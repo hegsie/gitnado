@@ -2930,6 +2930,65 @@ export async function getSubmodules(
   return invokeCommand<Submodule[]>("get_submodules", { path: repoPath });
 }
 
+/**
+ * A `.gitmodules` url that is relative to the superproject.
+ *
+ * git resolves `./x.git` and `../x.git` against the superproject's OWN remote,
+ * so such a submodule is always fetched from the superproject's host — the one
+ * the gate has already checked. The allowlist cannot parse a host out of the
+ * relative string itself, so handing it over as a destination would refuse an
+ * entirely ordinary relative layout.
+ */
+function isRelativeSubmoduleUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed.startsWith('./') || trimmed.startsWith('../');
+}
+
+/**
+ * Check every host `git submodule update` is actually going to contact.
+ *
+ * The superproject's remote is NOT the answer on its own: `.gitmodules` is
+ * repository content and can name any host it likes, and `git submodule
+ * update` clones or fetches every url in it. Checking only the superproject —
+ * which is all this used to do — let an allowlist of `github.com` sit there
+ * while the app went to gitlab.com. The backend enforces the same rule
+ * (`commands/submodule.rs`); this half is the one that can say so in a toast
+ * before any work starts.
+ *
+ * Skipped entirely when no policy is in force, so the common case does not pay
+ * for an extra round trip. When the submodules cannot be listed, the check
+ * fails closed, exactly as an unresolvable remote does.
+ */
+async function checkSubmoduleHostsAllowed(
+  repoPath: string,
+  submodulePaths?: string[],
+): Promise<boolean> {
+  if (!isNetworkPolicyActive()) return true;
+
+  const listed = await getSubmodules(repoPath);
+  if (!listed.success || !listed.data) {
+    return (await checkNetworkAllowed(null, undefined)) === null;
+  }
+
+  // An EMPTY list is not "no submodules": the backend emits a bare `--` and
+  // git then updates every one of them, so it is checked as the "all of them"
+  // it really is. A non-empty list narrows the check with it — refusing
+  // because some OTHER submodule points off the allowlist would block an
+  // update that was never going to contact that host.
+  const wanted =
+    submodulePaths && submodulePaths.length > 0
+      ? new Set(submodulePaths.map((p) => p.replace(/\/+$/, '')))
+      : null;
+
+  for (const submodule of listed.data) {
+    if (wanted && !wanted.has(submodule.path)) continue;
+    if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) continue;
+    if (await checkNetworkAllowed(null, submodule.url ?? undefined)) return false;
+  }
+  return true;
+}
+
+
 export async function addSubmodule(
   repoPath: string,
   url: string,
@@ -2937,8 +2996,16 @@ export async function addSubmodule(
   branch?: string,
 ): Promise<CommandResult<Submodule>> {
   // `git submodule add` clones from `url` — a network operation despite living
-  // among the local submodule commands.
-  if (!await checkNetworkPermission('add submodule', null, url)) {
+  // among the local submodule commands. A relative url is checked against the
+  // superproject's remote, the host git will actually resolve it to.
+  const relative = isRelativeSubmoduleUrl(url);
+  if (
+    !await checkNetworkPermission(
+      'add submodule',
+      relative ? repoPath : null,
+      relative ? undefined : url,
+    )
+  ) {
     return blockedResult();
   }
   return invokeCommand<Submodule>("add_submodule", {
@@ -2976,8 +3043,15 @@ export async function updateSubmodules(
   },
 ): Promise<CommandResult<void>> {
   // `git submodule update` fetches (and clones with --init), so it belongs
-  // behind the same gate as fetch/pull.
+  // behind the same gate as fetch/pull. The superproject's remote is checked
+  // first — it is where `.gitmodules` is read from, and the host a relative
+  // submodule url resolves against.
   if (!await checkNetworkPermission('update submodules', repoPath)) {
+    return blockedResult();
+  }
+  // ...and then every host named in `.gitmodules`, which is where the clones
+  // and fetches this spawns actually go.
+  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths)) {
     return blockedResult();
   }
 

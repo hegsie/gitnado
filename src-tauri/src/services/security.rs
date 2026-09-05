@@ -56,6 +56,15 @@ pub struct SecuritySettings {
 struct Inner {
     settings: SecuritySettings,
     config_dir: Option<PathBuf>,
+    /// Whether `security_settings.json` currently holds `settings`.
+    ///
+    /// The no-op skip in [`SecurityState::set`] is what makes this necessary.
+    /// Keying that skip on memory alone meant a write that failed once — an
+    /// unwritable config dir, a full disk — was never retried, because every
+    /// later push carried the same settings and returned early. The mirror
+    /// exists solely to give the pre-mount window at the NEXT launch the right
+    /// policy, and a stale `offlineMode: false` there fails OPEN.
+    mirrored: bool,
 }
 
 /// Tauri-managed handle to the current security settings.
@@ -95,6 +104,10 @@ impl SecurityState {
         let loaded = load_from_disk(&config_dir);
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.config_dir = Some(config_dir);
+        // A mirror that was read back IS in step with memory. A missing or
+        // unreadable one is not, so the next push writes it even if it carries
+        // exactly the settings already in memory.
+        inner.mirrored = loaded.is_some();
         if let Some(settings) = loaded {
             inner.settings = settings;
         }
@@ -102,23 +115,37 @@ impl SecurityState {
 
     /// Replace the settings and mirror them to disk.
     ///
-    /// A push that changes nothing returns without touching the file. The
-    /// frontend re-emits the WHOLE settings object on every settings write —
-    /// a theme change, a slider drag, each keystroke in a text field — and all
-    /// of those arrive here carrying the security settings unchanged; without
-    /// this check each one rewrites `security_settings.json`.
+    /// A push that changes nothing AND is already mirrored returns without
+    /// touching the file. The frontend re-emits the WHOLE settings object on
+    /// every settings write — a theme change, a slider drag, each keystroke in
+    /// a text field — and all of those arrive here carrying the security
+    /// settings unchanged; without that check each one rewrites
+    /// `security_settings.json`.
+    ///
+    /// The `mirrored` half of the condition is not optional. Keyed on memory
+    /// alone, a write that failed once was never retried for the rest of the
+    /// session, because every later push was identical and returned early.
+    ///
+    /// The write happens while the lock is still HELD, and that is deliberate
+    /// too: it is a tiny file, and saving outside the lock let two concurrent
+    /// `apply_payload` handlers (Tauri runs each `emit` on its own task)
+    /// commit memory in one order and the file in the other, leaving the
+    /// mirror permanently disagreeing with memory — after which every later
+    /// identical push skipped and never repaired it.
     pub fn set(&self, settings: SecuritySettings) {
-        let config_dir = {
-            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            if inner.settings == settings {
-                return;
-            }
-            inner.settings = settings.clone();
-            inner.config_dir.clone()
-        };
-        if let Some(dir) = config_dir {
-            save_to_disk(&dir, &settings);
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if inner.settings == settings && inner.mirrored {
+            return;
         }
+        inner.settings = settings;
+        let Some(dir) = inner.config_dir.clone() else {
+            // Nowhere to mirror to yet (`init` has not run). Memory is
+            // updated; `mirrored` stays false so the first push after `init`
+            // writes the file even if nothing changed.
+            return;
+        };
+        let written = save_to_disk(&dir, &inner.settings);
+        inner.mirrored = written;
     }
 
     /// Adopt the payload of an `update-security-settings` event.
@@ -157,18 +184,27 @@ fn load_from_disk(config_dir: &Path) -> Option<SecuritySettings> {
     serde_json::from_str(&contents).ok()
 }
 
-fn save_to_disk(config_dir: &Path, settings: &SecuritySettings) {
+/// Write the mirror. Returns whether the file now holds `settings`.
+///
+/// The caller records that answer: a failure that is only logged is a failure
+/// nothing ever retries.
+fn save_to_disk(config_dir: &Path, settings: &SecuritySettings) -> bool {
     if let Err(e) = std::fs::create_dir_all(config_dir) {
         tracing::warn!("Could not create config dir for security settings: {}", e);
-        return;
+        return false;
     }
     match serde_json::to_string_pretty(settings) {
-        Ok(contents) => {
-            if let Err(e) = std::fs::write(config_dir.join(SECURITY_FILE), contents) {
+        Ok(contents) => match std::fs::write(config_dir.join(SECURITY_FILE), contents) {
+            Ok(()) => true,
+            Err(e) => {
                 tracing::warn!("Could not persist security settings: {}", e);
+                false
             }
+        },
+        Err(e) => {
+            tracing::warn!("Could not serialize security settings: {}", e);
+            false
         }
-        Err(e) => tracing::warn!("Could not serialize security settings: {}", e),
     }
 }
 
@@ -696,6 +732,95 @@ mod tests {
         state.set(settings(false, &["github.com"]));
         assert!(path.exists(), "a changed setting is still mirrored");
         assert_eq!(state.snapshot(), settings(false, &["github.com"]));
+    }
+
+    #[test]
+    fn a_mirror_write_that_failed_is_retried_by_the_next_identical_push() {
+        // The no-op skip is keyed on memory AND on whether the file actually
+        // holds it. Without the second half, one failed write — an unwritable
+        // config dir, a full disk — was never retried for the rest of the
+        // session, because every later push carried the same settings and
+        // returned early. The next launch then ran its pre-mount window on a
+        // stale mirror, and a stale `offlineMode: false` fails OPEN.
+        let root = tempfile::TempDir::new().unwrap();
+        let config_dir = root.path().join("config");
+        // A FILE where the config directory belongs: `create_dir_all` fails,
+        // so the mirror cannot be written.
+        std::fs::write(&config_dir, "not a directory").unwrap();
+
+        let state = SecurityState::default();
+        state.init(config_dir.clone());
+        state.set(settings(true, &["github.com"]));
+        assert!(
+            !config_dir.is_dir(),
+            "the write really must have failed for this test to mean anything"
+        );
+
+        // The obstruction clears — and the very next push carries exactly the
+        // same settings, which is what every unrelated Settings write looks
+        // like from here.
+        std::fs::remove_file(&config_dir).unwrap();
+        state.set(settings(true, &["github.com"]));
+
+        assert_eq!(
+            load_from_disk(&config_dir),
+            Some(settings(true, &["github.com"])),
+            "an identical push must repair a mirror that was never written"
+        );
+    }
+
+    #[test]
+    fn a_repaired_mirror_then_goes_back_to_skipping_identical_pushes() {
+        // The retry must not turn into "write on every push": that is the
+        // behaviour the skip was added to stop.
+        let dir = tempfile::TempDir::new().unwrap();
+        let state = SecurityState::default();
+        state.init(dir.path().to_path_buf());
+        state.set(settings(true, &["github.com"]));
+
+        let path = dir.path().join(SECURITY_FILE);
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+        state.set(settings(true, &["github.com"]));
+        assert!(
+            !path.exists(),
+            "a mirror this process wrote successfully is not rewritten by an identical push"
+        );
+    }
+
+    #[test]
+    fn concurrent_pushes_cannot_leave_the_mirror_disagreeing_with_memory() {
+        // Tauri runs each JS `emit` on its own task, so two `apply_payload`
+        // handlers really do race. Committing memory under the lock and the
+        // file outside it let them land in opposite orders — memory ends on
+        // one value, the file on the other — after which every later identical
+        // push skipped and nothing ever repaired it.
+        for round in 0..20 {
+            let dir = tempfile::TempDir::new().unwrap();
+            let state = SecurityState::default();
+            state.init(dir.path().to_path_buf());
+
+            let handles: Vec<_> = (0..8)
+                .map(|worker| {
+                    let state = state.clone();
+                    std::thread::spawn(move || {
+                        for i in 0..25 {
+                            state.set(settings((worker + i) % 2 == 0, &["github.com"]));
+                        }
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            assert_eq!(
+                load_from_disk(dir.path()),
+                Some(state.snapshot()),
+                "round {}: the mirror must hold what memory holds",
+                round
+            );
+        }
     }
 
     #[test]

@@ -4,10 +4,16 @@
 //! `latest.json` from the configured endpoint and `download_and_install`
 //! pulls a signed binary and runs it — so every path through this module goes
 //! through the same offline-mode / allowlist gate as the rest of the app
-//! (`services/security.rs`). This one is the only gated path that runs
-//! unattended, 30 seconds after launch and every interval thereafter, which is
-//! why the scheduled loop treats a refusal differently from a failure: see
-//! [`classify_tick`].
+//! (`services/security.rs`). That is TWO destinations, not one: the manifest
+//! host comes from `plugins.updater.endpoints` and is guarded by
+//! [`guard_update_endpoints`], while the binary's host is named by the
+//! manifest itself and is guarded by [`guard_update_download`]. Gating only
+//! the first would let an allowlisted `latest.json` point the download at any
+//! host it liked.
+//!
+//! This is the only gated path that runs unattended, 30 seconds after launch
+//! and every interval thereafter, which is why the scheduled loop treats a
+//! refusal differently from a failure: see [`classify_tick`].
 
 use crate::error::{LeviathanError, Result};
 use std::sync::Arc;
@@ -96,6 +102,23 @@ pub(crate) fn guard_update_endpoints(endpoints: &[String]) -> Result<()> {
 /// [`guard_update_endpoints`], against whatever this build is configured with.
 fn guard_update_network(app: &tauri::AppHandle) -> Result<()> {
     guard_update_endpoints(&configured_update_endpoints(app))
+}
+
+/// Refuse a download whose BINARY comes from a host the allowlist never admitted.
+///
+/// [`guard_update_endpoints`] covers the manifest host — `plugins.updater.endpoints`,
+/// where `latest.json` is fetched from. It does NOT cover where the binary
+/// itself comes from: the updater takes that URL out of the manifest
+/// (`Update::download_url`), so a `latest.json` served from an allowlisted
+/// host can still name an installer on any host at all, and
+/// `download_and_install` would fetch and RUN it. Both hosts have to pass, or
+/// the endpoint gate is only a gate on where the app asks, not on what it runs.
+///
+/// Returning `NetworkBlocked` is what keeps this refusal in step with the
+/// endpoint one: [`classify_tick`] turns it into `Skipped` in the unattended
+/// loop, and the manual path surfaces it to the frontend as `BLOCKED`.
+pub(crate) fn guard_update_download(download_url: &str) -> Result<()> {
+    crate::services::security::guard_url(download_url)
 }
 
 /// The one place an updater is built.
@@ -254,6 +277,15 @@ async fn check_and_install_update(app: &tauri::AppHandle) -> Result<()> {
     match check_result {
         Ok(Some(update)) => {
             tracing::debug!("check_and_install_update: Update found");
+
+            // The manifest just told us WHERE the binary lives, and that
+            // answer is not the configured endpoint the gate above checked.
+            // Refuse here, before anything is announced or fetched: emitting
+            // `update-available` and `update-downloading` for a download that
+            // is about to be refused would put a stuck progress row in front
+            // of the user, and refusing after the fetch would be too late.
+            guard_update_download(update.download_url.as_str())?;
+
             let latest_version = update.version.clone();
             let release_notes = update.body.clone();
 
@@ -455,34 +487,145 @@ mod tests {
             .expect("no offline mode and no allowlist means updates work as before");
     }
 
+    /// Every `.rs` file under `src-tauri/src`, as (path, contents).
+    ///
+    /// Read off disk rather than `include_str!`ed: the property being pinned is
+    /// about the WHOLE crate, and a file that does not exist yet cannot be
+    /// named in an `include_str!`.
+    fn all_rust_sources() -> Vec<(std::path::PathBuf, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the source tree is readable") {
+                let path = entry.expect("a readable directory entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let contents = std::fs::read_to_string(&path).expect("a readable source file");
+                    sources.push((path, contents));
+                }
+            }
+        }
+        assert!(
+            sources.len() > 50,
+            "the scan found only {} files — it is not looking at the source tree",
+            sources.len()
+        );
+        sources
+    }
+
     #[test]
     fn every_updater_is_built_through_the_gate() {
         // `check_and_install_update` and `check_for_update_manual` cannot be
         // called from a unit test — `tauri::AppHandle` needs a running app — so
         // this pins the structural property that makes the guard unmissable:
-        // there is exactly one updater-builder call in this file, and it
-        // lives inside `gated_updater`, behind the check. Adding a second one
-        // fails here, which is what happened last time (two call sites, no
-        // gate on either).
-        let source = include_str!("update_service.rs");
-        // Split so this test's own source does not count as a call site.
-        let builder = concat!(".updater_", "builder()");
-        assert_eq!(
-            source.matches(builder).count(),
-            1,
-            "the updater must be built in exactly one place, and that place runs the gate"
-        );
-        let gated = source
-            .split_once("fn gated_updater")
-            .expect("gated_updater is the one constructor")
-            .1;
-        let body_end = gated.find("\n}\n").expect("gated_updater has a body");
-        let body = &gated[..body_end];
+        // every updater constructor in the CRATE lives inside `gated_updater`,
+        // behind the check. Counting call sites in this one file was not
+        // enough — a builder called from another module, or the trait's
+        // other constructor (the plain `updater()` on `UpdaterExt`), passed
+        // that silently.
+        //
+        // The needles are split so this test's own source is not a call site.
+        let needles = [
+            concat!(".updater_", "builder("),
+            concat!(".upda", "ter("),
+            concat!("UpdaterExt::", "updater"),
+        ];
+
+        let this_file =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/update_service.rs");
+        let source = std::fs::read_to_string(&this_file).expect("this module is readable");
+        let gate_start = source
+            .find("fn gated_updater")
+            .expect("gated_updater is the one constructor");
+        let gate_end = gate_start
+            + source[gate_start..]
+                .find("\n}\n")
+                .expect("gated_updater has a body")
+            + 1;
+
+        for (path, contents) in all_rust_sources() {
+            for needle in needles {
+                let mut from = 0;
+                while let Some(offset) = contents[from..].find(needle) {
+                    let at = from + offset;
+                    assert!(
+                        path == this_file && at >= gate_start && at < gate_end,
+                        "{}: `{}` at byte {} is outside `gated_updater` — every updater must be \
+                         constructed behind the network gate",
+                        path.display(),
+                        needle,
+                        at
+                    );
+                    from = at + needle.len();
+                }
+            }
+        }
+
+        let body = &source[gate_start..gate_end];
         assert!(
             body.find("guard_update_network").expect("the gate runs")
-                < body.find(builder).expect("the updater is built"),
+                < body.find(needles[0]).expect("the updater is built"),
             "the gate has to run BEFORE the updater is built"
         );
+    }
+
+    // ---- the host the BINARY comes from ----
+
+    #[test]
+    fn a_binary_url_the_manifest_names_has_to_pass_the_allowlist_too() {
+        let _guard = test_support::allowlist(&["github.com"]);
+        guard_update_download("https://github.com/o/r/releases/download/v1/Leviathan.AppImage")
+            .expect("a binary served from the allowlisted host is permitted");
+        // The manifest picks this URL, not `plugins.updater.endpoints`. A
+        // `latest.json` on github.com naming a binary on cdn.example.net used
+        // to pass the endpoint gate and then download and RUN that binary.
+        guard_update_download("https://cdn.example.net/Leviathan.AppImage")
+            .expect_err("a binary from an unlisted host must not be downloaded");
+    }
+
+    #[test]
+    fn offline_mode_refuses_the_binary_download_too() {
+        let _guard = test_support::offline();
+        guard_update_download("https://github.com/o/r/Leviathan.AppImage")
+            .expect_err("offline mode refuses the download, not just the check");
+    }
+
+    #[test]
+    fn a_refused_binary_url_is_skipped_by_the_scheduled_loop() {
+        // Same treatment the endpoint refusal gets: logged, no `update-error`
+        // toast, and the 24-hour timer kept alive.
+        let _guard = test_support::allowlist(&["github.com"]);
+        match classify_tick(guard_update_download(
+            "https://cdn.example.net/Leviathan.AppImage",
+        )) {
+            TickReport::Skipped(reason) => assert!(reason.contains("allowlist")),
+            other => panic!("a refused download must be Skipped, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn the_binary_url_is_guarded_before_anything_is_announced_or_fetched() {
+        // The refusal has to land before the `update-available` /
+        // `update-downloading` emits, or the user gets a progress row for a
+        // download that never starts — and before the fetch itself, obviously.
+        let source = include_str!("update_service.rs");
+        let body = source
+            .split_once("async fn check_and_install_update")
+            .expect("the install path exists")
+            .1;
+        let guard = body
+            .find("guard_update_download")
+            .expect("the binary's host is guarded on the install path");
+        let announced = body
+            .find("\"update-available\"")
+            .expect("the availability emit");
+        let downloaded = body
+            .find("download_and_install")
+            .expect("the download call");
+        assert!(guard < announced, "guard before the update-available emit");
+        assert!(guard < downloaded, "guard before the download starts");
     }
 
     // ---- the scheduled loop ----

@@ -9,6 +9,12 @@
  * is the one that can explain the refusal before any work starts; the backend
  * refuses too (`src-tauri/src/services/update_service.rs`), which is what
  * covers the unattended 24-hour loop that no frontend gate ever sees.
+ *
+ * The BINARY's host is deliberately not checked here and has no counterpart
+ * below: `latest.json` chooses it, so it is not knowable until the manifest
+ * has been fetched — inside the backend, mid-command. `guard_update_download`
+ * over there is the only place that check can live, and a refusal from it
+ * arrives here as the same `BLOCKED` code these guards return.
  */
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
