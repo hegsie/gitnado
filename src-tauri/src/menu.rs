@@ -134,7 +134,7 @@ pub const APP_MENU: &[MenuSection] = &[
         entries: &[
             item("toggle-left-panel", "Toggle Left Panel"),
             item("toggle-right-panel", "Toggle Right Panel"),
-            item("toggle-output-panel", "Toggle Output Panel"),
+            repo_item("toggle-output-panel", "Toggle Output Panel"),
             MenuEntry::Separator,
             item("command-palette", "Command Palette…"),
         ],
@@ -424,6 +424,8 @@ mod tests {
             "compare-branches",
             "branch-cleanup",
             "close-repository-tab",
+            // The output panel only exists inside the active-repository layout.
+            "toggle-output-panel",
         ] {
             assert!(scoped.contains(id), "'{}' must be repository-scoped", id);
         }
@@ -435,7 +437,6 @@ mod tests {
             "init-repository",
             "toggle-left-panel",
             "toggle-right-panel",
-            "toggle-output-panel",
             "command-palette",
             "keyboard-shortcuts",
             "about",

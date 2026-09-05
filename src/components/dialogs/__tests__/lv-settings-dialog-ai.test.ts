@@ -89,6 +89,30 @@ describe('lv-settings-dialog AI events', () => {
 
     expect(eventFired).to.be.true;
   });
+
+  // localAiService.loadModel / unloadModel announce `ai-settings-changed`
+  // themselves; deleteModel does not, so the dialog has to. Without it the
+  // commit panel's Generate / Vibe Check buttons keep the availability answer
+  // they cached before the model was deleted.
+  it('dispatches ai-settings-changed when a local model is deleted', async () => {
+    const el = await fixture<LvSettingsDialog>(
+      html`<lv-settings-dialog></lv-settings-dialog>`,
+    );
+
+    let eventFired = false;
+    const listener = (): void => {
+      eventFired = true;
+    };
+    window.addEventListener('ai-settings-changed', listener);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).handleDeleteModel('qwen-1_5b');
+    } finally {
+      window.removeEventListener('ai-settings-changed', listener);
+    }
+
+    expect(eventFired).to.be.true;
+  });
 });
 
 describe('lv-settings-dialog provider test feedback', () => {

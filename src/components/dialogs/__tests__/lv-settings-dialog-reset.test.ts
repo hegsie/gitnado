@@ -82,22 +82,28 @@ import { uiStore } from '../../../stores/ui.store.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** Records whether a `settings-changed` event reaches window. */
-function watchSettingsChanged(): { fired: () => boolean; stop: () => void } {
+/** Records whether a window event of `name` reaches window. */
+function watchWindowEvent(name: string): { fired: () => boolean; stop: () => void } {
   let seen = false;
   const listener = (): void => {
     seen = true;
   };
-  window.addEventListener('settings-changed', listener);
+  window.addEventListener(name, listener);
   return {
     fired: () => seen,
-    stop: () => window.removeEventListener('settings-changed', listener),
+    stop: () => window.removeEventListener(name, listener),
   };
+}
+
+/** Records whether a `settings-changed` event reaches window. */
+function watchSettingsChanged(): { fired: () => boolean; stop: () => void } {
+  return watchWindowEvent('settings-changed');
 }
 
 describe('lv-settings-dialog Reset to Defaults', () => {
   let el: LvSettingsDialog;
   let watcher: { fired: () => boolean; stop: () => void };
+  let aiWatcher: { fired: () => boolean; stop: () => void };
 
   beforeEach(async () => {
     confirmAnswer = 'Ok';
@@ -112,12 +118,14 @@ describe('lv-settings-dialog Reset to Defaults', () => {
     });
     uiStore.setState({ toasts: [] });
     watcher = watchSettingsChanged();
+    aiWatcher = watchWindowEvent('ai-settings-changed');
     el = await fixture<LvSettingsDialog>(html`<lv-settings-dialog></lv-settings-dialog>`);
     await el.updateComplete;
   });
 
   afterEach(() => {
     watcher.stop();
+    aiWatcher.stop();
     releaseConfirm = null;
     settingsStore.getState().resetToDefaults();
     uiStore.setState({ toasts: [] });
@@ -131,6 +139,30 @@ describe('lv-settings-dialog Reset to Defaults', () => {
     expect(settingsStore.getState().staleBranchDays).to.equal(90);
     expect(settingsStore.getState().remoteAllowlist).to.deep.equal([]);
     expect(watcher.fired(), 'settings-changed dispatched').to.equal(true);
+  });
+
+  it('announces ai-settings-changed so the AI buttons drop their stale reason', async () => {
+    // Offline mode on: the commit panel's Generate / Vibe Check buttons are
+    // disabled with "offline mode is on" cached from the last
+    // `ai-settings-changed`. Reset turns offline mode off — and those buttons
+    // listen to NOTHING ELSE, so without this event they keep refusing on a
+    // setting that is no longer set.
+    settingsStore.setState({ offlineMode: true });
+
+    await (el as any).handleReset();
+
+    expect(settingsStore.getState().offlineMode, 'offline mode cleared').to.equal(false);
+    expect(aiWatcher.fired(), 'ai-settings-changed dispatched').to.equal(true);
+  });
+
+  it('declining the reset announces nothing to the AI surfaces either', async () => {
+    confirmAnswer = 'Cancel';
+    settingsStore.setState({ offlineMode: true });
+
+    await (el as any).handleReset();
+
+    expect(settingsStore.getState().offlineMode, 'untouched').to.equal(true);
+    expect(aiWatcher.fired(), 'nothing changed, so nothing announced').to.equal(false);
   });
 
   it('declining the confirm leaves every setting untouched', async () => {

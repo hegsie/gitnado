@@ -4642,6 +4642,11 @@ export class AppShell extends LitElement {
     if (returnProvider && closedFromAccounts) {
       this.openIntegrationStandalone(returnProvider);
     }
+    // Announced for surfaces that sent the user here mid-task and owe them a
+    // way back — the clone dialog's account picker reopens on this. It is
+    // deliberately a plain notification rather than a second return target:
+    // whoever is waiting decides for itself whether to come back.
+    window.dispatchEvent(new CustomEvent('profile-manager-closed'));
   }
 
   private handleRestoreProvider(): void {

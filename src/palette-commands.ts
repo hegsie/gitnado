@@ -130,7 +130,12 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       label: 'Toggle Output Panel',
       category: 'action',
       icon: 'terminal',
-      action: () => { dialogs.setOpen('outputPanel', !dialogs.isOpen('outputPanel')); },
+      // The panel is rendered only inside the active-repository layout, so
+      // toggling it with nothing open would flip a flag no one can see — and
+      // pop the panel open on the next repository the user opened.
+      action: shell.requiresRepository(() => {
+        dialogs.setOpen('outputPanel', !dialogs.isOpen('outputPanel'));
+      }),
     },
     {
       id: 'stash',

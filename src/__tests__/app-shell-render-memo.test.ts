@@ -158,6 +158,9 @@ describe('app-shell render-path memoisation', () => {
 
       // The cached closures must read state at INVOCATION time, not at build
       // time — otherwise memoising would freeze the palette's behaviour.
+      // The output panel lives inside the repository layout, so the toggle is
+      // repository-scoped: give the shell one before invoking.
+      (el as any).activeRepository = { repository: mockRepo('/repo/one', 'one') };
       dialogs.close('outputPanel');
       toggleOutput!.action();
       expect(dialogs.isOpen('outputPanel')).to.equal(true);

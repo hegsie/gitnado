@@ -97,7 +97,10 @@ export const APP_MENU_ACTIONS: readonly AppMenuAction[] = [
     shortcutId: 'toggle-right',
     repositoryScoped: false,
   },
-  { id: 'toggle-output-panel', paletteId: 'toggle-output-panel', repositoryScoped: false },
+  // The output panel renders only inside the active-repository layout, so with
+  // no repository open the item would be a silent no-op that also armed the
+  // panel flag for whichever repository the user opened next.
+  { id: 'toggle-output-panel', paletteId: 'toggle-output-panel', repositoryScoped: true },
   {
     id: 'command-palette',
     shell: 'commandPalette',

@@ -288,6 +288,18 @@ export class LvCloneDialog extends LitElement {
   /** The dialog was dismissed while the submodule phase was still running. */
   private submoduleDetached = false;
 
+  /**
+   * The user was sent to the accounts manager from the picker and is owed a
+   * return trip to this dialog when that manager closes.
+   */
+  private returnAfterAccounts = false;
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    // A return trip belongs to a dialog that is still on screen.
+    this.stopWaitingForAccountsManager();
+  }
+
   public open(): void {
     // A clone already in flight owns this component; reset() would
     // clear `isCloning` and re-enable the button for a second concurrent run,
@@ -338,6 +350,8 @@ export class LvCloneDialog extends LitElement {
     // Any submodule phase still running belongs to the session being thrown
     // away: it must report through a toast rather than into this one.
     this.submoduleRunId += 1;
+    // A reset throws away the session the return trip was for.
+    this.stopWaitingForAccountsManager();
     this.cleanupListener();
   }
 
@@ -382,13 +396,51 @@ export class LvCloneDialog extends LitElement {
   /**
    * The picker asked for the accounts manager. Close this dialog first — the
    * manager opens as its own modal, and leaving the clone dialog stacked
-   * underneath it traps the user between two dialogs. The event keeps
-   * bubbling to the host, which opens the manager.
+   * underneath it traps the user between two dialogs.
+   *
+   * The picker's event carries `integrationType`, which the host reads as
+   * "return to THAT provider's integration dialog when the manager closes".
+   * That return target is right for a provider dialog and wrong here: the user
+   * came from Clone and has never opened the integration dialog, so honouring
+   * it drops them on a screen they never navigated to. Consume the picker's
+   * event and re-dispatch it WITHOUT the provider, then bring the user back
+   * here ourselves — with the account source still selected and everything
+   * they had typed intact — once the manager closes.
    */
-  private handleManageAccounts(): void {
+  private handleManageAccounts(e: Event): void {
     if (this.isCloning) return;
+    e.stopPropagation();
+    this.returnAfterAccounts = true;
+    window.addEventListener('profile-manager-closed', this.handleAccountsManagerClosed);
+    // close(), NOT reset(): the URL, destination and options the user has
+    // already filled in are the clone they were in the middle of.
     this.close();
-    this.reset();
+    this.dispatchEvent(
+      new CustomEvent('manage-accounts', { bubbles: true, composed: true }),
+    );
+  }
+
+  /**
+   * The accounts manager closed after we sent the user there. Reopen this
+   * dialog on the account source: the newly connected account is already in
+   * the profile store, which the picker subscribes to, so it lists that
+   * account's repositories without another round trip.
+   */
+  private readonly handleAccountsManagerClosed = (): void => {
+    this.stopWaitingForAccountsManager();
+    if (this.isCloning) return;
+    this.source = 'account';
+    this.error = '';
+    if (!this.destination) {
+      this.destination = settingsStore.getState().defaultClonePath;
+    }
+    this.modal.open = true;
+  };
+
+  private stopWaitingForAccountsManager(): void {
+    if (!this.returnAfterAccounts) return;
+    this.returnAfterAccounts = false;
+    window.removeEventListener('profile-manager-closed', this.handleAccountsManagerClosed);
   }
 
   private handleDestinationChange(e: Event): void {

@@ -642,6 +642,26 @@ describe('lv-clone-dialog', () => {
       expect(previews.join(' ')).to.not.contain('octocat/my-repo');
     });
 
+    /** Drive the picker's "Connect an account" request and return the event
+     *  the host actually received. */
+    async function requestAccountsManager(): Promise<CustomEvent[]> {
+      const seen: CustomEvent[] = [];
+      const listener = (e: Event): void => {
+        seen.push(e as CustomEvent);
+      };
+      el.addEventListener('manage-accounts', listener);
+      picker()!.dispatchEvent(
+        new CustomEvent('manage-accounts', {
+          detail: { integrationType: 'github' },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      await el.updateComplete;
+      el.removeEventListener('manage-accounts', listener);
+      return seen;
+    }
+
     it('closes so the accounts manager is not stacked under this dialog', async () => {
       selectSource('account');
       await el.updateComplete;
@@ -651,21 +671,86 @@ describe('lv-clone-dialog', () => {
       };
       modal.open = true;
 
-      let reachedHost = false;
-      el.addEventListener('manage-accounts', () => {
-        reachedHost = true;
-      });
-      picker()!.dispatchEvent(
-        new CustomEvent('manage-accounts', {
-          detail: { integrationType: 'github' },
-          bubbles: true,
-          composed: true,
-        }),
-      );
-      await el.updateComplete;
+      const seen = await requestAccountsManager();
 
       expect(modal.open, 'the clone dialog closes').to.be.false;
-      expect(reachedHost, 'the host still hears the request').to.be.true;
+      expect(seen.length, 'the host still hears the request').to.equal(1);
+    });
+
+    it('asks for the manager without a provider, so the host records no return target', async () => {
+      selectSource('account');
+      await el.updateComplete;
+
+      const seen = await requestAccountsManager();
+
+      // The picker names the provider it was listing; the host reads that as
+      // "reopen THAT provider's integration dialog when the manager closes".
+      // The user came from Clone and has never seen that dialog, so the
+      // request that leaves this component must carry no provider at all.
+      expect(seen.length).to.equal(1);
+      expect(
+        (seen[0].detail as { integrationType?: string } | null)?.integrationType,
+        'no provider travels to the host',
+      ).to.equal(undefined);
+    });
+
+    it('comes back when the accounts manager closes, with the clone intact', async () => {
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      selectSource('account');
+      await el.updateComplete;
+
+      const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+      urlInput.value = 'https://github.com/octocat/my-repo.git';
+      urlInput.dispatchEvent(new Event('input'));
+      await el.updateComplete;
+
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+
+      await requestAccountsManager();
+      expect(modal.open, 'stepped aside for the manager').to.be.false;
+
+      window.dispatchEvent(new CustomEvent('profile-manager-closed'));
+      await el.updateComplete;
+
+      expect(modal.open, 'the user is returned to the clone they started').to.be.true;
+      expect(
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-selected'),
+        'still on the account source',
+      ).to.equal('true');
+      expect(picker(), 'the picker is mounted again').to.exist;
+      expect(
+        (el.shadowRoot!.querySelector('#url') as HTMLInputElement).value,
+        'what the user had typed survives',
+      ).to.equal('https://github.com/octocat/my-repo.git');
+    });
+
+    it('does not reopen on a later manager close it never asked for', async () => {
+      selectSource('account');
+      await el.updateComplete;
+
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+
+      await requestAccountsManager();
+      window.dispatchEvent(new CustomEvent('profile-manager-closed'));
+      await el.updateComplete;
+      expect(modal.open).to.be.true;
+
+      // The user dismisses the clone dialog (Escape / × / overlay all route
+      // through the modal's own close). A manager closed later for some
+      // unrelated reason must not pop this dialog back up.
+      (modal as unknown as { close: () => void }).close();
+      await el.updateComplete;
+      expect(modal.open, 'dismissed').to.be.false;
+      window.dispatchEvent(new CustomEvent('profile-manager-closed'));
+      await el.updateComplete;
+
+      expect(modal.open, 'stays closed').to.be.false;
     });
 
     it('locks the source tabs while a clone is running', async () => {

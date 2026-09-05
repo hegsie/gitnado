@@ -438,7 +438,7 @@ test.describe('Clone Dialog - from a connected account', () => {
     expect(await requestedPages(page)).toEqual([1, 2]);
   });
 
-  test('with no accounts connected, offers to connect one', async ({ page }) => {
+  test('with no accounts connected, offers to connect one and comes back', async ({ page }) => {
     await initializeUnifiedProfileStore(page, { profiles: [defaultProfile], accounts: [] });
 
     await openAccountSource(page, dialogs);
@@ -456,6 +456,41 @@ test.describe('Clone Dialog - from a connected account', () => {
     await expect(
       page.locator('lv-profile-manager-dialog[open] .dialog-overlay'),
     ).toBeVisible();
+
+    // The account gets connected while the manager is up. The listing mocks go
+    // in FIRST: the picker subscribes to the profile store, so adding the
+    // account is itself what triggers the fetch.
+    await injectCommandMock(page, {
+      get_keyring_token: 'gh-e2e-tok',
+      list_github_repositories: {
+        repositories: [repository('alpha')],
+        nextPage: null,
+        totalCount: 1,
+      },
+    });
+    await initializeUnifiedProfileStore(page, {
+      profiles: [defaultProfile],
+      accounts: [githubAccount],
+      connectedAccounts: ['gh-acc-1'],
+    });
+
+    // Closing the manager returns the user to the clone they were in the
+    // middle of — NOT to a GitHub Integration dialog they never opened.
+    await page
+      .locator('lv-profile-manager-dialog .dialog-footer button', { hasText: 'Back' })
+      .click();
+    await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+    await expect(dialogs.github.dialog).toBeHidden();
+    await expect(dialogs.clone.dialog).toBeVisible();
+
+    // Back on the account source, now listing the account that was just
+    // connected — so the clone can carry on where it left off.
+    await expect(page.getByRole('tab', { name: 'From account' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(repoItems(page)).toHaveCount(1);
+    await expect(repoItems(page).first()).toContainText('alpha');
   });
 
   test('explains a rejected token and offers to reconnect', async ({ page }) => {

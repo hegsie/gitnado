@@ -1218,6 +1218,10 @@ export class LvSettingsDialog extends LitElement {
     const result = await localAiService.deleteModel(modelId);
     if (result.success) {
       await Promise.all([this.loadLocalAiData(), this.loadAiProviders()]);
+      // Deleting a model changes what the local provider can answer with, and
+      // `deleteModel` — unlike load/unload — makes no announcement of its own.
+      // The AI surfaces cache availability and listen only to this event.
+      window.dispatchEvent(new CustomEvent('ai-settings-changed'));
     } else {
       this.aiError = result.error?.message ?? 'Failed to delete model';
     }
@@ -1230,6 +1234,7 @@ export class LvSettingsDialog extends LitElement {
     const result = await localAiService.loadModel(modelId);
     this.loadingModelId = null;
     if (result.success) {
+      // localAiService.loadModel already announces `ai-settings-changed`.
       await Promise.all([this.loadLocalAiData(), this.loadAiProviders()]);
     } else {
       this.aiError = result.error?.message ?? 'Failed to load model';
@@ -1241,6 +1246,7 @@ export class LvSettingsDialog extends LitElement {
     this.aiError = null;
     const result = await localAiService.unloadModel();
     if (result.success) {
+      // localAiService.unloadModel already announces `ai-settings-changed`.
       await Promise.all([this.loadLocalAiData(), this.loadAiProviders()]);
     } else {
       this.aiError = result.error?.message ?? 'Failed to unload model';
@@ -1456,6 +1462,13 @@ export class LvSettingsDialog extends LitElement {
       // keeps painting the pre-reset settings until some other setting is
       // touched.
       window.dispatchEvent(new CustomEvent('settings-changed'));
+      // The reset clears offline mode and the remote allowlist, which is
+      // exactly the state `handleToggle('offlineMode')` and
+      // `handleRemoteAllowlistChange` announce with `ai-settings-changed`.
+      // The commit panel's Generate / Vibe Check buttons listen ONLY to that
+      // event, so without it they keep showing the pre-reset reason ("offline
+      // mode is on") for a setting the reset has just turned off.
+      window.dispatchEvent(new CustomEvent('ai-settings-changed'));
       showToast('Settings reset to defaults', 'success');
     } finally {
       this.resetting = false;

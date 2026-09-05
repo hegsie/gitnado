@@ -131,6 +131,8 @@ describe('app-menu service', () => {
         'compare-branches',
         'branch-cleanup',
         'close-repository-tab',
+        // The output panel only exists inside the active-repository layout.
+        'toggle-output-panel',
       ]) {
         expect(scoped.has(id), `"${id}" must be repository-scoped`).to.be.true;
       }
@@ -140,7 +142,6 @@ describe('app-menu service', () => {
         'init-repository',
         'toggle-left-panel',
         'toggle-right-panel',
-        'toggle-output-panel',
         'command-palette',
         'keyboard-shortcuts',
         'about',

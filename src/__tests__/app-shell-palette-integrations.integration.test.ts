@@ -218,5 +218,35 @@ describe('app-shell explicit integration navigation', () => {
     expect(dialogs.isOpen('profileManager')).to.equal(false);
     expect(dialogs.isOpen('gitHub'), 'no surprise reopen off Accounts').to.equal(false);
   });
+  it('a provider-less Manage Accounts request lands the user nowhere new', () => {
+    const el = createAppShellNoRepo();
+    // What the clone dialog's account picker sends: it wants the manager, but
+    // it has no provider dialog to be returned to — the user came from Clone.
+    (el as any).handleManageAccounts({ detail: {} });
+    expect(dialogs.isOpen('profileManager'), 'manager opened').to.equal(true);
+
+    (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+
+    expect(dialogs.isOpen('profileManager')).to.equal(false);
+    for (const id of ['gitHub', 'gitLab', 'bitbucket', 'azureDevOps', 'oidc'] as const) {
+      expect(dialogs.isOpen(id), `${id} must not open unasked`).to.equal(false);
+    }
+  });
+
+  it('announces the manager close so a mid-task surface can come back', () => {
+    const el = createAppShellNoRepo();
+    let announced = 0;
+    const listener = (): void => {
+      announced++;
+    };
+    window.addEventListener('profile-manager-closed', listener);
+    try {
+      (el as any).handleManageAccounts({ detail: {} });
+      (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+    } finally {
+      window.removeEventListener('profile-manager-closed', listener);
+    }
+    expect(announced, 'exactly one announcement').to.equal(1);
+  });
   /* eslint-enable @typescript-eslint/no-explicit-any */
 });
