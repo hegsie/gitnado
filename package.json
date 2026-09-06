@@ -11,7 +11,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test": "npm run test:contract && web-test-runner",
-    "test:contract": "node --test scripts/ipc-contract.test.mjs scripts/menu-contract.test.mjs scripts/i18n-coverage.test.mjs",
+    "test:contract": "node --test scripts/ipc-contract.test.mjs scripts/menu-contract.test.mjs scripts/i18n-coverage.test.mjs scripts/security-lock.test.mjs",
     "test:watch": "web-test-runner --watch",
     "test:e2e": "playwright test --config=e2e/playwright.config.ts",
     "test:e2e:ui": "playwright test --config=e2e/playwright.config.ts --ui",

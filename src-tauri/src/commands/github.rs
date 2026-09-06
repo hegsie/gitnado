@@ -2576,6 +2576,7 @@ pub async fn delete_release(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
 
     // ========================================================================
     // GitHubUser Parsing Tests
@@ -3055,6 +3056,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_github_repositories_no_token() {
+        let _policy = no_policy();
         // No token and no GitHub App configured: the command must refuse rather
         // than issue an unauthenticated request.
         let result = list_github_repositories(Some(10), Some(1), Some(String::new())).await;

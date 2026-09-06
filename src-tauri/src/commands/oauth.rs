@@ -759,6 +759,7 @@ pub async fn oauth_cancel_flow(port: u16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
 
     // ==========================================================================
     // refresh_token_params Tests
@@ -899,6 +900,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_github() {
+        let _policy = no_policy();
         let result =
             oauth_get_authorize_url("github".to_string(), None, "test-client-id".to_string()).await;
 
@@ -923,6 +925,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_gitlab() {
+        let _policy = no_policy();
         let result =
             oauth_get_authorize_url("gitlab".to_string(), None, "test-client-id".to_string()).await;
 
@@ -936,6 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_gitlab_custom_instance() {
+        let _policy = no_policy();
         let result = oauth_get_authorize_url(
             "gitlab".to_string(),
             Some("https://gitlab.example.com".to_string()),
@@ -951,6 +955,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_azure() {
+        let _policy = no_policy();
         let result =
             oauth_get_authorize_url("azure".to_string(), None, "test-client-id".to_string()).await;
 
@@ -969,6 +974,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_azure_custom_tenant() {
+        let _policy = no_policy();
         let result = oauth_get_authorize_url(
             "azure".to_string(),
             Some("my-tenant-id".to_string()),
@@ -1010,12 +1016,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_bitbucket() {
+        let _policy = no_policy();
         let _guard = BITBUCKET_PORT_TEST_LOCK.lock().await;
         let result =
             oauth_get_authorize_url("bitbucket".to_string(), None, "test-client-id".to_string())
                 .await;
 
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{:?}", result.as_ref().err());
         let response = result.unwrap();
 
         assert!(response.authorize_url.contains("bitbucket.org"));
@@ -1026,6 +1033,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_invalid_provider() {
+        let _policy = no_policy();
         let result = oauth_get_authorize_url(
             "invalid-provider".to_string(),
             None,
@@ -1038,6 +1046,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_get_authorize_url_generates_unique_state() {
+        let _policy = no_policy();
         let result1 =
             oauth_get_authorize_url("gitlab".to_string(), None, "test-client-id".to_string()).await;
         let result2 =
@@ -1064,6 +1073,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_start_github_flow() {
+        let _policy = no_policy();
         let result = oauth_start_github_flow("test-client-id".to_string()).await;
 
         assert!(result.is_ok());
@@ -1097,6 +1107,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_provider_case_insensitive() {
+        let _policy = no_policy();
         let result_lower =
             oauth_get_authorize_url("github".to_string(), None, "test-client-id".to_string()).await;
         let result_upper =
@@ -1115,6 +1126,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_authorize_url_contains_pkce() {
+        let _policy = no_policy();
         let result =
             oauth_get_authorize_url("github".to_string(), None, "test-client-id".to_string()).await;
 
@@ -1129,6 +1141,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_authorize_url_contains_scopes() {
+        let _policy = no_policy();
         let result =
             oauth_get_authorize_url("github".to_string(), None, "test-client-id".to_string()).await;
 
@@ -1256,6 +1269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_concurrent_github_flows() {
+        let _policy = no_policy();
         // Start multiple GitHub OAuth flows — each should get a unique port/state
         let result1 =
             oauth_get_authorize_url("github".to_string(), None, "client1".to_string()).await;
@@ -1545,6 +1559,7 @@ mod tests {
     /// the next attempt fail with "Port 8085 is not available".
     #[tokio::test]
     async fn test_bitbucket_flow_can_restart_after_an_abandoned_sign_in() {
+        let _policy = no_policy();
         let _guard = BITBUCKET_PORT_TEST_LOCK.lock().await;
         let first = oauth_get_authorize_url("bitbucket".to_string(), None, "cid".to_string()).await;
         // Self-skip when another process on this host owns 8085 (same pattern as

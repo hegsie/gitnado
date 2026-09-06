@@ -792,6 +792,7 @@ pub async fn get_pack_info(path: String) -> Result<PackInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
 
     // ── Tests from HEAD (feature branch) ─────────────────────────────────
@@ -1072,6 +1073,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prune_remote_tracking_branches_invalid_path() {
+        let _policy = no_policy();
         let result =
             prune_remote_tracking_branches("/nonexistent/path".to_string(), vec![], None).await;
 

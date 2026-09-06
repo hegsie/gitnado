@@ -1622,6 +1622,7 @@ pub async fn list_ado_repositories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
 
     // ========================================================================
     // Repository Listing Tests
@@ -1735,6 +1736,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_ado_repositories_no_token() {
+        let _policy = no_policy();
         let result = list_ado_repositories("myorg".to_string(), None, None, None).await;
         assert!(result.is_err());
     }

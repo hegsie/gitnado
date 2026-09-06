@@ -482,7 +482,7 @@ mod tests {
     fn nothing_is_refused_when_no_policy_is_in_force() {
         // Through `test_support` rather than reading the ambient default: it
         // is what serializes against the tests that turn offline mode on.
-        let _guard = test_support::with(crate::services::security::SecuritySettings::default());
+        let _guard = test_support::no_policy();
         guard_update_endpoints(&shipped_update_endpoints())
             .expect("no offline mode and no allowlist means updates work as before");
     }

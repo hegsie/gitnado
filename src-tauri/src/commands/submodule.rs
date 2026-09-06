@@ -534,16 +534,6 @@ mod tests {
 
     use crate::services::security::test_support;
 
-    /// Pin the permissive default for the lifetime of a test.
-    ///
-    /// The gate reads PROCESS-GLOBAL state, so a test that expects an
-    /// operation to go through has to take the same turn as the tests that
-    /// switch a policy on — otherwise one of those refuses it mid-run and the
-    /// failure looks like anything but what it is.
-    fn no_policy() -> test_support::GlobalSettingsGuard {
-        test_support::with(crate::services::security::SecuritySettings::default())
-    }
-
     /// A superproject whose committed `.gitmodules` names `entries` as
     /// (path, url), with `origin` pointing at `origin_url`.
     fn repo_with_gitmodules(origin_url: &str, entries: &[(&str, &str)]) -> TestRepo {
@@ -750,7 +740,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_submodules_no_submodules() {
         let repo = TestRepo::with_initial_commit();
-        let _policy = no_policy();
         // Update on repo with no submodules should succeed
         let result = update_submodules(repo.path_str(), None, None, None, None, None, None).await;
         assert!(result.is_ok());
@@ -791,7 +780,6 @@ mod tests {
     #[tokio::test]
     async fn test_add_submodule_invalid_url() {
         let repo = TestRepo::with_initial_commit();
-        let _policy = no_policy();
 
         let result = add_submodule(
             repo.path_str(),
@@ -855,7 +843,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_submodules_with_init() {
         let repo = TestRepo::with_initial_commit();
-        let _policy = no_policy();
         // Update with init flag on repo with no submodules should succeed
         let result = update_submodules(
             repo.path_str(),
@@ -873,7 +860,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_submodules_with_recursive() {
         let repo = TestRepo::with_initial_commit();
-        let _policy = no_policy();
         // Update with recursive flag on repo with no submodules should succeed
         let result = update_submodules(
             repo.path_str(),
@@ -1063,7 +1049,6 @@ mod tests {
     #[tokio::test]
     async fn test_add_submodule_rejects_a_flag_like_url() {
         let repo = TestRepo::with_initial_commit();
-        let _policy = no_policy();
 
         let err = add_submodule(
             repo.path_str(),
@@ -1089,7 +1074,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_submodules_feeds_the_token_to_the_submodule_git_process() {
         let source = TestRepo::with_initial_commit();
-        let _policy = no_policy();
         let super_repo = TestRepo::with_initial_commit();
         let super_path = super_repo.path.clone();
         // The injected helper is scoped to the host of the remote the token was
@@ -1469,7 +1453,6 @@ mod tests {
     #[tokio::test]
     async fn test_update_submodules_with_a_token_still_reports_errors() {
         let repo = TestRepo::with_initial_commit();
-        let _policy = no_policy();
 
         let err = update_submodules(
             repo.path_str(),

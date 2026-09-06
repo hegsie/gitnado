@@ -1416,6 +1416,7 @@ pub async fn list_bitbucket_repositories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
 
     #[test]
@@ -1516,6 +1517,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_bitbucket_repositories_no_credentials() {
+        let _policy = no_policy();
         // No token and no app password: refuse rather than call the API
         // unauthenticated.
         let result = list_bitbucket_repositories(None, None, None, None, None, None).await;

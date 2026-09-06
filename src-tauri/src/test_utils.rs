@@ -2,6 +2,7 @@
 
 #![cfg(test)]
 
+use crate::services::security::test_support::{self, GlobalSettingsGuard};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tempfile::TempDir;
@@ -48,6 +49,17 @@ pub struct TestRepo {
     #[allow(dead_code)]
     pub dir: TempDir,
     pub path: PathBuf,
+    /// Pins the permissive network policy for as long as the repository
+    /// exists, and takes a turn against the tests that switch a policy on.
+    ///
+    /// The backend gate reads a process-global setting, and a test that
+    /// expects a fetch, push, prune or submodule update to go through would
+    /// otherwise be refused whenever it happened to overlap a test that put
+    /// the process in offline mode. Every test that touches a remote goes
+    /// through here, so this is where the guard is taken by default rather
+    /// than remembered per test. Held, never read.
+    #[allow(dead_code)]
+    _policy: GlobalSettingsGuard,
 }
 
 impl TestRepo {
@@ -67,6 +79,7 @@ impl TestRepo {
 
     fn new_in_subdir(dir_name: Option<&str>) -> Self {
         isolate_git_config();
+        let policy = test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let path = match dir_name {
             Some(name) => {
@@ -88,7 +101,11 @@ impl TestRepo {
             .set_str("user.email", "test@example.com")
             .expect("Failed to set user.email");
 
-        Self { dir, path }
+        Self {
+            dir,
+            path,
+            _policy: policy,
+        }
     }
 
     /// Create a repository with an initial commit on the "main" branch

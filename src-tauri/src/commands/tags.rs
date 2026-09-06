@@ -617,7 +617,11 @@ mod tests {
         )
         .await;
         assert!(result.is_err(), "pre-push exit 1 must abort the deletion");
-        assert!(result.unwrap_err().to_string().contains("delete-denied"));
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("delete-denied"),
+            "the hook's stderr must be the reported reason, got: {message}"
+        );
 
         let bare_repo = git2::Repository::open(bare.path()).unwrap();
         assert!(

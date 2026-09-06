@@ -1149,6 +1149,7 @@ mod tests {
         assert_eq!(truncate_at_char_boundary("abc", 3), "abc");
     }
     use super::*;
+    use crate::services::security::test_support::no_policy;
 
     #[test]
     fn test_provider_type_display_name() {
@@ -1279,6 +1280,7 @@ mod tests {
     /// silently undid the Settings "Unload" button on the next AI action.
     #[tokio::test]
     async fn test_generate_commit_message_does_not_load_local_when_another_provider_serves() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         service
             .set_active_provider(AiProviderType::Anthropic)
@@ -1303,6 +1305,7 @@ mod tests {
     /// explain, and had the same unconditional load.
     #[tokio::test]
     async fn test_generate_text_does_not_load_local_when_another_provider_serves() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         service
             .set_active_provider(AiProviderType::Anthropic)
@@ -1325,6 +1328,7 @@ mod tests {
     /// local model is still the candidate and must still be lazily loaded.
     #[tokio::test]
     async fn test_generate_commit_message_still_lazy_loads_local_when_nothing_else_available() {
+        let _policy = no_policy();
         let (service, _config_dir, _models_dir) = service_fixture().await;
 
         let err = service
@@ -1349,6 +1353,7 @@ mod tests {
     /// Settings is honoured exactly, in both directions.
     #[tokio::test]
     async fn test_local_active_provider_is_loaded_and_errors_when_it_cannot_load() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         service
             .set_active_provider(AiProviderType::LocalInference)
@@ -1378,6 +1383,7 @@ mod tests {
     /// selected.
     #[tokio::test]
     async fn test_unavailable_active_provider_does_not_fall_back_to_local_model() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         // Ollama is the chosen provider but its endpoint is a closed port.
         service.set_active_provider(AiProviderType::Ollama).unwrap();
@@ -1434,6 +1440,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_refuses_to_substitute_an_unchosen_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1452,6 +1459,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_commit_message_never_hands_the_diff_to_a_substitute_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1468,6 +1476,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_text_never_hands_the_prompt_to_a_substitute_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1488,6 +1497,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_error_points_at_the_local_model_step() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1504,6 +1514,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_uses_the_provider_the_user_selected() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::Anthropic, "test-key");
@@ -1519,6 +1530,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_still_scans_when_nothing_is_selected() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         assert!(service.config.active_provider.is_none());
@@ -1572,6 +1584,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloaded_but_unloaded_local_model_counts_as_available() {
+        let _policy = no_policy();
         let models = tempfile::tempdir().unwrap();
         write_model(models.path(), "ready-model", true);
         let (service, _cfg) = service_with_models(models.path().to_path_buf());
@@ -1618,6 +1631,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloaded_local_model_does_not_cover_a_different_chosen_provider() {
+        let _policy = no_policy();
         // A local model is downloaded, but the user picked a cloud provider that
         // is not reachable. A request would fail rather than quietly run on the
         // local model, so availability must report false — otherwise the AI
@@ -1635,6 +1649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloaded_local_model_covers_local_inference_when_chosen() {
+        let _policy = no_policy();
         let models = tempfile::tempdir().unwrap();
         write_model(models.path(), "ready-model", true);
         let (mut service, _cfg) = service_with_models(models.path().to_path_buf());
@@ -1646,6 +1661,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unavailable_reason_is_generic_when_nothing_is_configured() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let service = test_service(&dir);
         assert!(service.config.active_provider.is_none());
@@ -1656,6 +1672,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unavailable_reason_is_none_for_the_chosen_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::Anthropic, "test-key");

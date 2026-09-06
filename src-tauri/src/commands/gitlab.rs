@@ -1104,6 +1104,7 @@ pub async fn list_gitlab_projects(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
 
     #[test]
@@ -1288,6 +1289,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_gitlab_connection_no_token() {
+        let _policy = no_policy();
         let result = check_gitlab_connection("https://gitlab.com".to_string(), None).await;
         assert!(result.is_ok());
         let status = result.unwrap();
@@ -1297,6 +1299,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_gitlab_connection_empty_token() {
+        let _policy = no_policy();
         let result =
             check_gitlab_connection("https://gitlab.com".to_string(), Some("".to_string())).await;
         assert!(result.is_ok());
@@ -1419,12 +1422,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_gitlab_projects_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_projects("https://gitlab.com".to_string(), None, None, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_list_gitlab_merge_requests_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_merge_requests(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1438,6 +1443,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_gitlab_merge_request_no_token() {
+        let _policy = no_policy();
         let result = get_gitlab_merge_request(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1450,6 +1456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_gitlab_issues_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_issues(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1464,6 +1471,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_gitlab_pipelines_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_pipelines(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1477,6 +1485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_gitlab_labels_no_token() {
+        let _policy = no_policy();
         let result = get_gitlab_labels(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),

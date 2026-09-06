@@ -409,23 +409,157 @@ pub fn guard_endpoint(endpoint: &str) -> Result<()> {
 ///
 /// The guards read [`global`] rather than taking a `State` parameter, so a test
 /// that wants a command to refuse has to set the real thing — and Rust runs
-/// tests in parallel threads, so those tests have to take turns. Holding the
-/// returned guard both pins the settings and serializes against every other
-/// test doing the same; dropping it restores the permissive default.
+/// tests in parallel threads, so a policy one test switches on is seen by
+/// every test running beside it. Two kinds of test therefore have to take
+/// turns:
+///
+/// - a WRITER ([`test_support::offline`], [`test_support::allowlist`],
+///   [`test_support::with`]) pins a restrictive policy and expects refusals;
+/// - a READER ([`test_support::no_policy`], taken by every
+///   [`crate::test_utils::TestRepo`]) pins the permissive default and expects
+///   guarded operations to go through.
+///
+/// Readers share the lock with each other and exclude writers; a writer
+/// excludes everyone. A reader that runs unlocked passes on an idle machine and
+/// fails under load, the moment it overlaps a writer, with a `NetworkBlocked`
+/// it never anticipated — that is what `TestRepo` taking the reader guard is
+/// for, and `scripts/security-lock.test.mjs` names any test that reaches the
+/// gate without holding either guard.
+///
+/// Both guards nest on the thread that holds them: a test may build a
+/// `TestRepo` before or after switching a policy on, and a writer may open a
+/// second, inner policy. Dropping a writer restores what it replaced.
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::{global, SecuritySettings};
-    use std::sync::{Mutex, MutexGuard};
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 
-    static SERIAL: Mutex<()> = Mutex::new(());
-
-    pub(crate) struct GlobalSettingsGuard {
-        _lock: MutexGuard<'static, ()>,
+    /// The reader/writer count behind the lock. A plain `RwLock` cannot be
+    /// used: a writer has to be able to take over from a reader share its own
+    /// thread already holds (a `TestRepo` built before `offline()`), and to
+    /// hand it back afterwards.
+    struct LockState {
+        readers: usize,
+        writer: bool,
     }
 
-    impl Drop for GlobalSettingsGuard {
+    static LOCK: Mutex<LockState> = Mutex::new(LockState {
+        readers: 0,
+        writer: false,
+    });
+    static CHANGED: Condvar = Condvar::new();
+
+    /// A test that panicked while holding the lock poisoned it; the counts are
+    /// maintained by RAII so they are still right, and the poison carries no
+    /// information here.
+    fn lock_state() -> MutexGuard<'static, LockState> {
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// One share of the reader count, co-owned by every reader guard taken on
+    /// a thread while it is alive. Released when the last co-owner drops,
+    /// whichever thread that happens on.
+    struct ReaderShare {
+        /// Set while a writer on the same thread has borrowed the share's
+        /// count; the drop then leaves the count alone, and the writer
+        /// notices the share is gone and does not hand it back.
+        suspended: AtomicBool,
+    }
+
+    impl Drop for ReaderShare {
         fn drop(&mut self) {
-            global().set(SecuritySettings::default());
+            let mut state = lock_state();
+            if !self.suspended.load(Ordering::SeqCst) {
+                state.readers -= 1;
+                CHANGED.notify_all();
+            }
+        }
+    }
+
+    /// The writer's hold on the lock, with what it has to put back.
+    struct WriterHold {
+        /// What the previous policy was: the default for an outermost writer,
+        /// the outer writer's settings for a nested one.
+        previous: SecuritySettings,
+        /// An inner writer keeps its outer alive and never touches the lock.
+        outer: Option<Arc<WriterHold>>,
+        /// The reader share this thread held when the writer took over.
+        suspended_reader: Option<Weak<ReaderShare>>,
+    }
+
+    impl Drop for WriterHold {
+        fn drop(&mut self) {
+            let mut state = lock_state();
+            global().set(self.previous.clone());
+            if self.outer.is_some() {
+                return;
+            }
+            state.writer = false;
+            if let Some(share) = self.suspended_reader.as_ref().and_then(Weak::upgrade) {
+                share.suspended.store(false, Ordering::SeqCst);
+                state.readers += 1;
+            }
+            CHANGED.notify_all();
+        }
+    }
+
+    thread_local! {
+        /// The live reader share of this thread, if any.
+        static READER: RefCell<Weak<ReaderShare>> = const { RefCell::new(Weak::new()) };
+        /// The outermost live writer of this thread, if any.
+        static WRITER: RefCell<Weak<WriterHold>> = const { RefCell::new(Weak::new()) };
+    }
+
+    enum Hold {
+        Reader(#[allow(dead_code)] Arc<ReaderShare>),
+        /// A reader taken while this thread's writer is in force: it keeps
+        /// the writer's policy pinned rather than replacing it, because the
+        /// writer test is the one that asked for it.
+        UnderWriter(#[allow(dead_code)] Arc<WriterHold>),
+        Writer(#[allow(dead_code)] Arc<WriterHold>),
+    }
+
+    /// Holds the policy lock for the lifetime of the value. `Send`, so a
+    /// `TestRepo` can be moved into a task; the lock is released wherever the
+    /// last holder drops.
+    pub(crate) struct GlobalSettingsGuard {
+        _hold: Hold,
+    }
+
+    /// Pin the permissive default — no offline mode, no allowlist — for the
+    /// lifetime of the guard, and take a turn against every test that switches
+    /// a policy on.
+    ///
+    /// Every `TestRepo` holds one; a test that reaches a guarded command
+    /// without a repository takes its own.
+    pub(crate) fn no_policy() -> GlobalSettingsGuard {
+        if let Some(writer) = WRITER.with(|w| w.borrow().upgrade()) {
+            return GlobalSettingsGuard {
+                _hold: Hold::UnderWriter(writer),
+            };
+        }
+        if let Some(share) = READER.with(|r| r.borrow().upgrade()) {
+            return GlobalSettingsGuard {
+                _hold: Hold::Reader(share),
+            };
+        }
+        let mut state = lock_state();
+        while state.writer {
+            state = CHANGED.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.readers += 1;
+        drop(state);
+        // Every writer restores the default on drop; this only makes the
+        // pinned state explicit rather than inherited.
+        global().set(SecuritySettings::default());
+        let share = Arc::new(ReaderShare {
+            suspended: AtomicBool::new(false),
+        });
+        READER.with(|r| *r.borrow_mut() = Arc::downgrade(&share));
+        GlobalSettingsGuard {
+            _hold: Hold::Reader(share),
         }
     }
 
@@ -445,12 +579,45 @@ pub(crate) mod test_support {
         })
     }
 
+    /// Apply `settings` for the lifetime of the guard, excluding every other
+    /// reader and writer. Dropping it restores what it replaced.
     pub(crate) fn with(settings: SecuritySettings) -> GlobalSettingsGuard {
-        // A test that panicked while holding the lock poisoned it; the state is
-        // reset on drop regardless, so the poison carries no information here.
-        let lock = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(outer) = WRITER.with(|w| w.borrow().upgrade()) {
+            let previous = global().snapshot();
+            global().set(settings);
+            return GlobalSettingsGuard {
+                _hold: Hold::Writer(Arc::new(WriterHold {
+                    previous,
+                    outer: Some(outer),
+                    suspended_reader: None,
+                })),
+            };
+        }
+
+        let mut state = lock_state();
+        // A reader share this thread already holds would wait for itself.
+        // Borrow its count for the duration of the writer instead.
+        let own_reader = READER.with(|r| r.borrow().upgrade());
+        if let Some(share) = &own_reader {
+            share.suspended.store(true, Ordering::SeqCst);
+            state.readers -= 1;
+        }
+        while state.writer || state.readers > 0 {
+            state = CHANGED.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        state.writer = true;
         global().set(settings);
-        GlobalSettingsGuard { _lock: lock }
+        drop(state);
+
+        let hold = Arc::new(WriterHold {
+            previous: SecuritySettings::default(),
+            outer: None,
+            suspended_reader: own_reader.as_ref().map(Arc::downgrade),
+        });
+        WRITER.with(|w| *w.borrow_mut() = Arc::downgrade(&hold));
+        GlobalSettingsGuard {
+            _hold: Hold::Writer(hold),
+        }
     }
 }
 
@@ -1290,5 +1457,164 @@ mod tests {
             resolve_remote_url(&repo.path_str(), Some("https://other.test/x.git")).as_deref(),
             Some("https://other.test/x.git")
         );
+    }
+
+    // ---- the test-support lock itself ----
+    //
+    // Every guarded-command test in the crate relies on these semantics, so
+    // they are pinned here rather than discovered the next time the suite
+    // goes red under load.
+
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Run `f` on its own thread and wait for it, failing rather than hanging
+    /// if it does not finish.
+    fn on_another_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("the other thread must finish: the lock is stuck")
+    }
+
+    fn policy_is_default() -> bool {
+        global().snapshot() == SecuritySettings::default()
+    }
+
+    #[test]
+    fn a_reader_holds_off_a_writer_until_it_drops() {
+        let reader = test_support::no_policy();
+        assert!(policy_is_default());
+
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let writer = std::thread::spawn(move || {
+            let _guard = test_support::offline();
+            acquired_tx.send(global().snapshot().offline_mode).unwrap();
+            let _ = release_rx.recv();
+        });
+
+        // The writer cannot get in while the reader pins the default.
+        assert!(
+            acquired_rx
+                .recv_timeout(Duration::from_millis(300))
+                .is_err(),
+            "a writer must wait for the reader"
+        );
+        assert!(policy_is_default(), "the reader still sees the default");
+
+        drop(reader);
+        assert!(
+            acquired_rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+            "the writer runs with its policy once the reader is gone"
+        );
+        drop(release_tx);
+        writer.join().unwrap();
+        // Read back under a reader of our own: another test's writer may
+        // otherwise be in force by now, which is the lock working, not failing.
+        let _reader = test_support::no_policy();
+        assert!(policy_is_default(), "the writer restored the default");
+    }
+
+    #[test]
+    fn readers_share_the_lock_with_each_other() {
+        let _mine = test_support::no_policy();
+        // Another thread's reader is not made to wait.
+        assert!(on_another_thread(|| {
+            let _theirs = test_support::no_policy();
+            policy_is_default()
+        }));
+    }
+
+    #[test]
+    fn a_writer_takes_over_a_reader_share_its_own_thread_holds() {
+        // The order every refusal test uses: the repository first, then the
+        // policy. Without the takeover this would wait for itself forever.
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        let reader = test_support::no_policy();
+        {
+            let _offline = test_support::offline();
+            assert!(global().snapshot().offline_mode);
+            assert!(guard_remote(&repo.path_str(), None).is_err());
+        }
+        assert!(
+            policy_is_default(),
+            "dropping the writer restores the default"
+        );
+        // And the share is handed back: a writer elsewhere waits again.
+        assert!(
+            on_another_thread(|| {
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let _g = test_support::offline();
+                    let _ = tx.send(());
+                });
+                rx.recv_timeout(Duration::from_millis(300)).is_err()
+            }),
+            "the reader share is back in force after the writer drops"
+        );
+        drop(reader);
+        drop(repo);
+    }
+
+    #[test]
+    fn a_reader_share_dropped_under_a_writer_leaves_the_count_consistent() {
+        let reader = test_support::no_policy();
+        let writer = test_support::offline();
+        drop(reader);
+        drop(writer);
+        {
+            let _reader = test_support::no_policy();
+            assert!(policy_is_default());
+        }
+        // Nothing is left counted: a writer on another thread gets straight in.
+        assert!(on_another_thread(|| {
+            let _g = test_support::offline();
+            global().snapshot().offline_mode
+        }));
+    }
+
+    #[test]
+    fn a_reader_taken_under_a_writer_keeps_the_writer_policy() {
+        let _offline = test_support::offline();
+        // The refusal tests build repositories after switching the policy on;
+        // that must not quietly turn it back off.
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        let _reader = test_support::no_policy();
+        assert!(global().snapshot().offline_mode);
+        assert!(guard_remote(&repo.path_str(), None).is_err());
+    }
+
+    #[test]
+    fn nested_writers_restore_the_policy_they_replaced() {
+        let _outer = test_support::allowlist(&["github.com"]);
+        {
+            let _inner = test_support::offline();
+            assert!(global().snapshot().offline_mode);
+        }
+        assert_eq!(
+            global().snapshot(),
+            settings(false, &["github.com"]),
+            "dropping the inner writer restores the outer policy"
+        );
+    }
+
+    #[test]
+    fn a_test_repo_pins_the_default_for_as_long_as_it_lives() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        // A writer elsewhere waits until the repository is gone.
+        let (tx, rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let _g = test_support::offline();
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(guard_remote(&repo.path_str(), None).is_ok());
+        drop(repo);
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("the writer gets in once the repository is dropped");
+        writer.join().unwrap();
     }
 }
