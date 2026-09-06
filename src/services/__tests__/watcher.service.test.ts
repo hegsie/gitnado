@@ -4,7 +4,7 @@
  * Tests for file watcher service using invokeCommand wrapper.
  */
 
-import { expect } from '@open-wc/testing';
+import { expect, waitUntil } from '@open-wc/testing';
 
 const invokeCallArgs: Array<{ command: string; args: Record<string, unknown> }> = [];
 let shouldFail = false;
@@ -122,12 +122,6 @@ describe('watcher.service', () => {
       'the system file-watch limit was reached while watching /repos/huge-monorepo. ' +
       'Raise the inotify limit to restore it, e.g. `sudo sysctl fs.inotify.max_user_watches=524288`.';
 
-    async function flush(): Promise<void> {
-      for (let i = 0; i < 20; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-    }
-
     function warnings(): Array<{ message: string }> {
       return uiStore.getState().toasts.filter((t) => t.type === 'warning');
     }
@@ -192,7 +186,10 @@ describe('watcher.service', () => {
       failCommands = {};
       invokeCallArgs.length = 0;
       toast!.action!.callback();
-      await flush();
+      await waitUntil(
+        () => invokeCallArgs.some((c) => c.command === 'start_watching'),
+        'the retry to reach the backend',
+      );
 
       const retry = invokeCallArgs.find((c) => c.command === 'start_watching');
       expect(retry, 'Retry re-attempts the watch').to.not.be.undefined;

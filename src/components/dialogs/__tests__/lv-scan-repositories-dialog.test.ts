@@ -26,7 +26,7 @@ let cbId = 0;
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-scan-repositories-dialog.ts';
 import type { LvScanRepositoriesDialog } from '../lv-scan-repositories-dialog.ts';
 import { repositoryStore, uiStore } from '../../../stores/index.ts';
@@ -59,14 +59,6 @@ function mockRepoPayload(path: string) {
     isPartialClone: false,
     cloneFilter: null,
   };
-}
-
-async function waitUntil(predicate: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (predicate()) return;
-    await new Promise((r) => setTimeout(r, 0));
-  }
-  throw new Error(`timed out waiting for ${what}`);
 }
 
 async function openDialog(

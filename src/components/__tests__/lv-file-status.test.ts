@@ -22,7 +22,7 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvFileStatus } from '../sidebar/lv-file-status.ts';
 import '../sidebar/lv-file-status.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
@@ -1367,7 +1367,7 @@ describe('lv-file-status', () => {
       uiStore.setState({ toasts: [] });
 
       window.dispatchEvent(new CustomEvent('stage-all'));
-      await new Promise((r) => setTimeout(r, 100));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
       await el.updateComplete;
 
       const args = findCommands('stage_files')[0].args as { paths: string[] };
@@ -1386,7 +1386,7 @@ describe('lv-file-status', () => {
       uiStore.setState({ toasts: [] });
 
       window.dispatchEvent(new CustomEvent('unstage-all'));
-      await new Promise((r) => setTimeout(r, 100));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
       await el.updateComplete;
 
       const args = findCommands('unstage_files')[0].args as { paths: string[] };
@@ -1419,7 +1419,7 @@ describe('lv-file-status', () => {
       uiStore.setState({ toasts: [] });
 
       window.dispatchEvent(new CustomEvent('stage-all'));
-      await new Promise((r) => setTimeout(r, 100));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
       await el.updateComplete;
 
       expect(findCommands('stage_files').length).to.equal(0);
@@ -1438,7 +1438,7 @@ describe('lv-file-status', () => {
       unstagedSection
         .querySelector('.section-actions .section-action')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 100));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
       await el.updateComplete;
 
       const args = findCommands('stage_files')[0].args as { paths: string[] };

@@ -32,7 +32,7 @@ let parked = new Map<string, Array<(value: unknown) => void>>();
   transformCallback: () => 0,
 };
 
-import { expect } from '@open-wc/testing';
+import { expect, waitUntil } from '@open-wc/testing';
 import {
   runFetch,
   runPull,
@@ -72,28 +72,14 @@ function counts(command: string): number {
 }
 
 /**
- * Wait until `predicate` holds.
+ * Wait until `command` has been sent `times` times.
  *
  * git.service resolves the remote, checks the security gate and looks up a
  * credential before it reaches `invoke`, each behind its own await, so "the
  * command has been sent" is several turns away from the call.
  */
-async function waitUntil(predicate: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`Timed out waiting for ${what}`);
-}
-
-/** Wait until `command` has been sent `times` times. */
 function sent(command: string, times = 1): Promise<void> {
   return waitUntil(() => counts(command) >= times, `${command} x${times}`);
-}
-
-/** Give any pending work a chance to reach IPC, then assert it did not. */
-async function quiesce(): Promise<void> {
-  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
 function errorToasts(): string[] {
@@ -132,8 +118,10 @@ describe('remote operations runner', () => {
       const first = runFetch(REPO);
       await sent('fetch');
 
+      // The awaited call is the whole story: a refused operation returns
+      // before anything is scheduled, and one that slipped past the lock
+      // would block here on the parked fetch.
       await runFetch(REPO);
-      await quiesce();
       expect(counts('fetch'), 'the second is coalesced, not duplicated').to.equal(1);
 
       release('fetch');
@@ -148,9 +136,9 @@ describe('remote operations runner', () => {
       const first = runFetch(REPO);
       await sent('fetch');
 
+      // As above: refused, both return with nothing in flight.
       await runPull(REPO);
       await runPush(REPO);
-      await quiesce();
 
       expect(counts('pull'), 'no pull behind the fetch').to.equal(0);
       expect(counts('push'), 'no push behind the fetch').to.equal(0);

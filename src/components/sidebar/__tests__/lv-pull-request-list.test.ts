@@ -25,7 +25,7 @@ let invokeCalls: Array<{ command: string; args?: unknown }> = [];
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import { settingsStore } from '../../../stores/settings.store.ts';
 import { unifiedProfileStore } from '../../../stores/unified-profile.store.ts';
 import { invalidateProviderDetection } from '../../../services/pull-request.service.ts';
@@ -109,13 +109,26 @@ async function renderList(
   return el;
 }
 
-/** Let the element's chained awaits (detect → token → list) resolve. */
+/**
+ * Let the element's chained awaits (detect → token → list) resolve.
+ *
+ * `updated()` starts the load a microtask after the render that changed the
+ * bindings, and the load flips `listState` to 'loading' before its first
+ * await — so once that render has completed, "not loading" means the chain
+ * has reached its settled state (or, collapsed or unbound, never started).
+ */
 async function settle(el: LvPullRequestList): Promise<void> {
-  for (let i = 0; i < 12; i++) {
-    await el.updateComplete;
-    await new Promise((r) => setTimeout(r, 0));
-  }
   await el.updateComplete;
+  await waitUntil(
+    () => (el as unknown as { listState: string }).listState !== 'loading',
+    'the pull request list to settle',
+  );
+  await el.updateComplete;
+}
+
+/** The row handlers hand off to openExternalUrl, which reaches IPC asynchronously. */
+function browserOpened(): Promise<void> {
+  return waitUntil(() => openedUrls().length > 0, 'the pull request to be opened in the browser');
 }
 
 /** Rendered text with template whitespace collapsed, for prose assertions. */
@@ -442,7 +455,7 @@ describe('lv-pull-request-list', () => {
       const el = await renderList();
 
       (el.shadowRoot!.querySelector('.pr-item') as HTMLElement).click();
-      await new Promise((r) => setTimeout(r, 20));
+      await browserOpened();
 
       // openExternalUrl hands the URL to the Tauri shell plugin - the same
       // route the graph's PR badges take.
@@ -455,7 +468,7 @@ describe('lv-pull-request-list', () => {
 
       const item = el.shadowRoot!.querySelector('.pr-item') as HTMLElement;
       item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-      await new Promise((r) => setTimeout(r, 20));
+      await browserOpened();
 
       expect(openedUrls()).to.contain('https://github.com/octo/leviathan/pull/42');
     });
@@ -466,7 +479,7 @@ describe('lv-pull-request-list', () => {
 
       const item = el.shadowRoot!.querySelector('.pr-item') as HTMLElement;
       item.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
-      await new Promise((r) => setTimeout(r, 20));
+      await browserOpened();
 
       expect(openedUrls()).to.contain('https://github.com/octo/leviathan/pull/42');
     });
@@ -501,7 +514,7 @@ describe('lv-pull-request-list', () => {
       const row = el.shadowRoot!.querySelector('.pr-item') as HTMLAnchorElement;
       const click = new MouseEvent('click', { bubbles: true, cancelable: true });
       row.dispatchEvent(click);
-      await new Promise((r) => setTimeout(r, 20));
+      await browserOpened();
 
       expect(click.defaultPrevented).to.equal(true);
       expect(openedUrls()).to.contain('https://github.com/octo/leviathan/pull/42');
@@ -518,7 +531,7 @@ describe('lv-pull-request-list', () => {
         cancelable: true,
       });
       row.dispatchEvent(key);
-      await new Promise((r) => setTimeout(r, 20));
+      await browserOpened();
 
       expect(key.defaultPrevented).to.equal(true);
       expect(openedUrls().filter((u) => u.endsWith('/pull/42')).length).to.equal(1);

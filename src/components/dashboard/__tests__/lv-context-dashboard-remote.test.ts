@@ -39,7 +39,7 @@ let parked = new Map<string, Array<(value: unknown) => void>>();
   transformCallback: () => 0,
 };
 
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-context-dashboard.ts';
 import type { LvContextDashboard } from '../lv-context-dashboard.ts';
 import { repositoryStore } from '../../../stores/repository.store.ts';
@@ -109,12 +109,8 @@ function release(command: string): void {
  * git.service resolves the remote, checks the security gate and looks up a
  * credential before it reaches `invoke`, each behind its own await.
  */
-async function sent(command: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (counts(command) > 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`Timed out waiting for ${command}`);
+function sent(command: string): Promise<void> {
+  return waitUntil(() => counts(command) > 0, `Timed out waiting for ${command}`);
 }
 
 /**
