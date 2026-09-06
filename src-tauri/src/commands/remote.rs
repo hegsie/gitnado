@@ -1610,6 +1610,26 @@ fn poll_push_child(child: &mut std::process::Child, monitor: &TransferMonitor) -
     }
 }
 
+/// Kill and reap a child the poll gave up on, and say what it really was.
+///
+/// `poll_push_child` reads the cancel flag AFTER `try_wait` reports the child
+/// still running, so a push that exits between those two reads is handed over
+/// as `Cancelled`: the kill below is a no-op on it, and reaping it as
+/// cancelled would throw its real exit status away — the same misreport the
+/// reap-first ordering exists to prevent, shrunk from the 100ms sleep to a
+/// few instructions but not closed. The status `wait` returns after the kill
+/// is the truth: a `success()` there is a push that landed on the remote, and
+/// the user has to be told so. A killed child does not report success (it is
+/// signalled on Unix and exits non-zero on Windows), so a push that really
+/// was stopped stays cancelled.
+fn reap_abandoned_push(child: &mut std::process::Child, abnormal: PushOutcome) -> PushOutcome {
+    let _ = child.kill();
+    match child.wait() {
+        Ok(status) if status.success() => PushOutcome::Finished(status),
+        _ => abnormal,
+    }
+}
+
 /// Run a prepared `git push` to completion, killing it if the user cancels.
 ///
 /// `Command::output()` blocks until the child exits, which is why the force
@@ -1663,13 +1683,15 @@ fn run_push_command(
     // Single exit path for every abnormal outcome, the shape the CLI clone in
     // `commands::repository` uses: kill the child and join the drain threads
     // once, instead of repeating that in each early return.
-    let status = match poll_push_child(&mut child, monitor) {
+    let outcome = match poll_push_child(&mut child, monitor) {
+        finished @ PushOutcome::Finished(_) => finished,
+        // Killed and reaped before returning: an orphaned `git push` would
+        // keep talking to the remote after the user was told it stopped.
+        abnormal => reap_abandoned_push(&mut child, abnormal),
+    };
+    let status = match outcome {
         PushOutcome::Finished(status) => status,
         abnormal => {
-            // Killed and reaped before returning: an orphaned `git push` would
-            // keep talking to the remote after the user was told it stopped.
-            let _ = child.kill();
-            let _ = child.wait();
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(match abnormal {
@@ -5090,6 +5112,62 @@ mod tests {
         assert!(
             matches!(outcome, PushOutcome::Cancelled),
             "a push still in flight must be stoppable"
+        );
+    }
+
+    /// A child that exited successfully, already reaped.
+    fn exited_successfully_child(repo: &TestRepo) -> std::process::Child {
+        let mut child = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path_str())
+            .arg("rev-parse")
+            .arg("HEAD")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("git must be on PATH");
+        assert!(child.wait().expect("the child must exit").success());
+        child
+    }
+
+    /// The residual window the reap-first ordering left open: the poll reads
+    /// the cancel flag AFTER `try_wait` reports the child still running, and a
+    /// push that exits between those two reads is handed over as `Cancelled`.
+    /// That interleaving is a few instructions wide and cannot be driven
+    /// deterministically from outside the loop, so the property is pinned at
+    /// the point of decision: a child handed over as cancelled that `wait`
+    /// then reports as a success is a push that landed, and is reported with
+    /// that status rather than as "Push cancelled".
+    #[test]
+    fn a_push_that_exited_successfully_before_the_kill_is_reported_as_finished() {
+        let repo = TestRepo::with_initial_commit();
+        let mut child = exited_successfully_child(&repo);
+
+        match reap_abandoned_push(&mut child, PushOutcome::Cancelled) {
+            PushOutcome::Finished(status) => assert!(status.success()),
+            PushOutcome::Cancelled => panic!(
+                "a push that had exited 0 was reported as cancelled — the remote has been \
+                 written, the user is told it was not"
+            ),
+            PushOutcome::WaitFailed(e) => panic!("unexpected wait failure: {}", e),
+        }
+    }
+
+    /// The balancing half: a child that really was still running is killed,
+    /// and the kill's status must not be mistaken for a landed push.
+    #[test]
+    fn a_push_killed_while_still_running_stays_cancelled() {
+        let mut child = still_running_child();
+
+        let outcome = reap_abandoned_push(&mut child, PushOutcome::Cancelled);
+
+        assert!(
+            matches!(outcome, PushOutcome::Cancelled),
+            "a killed push must not be reported as landed"
+        );
+        assert!(
+            child.try_wait().expect("reaped").is_some(),
+            "the child must have been reaped"
         );
     }
 

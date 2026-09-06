@@ -190,6 +190,169 @@ describe('the submodule hosts the gate has to check', () => {
     ).to.equal(false);
   });
 
+  // ---- the paths after `--` are pathspecs ----
+  //
+  // `git submodule update -- vendor` registers and clones every submodule
+  // under `vendor/`. Matching the entries as exact submodule paths guarded
+  // nothing for that spelling, so `vendor/off` was reached anyway.
+
+  it('checks every submodule a directory pathspec selects', async () => {
+    mockRepo([
+      { name: 'ok', path: 'vendor/ok', url: 'https://github.com/x/ok.git' },
+      { name: 'off', path: 'vendor/off', url: 'https://gitlab.com/x/off.git' },
+    ]);
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo', { submodulePaths: ['vendor'] });
+
+    expect(result.success, '`-- vendor` updates vendor/off too').to.equal(false);
+    expect(reachedUpdate()).to.equal(false);
+    expect(uiStore.getState().toasts.some((t) => t.message.includes('gitlab.com'))).to.equal(true);
+  });
+
+  it('a trailing slash still narrows to that one submodule', async () => {
+    mockRepo([
+      { name: 'ok', path: 'vendor/ok', url: 'https://github.com/x/ok.git' },
+      { name: 'off', path: 'vendor/off', url: 'https://gitlab.com/x/off.git' },
+    ]);
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo', { submodulePaths: ['vendor/ok/'] });
+
+    expect(result.success).to.not.equal(false);
+    expect(reachedUpdate()).to.equal(true);
+  });
+
+  it('fails closed on a glob pathspec', async () => {
+    // git expands the glob; the check does not reproduce that, and a guess
+    // would guess open.
+    mockRepo([
+      { name: 'ok', path: 'vendor/ok', url: 'https://github.com/x/ok.git' },
+      { name: 'off', path: 'lib/off', url: 'https://gitlab.com/x/off.git' },
+    ]);
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo', { submodulePaths: ['vendor/*'] });
+
+    expect(result.success).to.equal(false);
+    expect(reachedUpdate()).to.equal(false);
+  });
+
+  it('fails closed on a pathspec that selects nothing', async () => {
+    mockRepo([
+      { name: 'ok', path: 'vendor/ok', url: 'https://github.com/x/ok.git' },
+      { name: 'off', path: 'lib/off', url: 'https://gitlab.com/x/off.git' },
+    ]);
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo', { submodulePaths: ['nothing/here'] });
+
+    expect(result.success).to.equal(false);
+    expect(reachedUpdate()).to.equal(false);
+  });
+
+  // ---- the superproject's own remote is not the question ----
+
+  it('does not need a superproject remote when every submodule is allowlisted', async () => {
+    // A local-only superproject: no remotes at all. Its own remote is only
+    // where a RELATIVE url would resolve, and there is none.
+    mockInvoke = (command: string) => {
+      if (command === 'get_remotes') return Promise.resolve([]);
+      if (command === 'get_submodules') {
+        return Promise.resolve([
+          {
+            name: 'dep',
+            path: 'vendor/dep',
+            url: 'https://github.com/x/y.git',
+            headOid: null,
+            branch: null,
+            initialized: true,
+            status: 'current',
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    };
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success, 'the superproject remote is not a destination').to.not.equal(false);
+    expect(reachedUpdate()).to.equal(true);
+    expect(uiStore.getState().toasts.some((t) => t.type === 'error')).to.equal(false);
+  });
+
+  it('still refuses a relative url on a superproject with no remote', async () => {
+    // The one case the superproject remote decides: a relative url with no
+    // remote to resolve against has no host the allowlist can see.
+    mockInvoke = (command: string) => {
+      if (command === 'get_remotes') return Promise.resolve([]);
+      if (command === 'get_submodules') {
+        return Promise.resolve([
+          {
+            name: 'dep',
+            path: 'vendor/dep',
+            url: '../dep.git',
+            headOid: null,
+            branch: null,
+            initialized: true,
+            status: 'current',
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    };
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success).to.equal(false);
+    expect(reachedUpdate()).to.equal(false);
+  });
+
+  it('offline mode refuses before anything is listed', async () => {
+    mockRepo([]);
+    settingsStore.setState({ offlineMode: true });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success).to.equal(false);
+    expect(result.error?.code).to.equal('BLOCKED');
+    expect(reachedUpdate()).to.equal(false);
+    expect(
+      invokeHistory.some((c) => c.command === 'get_submodules'),
+      'offline mode refuses without looking',
+    ).to.equal(false);
+    expect(uiStore.getState().toasts.some((t) => t.message.includes('Offline mode'))).to.equal(
+      true,
+    );
+  });
+
+  it('still asks for the confirm the user turned on, once, and honours a decline', async () => {
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: 'https://github.com/x/y.git' }]);
+    const repoMock = mockInvoke;
+    mockInvoke = (command: string, args?: unknown) => {
+      // The native confirm the gate shows (`showConfirm` in dialog.service).
+      if (command === 'plugin:dialog|confirm' || command === 'plugin:dialog|message') {
+        return Promise.resolve(false);
+      }
+      return repoMock(command, args);
+    };
+    settingsStore.setState({ remoteAllowlist: ['github.com'], confirmNetworkOps: true });
+
+    const result = await updateSubmodules('/repo');
+
+    const confirms = invokeHistory.filter(
+      (c) => c.command === 'plugin:dialog|confirm' || c.command === 'plugin:dialog|message',
+    );
+    expect(confirms.length, 'the confirm must still run exactly once').to.equal(1);
+    expect(result.success).to.equal(false);
+    expect(result.error?.code, 'a decline is the user\'s own choice, not a block').to.equal(
+      'CANCELLED',
+    );
+    expect(reachedUpdate()).to.equal(false);
+  });
+
   it('checks a relative "git submodule add" against the superproject remote', async () => {
     mockRepo([]);
     settingsStore.setState({ remoteAllowlist: ['github.com'] });

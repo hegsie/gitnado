@@ -516,11 +516,26 @@ fn finish_clone_poll(
     };
 
     let _ = child.kill();
-    let _ = child.wait();
+    // The poll reads the cancel flag and the clock AFTER `try_wait` says the
+    // child is still running, so a clone that exits between those two reads
+    // is killed here to no effect and reaped as what it really was. Reaping
+    // first shrank that window from the 100ms sleep to a few instructions;
+    // it did not close it. The status the reap returns is the truth: a
+    // `success()` is a clone that completed, and its checkout is the user's
+    // — not a partial one to clear.
+    if let Ok(status) = child.wait() {
+        if status.success() {
+            return Ok(status);
+        }
+    }
     let _ = std::fs::remove_dir_all(dest_path);
 
     Err(match abnormal {
-        CloneOutcome::Cancelled => LeviathanError::Custom("Clone cancelled".to_string()),
+        // The variant every other cancellable operation returns: the frontend
+        // recognises its code (`isOperationCancelled`) as the user's own click
+        // rather than a failure to paint red. `Custom("Clone cancelled")`
+        // reached the dialog as `CUSTOM_ERROR`, which is a failure.
+        CloneOutcome::Cancelled => LeviathanError::OperationCancelled,
         CloneOutcome::TimedOut => {
             LeviathanError::OperationTimeout("Clone operation timed out".to_string())
         }
@@ -529,6 +544,78 @@ fn finish_clone_poll(
         }
         CloneOutcome::Finished(_) => unreachable!("handled above"),
     })
+}
+
+/// Run a prepared CLI `git clone` to completion, killing it on a cancel or a
+/// lapsed deadline, and report the run to the Output panel.
+///
+/// The child is spawned rather than run through `GitCommand::output()` so a
+/// cancellation can kill it — which means `output()` never reports it. Without
+/// the explicit `report_run` here the `--depth`/`--filter`/`--single-branch`
+/// clone, the one shell-out whose exact argv matters most when it fails, was
+/// the one that never reached the panel: the user got `git clone failed:
+/// <stderr>` and never saw the invocation. Reported on both the success and
+/// the failure path; stdout is discarded (git clone writes its progress and
+/// its failure reason to stderr), so the entry carries stderr only.
+///
+/// stderr is drained on its own thread: leaving a piped stream unread
+/// deadlocks the child once the pipe buffer fills on a large clone.
+///
+/// `cancelled` is `CLONE_CANCELLED` in production; it is a parameter so the
+/// run can be tested without touching global state.
+fn run_clone_command(
+    mut cmd: crate::utils::GitCommand,
+    dest_path: &Path,
+    cancelled: &AtomicBool,
+    deadline: Option<std::time::Instant>,
+    emit_progress: impl Fn(CloneProgress) + Send + 'static,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| LeviathanError::Custom(format!("Failed to execute git command: {}", e)))?;
+
+    let stderr_pipe = child.stderr.take();
+    let stderr_reader = std::thread::spawn(move || {
+        if let Some(pipe) = stderr_pipe {
+            drain_clone_stderr(pipe, emit_progress)
+        } else {
+            String::new()
+        }
+    });
+
+    let outcome = poll_clone_child(&mut child, cancelled, deadline);
+
+    // The drain thread is joined on BOTH paths: `finish_clone_poll` has
+    // already killed and reaped the child on an abnormal one, so the pipe is
+    // at EOF and this returns straight away.
+    let status = match finish_clone_poll(&mut child, dest_path, outcome) {
+        Ok(status) => status,
+        Err(e) => {
+            let _ = stderr_reader.join();
+            return Err(e);
+        }
+    };
+
+    let stderr = stderr_reader.join().unwrap_or_default();
+
+    cmd.report_run(
+        started,
+        &std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr: stderr.clone().into_bytes(),
+        },
+    );
+
+    if !status.success() {
+        return Err(clone_failed(&stderr));
+    }
+    Ok(())
 }
 
 /// Clone a repository with progress reporting
@@ -585,7 +672,7 @@ pub async fn clone_repository(
         if needs_cli {
             // git2 doesn't support --depth, --filter, or --single-branch, so fall back to git CLI
             let result = tokio::task::spawn_blocking(move || {
-                let mut cmd = build_clone_command(
+                let cmd = build_clone_command(
                     &url_clone,
                     &dest_path,
                     bare,
@@ -596,28 +683,6 @@ pub async fn clone_repository(
                     token_clone.as_deref(),
                 );
 
-                // Spawned rather than run to completion so a cancel can kill it.
-                // stderr is drained on its own thread: git clone writes progress
-                // there, and leaving a piped stream unread deadlocks the child
-                // once the pipe buffer fills on a large clone.
-                cmd.stdout(std::process::Stdio::null());
-                cmd.stderr(std::process::Stdio::piped());
-
-                let mut child = cmd.spawn().map_err(|e| {
-                    LeviathanError::Custom(format!("Failed to execute git command: {}", e))
-                })?;
-
-                let stderr_pipe = child.stderr.take();
-                let stderr_reader = std::thread::spawn(move || {
-                    if let Some(pipe) = stderr_pipe {
-                        drain_clone_stderr(pipe, |progress| {
-                            let _ = app_for_progress.emit("clone-progress", progress);
-                        })
-                    } else {
-                        String::new()
-                    }
-                });
-
                 // The timeout is enforced HERE as well as by the outer
                 // tokio::time::timeout. That one only drops the future — this
                 // blocking task, and the git process it spawned, would keep
@@ -626,24 +691,15 @@ pub async fn clone_repository(
                     .filter(|secs| *secs > 0)
                     .map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
 
-                let outcome = poll_clone_child(&mut child, &CLONE_CANCELLED, deadline);
-
-                // The drain thread is joined on BOTH paths: `finish_clone_poll`
-                // has already killed and reaped the child on an abnormal one,
-                // so the pipe is at EOF and this returns straight away.
-                let status = match finish_clone_poll(&mut child, &dest_path, outcome) {
-                    Ok(status) => status,
-                    Err(e) => {
-                        let _ = stderr_reader.join();
-                        return Err(e);
-                    }
-                };
-
-                let stderr = stderr_reader.join().unwrap_or_default();
-
-                if !status.success() {
-                    return Err(clone_failed(&stderr));
-                }
+                run_clone_command(
+                    cmd,
+                    &dest_path,
+                    &CLONE_CANCELLED,
+                    deadline,
+                    move |progress| {
+                        let _ = app_for_progress.emit("clone-progress", progress);
+                    },
+                )?;
 
                 git2::Repository::open(&dest_path).map_err(|e| {
                     LeviathanError::Custom(format!("Failed to open cloned repo: {}", e))
@@ -802,7 +858,7 @@ pub async fn clone_repository(
                     // checkout so a retry does not hit an occupied destination.
                     if CLONE_CANCELLED.load(Ordering::Relaxed) {
                         let _ = std::fs::remove_dir_all(Path::new(&path));
-                        return Err(LeviathanError::Custom("Clone cancelled".to_string()));
+                        return Err(LeviathanError::OperationCancelled);
                     }
                     // A deadline abort leaves exactly the same partial checkout
                     // a cancellation does, and reported it as a bare libgit2
@@ -1087,6 +1143,136 @@ mod tests {
         (text, events)
     }
 
+    // ---- the CLI clone reaches the Output panel ----
+    //
+    // `run_clone_command` spawns the child by hand so a cancel can kill it,
+    // which bypasses the automatic report in `GitCommand::output()`. Without
+    // an explicit `report_run` the shallow/partial clone never emitted
+    // `git-command-executed` at all.
+
+    /// Every git run reported to the panel since the sink was installed.
+    ///
+    /// The sink is process-wide and installed once, so this captures the runs
+    /// of every test in the binary; a test picks its own out by destination.
+    fn captured_git_runs() -> &'static std::sync::Mutex<Vec<crate::utils::GitCommandLog>> {
+        static CAPTURED: std::sync::Mutex<Vec<crate::utils::GitCommandLog>> =
+            std::sync::Mutex::new(Vec::new());
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            crate::utils::set_git_command_log_sink(|entry| {
+                CAPTURED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(entry);
+            });
+        });
+        &CAPTURED
+    }
+
+    fn runs_naming(needle: &str) -> Vec<crate::utils::GitCommandLog> {
+        captured_git_runs()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|entry| entry.command.contains(needle))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_successful_cli_clone_is_reported_to_the_panel_once() {
+        captured_git_runs();
+        let source = TestRepo::with_initial_commit();
+        let dest = TempDir::new().expect("temp dir");
+        let checkout = dest.path().join("shallow");
+        // `file://` rather than a bare path: git ignores `--depth` on a local
+        // path clone, and this pins the argv the panel shows for a real one.
+        let url = format!("file://{}", source.path.display());
+
+        let cmd = build_clone_command(&url, &checkout, false, None, Some(1), None, true, None);
+        run_clone_command(cmd, &checkout, &AtomicBool::new(false), None, |_| {})
+            .expect("a local shallow clone succeeds");
+
+        let runs = runs_naming(&checkout.to_string_lossy());
+        assert_eq!(
+            runs.len(),
+            1,
+            "exactly one panel entry for the clone, got {:?}",
+            runs
+        );
+        let run = &runs[0];
+        assert!(run.success, "the entry must carry the real exit status");
+        assert!(
+            run.command.contains("--depth 1") && run.command.contains("--single-branch"),
+            "the entry must show the flags the clone really ran with: {}",
+            run.command
+        );
+        assert!(checkout.join("README.md").exists());
+    }
+
+    #[test]
+    fn a_failed_cli_clone_is_reported_to_the_panel_with_its_argv_and_stderr() {
+        captured_git_runs();
+        let dest = TempDir::new().expect("temp dir");
+        let checkout = dest.path().join("missing");
+        let url = format!("file://{}", dest.path().join("no-such-source").display());
+
+        let cmd = build_clone_command(
+            &url,
+            &checkout,
+            false,
+            None,
+            Some(1),
+            Some("blob:none"),
+            false,
+            None,
+        );
+        let err = run_clone_command(cmd, &checkout, &AtomicBool::new(false), None, |_| {})
+            .expect_err("cloning a source that does not exist fails");
+        assert!(
+            err.to_string().contains("git clone failed"),
+            "unexpected error: {}",
+            err
+        );
+
+        let runs = runs_naming(&checkout.to_string_lossy());
+        assert_eq!(
+            runs.len(),
+            1,
+            "exactly one panel entry for the failed clone, got {:?}",
+            runs
+        );
+        let run = &runs[0];
+        assert!(!run.success);
+        assert!(
+            run.command.contains("--depth 1") && run.command.contains("--filter blob:none"),
+            "the failure entry is the one place the user sees the argv: {}",
+            run.command
+        );
+        assert!(
+            !run.output.trim().is_empty(),
+            "git's reason from stderr must reach the panel"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_cli_clone_is_the_cancellation_every_other_operation_reports() {
+        let source = TestRepo::with_initial_commit();
+        let dest = TempDir::new().expect("temp dir");
+        let checkout = dest.path().join("cancelled");
+        let url = format!("file://{}", source.path.display());
+
+        let cmd = build_clone_command(&url, &checkout, false, None, None, None, false, None);
+        // Cancelled before the child is polled; whether the clone finished
+        // first decides which outcome wins, and both are legitimate here.
+        let cancelled = AtomicBool::new(true);
+        match run_clone_command(cmd, &checkout, &cancelled, None, |_| {}) {
+            Ok(()) => assert!(checkout.join("README.md").exists()),
+            Err(LeviathanError::OperationCancelled) => assert!(!checkout.exists()),
+            Err(other) => panic!("a cancelled clone must not be a plain failure: {:?}", other),
+        }
+    }
+
     // ---- the clone poll: reap first, abort only what is still running ----
     //
     // The CLI clone drives its `git clone` child by hand so a Cancel or a
@@ -1242,6 +1428,52 @@ mod tests {
         );
     }
 
+    /// A child that exited successfully, already reaped.
+    fn exited_successfully_child(repo: &TestRepo) -> std::process::Child {
+        let mut child = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path_str())
+            .arg("rev-parse")
+            .arg("HEAD")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("git must be on PATH");
+        assert!(child.wait().expect("the child must exit").success());
+        child
+    }
+
+    /// The residual window the reap-first ordering left open: the poll reads
+    /// the cancel flag AFTER `try_wait` reports the child still running, and
+    /// a clone that exits between those two reads is handed over as
+    /// `Cancelled`. That interleaving is a few instructions wide and cannot
+    /// be driven deterministically from outside the loop, so the property is
+    /// pinned at the point of decision: a child handed over as cancelled that
+    /// `wait` then reports as a success is a finished clone, and its checkout
+    /// stays. Before this, `finish_clone_poll` deleted the completed working
+    /// copy and reported "Clone cancelled".
+    #[test]
+    fn a_clone_that_exited_successfully_before_the_kill_keeps_its_checkout() {
+        let repo = TestRepo::with_initial_commit();
+        let mut child = exited_successfully_child(&repo);
+
+        let dest = TempDir::new().expect("temp dir");
+        let checkout = dest.path().join("clone");
+        std::fs::create_dir_all(&checkout).expect("create checkout");
+        let marker = checkout.join("cloned.txt");
+        std::fs::write(&marker, "the user's clone").expect("write marker");
+
+        for abnormal in [CloneOutcome::Cancelled, CloneOutcome::TimedOut] {
+            let status = finish_clone_poll(&mut child, &checkout, abnormal)
+                .expect("a clone that exited 0 must be reported as finished, not aborted");
+            assert!(status.success());
+            assert!(
+                marker.exists(),
+                "a finished clone's checkout was deleted as if it were partial"
+            );
+        }
+    }
+
     /// The balancing half: a genuinely aborted clone still has its PARTIAL
     /// destination cleared, so a retry does not hit "destination already
     /// exists".
@@ -1257,8 +1489,8 @@ mod tests {
             .expect_err("a cancelled clone must be an error");
 
         assert!(
-            matches!(&err, LeviathanError::Custom(m) if m == "Clone cancelled"),
-            "unexpected error: {:?}",
+            matches!(&err, LeviathanError::OperationCancelled),
+            "a cancelled clone must carry the code every other cancellation does, got {:?}",
             err
         );
         assert!(
