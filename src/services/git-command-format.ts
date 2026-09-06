@@ -376,6 +376,49 @@ export function synthesizeGitCommand(
 export const SYNTHESIZED_COMMANDS: ReadonlyArray<string> = Object.keys(BUILDERS);
 
 /**
+ * The git subcommands the BACKEND may really run for an operation whose
+ * builder above renders a DIFFERENT one.
+ *
+ * The Output panel drops an operation's synthesised row when a real `git` run
+ * reported by the backend belongs to it, and it decides that by comparing git
+ * subcommands: two known values that differ are a mismatch. That comparison is
+ * right for `create_commit` (`git commit`), `push` (`git push`) and every other
+ * builder whose Rust side shells out to the subcommand the builder names — but
+ * `merge` does not: it runs through libgit2 and then, when `commit.gpgsign` is
+ * set, commits the merge with `git commit -S -m <msg>` (`commit_merge_signed`
+ * in `src-tauri/src/commands/merge.rs`), because libgit2 cannot sign. Left
+ * undeclared, that real `git commit` was refused as "a different subcommand"
+ * and the panel showed BOTH `≈ git merge feature` and the real line — two red
+ * rows for one click when no GPG key was configured.
+ *
+ * Every builder's own subcommand is always accepted; this map lists the
+ * ADDITIONAL ones. Audited against every `create_command("git")` site in
+ * `src-tauri/src/commands/` reachable from a builder command: `create_commit`,
+ * `amend_commit`, `commit_merge` → `commit`; `create_tag` → `tag`; `push` →
+ * `push`; `continue_rebase`, `abort_rebase`, `skip_rebase_commit` → `rebase`.
+ * `pull`, `cherry_pick`, `revert`, `rebase`, `fetch`, the stash, branch, reset
+ * and staging builders never shell out through a reporting command at all.
+ */
+const BACKEND_SUBCOMMANDS: Readonly<Record<string, ReadonlyArray<string>>> = {
+  merge: ['commit'],
+};
+
+/**
+ * Every git subcommand a real run of `command` may carry: the one its
+ * synthesised `line` names plus any the backend is known to run instead.
+ * `undefined` when the line names none — the operation's shape is unknown
+ * then, and the caller stays permissive exactly as it did before.
+ */
+export function claimableSubcommands(
+  command: string,
+  line: string | undefined,
+): string[] | undefined {
+  const own = gitSubcommand(line);
+  if (own === undefined) return undefined;
+  return [own, ...(BACKEND_SUBCOMMANDS[command] ?? [])];
+}
+
+/**
  * git's own options that take a SEPARATE value argument, so the subcommand
  * scan skips two slots rather than mistaking the value for the subcommand.
  *

@@ -775,5 +775,235 @@ describe('output-log.service', () => {
       const occurrences = entries[0].output.split('gpg failed to sign').length - 1;
       expect(occurrences).to.equal(1);
     });
+
+    // `merge` is the one builder whose backend shells out to a DIFFERENT git
+    // subcommand than the builder names: with `commit.gpgsign` set, the merge
+    // itself runs through libgit2 and the merge commit is then made with
+    // `git commit -S -m <msg>` (commit_merge_signed in merge.rs). The real
+    // run's subcommand is `commit`, the synthesised line's is `merge`, and a
+    // plain "known subcommands must be equal" rule refused the claim — so one
+    // click on "Merge into current branch" showed BOTH `≈ git merge feature`
+    // and the real `git commit -S …`.
+    it('a merge signed because of commit.gpgsign logs ONE row — the real git commit -S', async () => {
+      shellsOut('merge', {
+        command: 'git commit -S -m "Merge branch \'feature\'"',
+        output: "[main 1a2b3c4] Merge branch 'feature'",
+        repoPath: '/repo',
+      });
+
+      await invokeCommand('merge', { path: '/repo', sourceRef: 'feature' });
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].gitCommand).to.equal('git commit -S -m "Merge branch \'feature\'"');
+      expect(entries[0].synthesized).to.be.false;
+      expect(entries[0].command).to.equal('git commit -S -m "Merge branch \'feature\'"');
+      expect(entries[0].success).to.be.true;
+    });
+
+    it('a signed merge with no GPG key shows ONE red row carrying the error, not two', async () => {
+      // The claim is CONFIRMED (a declared subcommand), so the IPC failure is
+      // carried onto the real row rather than opening a second red one.
+      shellsOut(
+        'merge',
+        {
+          command: 'git commit -S -m "Merge branch \'feature\'"',
+          output: 'error: gpg failed to sign the data',
+          success: false,
+          repoPath: '/repo',
+        },
+        () =>
+          Promise.reject({
+            code: 'OPERATION_FAILED',
+            message: 'Git commit failed: error: gpg failed to sign the data',
+          }),
+      );
+
+      const result = await invokeCommand('merge', { path: '/repo', sourceRef: 'feature' });
+      expect(result.success).to.be.false;
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].success).to.be.false;
+      expect(entries[0].gitCommand).to.equal('git commit -S -m "Merge branch \'feature\'"');
+      expect(entries[0].synthesized).to.be.false;
+      expect(entries[0].output).to.contain('gpg failed to sign the data');
+      const occurrences = entries[0].output.split('gpg failed to sign').length - 1;
+      expect(occurrences).to.equal(1);
+    });
+
+    it('an unsigned merge keeps its ONE synthesised git merge row', async () => {
+      // Over-suppression guard: declaring `commit` as a subcommand the merge
+      // may run must not cost a git2-backed merge its own equivalent line.
+      await invokeCommand('merge', { path: '/repo', sourceRef: 'feature', noFf: true });
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].gitCommand).to.equal('git merge --no-ff feature');
+      expect(entries[0].synthesized).to.be.true;
+      expect(entries[0].command).to.equal('merge');
+    });
+
+    it('a merge in flight still does not swallow an unrelated real run', async () => {
+      // The declared list widens the merge to `commit`, not to everything: an
+      // auto-fetch firing mid-merge keeps its own row and so does the merge.
+      shellsOut('merge', {
+        command: 'git fetch --prune origin',
+        repoPath: '/repo',
+      });
+
+      await invokeCommand('merge', { path: '/repo', sourceRef: 'feature' });
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(2);
+      expect(entries.some((e) => e.gitCommand === 'git fetch --prune origin')).to.be.true;
+      expect(
+        entries.some((e) => e.gitCommand === 'git merge feature' && e.synthesized === true),
+      ).to.be.true;
+    });
+
+    it("a signed merge commit's real run is not taken by an older create_commit in another repository", async () => {
+      // Both accept `commit`; the repository tells them apart.
+      const resolvers = new Map<string, () => void>();
+      mockInvoke = (_command: string, args?: unknown) => {
+        const path = (args as { path?: string } | undefined)?.path ?? '';
+        return new Promise((resolve) => {
+          resolvers.set(path, () => resolve(null));
+        });
+      };
+
+      const commit = invokeCommand('create_commit', { path: '/other', message: 'unrelated' });
+      const merge = invokeCommand('merge', { path: '/repo', sourceRef: 'feature' });
+
+      recordGitCommandEvent({
+        command: 'git commit -S -m "Merge branch \'feature\'"',
+        output: '',
+        success: true,
+        durationMs: 30,
+        repoPath: '/repo',
+      });
+
+      resolvers.get('/other')?.();
+      resolvers.get('/repo')?.();
+      await Promise.all([commit, merge]);
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(2);
+      const forOther = entries.find((e) => e.repoPath === '/other');
+      expect(forOther?.synthesized).to.be.true;
+      expect(forOther?.gitCommand).to.equal('git commit -m unrelated');
+      const forRepo = entries.find((e) => e.repoPath === '/repo');
+      expect(forRepo?.synthesized).to.be.false;
+      expect(forRepo?.gitCommand).to.contain('-S');
+    });
+  });
+
+  describe('a real run that reports no repository', () => {
+    // A CLI clone has no working directory yet, so the backend reports its
+    // run with `repoPath: null`. Such a run matches every candidate on the
+    // repository axis and can only be attributed when ONE candidate is left.
+    function inFlight(): {
+      settle: (path: string) => void;
+    } {
+      const resolvers = new Map<string, () => void>();
+      mockInvoke = (_command: string, args?: unknown) => {
+        const path = (args as { path?: string } | undefined)?.path ?? '';
+        return new Promise((resolve) => {
+          resolvers.set(path, () => resolve(null));
+        });
+      };
+      return { settle: (path) => resolvers.get(path)?.() };
+    }
+
+    it('is claimed when exactly one candidate is in flight', async () => {
+      const { settle } = inFlight();
+      const clone = invokeCommand('clone_repository', {
+        url: 'https://example.com/a.git',
+        path: '/clones/a',
+        depth: 1,
+      });
+
+      recordGitCommandEvent({
+        command: 'git clone --depth 1 https://example.com/a.git /clones/a',
+        output: "Cloning into '/clones/a'...",
+        success: true,
+        durationMs: 900,
+        repoPath: null,
+      });
+
+      settle('/clones/a');
+      await clone;
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].synthesized).to.be.false;
+      expect(entries[0].gitCommand).to.equal(
+        'git clone --depth 1 https://example.com/a.git /clones/a',
+      );
+    });
+
+    it('is NOT claimed while two candidates are in flight — every row stands', async () => {
+      const { settle } = inFlight();
+      const a = invokeCommand('clone_repository', {
+        url: 'https://example.com/a.git',
+        path: '/clones/a',
+        depth: 1,
+      });
+      const b = invokeCommand('clone_repository', {
+        url: 'https://example.com/b.git',
+        path: '/clones/b',
+        depth: 1,
+      });
+
+      recordGitCommandEvent({
+        command: 'git clone --depth 1 https://example.com/a.git /clones/a',
+        output: "Cloning into '/clones/a'...",
+        success: true,
+        durationMs: 900,
+        repoPath: null,
+      });
+
+      settle('/clones/a');
+      settle('/clones/b');
+      await Promise.all([a, b]);
+
+      // The real row plus BOTH operations' own rows: nothing was guessed.
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(3);
+      expect(entries.filter((e) => e.command === 'clone_repository').length).to.equal(2);
+      expect(
+        entries.filter((e) => e.gitCommand?.startsWith('git clone')).length,
+      ).to.equal(1);
+    });
+
+    it('a candidate with a KNOWN, different subcommand is not a candidate', async () => {
+      // A commit in flight elsewhere does not make the clone ambiguous: the
+      // subcommand rules it out before the repository question is asked.
+      const { settle } = inFlight();
+      const commit = invokeCommand('create_commit', { path: '/repo', message: 'x' });
+      const clone = invokeCommand('clone_repository', {
+        url: 'https://example.com/a.git',
+        path: '/clones/a',
+        depth: 1,
+      });
+
+      recordGitCommandEvent({
+        command: 'git clone --depth 1 https://example.com/a.git /clones/a',
+        output: '',
+        success: true,
+        durationMs: 900,
+        repoPath: null,
+      });
+
+      settle('/repo');
+      settle('/clones/a');
+      await Promise.all([commit, clone]);
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(2);
+      expect(entries.some((e) => e.gitCommand === 'git commit -m x' && e.synthesized)).to.be
+        .true;
+      expect(entries.some((e) => e.command === 'clone_repository')).to.be.false;
+    });
   });
 });

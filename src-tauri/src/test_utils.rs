@@ -394,12 +394,20 @@ pub fn port_has_a_listener(port: u16) -> bool {
 /// of reporting a release that did happen as a leak. A port that is really
 /// still held (a wait that never got its cancel) stays bound for the whole
 /// 300 s callback timeout, so the assertion still fails when it should.
+///
+/// That 5 s patience covers the TOTAL-failure regression only. A test that
+/// asserts the port was released BEFORE the call under test returned — not
+/// merely eventually — must use [`bind_released_port_within`] with a bound
+/// below the accept loop's poll tick, or a shutdown that only signals the
+/// loop (and frees the port a tick later) passes it anyway.
 pub fn bind_released_port(port: u16) -> std::io::Result<std::net::TcpListener> {
     bind_released_port_within(port, std::time::Duration::from_secs(5))
 }
 
 /// [`bind_released_port`] with an explicit bound on how long a lingering
-/// copy of the old listener is waited out.
+/// copy of the old listener is waited out — and, when that bound is set
+/// below the code under test's own release latency, on how late a release
+/// still counts as "before the call returned".
 pub fn bind_released_port_within(
     port: u16,
     patience: std::time::Duration,
