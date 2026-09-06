@@ -5,7 +5,7 @@
  * commands; read queries are excluded so the log stays meaningful.
  */
 
-import { gitSubcommand } from './git-command-format.ts';
+import { claimableSubcommands, gitSubcommand } from './git-command-format.ts';
 
 const MAX_ENTRIES = 100;
 
@@ -153,13 +153,15 @@ export function clearLogEntries(repoPath?: string): void {
 //   2. `git-output.service.ts` records one row for every REAL `git` subprocess
 //      the backend runs, from the `git-command-executed` event.
 //
-// Most operations run through libgit2 and only produce (1). But a large share
-// fall back to the CLI — a signed commit, `push --force-with-lease`, a shallow
-// clone, `rebase --continue` — and those produce BOTH, which showed the user
-// two rows for one operation. Worse, the two could contradict each other: the
-// synthesised line is built from the IPC arguments, so a commit signed because
-// `commit.gpgsign` is set in the repository config rendered WITHOUT `-S` next
-// to the real invocation that carried it.
+// Most operations run through libgit2 and only produce (1). But whether an
+// operation shells out is the BACKEND's decision, made per call — a commit is
+// signed through the CLI because `commit.gpgsign` is set, a push goes through
+// it for `--force-with-lease`, a rebase for `--continue` — and every one that
+// does produces BOTH, which showed the user two rows for one operation. Worse,
+// the two could contradict each other: the synthesised line is built from the
+// IPC arguments, so a commit signed because `commit.gpgsign` is set in the
+// repository config rendered WITHOUT `-S` next to the real invocation that
+// carried it.
 //
 // The real line is the truthful one — it is the actual argv — so it wins. An
 // IPC call registers itself here for the duration of the operation; a real
@@ -169,13 +171,24 @@ export function clearLogEntries(repoPath?: string): void {
 // A claim requires the repository and the git subcommand to be COMPATIBLE: two
 // KNOWN values that differ block it, so a background fetch in the same
 // repository cannot swallow a commit's row and repository A's real line cannot
-// swallow repository B's synthesised one. But many operations have no
-// synthesised line and therefore no known subcommand at all (`clone_repository`,
-// `run_gc`, `bundle_create`, the index builders), and those must still be
-// claimable or they would double every time they shell out. So an unknown
-// subcommand stays compatible — as a FALLBACK only: an operation whose
-// subcommand IS this run's is always preferred, and an unknown one can never
-// take the claim ahead of it.
+// swallow repository B's synthesised one. The subcommands an operation accepts
+// are the one its synthesised line names plus any its backend is known to run
+// INSTEAD (`claimableSubcommands`): a `merge` commits through `git commit -S`
+// when signing is on, and refusing that as "a different subcommand" was
+// exactly the doubling this module exists to remove. Many operations have no
+// synthesised line and therefore no known subcommand at all
+// (`clone_repository`, `run_gc`, `bundle_create`, the index builders), and
+// those must still be claimable or they would double every time they shell
+// out. So an unknown subcommand stays compatible — as a FALLBACK only: an
+// operation whose subcommand IS this run's is always preferred, and an unknown
+// one can never take the claim ahead of it.
+//
+// One more thing a claim needs is somewhere to anchor: a real run that reports
+// NO repository (`git clone` has no working directory yet, so the backend
+// cannot attach one) is compatible with every candidate on that axis, and
+// attributing it to the first of several would be a guess that could silence
+// the wrong operation's row. Such a run is claimed only when exactly one
+// candidate remains; otherwise both rows stand.
 //
 // A claim taken on that fallback is a compatibility guess rather than a
 // confirmed identity, so a failure arriving afterwards is carried onto the real
@@ -194,8 +207,11 @@ interface GitOperation {
   command: string;
   /** Repository the operation targets, when it has one. */
   repoPath?: string;
-  /** git subcommand the operation is expected to produce, when known. */
-  subcommand?: string;
+  /**
+   * git subcommands a real run of this operation may carry, when known: the
+   * one its synthesised line names, plus any its backend runs instead.
+   */
+  subcommands?: readonly string[];
   /** Log entry id of the real invocation that claimed this operation. */
   claimedEntryId?: number;
   /**
@@ -249,13 +265,28 @@ function operationMatches(
     return false;
   }
   if (
-    operation.subcommand !== undefined &&
+    operation.subcommands !== undefined &&
     subcommand !== undefined &&
-    operation.subcommand !== subcommand
+    !operation.subcommands.includes(subcommand)
   ) {
     return false;
   }
   return true;
+}
+
+/**
+ * Whether a real run's subcommand CONFIRMS it belongs to this operation, as
+ * opposed to being merely tolerated because one side's subcommand is unknown.
+ */
+function confirms(
+  operation: GitOperation,
+  subcommand: string | undefined,
+): boolean {
+  return (
+    subcommand !== undefined &&
+    operation.subcommands !== undefined &&
+    operation.subcommands.includes(subcommand)
+  );
 }
 
 function findClaimable(
@@ -273,13 +304,13 @@ function findClaimable(
   // builders) can still be claimed — but those are pending far more often, and
   // `matches` is oldest-first, so without this a background index refresh would
   // take a push's claim and the push would write a second, contradictory row.
-  const confirmed = matches.filter(
-    (op) => op.subcommand !== undefined && op.subcommand === subcommand,
-  );
+  const confirmed = matches.filter((op) => confirms(op, subcommand));
   const preferred = confirmed.length > 0 ? confirmed : matches;
-  // A run whose repository could not be determined (`git clone` has no working
-  // directory yet) is only attributed when there is exactly one candidate —
-  // otherwise it could be attributed to the wrong repository's operation.
+  // A run that reports NO repository (`git clone` has no working directory
+  // yet) matches every candidate on the repository axis, so with more than
+  // one left there is nothing to say which operation it was — and claiming the
+  // first would silence the wrong one's row. Only an unambiguous candidate is
+  // attributed; otherwise the real row and the synthesised rows all stand.
   if (repoPath === undefined && preferred.length > 1) return undefined;
   return preferred[0];
 }
@@ -333,6 +364,7 @@ export function beginGitOperation(
   command: string,
   repoPath: string | undefined,
   gitCommand: string | undefined,
+  claimSubcommands: readonly string[] = claimableSubcommands(command, gitCommand) ?? [],
 ): number {
   // A caller that never settles would otherwise pin an operation forever and
   // let it swallow an unrelated real invocation later on.
@@ -344,7 +376,10 @@ export function beginGitOperation(
     id,
     command,
     repoPath,
-    subcommand: gitSubcommand(gitCommand),
+    // An empty list means "unknown", which keeps the operation permissive; it
+    // must never mean "accepts nothing", or the operation could never be
+    // claimed and would double every time it shelled out.
+    subcommands: claimSubcommands.length > 0 ? claimSubcommands : undefined,
   });
   return id;
 }
@@ -416,8 +451,7 @@ export function claimGitOperationForEntry(
   const inFlight = findClaimable(pendingOperations, repoPath, subcommand);
   if (inFlight) {
     inFlight.claimedEntryId = entryId;
-    inFlight.claimConfirmed =
-      inFlight.subcommand !== undefined && inFlight.subcommand === subcommand;
+    inFlight.claimConfirmed = confirms(inFlight, subcommand);
     return;
   }
 
@@ -441,8 +475,7 @@ export function claimGitOperationForEntry(
   // that failed keeps the row it already wrote — two rows are the honest
   // outcome, and recolouring a real invocation that succeeded with an
   // unrelated error is not.
-  const confirmed =
-    settled.subcommand !== undefined && settled.subcommand === subcommand;
+  const confirmed = confirms(settled, subcommand);
   if (settled.settledFailure !== undefined && !confirmed) return;
 
   const index = entryIndex(settled.settledEntryId);

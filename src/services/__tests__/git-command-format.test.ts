@@ -1,6 +1,7 @@
 import { expect } from '@open-wc/testing';
 
 import {
+  claimableSubcommands,
   gitSubcommand,
   redactSecrets,
   synthesizeGitCommand,
@@ -430,6 +431,51 @@ describe('git-command-format', () => {
       expect(gitSubcommand(undefined)).to.equal(undefined);
       expect(gitSubcommand('')).to.equal(undefined);
       expect(gitSubcommand('git --version')).to.equal(undefined);
+    });
+  });
+
+  describe('claimableSubcommands', () => {
+    it("is the line's own subcommand for a builder whose backend runs the same one", () => {
+      expect(claimableSubcommands('create_commit', 'git commit -m x')).to.deep.equal([
+        'commit',
+      ]);
+      expect(claimableSubcommands('push', 'git push origin main')).to.deep.equal(['push']);
+      expect(claimableSubcommands('create_tag', 'git tag -a -m m v1')).to.deep.equal(['tag']);
+    });
+
+    it('adds commit for merge, which signs its merge commit through git commit -S', () => {
+      expect(claimableSubcommands('merge', 'git merge feature')).to.deep.equal([
+        'merge',
+        'commit',
+      ]);
+    });
+
+    it('stays unknown when the line names no subcommand', () => {
+      // Unknown keeps the caller permissive; a declared extra must not turn an
+      // operation with no line into one that accepts only that extra.
+      expect(claimableSubcommands('merge', undefined)).to.equal(undefined);
+      expect(claimableSubcommands('clone_repository', undefined)).to.equal(undefined);
+    });
+
+    it('always keeps the builder\'s own subcommand claimable', () => {
+      for (const command of SYNTHESIZED_COMMANDS) {
+        const line = synthesizeGitCommand(command, {
+          message: 'm',
+          paths: ['a'],
+          refName: 'x',
+          name: 'n',
+          oldName: 'o',
+          newName: 'p',
+          sourceRef: 's',
+          onto: 'o',
+          targetRef: 't',
+          mode: 'hard',
+          commitOid: 'abc',
+        });
+        const own = gitSubcommand(line);
+        if (own === undefined) continue;
+        expect(claimableSubcommands(command, line), command).to.include(own);
+      }
     });
   });
 

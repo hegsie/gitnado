@@ -491,6 +491,134 @@ test.describe('Output Panel - In-app integration', () => {
     await expect(appPanel.locator('.legend')).toHaveCount(0);
   });
 
+  /**
+   * Model the backend of a repository with `commit.gpgsign = true`: the merge
+   * itself runs through libgit2, and the merge commit is then made with
+   * `git commit -S -m <msg>` (commit_merge_signed in merge.rs) — a DIFFERENT
+   * git subcommand from the `git merge` the frontend synthesises — reported on
+   * `git-command-executed` while the `merge` IPC call is still in flight.
+   */
+  async function mergeCommitsThroughSignedCli(
+    page: import('@playwright/test').Page,
+    outcome: { success: true } | { success: false; error: string }
+  ): Promise<void> {
+    await page.evaluate(
+      ({ repoPath, outcome }) => {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> };
+          }
+        ).__TAURI_INTERNALS__;
+        const originalInvoke = internals.invoke;
+        internals.invoke = async (command: string, args?: unknown) => {
+          if (command !== 'merge') return originalInvoke(command, args);
+          const sourceRef = (args as { sourceRef?: string } | undefined)?.sourceRef ?? '';
+          (
+            window as unknown as {
+              __EMIT_TAURI_EVENT__: (event: string, payload: unknown) => void;
+            }
+          ).__EMIT_TAURI_EVENT__('git-command-executed', {
+            command: `git commit -S -m "Merge branch '${sourceRef}'"`,
+            output: outcome.success
+              ? `[main 1a2b3c4] Merge branch '${sourceRef}'`
+              : outcome.error,
+            success: outcome.success,
+            durationMs: 240,
+            repoPath,
+          });
+          if (!outcome.success) {
+            throw { code: 'OPERATION_FAILED', message: `Failed to run git commit: ${outcome.error}` };
+          }
+          return originalInvoke(command, args);
+        };
+      },
+      { repoPath: '/tmp/test-repo', outcome }
+    );
+  }
+
+  /** Branch list → right-click `name` → "Merge into current branch". */
+  async function mergeFromBranchList(
+    page: import('@playwright/test').Page,
+    name: string
+  ): Promise<void> {
+    const { LeftPanelPage } = await import('../pages/panels.page');
+    const leftPanel = new LeftPanelPage(page);
+    await leftPanel.openBranchContextMenu(name);
+    const mergeMenuItem = page.locator('.context-menu-item', { hasText: 'Merge into current branch' });
+    await expect(mergeMenuItem).toBeVisible();
+    await mergeMenuItem.click();
+  }
+
+  test('a merge signed because of commit.gpgsign shows ONE row — the real git commit -S', async ({
+    page,
+  }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const { autoConfirmDialogs } = await import('../fixtures/test-helpers');
+    const app = new AppPage(page);
+
+    await autoConfirmDialogs(page);
+    await mergeCommitsThroughSignedCli(page, { success: true });
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await mergeFromBranchList(page, 'feature/test');
+    await expect(page.locator('.toast', { hasText: 'Merged feature/test' })).toBeVisible();
+
+    // ONE row for one click: the real `git commit -S`, whose subcommand differs
+    // from the synthesised `git merge` — not both.
+    const realRow = appPanel.locator('.entry-command', { hasText: 'git commit -S' });
+    await expect(realRow).toHaveCount(1);
+    await expect(realRow.first()).toHaveText(`git commit -S -m "Merge branch 'feature/test'"`);
+    await expect(appPanel.locator('.entry-command', { hasText: 'git merge' })).toHaveCount(0);
+
+    // The surviving row is the executed one, so nothing marks it an equivalent.
+    await expect(appPanel.locator('.synth-mark')).toHaveCount(0);
+    await expect(appPanel.locator('.legend')).toHaveCount(0);
+    await expect(appPanel.locator('.status-dot.success')).toHaveCount(1);
+  });
+
+  test('a signed merge with no GPG key shows ONE red row, not two', async ({ page }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const { autoConfirmDialogs } = await import('../fixtures/test-helpers');
+    const app = new AppPage(page);
+
+    await autoConfirmDialogs(page);
+    await mergeCommitsThroughSignedCli(page, {
+      success: false,
+      error: 'error: gpg failed to sign the data',
+    });
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await mergeFromBranchList(page, 'feature/test');
+    // The user is told the merge failed...
+    await expect(page.locator('.toast', { hasText: 'Merge failed' })).toBeVisible();
+
+    // ...and the panel shows the failure ONCE: the real `git commit -S` row
+    // carrying the error, with no second red `≈ git merge` twin beside it.
+    await expect(appPanel.locator('.entry')).toHaveCount(1);
+    const failedEntry = appPanel
+      .locator('.entry')
+      .filter({ has: page.locator('.status-dot.failure') })
+      .first();
+    await expect(failedEntry.locator('.entry-command.failure')).toHaveText(
+      `git commit -S -m "Merge branch 'feature/test'"`
+    );
+    await expect(appPanel.locator('.entry-command', { hasText: 'git merge' })).toHaveCount(0);
+    await expect(appPanel.locator('.synth-mark')).toHaveCount(0);
+
+    await failedEntry.locator('.entry-header').click();
+    await expect(failedEntry.locator('.entry-output.failure')).toContainText(
+      'gpg failed to sign the data'
+    );
+  });
+
   test('app plumbing never shows up as a command in the panel', async ({ page }) => {
     const { AppPage } = await import('../pages/app.page');
     const app = new AppPage(page);

@@ -737,6 +737,24 @@ mod tests {
         crate::test_utils::reserve_test_port()
     }
 
+    /// How long after `shutdown()`/`cancel()` returns the port must be
+    /// bindable, for the tests that assert the release happened BEFORE the
+    /// return rather than merely eventually.
+    ///
+    /// `bind_released_port`'s default patience (5 s) exists to wait out a
+    /// descriptor copy held by a child another test thread is forking — a
+    /// window of microseconds to a few scheduler ticks — but it is also long
+    /// enough to hide the regression these tests were written for: a
+    /// signal-only shutdown frees the port one accept tick
+    /// ([`ACCEPT_POLL_INTERVAL`], 100 ms) later, and a 5 s probe still
+    /// succeeded on it. 30 ms sits far above the fork window and well below
+    /// the tick, so the probe passes only when the port was released before
+    /// the call returned. Measured: with the wait for the close acknowledgement
+    /// removed from `cancel()`, 10/10 runs of each of the three tests failed
+    /// at 30 ms and 0/5 failed at 5 s; restored, 0 failures in 20 runs of this
+    /// module at `--test-threads=32`.
+    const RELEASE_LATENCY: Duration = Duration::from_millis(30);
+
     /// `shutdown` must not return until the socket is actually closed: an
     /// abandoned OAuth sign-in has to free its port for an immediate retry.
     /// Plain `drop` only signals the accept loop, which can take a poll tick
@@ -745,10 +763,15 @@ mod tests {
     fn test_shutdown_releases_the_port_before_returning() {
         let server = LoopbackServer::new_with_port(releasable_port()).unwrap();
         let port = server.port();
+        // Let the accept loop settle into its poll cadence first. Signalled
+        // before the server thread's very first pass, even a signal-only
+        // shutdown is noticed at once, and the probe below could not tell it
+        // from a shutdown that waits for the close.
+        thread::sleep(Duration::from_millis(150));
 
         server.shutdown();
 
-        let rebound = crate::test_utils::bind_released_port(port);
+        let rebound = crate::test_utils::bind_released_port_within(port, RELEASE_LATENCY);
         assert!(
             rebound.is_ok(),
             "shutdown must confirm the socket is closed before returning: {:?}",
@@ -777,7 +800,7 @@ mod tests {
 
         cancel.cancel();
 
-        let rebound = crate::test_utils::bind_released_port(port);
+        let rebound = crate::test_utils::bind_released_port_within(port, RELEASE_LATENCY);
         assert!(
             rebound.is_ok(),
             "cancelling must release the port immediately: {:?}",
@@ -809,11 +832,14 @@ mod tests {
 
         // Connect and send nothing: the accept loop is now in the request read.
         let _silent = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        thread::sleep(Duration::from_millis(150));
+        // Half a tick past the accept, so the cancel lands in the MIDDLE of a
+        // read slice rather than on the shutdown check between two slices,
+        // where a signal-only cancel would be noticed at once by luck.
+        thread::sleep(Duration::from_millis(100));
 
         cancel.cancel();
 
-        let rebound = crate::test_utils::bind_released_port(port);
+        let rebound = crate::test_utils::bind_released_port_within(port, RELEASE_LATENCY);
         assert!(
             rebound.is_ok(),
             "cancelling must release the port even while a connection is being read: {:?}",
