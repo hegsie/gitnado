@@ -18,7 +18,7 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvBranchList } from '../lv-branch-list.ts';
 import { invalidateProviderDetection } from '../../../services/pull-request.service.ts';
 import '../lv-branch-list.ts';
@@ -82,10 +82,12 @@ async function createComponent(
   const el = await fixture<LvBranchList>(
     html`<lv-branch-list .repositoryPath=${REPO_PATH}></lv-branch-list>`,
   );
-  for (let i = 0; i < 10; i++) {
-    await el.updateComplete;
-    await new Promise((r) => setTimeout(r, 0));
-  }
+  // connectedCallback loads the branches and then detects the provider; the
+  // resolved flag flips at the end of that chain.
+  await waitUntil(
+    () => (el as unknown as { prProviderResolved: boolean }).prProviderResolved,
+    'the provider detection to resolve',
+  );
   await el.updateComplete;
   return el;
 }

@@ -21,7 +21,7 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { Commit, RefsByCommit } from '../../../types/git.types.ts';
 import '../lv-graph-canvas.ts';
 import type { LvGraphCanvas } from '../lv-graph-canvas.ts';
@@ -80,10 +80,22 @@ async function renderCanvas(): Promise<{ el: LvGraphCanvas; events: () => number
       @graph-commits-changed=${() => { count++; }}
     ></lv-graph-canvas>`
   );
-  await el.updateComplete;
-  await new Promise((r) => setTimeout(r, 200));
-  await el.updateComplete;
+  await loaded(el, 2);
   return { el, events: () => count };
+}
+
+/**
+ * Wait for a load to land. The commit map is filled and the refs assigned in
+ * one synchronous block with the event queued a microtask behind them, so a
+ * populated map followed by any await means both are in place and the event
+ * has fired.
+ */
+async function loaded(el: LvGraphCanvas, commitCount: number): Promise<void> {
+  await waitUntil(
+    () => el.getLoadedCommits().length === commitCount,
+    `the graph to load ${commitCount} commits`,
+  );
+  await el.updateComplete;
 }
 
 describe('lv-graph-canvas graph-commits-changed', () => {
@@ -111,8 +123,7 @@ describe('lv-graph-canvas graph-commits-changed', () => {
 
     setupMocks([commitB, commitA, makeCommit('c'.repeat(40), 'Third commit')]);
     el.refresh();
-    await new Promise((r) => setTimeout(r, 200));
-    await el.updateComplete;
+    await loaded(el, 3);
 
     expect(events()).to.be.greaterThan(before);
     expect(el.getLoadedCommits()).to.have.length(3);

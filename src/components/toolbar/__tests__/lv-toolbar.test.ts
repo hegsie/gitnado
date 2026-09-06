@@ -17,7 +17,7 @@ let mockInvoke: (command: string, args?: unknown) => Promise<unknown> = () => Pr
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvToolbar } from '../lv-toolbar.ts';
 import '../lv-toolbar.ts';
 import { repositoryStore, uiStore } from '../../../stores/index.ts';
@@ -74,12 +74,11 @@ function parkingInvoke(command: string): Promise<unknown> {
  * git.service resolves the remote, checks the security gate and looks up a
  * credential before it invokes, each behind its own await.
  */
-async function waitForInvoke(command: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (parkedCommands.get(command)?.length) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`Timed out waiting for ${command}`);
+function waitForInvoke(command: string): Promise<void> {
+  return waitUntil(
+    () => Boolean(parkedCommands.get(command)?.length),
+    `Timed out waiting for ${command}`,
+  );
 }
 
 function mockRepo(path: string, name: string): Repository {
@@ -941,9 +940,10 @@ describe('lv-toolbar menu bar routed actions', () => {
     const el = await createToolbar();
 
     el.dispatchEvent(new CustomEvent('open-repository'));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(calls.some((c) => c.startsWith('plugin:dialog|open'))).to.be.true;
+    await waitUntil(
+      () => calls.some((c) => c.startsWith('plugin:dialog|open')),
+      'the folder picker to open',
+    );
   });
 
   it('stops listening once the toolbar is disconnected', async () => {

@@ -23,20 +23,12 @@ let cbId = 0;
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-welcome.ts';
 import type { LvWelcome } from '../lv-welcome.ts';
 import { repositoryStore, uiStore } from '../../../stores/index.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-async function waitUntil(predicate: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (predicate()) return;
-    await new Promise((r) => setTimeout(r, 0));
-  }
-  throw new Error(`timed out waiting for ${what}`);
-}
 
 function actionButton(el: LvWelcome, label: string): HTMLButtonElement {
   const match = Array.from(el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.action-btn')).find(

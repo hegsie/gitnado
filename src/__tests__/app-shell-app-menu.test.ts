@@ -21,7 +21,7 @@ let cbId = 0;
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect } from '@open-wc/testing';
+import { expect, waitUntil } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
 import { repositoryStore, uiStore } from '../stores/index.ts';
@@ -157,7 +157,7 @@ describe('app-shell application menu routing', () => {
     dialogs.reset();
 
     runMenuAction(el, 'switch-branch');
-    await new Promise((r) => setTimeout(r, 0));
+    await waitUntil(() => dialogs.isOpen('commandPalette'), 'the palette to open');
 
     expect(dialogs.isOpen('commandPalette'), 'the palette opens').to.be.true;
     // Matches the "Switch to <branch>" label lv-command-palette gives every
@@ -170,7 +170,7 @@ describe('app-shell application menu routing', () => {
     dialogs.reset();
 
     runMenuAction(el, 'command-palette');
-    await new Promise((r) => setTimeout(r, 0));
+    await waitUntil(() => dialogs.isOpen('commandPalette'), 'the palette to open');
 
     expect(dialogs.isOpen('commandPalette')).to.be.true;
     expect((el as any).commandPaletteQuery, 'every other entry point is unchanged').to.equal('');
@@ -217,7 +217,10 @@ describe('app-shell application menu routing', () => {
     const el = shell(null);
 
     (el as any).syncAppMenuState(false);
-    await new Promise((r) => setTimeout(r, 0));
+    await waitUntil(
+      () => invokeCalls.some((c) => c.command === 'sync_app_menu'),
+      'the first sync to reach the backend',
+    );
 
     const first = invokeCalls.filter((c) => c.command === 'sync_app_menu');
     expect(first, 'the first sync must reach the backend').to.have.lengthOf(1);
@@ -225,14 +228,17 @@ describe('app-shell application menu routing', () => {
     expect(items.find((i) => i.id === 'fetch')!.enabled).to.be.false;
     expect(items.find((i) => i.id === 'command-palette')!.enabled).to.be.true;
 
-    // Same state again: no IPC.
+    // Same state again: no IPC. The no-op guard returns before anything is
+    // scheduled, so there is nothing to wait for.
     (el as any).syncAppMenuState(false);
-    await new Promise((r) => setTimeout(r, 0));
     expect(invokeCalls.filter((c) => c.command === 'sync_app_menu')).to.have.lengthOf(1);
 
     // A repository opens: everything becomes clickable.
     (el as any).syncAppMenuState(true);
-    await new Promise((r) => setTimeout(r, 0));
+    await waitUntil(
+      () => invokeCalls.filter((c) => c.command === 'sync_app_menu').length === 2,
+      'the second sync to reach the backend',
+    );
     const second = invokeCalls.filter((c) => c.command === 'sync_app_menu');
     expect(second).to.have.lengthOf(2);
     const enabled = second[1].args.items as Array<{ id: string; enabled: boolean }>;

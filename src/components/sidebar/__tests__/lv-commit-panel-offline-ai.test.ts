@@ -30,7 +30,7 @@ const invoked: string[] = [];
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-commit-panel.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
 
@@ -46,15 +46,6 @@ let activeProvider: string | null = 'open_ai';
 
 function generateButton(el: Panel): HTMLButtonElement {
   return el.shadowRoot!.querySelector('.generate-btn') as HTMLButtonElement;
-}
-
-/** Poll until a condition holds — click() cannot be awaited. */
-async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('condition never held');
-    await new Promise((r) => setTimeout(r, 10));
-  }
 }
 
 function errorText(el: Panel): string | null {
@@ -107,7 +98,7 @@ describe('lv-commit-panel offline mode AI', () => {
     invoked.length = 0;
     generateButton(el).click();
     // click() does not await the async handler; wait for it to settle.
-    await waitUntil(() => (el as any).generationError !== null);
+    await waitUntil(() => (el as any).generationError !== null, 'the refusal to be shown');
     await el.updateComplete;
 
     expect(invoked.includes('generate_commit_message'), 'the staged diff must not leave').to.equal(

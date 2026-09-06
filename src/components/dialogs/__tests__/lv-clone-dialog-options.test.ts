@@ -32,7 +32,7 @@ const invoked: { command: string; args?: Record<string, unknown> }[] = [];
   unregisterListener: (_event: string, _eventId: number) => {},
 };
 
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-clone-dialog.ts';
 import type { LvCloneDialog } from '../lv-clone-dialog.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
@@ -64,25 +64,6 @@ function argsOf(command: string): Record<string, unknown> | undefined {
   if (!call) return undefined;
   const nested = call.args?.args as Record<string, unknown> | undefined;
   return nested ?? call.args;
-}
-
-async function flush(): Promise<void> {
-  await new Promise((r) => setTimeout(r, 0));
-  await new Promise((r) => setTimeout(r, 0));
-}
-
-/**
- * Poll until `predicate` holds. The clone path awaits credential lookups and
- * dynamic imports before it reaches the submodule phase, so a fixed number of
- * ticks is not a reliable way to observe a phase that is deliberately left
- * pending.
- */
-async function waitFor(predicate: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 300; i++) {
-    if (predicate()) return;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error(`Timed out waiting for ${what}`);
 }
 
 const clonedRepo = {
@@ -184,7 +165,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.branch = '  develop  ';
 
       await state.handleClone();
-      await flush();
 
       expect(argsOf('clone_repository')?.branch, 'the branch is trimmed and sent').to.equal(
         'develop',
@@ -198,7 +178,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.branch = '   ';
 
       await state.handleClone();
-      await flush();
 
       const args = argsOf('clone_repository');
       expect(args, 'the clone still runs').to.exist;
@@ -263,7 +242,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.cloneSubmodules = false;
 
       await state.handleClone();
-      await flush();
 
       expect(invoked.some((c) => c.command === 'get_submodules')).to.be.false;
       expect(invoked.some((c) => c.command === 'update_submodules')).to.be.false;
@@ -283,7 +261,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.cloneSubmodules = true;
 
       await state.handleClone();
-      await flush();
 
       const update = argsOf('update_submodules');
       expect(update, 'the submodule phase must run after a successful clone').to.exist;
@@ -305,7 +282,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.cloneSubmodules = true;
 
       await state.handleClone();
-      await flush();
 
       expect(invoked.some((c) => c.command === 'get_submodules')).to.be.true;
       expect(
@@ -333,7 +309,7 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.cloneSubmodules = true;
 
       const pending = state.handleClone();
-      await waitFor(() => state.submodulePhase, 'the submodule phase to start');
+      await waitUntil(() => state.submodulePhase, 'the submodule phase to start');
       await el.updateComplete;
 
       expect(state.submodulePhase, 'the phase is active').to.be.true;
@@ -343,7 +319,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
 
       (releaseUpdate as ((value: unknown) => void) | null)?.(null);
       await pending;
-      await flush();
     });
 
     it('reports a submodule failure as a partial success, not a failed clone', async () => {
@@ -362,7 +337,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.cloneSubmodules = true;
 
       await state.handleClone();
-      await flush();
       await el.updateComplete;
 
       // A toast, not an inline banner: opening the cloned repository can tear
@@ -409,7 +383,7 @@ describe('lv-clone-dialog branch and submodule options', () => {
 
       await state.handleClone();
       // The close is scheduled on the same 500ms timer a clean clone uses.
-      await waitFor(() => {
+      await waitUntil(() => {
         const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & { open: boolean };
         return !modal.open;
       }, 'the dialog to close after the failed submodule phase');
@@ -432,7 +406,6 @@ describe('lv-clone-dialog branch and submodule options', () => {
         state.cloneSubmodules = true;
 
         await state.handleClone();
-        await flush();
         await el.updateComplete;
 
         expect(
@@ -465,7 +438,7 @@ describe('lv-clone-dialog branch and submodule options', () => {
       state.cloneSubmodules = true;
 
       const pending = state.handleClone();
-      await waitFor(() => state.submodulePhase, 'the submodule phase to start');
+      await waitUntil(() => state.submodulePhase, 'the submodule phase to start');
       await el.updateComplete;
 
       // Escape / the x / the footer button while submodules are still running.
@@ -487,7 +460,7 @@ describe('lv-clone-dialog branch and submodule options', () => {
 
       (releaseUpdate as ((value: unknown) => void) | null)?.(null);
       await pending;
-      await waitFor(
+      await waitUntil(
         () => toastMessages().some((m) => m.includes('submodule')),
         'the background phase to report',
       );

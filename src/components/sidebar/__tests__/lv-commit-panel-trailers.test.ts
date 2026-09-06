@@ -49,6 +49,7 @@ interface PanelInternals {
   selectedType: string;
   scope: string;
   amend: boolean;
+  lastCommit: unknown;
   identityName: string;
   identityEmail: string;
   identityLoaded: boolean;
@@ -126,9 +127,28 @@ async function renderCommitPanel(stagedCount = 1): Promise<LvCommitPanel> {
   const el = await fixture<LvCommitPanel>(
     html`<lv-commit-panel .repositoryPath=${REPO_PATH} .stagedCount=${stagedCount}></lv-commit-panel>`
   );
-  await new Promise((r) => setTimeout(r, 100));
-  await el.updateComplete;
+  await mounted(el);
   return el;
+}
+
+/**
+ * Wait for the panel's mount to finish. connectedCallback chains several
+ * lookups (templates, conventional types, AI availability, identity), only
+ * THEN seeds sign-off and registers its window listeners, and its last act is
+ * to subscribe to the model-download event — so that subscription reaching
+ * the Tauri boundary is the signal the whole chain has run.
+ */
+async function mounted(el: LvCommitPanel): Promise<void> {
+  await waitUntil(
+    () =>
+      invokeHistory.some(
+        (h) =>
+          h.command === 'plugin:event|listen' &&
+          (h.args as { event?: string } | undefined)?.event === 'model-download-complete',
+      ),
+    'the commit panel to finish mounting',
+  );
+  await el.updateComplete;
 }
 
 function internals(el: LvCommitPanel): PanelInternals {
@@ -330,7 +350,7 @@ describe('lv-commit-panel trailers', () => {
       identity = { name: null, email: null };
       el.repositoryPath = '/test/no-identity';
       await el.updateComplete;
-      await new Promise((r) => setTimeout(r, 50));
+      await waitUntil(() => panel.identityLoaded, 'the new repository identity to load');
       await el.updateComplete;
 
       expect(panel.signOff).to.be.false;
@@ -583,7 +603,7 @@ describe('lv-commit-panel trailers', () => {
 
       const checkbox = el.shadowRoot!.querySelector('.amend-toggle input') as HTMLInputElement;
       checkbox.click();
-      await new Promise((r) => setTimeout(r, 50));
+      await waitUntil(() => panel.lastCommit !== null, 'the amended commit to be fetched');
       await el.updateComplete;
       expect(panel.coAuthors.map((c) => c.email)).to.deep.equal([
         'alan@example.com',
@@ -591,7 +611,7 @@ describe('lv-commit-panel trailers', () => {
       ]);
 
       checkbox.click();
-      await new Promise((r) => setTimeout(r, 50));
+      // Switching amend off restores the draft synchronously in the handler.
       await el.updateComplete;
 
       expect(panel.summary).to.equal('my own draft');
@@ -612,7 +632,7 @@ describe('lv-commit-panel trailers', () => {
       identity = { name: 'Second Repo User', email: 'second@example.com' };
       el.repositoryPath = '/test/other-repo';
       await el.updateComplete;
-      await new Promise((r) => setTimeout(r, 50));
+      await waitUntil(() => panel.identityLoaded, 'the new repository identity to load');
       await el.updateComplete;
 
       expect(panel.coAuthors).to.deep.equal([]);
@@ -633,7 +653,7 @@ describe('lv-commit-panel trailers', () => {
       await el.updateComplete;
       el.repositoryPath = REPO_PATH;
       await el.updateComplete;
-      await new Promise((r) => setTimeout(r, 50));
+      await waitUntil(() => panel.identityLoaded, 'the restored repository identity to load');
 
       expect(panel.summary).to.equal('draft for repo one');
       expect(panel.signOff).to.be.true;

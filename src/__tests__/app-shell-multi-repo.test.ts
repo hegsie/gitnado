@@ -1054,8 +1054,10 @@ describe('app-shell multi-repo behavior', () => {
       const el = createAppShell();
       document.body.appendChild(el);
       try {
-        // Give the restore pass every chance to run before asserting it didn't.
-        await new Promise((r) => setTimeout(r, 50));
+        // The restore pass starts synchronously from connectedCallback and the
+        // setting guard returns before its first await, so once the first
+        // render has completed there is nothing left in flight.
+        await el.updateComplete;
 
         expect(
           invokeCallArgs.filter((c) => c.command === 'open_repository'),
@@ -1087,7 +1089,8 @@ describe('app-shell multi-repo behavior', () => {
 
       const off = createAppShell();
       document.body.appendChild(off);
-      await new Promise((r) => setTimeout(r, 20));
+      // As above: the guard has already returned by the first render.
+      await off.updateComplete;
       off.remove();
       expect(repositoryStore.getState().openRepositories).to.have.length(0);
 
