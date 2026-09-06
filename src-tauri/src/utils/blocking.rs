@@ -126,18 +126,24 @@ mod tests {
             .unwrap();
 
         runtime.block_on(async {
-            let slow = tokio::spawn(blocking_git(|| {
-                std::thread::sleep(std::time::Duration::from_millis(300));
+            // The blocking operation cannot finish until the test lets it, so
+            // the quick task can only complete if the worker is genuinely
+            // free while the blocking call is in flight — not because the
+            // clock ran out on a sleep first. The budget only bounds a hang.
+            let (release, gate) = std::sync::mpsc::channel::<()>();
+            let slow = tokio::spawn(blocking_git(move || {
+                let _ = gate.recv();
                 Ok(1)
             }));
             let quick = tokio::spawn(async { 2 });
 
-            // The quick task finishes long before the blocking one.
-            let quick_value = tokio::time::timeout(std::time::Duration::from_millis(200), quick)
+            let quick_value = tokio::time::timeout(std::time::Duration::from_secs(30), quick)
                 .await
                 .expect("a worker thread was starved by the blocking operation")
                 .unwrap();
             assert_eq!(quick_value, 2);
+
+            release.send(()).unwrap();
             assert_eq!(slow.await.unwrap().unwrap(), 1);
         });
     }

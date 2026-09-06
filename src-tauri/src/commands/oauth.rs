@@ -1014,10 +1014,35 @@ mod tests {
     /// An async mutex: the guard is held across `.await` points.
     static BITBUCKET_PORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    /// The port Bitbucket's registered redirect pins the loopback server to.
+    const BITBUCKET_PORT: u16 = 8085;
+
+    /// True when a process OTHER than this one holds 8085 — another test
+    /// binary running alongside, or a real application. The lock above only
+    /// serialises the tests in this binary, and the production code can only
+    /// evict a listener of its own, so such a test has no port to run on and
+    /// self-skips (the same pattern as the IPv6 loopback test). Our own
+    /// parked listener does not count: a new sign-in supersedes it.
+    fn bitbucket_port_held_elsewhere() -> bool {
+        let ours = PENDING_SERVERS
+            .lock()
+            .unwrap()
+            .contains_key(&BITBUCKET_PORT)
+            || ACTIVE_WAITS.lock().unwrap().contains_key(&BITBUCKET_PORT);
+        !ours && crate::test_utils::port_has_a_listener(BITBUCKET_PORT)
+    }
+
     #[tokio::test]
     async fn test_oauth_get_authorize_url_bitbucket() {
         let _policy = no_policy();
         let _guard = BITBUCKET_PORT_TEST_LOCK.lock().await;
+        if bitbucket_port_held_elsewhere() {
+            eprintln!(
+                "skipping: port {} is held by another process",
+                BITBUCKET_PORT
+            );
+            return;
+        }
         let result =
             oauth_get_authorize_url("bitbucket".to_string(), None, "test-client-id".to_string())
                 .await;
@@ -1028,7 +1053,12 @@ mod tests {
         assert!(response.authorize_url.contains("bitbucket.org"));
         assert!(response.loopback_port.is_some());
         // Bitbucket uses dedicated port 8085
-        assert_eq!(response.loopback_port, Some(8085));
+        assert_eq!(response.loopback_port, Some(BITBUCKET_PORT));
+
+        // Release the listener this parked on 8085: a test binary running
+        // alongside this one would otherwise find the port taken until the
+        // pending-server TTL expires.
+        oauth_cancel_flow(BITBUCKET_PORT).await.unwrap();
     }
 
     #[tokio::test]
@@ -1475,28 +1505,66 @@ mod tests {
         (port, id, handle)
     }
 
-    fn port_is_free(port: u16) -> bool {
-        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+    /// Whether `port` is bound right now — the check that an in-flight wait
+    /// still owns its port.
+    fn port_is_held(port: u16) -> bool {
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+    }
+
+    /// Bind `port` after a cancel reported it released; the error says who
+    /// still holds it when that is not so. See `test_utils::bind_released_port`
+    /// for why the first attempt is allowed to fail.
+    fn bind_probe(port: u16) -> std::io::Result<std::net::TcpListener> {
+        crate::test_utils::bind_released_port(port)
+    }
+
+    /// A port for a server whose release the test then verifies with a fresh
+    /// `bind`. Port 0 would do for the server's own bind, but the number read
+    /// back is in the ephemeral range, where another test thread's `connect()`
+    /// can take it between the release and the probe. See
+    /// `test_utils::reserve_test_port`.
+    fn releasable_port() -> u16 {
+        crate::test_utils::reserve_test_port()
+    }
+
+    /// The retry's own bind of the port a cancelled wait just released. As
+    /// with `bind_probe`, the first attempt may still find a forked child's
+    /// copy of the old listener open (see `test_utils::bind_released_port`);
+    /// a port that was NOT released stays bound for the whole callback
+    /// timeout, so the bound below is not what decides the test.
+    fn rebind_released(port: u16) -> LoopbackServer {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match LoopbackServer::new_with_port(port) {
+                Ok(server) => return server,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("the retry could not re-bind port {}: {}", port, e),
+            }
+        }
     }
 
     /// The core bug: `oauth_wait_for_callback` consumes the pending server, so a
     /// cancelled sign-in used to hold its port until the 5-minute timeout.
     #[tokio::test]
     async fn test_oauth_cancel_flow_releases_a_port_held_by_an_in_flight_wait() {
-        let port = park_server(LoopbackServer::new_with_port(0).unwrap());
+        let port = park_server(LoopbackServer::new_with_port(releasable_port()).unwrap());
 
         let waiting = tokio::spawn(oauth_wait_for_callback(port));
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
-            !port_is_free(port),
+            port_is_held(port),
             "the in-flight wait should own the port before the cancel"
         );
 
         oauth_cancel_flow(port).await.unwrap();
 
+        let probe = bind_probe(port);
         assert!(
-            port_is_free(port),
-            "cancelling must free the port for an immediate retry"
+            probe.is_ok(),
+            "cancelling must free the port for an immediate retry: {:?}",
+            probe.err()
         );
         assert!(
             waiting.await.unwrap().is_err(),
@@ -1508,7 +1576,7 @@ mod tests {
     /// `PENDING_SERVERS`; cancelling must evict it and free the port too.
     #[tokio::test]
     async fn test_oauth_cancel_flow_releases_a_server_that_never_started_waiting() {
-        let port = park_server(LoopbackServer::new_with_port(0).unwrap());
+        let port = park_server(LoopbackServer::new_with_port(releasable_port()).unwrap());
 
         oauth_cancel_flow(port).await.unwrap();
 
@@ -1516,7 +1584,12 @@ mod tests {
             !PENDING_SERVERS.lock().unwrap().contains_key(&port),
             "the parked server must be evicted"
         );
-        assert!(port_is_free(port), "the parked server's port must be freed");
+        let probe = bind_probe(port);
+        assert!(
+            probe.is_ok(),
+            "the parked server's port must be freed: {:?}",
+            probe.err()
+        );
 
         // Cancelling again (or after the flow already finished) is a no-op.
         assert!(oauth_cancel_flow(port).await.is_ok());
@@ -1535,12 +1608,13 @@ mod tests {
     #[tokio::test]
     async fn test_a_finished_wait_does_not_strip_a_retrys_cancel_handle() {
         // Wait A takes the port, then the user cancels it.
-        let (port, id_a, handle_a) = register_wait(LoopbackServer::new_with_port(0).unwrap());
+        let (port, id_a, handle_a) =
+            register_wait(LoopbackServer::new_with_port(releasable_port()).unwrap());
         oauth_cancel_flow(port).await.unwrap();
         assert!(handle_a.join().unwrap().is_err());
 
         // The retry (wait B) reuses the same port.
-        let (_, id_b, handle_b) = register_wait(LoopbackServer::new_with_port(port).unwrap());
+        let (_, id_b, handle_b) = register_wait(rebind_released(port));
         assert_ne!(id_a, id_b);
 
         // Wait A's task only now gets around to deregistering itself.
@@ -1548,9 +1622,11 @@ mod tests {
 
         // B is still cancellable, so its port is released on the next cancel.
         oauth_cancel_flow(port).await.unwrap();
+        let probe = bind_probe(port);
         assert!(
-            port_is_free(port),
-            "the retry must still be cancellable after the older wait finishes"
+            probe.is_ok(),
+            "the retry must still be cancellable after the older wait finishes: {:?}",
+            probe.err()
         );
         assert!(handle_b.join().unwrap().is_err());
     }
@@ -1561,20 +1637,40 @@ mod tests {
     async fn test_bitbucket_flow_can_restart_after_an_abandoned_sign_in() {
         let _policy = no_policy();
         let _guard = BITBUCKET_PORT_TEST_LOCK.lock().await;
-        let first = oauth_get_authorize_url("bitbucket".to_string(), None, "cid".to_string()).await;
-        // Self-skip when another process on this host owns 8085 (same pattern as
-        // the IPv6 loopback test) — there is nothing of ours to release then.
-        let Ok(first) = first else {
+        if bitbucket_port_held_elsewhere() {
+            eprintln!(
+                "skipping: port {} is held by another process",
+                BITBUCKET_PORT
+            );
             return;
-        };
-        assert_eq!(first.loopback_port, Some(8085));
-
-        let second = oauth_get_authorize_url("bitbucket".to_string(), None, "cid".to_string())
+        }
+        let first = oauth_get_authorize_url("bitbucket".to_string(), None, "cid".to_string())
             .await
-            .expect("a second Bitbucket sign-in must be able to re-bind port 8085");
-        assert_eq!(second.loopback_port, Some(8085));
+            .expect("the first Bitbucket sign-in must bind port 8085");
+        assert_eq!(first.loopback_port, Some(BITBUCKET_PORT));
 
-        oauth_cancel_flow(8085).await.unwrap();
+        // The production path evicts our parked listener and re-binds 8085
+        // in one go, with no allowance for the fork window described at
+        // `test_utils::bind_released_port`: a git child another test is
+        // spawning at that instant still holds a copy of the evicted socket.
+        // The property here is the eviction, so that window is waited out;
+        // without the eviction every attempt fails the same way.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let second = loop {
+            match oauth_get_authorize_url("bitbucket".to_string(), None, "cid".to_string()).await {
+                Ok(second) => break second,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => panic!(
+                    "a second Bitbucket sign-in must be able to re-bind port 8085: {}",
+                    e
+                ),
+            }
+        };
+        assert_eq!(second.loopback_port, Some(BITBUCKET_PORT));
+
+        oauth_cancel_flow(BITBUCKET_PORT).await.unwrap();
     }
 }
 

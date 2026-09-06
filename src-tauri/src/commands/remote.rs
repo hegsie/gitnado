@@ -2234,19 +2234,65 @@ mod tests {
         seen.lock().unwrap().take()
     }
 
+    /// A blocking task that cannot finish until the test says so.
+    ///
+    /// The timing these tests care about is causal, not measured: the caller
+    /// gives up FIRST, the work lands LATER. A task that sleeps for "long
+    /// enough" only reproduces that order when the machine honours the
+    /// numbers, and under a loaded test run it does not — the blocking pool
+    /// may not even have started the task by the time the timeout fires, or
+    /// may finish it after the fixed wait the test then spends looking for
+    /// the late report. Gating the task on a channel makes the order a fact:
+    /// the timeout has already been reported when `release` is sent.
+    fn gated_task<T: Send + 'static>(
+        outcome: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> (
+        std::sync::mpsc::Sender<()>,
+        tokio::task::JoinHandle<Result<T>>,
+    ) {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let handle = tokio::task::spawn_blocking(move || {
+            let _ = gate.recv();
+            outcome()
+        });
+        (release, handle)
+    }
+
+    /// A short timeout that the gated task above is guaranteed to miss.
+    const ELAPSES_FIRST: Option<Duration> = Some(Duration::from_millis(10));
+
+    /// Hand a task back once it has really finished, so awaiting it under a
+    /// timeout exercises the "made the deadline" branch deterministically
+    /// instead of racing the blocking pool against the clock.
+    async fn settled<T>(handle: tokio::task::JoinHandle<T>) -> tokio::task::JoinHandle<T> {
+        for _ in 0..1500 {
+            if handle.is_finished() {
+                return handle;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the blocking task never finished");
+    }
+
+    /// Panic out of a task the way `panic!` does — tokio catches the unwind
+    /// and the `JoinError` reports it as a panic — but WITHOUT the panic hook.
+    /// The hook is process-global: with `RUST_BACKTRACE` set it symbolicates
+    /// the whole stack under a lock every other panicking test contends for,
+    /// which on this binary costs seconds — spent before the task's join
+    /// handle resolves, inside the window these tests are timing.
+    fn unwind<T>(message: &'static str) -> T {
+        std::panic::resume_unwind(Box::new(message))
+    }
+
     /// `tokio::time::timeout` only DROPS the future it wraps — a
     /// `spawn_blocking` task keeps running. The merge landed minutes after the
     /// user was told the pull timed out, with no event and no refresh.
     #[tokio::test]
     async fn test_timed_out_task_still_reports_its_completion() {
         let (seen, on_late) = late_slot::<String>();
-        let handle = tokio::task::spawn_blocking(|| {
-            std::thread::sleep(Duration::from_millis(120));
-            Ok("Merge completed".to_string())
-        });
+        let (release, handle) = gated_task(|| Ok("Merge completed".to_string()));
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
 
         match result {
             Err(LeviathanError::OperationTimeout(m)) => {
@@ -2255,9 +2301,8 @@ mod tests {
             other => panic!("expected a Pull timeout, got {:?}", other.map(|_| ())),
         }
 
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        let late = seen.lock().unwrap();
-        match late.as_ref() {
+        release.send(()).unwrap();
+        match late_outcome(&seen).await {
             Some(Ok(message)) => assert_eq!(message, "Merge completed"),
             Some(Err(e)) => panic!("the abandoned task reported a failure: {}", e),
             None => panic!("the abandoned task's completion was never reported at all"),
@@ -2289,8 +2334,7 @@ mod tests {
             Ok("Pushed to origin/main".to_string())
         });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Push", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Push", handle, on_late).await;
         match result {
             Err(LeviathanError::OperationTimeout(m)) => assert_eq!(m, "Push operation timed out"),
             other => panic!("expected a Push timeout, got {:?}", other.map(|_| ())),
@@ -2333,7 +2377,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_that_finishes_in_time_is_never_reported_late() {
         let (seen, on_late) = late_slot::<u32>();
-        let handle = tokio::task::spawn_blocking(|| Ok(7u32));
+        let handle = settled(tokio::task::spawn_blocking(|| Ok(7u32))).await;
 
         let result = await_remote_task(Some(Duration::from_secs(5)), "Pull", handle, on_late).await;
 
@@ -2365,18 +2409,28 @@ mod tests {
     #[tokio::test]
     async fn test_a_late_deadline_abort_is_not_reported_twice() {
         let (seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| {
-            std::thread::sleep(Duration::from_millis(120));
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mark_ended = Arc::clone(&ended);
+        let (release, handle) = gated_task(move || {
+            mark_ended.store(true, std::sync::atomic::Ordering::SeqCst);
             Err(LeviathanError::OperationTimeout(
                 "Pull operation timed out".to_string(),
             ))
         });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
         assert!(matches!(result, Err(LeviathanError::OperationTimeout(_))));
 
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        // Let the abandoned task end, and give the reporter its turn to
+        // decide what to do with the outcome.
+        release.send(()).unwrap();
+        for _ in 0..250 {
+            if ended.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(seen.lock().unwrap().is_none());
     }
 
@@ -2387,17 +2441,16 @@ mod tests {
     #[tokio::test]
     async fn test_a_timeout_after_the_repository_changed_is_still_reported() {
         let (seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| {
-            std::thread::sleep(Duration::from_millis(120));
+        let (release, handle) = gated_task(|| {
             Err(LeviathanError::OperationTimeoutAfterChange(
                 "Pull operation timed out".to_string(),
             ))
         });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
         assert!(matches!(result, Err(LeviathanError::OperationTimeout(_))));
 
+        release.send(()).unwrap();
         match late_outcome(&seen).await {
             Some(Err(LeviathanError::OperationTimeoutAfterChange(_))) => {}
             Some(other) => panic!("unexpected late outcome: {:?}", other.err()),
@@ -2421,15 +2474,12 @@ mod tests {
     #[tokio::test]
     async fn test_a_panicking_abandoned_task_is_reported_not_just_logged() {
         let (seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| -> Result<()> {
-            std::thread::sleep(Duration::from_millis(120));
-            panic!("boom")
-        });
+        let (release, handle) = gated_task(|| -> Result<()> { unwind("boom") });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
         assert!(matches!(result, Err(LeviathanError::OperationTimeout(_))));
 
+        release.send(()).unwrap();
         match late_outcome(&seen).await {
             Some(Err(LeviathanError::Custom(m))) => assert!(
                 m.starts_with("Pull task failed:"),
@@ -2519,7 +2569,10 @@ mod tests {
     #[tokio::test]
     async fn test_join_failure_keeps_the_operation_label() {
         let (_seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| -> Result<()> { panic!("boom") });
+        let handle = settled(tokio::task::spawn_blocking(|| -> Result<()> {
+            unwind("boom")
+        }))
+        .await;
 
         let result = await_remote_task(Some(Duration::from_secs(5)), "Push", handle, on_late).await;
 

@@ -1158,15 +1158,12 @@ mod tests {
         let alt = tempfile::tempdir().unwrap();
         // Install an executable pre-commit in the alternate absolute dir.
         {
-            use std::os::unix::fs::PermissionsExt;
             let hook = alt.path().join("pre-commit");
             let marker = repo.path.join("abs-marker");
-            std::fs::write(
+            crate::test_utils::write_executable(
                 &hook,
-                format!("#!/bin/sh\ntouch \"{}\"\n", marker.display()),
-            )
-            .unwrap();
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+                &format!("#!/bin/sh\ntouch \"{}\"\n", marker.display()),
+            );
         }
         {
             let git_repo = repo.repo();
@@ -1186,12 +1183,9 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
         // Relative hooksPath resolves against the working directory.
         {
-            use std::os::unix::fs::PermissionsExt;
             let dir = repo.path.join("myhooks");
             std::fs::create_dir_all(&dir).unwrap();
-            let hook = dir.join("pre-commit");
-            std::fs::write(&hook, "#!/bin/sh\nexit 7\n").unwrap();
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_utils::write_executable(&dir.join("pre-commit"), "#!/bin/sh\nexit 7\n");
         }
         {
             let git_repo = repo.repo();

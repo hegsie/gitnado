@@ -727,20 +727,32 @@ mod tests {
         assert_eq!(result.state, "v6state");
     }
 
+    /// A port for a test that probes with a fresh `bind` AFTER the server has
+    /// released it. Port 0 would serve the bind itself, but the number read
+    /// back sits in the ephemeral range, where another test thread's
+    /// `connect()` can take it between the release and the probe — a false
+    /// "still held". See `test_utils::reserve_test_port` and, for why the
+    /// probe itself is `bind_released_port`, the note there.
+    fn releasable_port() -> u16 {
+        crate::test_utils::reserve_test_port()
+    }
+
     /// `shutdown` must not return until the socket is actually closed: an
     /// abandoned OAuth sign-in has to free its port for an immediate retry.
     /// Plain `drop` only signals the accept loop, which can take a poll tick
     /// (100 ms) to notice — long enough for the retry's bind to fail.
     #[test]
     fn test_shutdown_releases_the_port_before_returning() {
-        let server = LoopbackServer::new_with_port(0).unwrap();
+        let server = LoopbackServer::new_with_port(releasable_port()).unwrap();
         let port = server.port();
 
         server.shutdown();
 
+        let rebound = crate::test_utils::bind_released_port(port);
         assert!(
-            TcpListener::bind(("127.0.0.1", port)).is_ok(),
-            "shutdown must confirm the socket is closed before returning"
+            rebound.is_ok(),
+            "shutdown must confirm the socket is closed before returning: {:?}",
+            rebound.err()
         );
     }
 
@@ -749,7 +761,7 @@ mod tests {
     /// is held for the full callback timeout.
     #[test]
     fn test_cancel_handle_aborts_an_in_flight_wait_and_frees_the_port() {
-        let mut server = LoopbackServer::new_with_port(0).unwrap();
+        let mut server = LoopbackServer::new_with_port(releasable_port()).unwrap();
         let port = server.port();
         let cancel = server
             .take_cancel_handle()
@@ -765,9 +777,11 @@ mod tests {
 
         cancel.cancel();
 
+        let rebound = crate::test_utils::bind_released_port(port);
         assert!(
-            TcpListener::bind(("127.0.0.1", port)).is_ok(),
-            "cancelling must release the port immediately"
+            rebound.is_ok(),
+            "cancelling must release the port immediately: {:?}",
+            rebound.err()
         );
         assert!(
             handle.join().unwrap().is_err(),
@@ -784,7 +798,7 @@ mod tests {
     /// would fail with EADDRINUSE.
     #[test]
     fn test_cancel_releases_the_port_while_a_silent_connection_is_being_read() {
-        let mut server = LoopbackServer::new_with_port(0).unwrap();
+        let mut server = LoopbackServer::new_with_port(releasable_port()).unwrap();
         let port = server.port();
         let cancel = server
             .take_cancel_handle()
@@ -799,9 +813,11 @@ mod tests {
 
         cancel.cancel();
 
+        let rebound = crate::test_utils::bind_released_port(port);
         assert!(
-            TcpListener::bind(("127.0.0.1", port)).is_ok(),
-            "cancelling must release the port even while a connection is being read"
+            rebound.is_ok(),
+            "cancelling must release the port even while a connection is being read: {:?}",
+            rebound.err()
         );
         assert!(
             handle.join().unwrap().is_err(),

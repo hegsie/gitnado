@@ -1206,11 +1206,10 @@ mod tests {
     #[tokio::test]
     async fn test_start_stop_server() {
         let (_dir, mut server) = test_server();
-        // Use a high port to avoid conflicts
         server
             .set_config(McpConfig {
                 enabled: true,
-                port: 19876,
+                port: free_port(),
                 allowed_origins: Vec::new(),
                 auth_token: String::new(),
             })
@@ -1330,20 +1329,19 @@ mod tests {
         assert!(!server.get_config().enabled);
     }
 
-    /// Ask the OS for a currently unused localhost port
-    async fn free_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to reserve a port");
-        listener
-            .local_addr()
-            .expect("Failed to read reserved address")
-            .port()
+    /// A localhost port this test can configure the server to bind.
+    ///
+    /// Not "bind port 0 and read it back": the server binds the configured
+    /// port itself, later, and a port that was free when probed is back in
+    /// the ephemeral range the moment the probe closes — another test's
+    /// `connect()` can take it first. See `test_utils::reserve_test_port`.
+    fn free_port() -> u16 {
+        crate::test_utils::reserve_test_port()
     }
 
     #[tokio::test]
     async fn test_start_enables_and_stop_disables_persisted_config() {
-        let port = free_port().await;
+        let port = free_port();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let mut server = McpServer::new(dir.path().to_path_buf());
         server
@@ -1848,7 +1846,7 @@ mod tests {
         allowed_origins: Vec<String>,
         limits: ConnectionLimits,
     ) -> (McpServer, u16, String) {
-        let port = free_port().await;
+        let port = free_port();
         let mut server = McpServer::new(dir.path().to_path_buf());
         server
             .set_config(McpConfig {
@@ -1874,6 +1872,12 @@ mod tests {
 
     /// Read whatever the server sends before it closes the connection, giving
     /// up after `budget`. `None` means the connection was still open.
+    ///
+    /// A reset counts as closed: when the server drops a connection past
+    /// the concurrency cap while the client's request bytes are still
+    /// unread, the kernel answers with RST rather than FIN, and the client
+    /// sees `ECONNRESET` instead of a clean EOF — the same refusal, only
+    /// raced differently against the client's write.
     async fn read_until_closed(
         stream: &mut tokio::net::TcpStream,
         budget: Duration,
@@ -1881,6 +1885,9 @@ mod tests {
         let mut response = Vec::new();
         match tokio::time::timeout(budget, stream.read_to_end(&mut response)).await {
             Ok(Ok(_)) => Some(String::from_utf8_lossy(&response).to_string()),
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                Some(String::from_utf8_lossy(&response).to_string())
+            }
             Ok(Err(e)) => panic!("Failed to read response: {}", e),
             Err(_) => None,
         }
@@ -2111,11 +2118,12 @@ mod tests {
         // Two clients that connect and say nothing occupy both slots
         let holders = vec![connect(port).await, connect(port).await];
 
-        // Probing in a loop keeps the assertion independent of when the accept
-        // loop gets to each socket; a refused connection is closed at once
-        // rather than queued, so it reads EOF immediately.
+        // Probing until a deadline keeps the assertion independent of when
+        // the accept loop gets to each socket; a refused connection is closed
+        // at once rather than queued, so it reads EOF immediately.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut refused = false;
-        for _ in 0..20 {
+        while tokio::time::Instant::now() < deadline {
             let mut probe = connect(port).await;
             if read_until_closed(&mut probe, Duration::from_millis(250)).await
                 == Some(String::new())
@@ -2129,10 +2137,15 @@ mod tests {
             "a connection past the concurrency cap must be closed instead of queued"
         );
 
-        // Closing the holders frees their slots again
+        // Closing the holders frees their slots again — once the server's
+        // tasks for them have run and seen EOF, which is why this too retries
+        // until a deadline rather than a fixed number of times: on a loaded
+        // machine a burst of refusals can come and go before those tasks are
+        // scheduled at all.
         drop(holders);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut served = None;
-        for _ in 0..20 {
+        while tokio::time::Instant::now() < deadline {
             let mut client = connect(port).await;
             let request = tools_list_request(&[format!("Authorization: Bearer {}", token)]);
             client
@@ -2146,6 +2159,7 @@ mod tests {
                     break;
                 }
             }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(
             served.is_some_and(|response| response.contains("get_commit_history")),
