@@ -673,6 +673,40 @@ describe('lv-account-repo-picker', () => {
     });
   });
 
+  describe('disabled', () => {
+    it('passes the lock through to its account selector', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories'
+          ? { repositories: [repo('alpha')], nextPage: null }
+          : null,
+      );
+      // Mounted live and locked afterwards, the way the clone dialog does it
+      // when a clone starts.
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+      el.disabled = true;
+      await el.updateComplete;
+
+      // The picker's own controls honour `disabled`; the selector nested inside
+      // it must too, or its "Manage Accounts…" stays live while the host that
+      // disabled us (the clone dialog mid-clone) has locked everything else.
+      const selector = el.shadowRoot!.querySelector('lv-account-selector') as HTMLElement & {
+        disabled: boolean;
+        updateComplete: Promise<unknown>;
+      };
+      expect(selector.disabled, 'the selector is disabled with the picker').to.be.true;
+      await selector.updateComplete;
+      expect(
+        (selector.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement).disabled,
+      ).to.be.true;
+      expect(
+        (el.shadowRoot!.querySelector('#repo-provider') as HTMLSelectElement).disabled,
+        'control: the provider select is disabled too',
+      ).to.be.true;
+    });
+  });
+
   describe('account switching', () => {
     it('lists the newly chosen provider account', async () => {
       unifiedProfileStore.getState().setAccounts([githubAccount, gitlabAccount]);

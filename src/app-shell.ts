@@ -832,6 +832,12 @@ export class AppShell extends LitElement {
   // provider so closing the Accounts view can return there — making that
   // navigation reversible rather than a one-way teleport.
   private manageAccountsReturnProvider: IntegrationType | null = null;
+  /**
+   * The manager closed by returning the user to a provider dialog, so the
+   * `profile-manager-closed` announcement is owed only once THAT dialog closes
+   * — see handleProfileManagerClose.
+   */
+  private announceManagerClosedAfterProvider = false;
 
   /** Folder the scan dialog was opened for, and which of its two modes. */
   @state() private repositoryScanPath = '';
@@ -3597,6 +3603,13 @@ export class AppShell extends LitElement {
       // The profile manager stayed mounted (demoted) underneath; reveal it and
       // attach the just-connected account per the explicit context.
       void this.profileManagerDialog?.revealAfterConnect(context);
+      return;
+    }
+    // The manager returned the user to this dialog when it closed, deferring
+    // its announcement; the detour they took through the manager is over now.
+    if (this.announceManagerClosedAfterProvider) {
+      this.announceManagerClosedAfterProvider = false;
+      this.announceProfileManagerClosed();
     }
   }
 
@@ -4641,11 +4654,28 @@ export class AppShell extends LitElement {
     this.manageAccountsReturnProvider = null;
     if (returnProvider && closedFromAccounts) {
       this.openIntegrationStandalone(returnProvider);
+      // ONE return at a time. The provider dialog is where the user most
+      // recently came from, so it is where this close takes them; a surface
+      // waiting further back (Clone → manager → provider → "Manage Accounts…"
+      // → manager → close) is told when that provider dialog closes, not now
+      // — announcing now would reopen it stacked under the provider dialog.
+      this.announceManagerClosedAfterProvider = true;
+      return;
     }
-    // Announced for surfaces that sent the user here mid-task and owe them a
-    // way back — the clone dialog's account picker reopens on this. It is
-    // deliberately a plain notification rather than a second return target:
-    // whoever is waiting decides for itself whether to come back.
+    // No provider return, so any deferred announcement is settled by this one.
+    this.announceManagerClosedAfterProvider = false;
+    this.announceProfileManagerClosed();
+  }
+
+  /**
+   * Announced for surfaces that sent the user to the manager mid-task and owe
+   * them a way back — the clone dialog's account picker reopens on this. It
+   * is deliberately a plain notification rather than a second return target:
+   * whoever is waiting decides for itself whether to come back. Fired once
+   * per trip, when the trip is actually over (the manager closed and did not
+   * hand the user on to a provider dialog, or that provider dialog closed).
+   */
+  private announceProfileManagerClosed(): void {
     window.dispatchEvent(new CustomEvent('profile-manager-closed'));
   }
 

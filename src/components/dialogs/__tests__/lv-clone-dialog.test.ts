@@ -29,6 +29,7 @@ import { expect, fixture, html } from '@open-wc/testing';
 import '../lv-clone-dialog.ts';
 import type { LvCloneDialog } from '../lv-clone-dialog.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
+import { unifiedProfileStore } from '../../../stores/unified-profile.store.ts';
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 describe('lv-clone-dialog', () => {
@@ -760,6 +761,68 @@ describe('lv-clone-dialog', () => {
 
       const tabs = el.shadowRoot!.querySelectorAll('.source-tab');
       expect(Array.from(tabs).every((t) => (t as HTMLButtonElement).disabled)).to.be.true;
+    });
+
+    it('refuses a manage-accounts request mid-clone instead of letting it reach the host', async () => {
+      selectSource('account');
+      await el.updateComplete;
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+      const internal = el as unknown as { isCloning: boolean; returnAfterAccounts: boolean };
+      internal.isCloning = true;
+      await el.updateComplete;
+
+      // The request the picker forwards from its account selector, provider
+      // and all. Merely returning early would let it carry on to the host,
+      // which would open the manager stacked on the cloning dialog and record
+      // that provider as the place to return to.
+      const seen = await requestAccountsManager();
+
+      expect(seen.length, 'nothing escapes to the host').to.equal(0);
+      expect(modal.open, 'the cloning dialog stays where it is').to.be.true;
+      expect(internal.returnAfterAccounts, 'no return trip is armed').to.be.false;
+    });
+
+    it('locks the account selector inside the picker while a clone is running', async () => {
+      // The picker mounts its selector only once an account exists.
+      unifiedProfileStore.getState().setAccounts([
+        {
+          id: 'gh-1',
+          name: 'Work GitHub',
+          integrationType: 'github',
+          urlPatterns: [],
+          isDefault: true,
+          color: null,
+          config: { type: 'github' },
+          cachedUser: null,
+        },
+      ]);
+      try {
+        selectSource('account');
+        await el.updateComplete;
+        const internal = el as unknown as { isCloning: boolean };
+        internal.isCloning = true;
+        await el.updateComplete;
+
+        const pickerEl = picker() as HTMLElement & {
+          disabled: boolean;
+          updateComplete: Promise<unknown>;
+        };
+        expect(pickerEl.disabled, 'the picker is disabled').to.be.true;
+        await pickerEl.updateComplete;
+        const selector = pickerEl.shadowRoot!.querySelector('lv-account-selector') as
+          | (HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> })
+          | null;
+        expect(selector, 'the selector is mounted').to.exist;
+        expect(selector!.disabled, 'the selector inherits the lock').to.be.true;
+        await selector!.updateComplete;
+        const trigger = selector!.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement;
+        expect(trigger.disabled, 'its dropdown cannot be opened').to.be.true;
+      } finally {
+        unifiedProfileStore.getState().reset();
+      }
     });
 
     it('returns to the URL source on reset', async () => {

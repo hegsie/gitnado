@@ -156,11 +156,19 @@ describe('dialog.store', () => {
     // The sweep's whole point: repo-scoping is DECLARED, not inferred from a
     // field name. A dialog rendered inside app-shell's activeRepository block
     // must be repo-scoped or it springs back open over the next repository.
+    //
+    // This list is the PRODUCT statement — which dialogs a user can reach with
+    // nothing open — and can only ever be typed by hand. Whether a declaration
+    // agrees with where app-shell actually renders the dialog is not something
+    // this file can know; that is DERIVED from app-shell's own render in
+    // app-shell-multi-repo.test.ts ("declares every dialog rendered inside the
+    // repository block as repo-scoped"), which is where a wrong `false` here
+    // fails. The output panel was listed here as repo-independent while
+    // rendering inside the repository block, and this test pinned the bug.
     it('declares the dialogs reachable with no repository open as repo-independent', () => {
       const repoIndependent: DialogId[] = [
         'settings',
         'shortcuts',
-        'outputPanel',
         'commandPalette',
         'workspaceManager',
         'ssh',

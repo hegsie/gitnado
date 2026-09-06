@@ -406,10 +406,15 @@ export class LvCloneDialog extends LitElement {
    * event and re-dispatch it WITHOUT the provider, then bring the user back
    * here ourselves — with the account source still selected and everything
    * they had typed intact — once the manager closes.
+   *
+   * Consumed BEFORE the in-flight guard: a request that arrives mid-clone is
+   * refused here, not merely ignored, or it would carry on to the host with
+   * the picker's provider still attached and open the manager stacked on the
+   * cloning dialog — the exact trap this handler exists to avoid.
    */
   private handleManageAccounts(e: Event): void {
-    if (this.isCloning) return;
     e.stopPropagation();
+    if (this.isCloning) return;
     this.returnAfterAccounts = true;
     window.addEventListener('profile-manager-closed', this.handleAccountsManagerClosed);
     // close(), NOT reset(): the URL, destination and options the user has

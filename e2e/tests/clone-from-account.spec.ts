@@ -249,6 +249,123 @@ test.describe('Clone Dialog - from a connected account', () => {
       );
     });
 
+    test('mid-clone, the account actions are inert and cannot walk out to the manager', async ({
+      page,
+    }) => {
+      await openAccountSource(page, dialogs);
+      await expect(repoItems(page)).toHaveCount(2);
+      await repoItems(page).first().click();
+      await dialogs.clone.fillPath('/home/user/projects');
+
+      // A clone that never finishes, so the dialog stays in its in-flight
+      // state for the whole test.
+      await page.evaluate(() => {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+          }
+        ).__TAURI_INTERNALS__;
+        const original = internals.invoke;
+        internals.invoke = (command: string, args?: unknown) =>
+          command === 'clone_repository' ? new Promise(() => {}) : original(command, args);
+      });
+      await dialogs.clone.clone();
+      await expect(page.getByRole('button', { name: 'Cancel Clone' })).toBeVisible();
+
+      // The picker's account dropdown is locked along with everything else.
+      const selectorButton = page.locator('lv-clone-dialog lv-account-selector .selector-btn');
+      await expect(selectorButton).toBeDisabled();
+      await expect(page.locator('lv-clone-dialog lv-account-selector .dropdown')).toHaveCount(0);
+
+      // And even a request that somehow gets out of the picker is refused at
+      // the clone dialog rather than reaching the host with a provider: the
+      // manager must not open stacked on the cloning dialog, and closing it
+      // later must not land on a GitHub Integration dialog.
+      await page.locator('lv-clone-dialog lv-account-repo-picker').evaluate((el) => {
+        el.dispatchEvent(
+          new CustomEvent('manage-accounts', {
+            detail: { integrationType: 'github' },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      });
+      await expect(dialogs.clone.dialog).toBeVisible();
+      await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+      await expect(dialogs.github.dialog).toBeHidden();
+    });
+
+    test('a nested trip through the manager and a provider dialog comes back one dialog at a time', async ({
+      page,
+    }) => {
+      // The manager reloads its accounts from the backend when it opens, so
+      // the connected account has to exist there too, not only in the store.
+      await injectCommandMock(page, {
+        get_unified_profiles_config: {
+          version: 3,
+          profiles: [defaultProfile],
+          accounts: [githubAccount],
+          repositoryAssignments: {},
+        },
+        get_migration_backup_info: { hasBackup: false },
+      });
+      await openAccountSource(page, dialogs);
+      await expect(repoItems(page)).toHaveCount(2);
+
+      // Clone → Manage Accounts… (from the picker's account dropdown).
+      await page.locator('lv-clone-dialog lv-account-selector .selector-btn').click();
+      await page
+        .locator('lv-clone-dialog lv-account-selector .dropdown-action', {
+          hasText: 'Manage Accounts',
+        })
+        .click();
+      await expect(dialogs.clone.dialog).toBeHidden();
+      await expect(page.locator('lv-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
+      await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+        'Accounts',
+      );
+
+      // Manager → "Connect a new account" → GitHub, stacked on the manager.
+      await page
+        .locator('lv-profile-manager-dialog')
+        .getByRole('button', { name: 'GitHub', exact: true })
+        .click();
+      await expect(dialogs.github.dialog).toBeVisible();
+      await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(1);
+
+      // GitHub dialog → Manage Accounts… → the manager again, on Accounts.
+      await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+      await page
+        .locator('lv-github-dialog lv-account-selector .dropdown-action', {
+          hasText: 'Manage Accounts',
+        })
+        .click();
+      await expect(dialogs.github.dialog).toBeHidden();
+      await expect(page.locator('lv-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
+      await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+        'Accounts',
+      );
+
+      // × on the manager: back to the GitHub dialog the user came from — and
+      // ONLY that. The clone dialog must not be reopened underneath it.
+      await dialogs.profileManager.closeButton.click();
+      await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+      await expect(dialogs.github.dialog).toBeVisible();
+      await expect(dialogs.clone.dialog).toBeHidden();
+
+      // Closing the GitHub dialog ends the trip: the clone the user started is
+      // returned to them, still on the account source.
+      await page.locator('lv-github-dialog lv-modal [aria-label="Close"]').click();
+      await expect(dialogs.github.dialog).toBeHidden();
+      await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+      await expect(dialogs.clone.dialog).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'From account' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      await expect(repoItems(page)).toHaveCount(2);
+    });
+
     test('does not list anything until the account source is chosen', async ({ page }) => {
       await startCommandCapture(page);
       await new AppPage(page).cloneButton.click();

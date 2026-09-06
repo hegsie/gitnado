@@ -28,6 +28,7 @@ import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
 import { dialogs } from '../stores/dialog.store.ts';
 import { uiStore } from '../stores/ui.store.ts';
+import { repositoryStore } from '../stores/repository.store.ts';
 import type { Repository } from '../types/git.types.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -111,6 +112,46 @@ describe('app-shell output panel wiring', () => {
       expect(outputPanel(el), 'the panel is gone again').to.equal(null);
     } finally {
       el.remove();
+    }
+  });
+
+  // The other half of the same harm: the toggle being repo-scoped keeps the
+  // flag from being ARMED with no repository, but a panel opened legitimately
+  // for repo A whose flag survives closing the last tab pops open unbidden
+  // over repo B. The registry has to sweep it with the tab.
+  it('does not outlive the last repository tab and spring open over the next one', async () => {
+    const el = createAppShell();
+    document.body.appendChild(el);
+    try {
+      await el.updateComplete;
+      repositoryStore.setState({
+        openRepositories: [
+          { repository: { ...mockRepo(), path: '/repo/a', name: 'a' }, branches: [], currentBranch: null },
+        ] as never,
+        activeIndex: 0,
+      });
+      await el.updateComplete;
+
+      getPaletteCommands(el).find((c) => c.id === 'toggle-output-panel')!.action();
+      await el.updateComplete;
+      expect(outputPanel(el), 'the panel is up for repo A').to.not.equal(null);
+
+      repositoryStore.setState({ openRepositories: [] as never, activeIndex: -1 });
+      await el.updateComplete;
+      expect(outputPanel(el), 'nothing rendered with no repository').to.equal(null);
+      expect(dialogs.isOpen('outputPanel'), 'the flag is swept with the last tab').to.be.false;
+
+      repositoryStore.setState({
+        openRepositories: [
+          { repository: { ...mockRepo(), path: '/repo/b', name: 'b' }, branches: [], currentBranch: null },
+        ] as never,
+        activeIndex: 0,
+      });
+      await el.updateComplete;
+      expect(outputPanel(el), 'repo B opens without a panel it never asked for').to.equal(null);
+    } finally {
+      el.remove();
+      repositoryStore.setState({ openRepositories: [] as never, activeIndex: -1 });
     }
   });
 

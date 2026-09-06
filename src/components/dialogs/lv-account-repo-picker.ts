@@ -614,6 +614,7 @@ export class LvAccountRepoPicker extends LitElement {
               <lv-account-selector
                 .integrationType=${this.provider}
                 .selectedAccountId=${this.selectedAccountId}
+                ?disabled=${this.disabled}
                 @account-change=${this.handleAccountChange}
                 @add-account=${this.handleAccountsAction}
                 @manage-accounts=${this.handleAccountsAction}

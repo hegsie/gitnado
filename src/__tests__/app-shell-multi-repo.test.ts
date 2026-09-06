@@ -26,7 +26,7 @@ let cbId = 0;
 import { expect, waitUntil } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
-import { dialogs, type DialogId } from '../stores/dialog.store.ts';
+import { dialogs, DIALOG_REGISTRY, type DialogId } from '../stores/dialog.store.ts';
 import { uiStore, repositoryStore, settingsStore } from '../stores/index.ts';
 import { searchIndexService } from '../services/search-index.service.ts';
 import type { Repository } from '../types/git.types.ts';
@@ -2376,6 +2376,72 @@ describe('closing the last repository closes its dialogs', () => {
     el.remove();
   });
 
+  /**
+   * Which dialogs app-shell consults `dialogs.isOpen` for while rendering —
+   * observed from the render itself, not typed by hand. A dialog consulted
+   * only when a repository is open is rendered inside the
+   * `${this.activeRepository ? ...}` block; one consulted with nothing open
+   * renders outside it. Lit re-runs the whole `render()` on every update, so
+   * one forced update sees every `isOpen` call the template makes.
+   */
+  async function dialogsConsultedByRender(el: AppShell): Promise<Set<DialogId>> {
+    const seen = new Set<DialogId>();
+    const original = dialogs.isOpen;
+    dialogs.isOpen = (id: DialogId): boolean => {
+      seen.add(id);
+      return original(id);
+    };
+    try {
+      el.requestUpdate();
+      await el.updateComplete;
+    } finally {
+      dialogs.isOpen = original;
+    }
+    return seen;
+  }
+
+  // The registry's contract, checked against app-shell's actual render rather
+  // than a second hand-typed list: a dialog whose element lives inside the
+  // repository block is destroyed with the last tab while its flag would
+  // survive, so it MUST be declared repo-scoped. This is what caught the
+  // output panel being declared repo-independent while rendering in the
+  // repository layout (and would catch the next one). The reverse direction
+  // is a product choice, not a rendering fact: a dialog rendered outside the
+  // block may still be declared repo-scoped if it is meaningless without one.
+  it('declares every dialog rendered inside the repository block as repo-scoped', async () => {
+    const el = createAppShell();
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    repositoryStore.setState({ openRepositories: [] as never, activeIndex: -1 });
+    await el.updateComplete;
+    const withoutRepo = await dialogsConsultedByRender(el);
+
+    repositoryStore.setState({
+      openRepositories: [
+        { repository: mockRepo('/repo/a', 'a'), branches: [], currentBranch: null },
+      ] as never,
+      activeIndex: 0,
+    });
+    await el.updateComplete;
+    const withRepo = await dialogsConsultedByRender(el);
+
+    const insideRepoBlock = [...withRepo].filter((id) => !withoutRepo.has(id));
+    // Guard against a vacuous pass: the derivation must actually see the
+    // render on both sides of the repository block.
+    expect(withoutRepo.size, 'dialogs are rendered outside the repository block').to.be.greaterThan(0);
+    expect(insideRepoBlock.length, 'dialogs are rendered inside the repository block').to.be.greaterThan(0);
+
+    for (const id of insideRepoBlock) {
+      expect(
+        DIALOG_REGISTRY[id].repoScoped,
+        `${id} renders inside the repository block, so it must be repo-scoped`,
+      ).to.equal(true);
+    }
+
+    el.remove();
+  });
+
   // Over-reach guard. This passes with or without the exclusions above; it is
   // here so that widening REPO_INDEPENDENT_DIALOGS to a dialog that really does
   // render inside the activeRepository block fails loudly.
@@ -2405,6 +2471,7 @@ describe('closing the last repository closes its dialogs', () => {
       'hooks',
       'repositoryHealth',
       'reflog',
+      'outputPanel',
     ];
     for (const key of repoScoped) dialogs.open(key);
     await el.updateComplete;

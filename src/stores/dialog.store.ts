@@ -53,7 +53,6 @@ export const DIALOG_REGISTRY = {
   // --- Repo-independent: usable with no repository open. ---
   settings: { repoScoped: false },
   shortcuts: { repoScoped: false },
-  outputPanel: { repoScoped: false },
   commandPalette: { repoScoped: false },
   workspaceManager: { repoScoped: false },
   ssh: { repoScoped: false },
@@ -78,6 +77,13 @@ export const DIALOG_REGISTRY = {
   diff: { repoScoped: true },
   blame: { repoScoped: true },
   fileHistory: { repoScoped: true },
+  /**
+   * A pane, not a modal, but it renders inside the repository block like the
+   * three above — which is why its View-menu and palette toggles are
+   * repository-scoped. Left repo-independent, its flag survived closing the
+   * last tab and the panel sprang open over the next repository opened.
+   */
+  outputPanel: { repoScoped: true },
   conflict: { repoScoped: true },
   reflog: { repoScoped: true },
   search: { repoScoped: true },
