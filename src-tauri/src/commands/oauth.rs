@@ -98,6 +98,36 @@ async fn release_loopback_port(port: u16) -> Result<bool> {
     Ok(true)
 }
 
+/// How long a re-bind of a fixed port is retried after our own listener was
+/// evicted from it. Generous against the window described below (microseconds
+/// to a few scheduler ticks), and still well inside what a click tolerates.
+const REBIND_PATIENCE: Duration = Duration::from_millis(250);
+
+/// Re-bind `port` right after [`release_loopback_port`] evicted our own
+/// listener from it, tolerating the fork window.
+///
+/// The evicted socket is closed, but a `git` child another part of the app is
+/// spawning at that instant — autofetch, a status refresh — holds a copy of
+/// every descriptor this process had open between its `fork` and its `exec`
+/// (`SOCK_CLOEXEC` only closes the copy at the `exec`), and a bind in those
+/// microseconds fails with `EADDRINUSE`. Reported as-is, the error told the
+/// user to close whatever application is using the port: wrong advice for a
+/// self-inflicted, sub-millisecond condition. Retried briefly instead; a port
+/// that is still held when the patience runs out yields the same error it
+/// always did.
+async fn rebind_released_port(port: u16, patience: Duration) -> Result<LoopbackServer> {
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        match LoopbackServer::new_with_port(port) {
+            Ok(server) => return Ok(server),
+            Err(_) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Remove expired entries from the pending servers map.
 fn cleanup_expired_pending_servers(map: &mut HashMap<u16, PendingServer>) {
     let now = std::time::Instant::now();
@@ -310,13 +340,14 @@ pub async fn oauth_get_authorize_url(
             // OUR OWN listener holding 8085 and the user would be told to close
             // whatever application is using the port. A new sign-in supersedes
             // the old one — the frontend already drops a superseded flow's late
-            // callback silently — so release ours and re-bind. A genuine
+            // callback silently — so release ours and re-bind (retried across
+            // the fork window, see `rebind_released_port`). A genuine
             // third-party occupant still yields the original error.
             let server = match LoopbackServer::new_with_port(BITBUCKET_PORT) {
                 Ok(server) => server,
                 Err(bind_error) => {
                     if release_loopback_port(BITBUCKET_PORT).await? {
-                        LoopbackServer::new_with_port(BITBUCKET_PORT)?
+                        rebind_released_port(BITBUCKET_PORT, REBIND_PATIENCE).await?
                     } else {
                         return Err(bind_error);
                     }
@@ -1631,6 +1662,51 @@ mod tests {
         assert!(handle_b.join().unwrap().is_err());
     }
 
+    /// The fork window: the listener we just evicted can stay bound for the
+    /// microseconds a forking child holds its copy. A re-bind that succeeds
+    /// within the patience must not be reported as "close whatever
+    /// application is using the port".
+    #[tokio::test]
+    async fn a_port_released_within_the_patience_is_rebound_not_reported() {
+        let port = releasable_port();
+        let holder = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind the port");
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(holder);
+        });
+
+        let server = rebind_released_port(port, Duration::from_millis(1_000))
+            .await
+            .expect("a port freed within the patience must bind");
+        assert_eq!(server.port(), port);
+
+        release.join().unwrap();
+        server.shutdown();
+    }
+
+    /// A port that is genuinely held — a third-party occupant — is still
+    /// reported once the patience runs out.
+    #[tokio::test]
+    async fn a_port_held_past_the_patience_is_still_reported() {
+        let port = releasable_port();
+        let _holder = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind the port");
+
+        let started = std::time::Instant::now();
+        let err = match rebind_released_port(port, Duration::from_millis(100)).await {
+            Ok(_) => panic!("a held port must not bind"),
+            Err(e) => e,
+        };
+        assert!(
+            started.elapsed() >= Duration::from_millis(100),
+            "the patience must be spent before giving up"
+        );
+        assert!(
+            err.to_string().contains("is not available"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
     /// End-to-end: a Bitbucket sign-in abandoned without a cancel must not make
     /// the next attempt fail with "Port 8085 is not available".
     #[tokio::test]
@@ -1649,12 +1725,13 @@ mod tests {
             .expect("the first Bitbucket sign-in must bind port 8085");
         assert_eq!(first.loopback_port, Some(BITBUCKET_PORT));
 
-        // The production path evicts our parked listener and re-binds 8085
-        // in one go, with no allowance for the fork window described at
-        // `test_utils::bind_released_port`: a git child another test is
-        // spawning at that instant still holds a copy of the evicted socket.
-        // The property here is the eviction, so that window is waited out;
-        // without the eviction every attempt fails the same way.
+        // The production path evicts our parked listener and re-binds 8085,
+        // retrying across the fork window described at
+        // `test_utils::bind_released_port` for `REBIND_PATIENCE`. A loaded
+        // test host can hold a copy of the evicted socket in a forking child
+        // for longer than that, and the property here is the eviction, so
+        // the rest of the window is waited out; without the eviction every
+        // attempt fails the same way.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let second = loop {
             match oauth_get_authorize_url("bitbucket".to_string(), None, "cid".to_string()).await {

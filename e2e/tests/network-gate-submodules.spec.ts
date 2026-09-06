@@ -184,6 +184,33 @@ test.describe('Submodule Dialog — the allowlist covers the submodule hosts', (
     expect(await findCommand(page, 'update_submodules')).toHaveLength(1);
   });
 
+  test('a superproject with no remote is not refused when its submodules are allowlisted', async ({
+    page,
+  }) => {
+    // A local-only superproject. Its own remote is only where a RELATIVE
+    // submodule url would resolve; checking it for every update refused this
+    // with "Could not determine the remote URL" although every host the
+    // update contacts is on the list.
+    await startCommandCaptureWithMocks(page, {
+      get_remotes: [],
+      get_submodules: submoduleRows([
+        { name: 'lib/utils', path: 'lib/utils', url: 'https://github.com/user/utils.git' },
+        { name: 'vendor/plugin', path: 'vendor/plugin', url: 'https://github.com/vendor/plugin.git' },
+      ]),
+      update_submodules: null,
+    });
+    await setSecurity(page, { remoteAllowlist: ['github.com'] });
+    await openSubmoduleDialog(page);
+
+    await updateAllButton(page).click();
+
+    await expect
+      .poll(async () => (await findCommand(page, 'update_submodules')).length)
+      .toBeGreaterThan(0);
+    await expect(page.locator('.toast.error')).toHaveCount(0);
+    await expect(dialog(page).locator('.message.success')).toBeVisible();
+  });
+
   test('with no policy in force the update runs as before', async ({ page }) => {
     await startCommandCaptureWithMocks(page, {
       get_remotes: SUPERPROJECT_ON_GITHUB,

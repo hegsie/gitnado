@@ -2945,6 +2945,42 @@ function isRelativeSubmoduleUrl(url: string): boolean {
 }
 
 /**
+ * Whether `wanted` — a path the caller hands git after `--` — selects the
+ * submodule at `path`.
+ *
+ * Those paths are PATHSPECS, not submodule names: `git submodule update --
+ * vendor` registers and clones every submodule under `vendor/`. Matching the
+ * entries as exact submodule paths guarded nothing for that spelling, and let
+ * the update reach a host the allowlist never admitted. The exact path and
+ * the directory-prefix form are reproduced here; anything else falls back to
+ * checking every submodule (see `selectSubmodules`).
+ */
+function pathspecSelects(wanted: string, path: string): boolean {
+  const trimmed = wanted.replace(/\/+$/, '');
+  return path === trimmed || path.startsWith(`${trimmed}/`);
+}
+
+/**
+ * The submodules a `submodulePaths` list selects out of `all`.
+ *
+ * Every one of them when the list is absent or empty (the backend emits a bare
+ * `--` for an empty list, and git then updates every submodule), when an entry
+ * carries glob characters (git's pathspec matching is not reproduced here, and
+ * guessing at it would guess OPEN), and when an entry selects nothing (the
+ * update then has a destination this check cannot see, which is the
+ * fail-closed rule the rest of the gate uses). Otherwise exactly the
+ * submodules the pathspecs name.
+ */
+function selectSubmodules(all: Submodule[], submodulePaths?: string[]): Submodule[] {
+  if (!submodulePaths || submodulePaths.length === 0) return all;
+  if (submodulePaths.some((p) => /[*?[]/.test(p))) return all;
+  for (const entry of submodulePaths) {
+    if (!all.some((s) => pathspecSelects(entry, s.path))) return all;
+  }
+  return all.filter((s) => submodulePaths.some((entry) => pathspecSelects(entry, s.path)));
+}
+
+/**
  * Check every host `git submodule update` is actually going to contact.
  *
  * The superproject's remote is NOT the answer on its own: `.gitmodules` is
@@ -2955,6 +2991,18 @@ function isRelativeSubmoduleUrl(url: string): boolean {
  * (`commands/submodule.rs`); this half is the one that can say so in a toast
  * before any work starts.
  *
+ * Offline mode refuses outright, before anything is listed. Under an allowlist
+ * the superproject's own remote is deliberately not checked: it is only where
+ * a RELATIVE submodule url resolves to, and the backend guards it for exactly
+ * those. Checking it for every update refused a local-only superproject — no
+ * remotes at all — whose `.gitmodules` named nothing but allowlisted hosts.
+ *
+ * Top-level only, on purpose. A NESTED submodule's url lives in its parent's
+ * `.gitmodules`, which does not exist until the parent is cloned, so no check
+ * made before the command runs can see it. The backend is the honest gate for
+ * those: under a policy it walks the tree itself instead of handing git
+ * `--recursive`, guarding each level before that level is contacted.
+ *
  * Skipped entirely when no policy is in force, so the common case does not pay
  * for an extra round trip. When the submodules cannot be listed, the check
  * fails closed, exactly as an unresolvable remote does.
@@ -2964,25 +3012,22 @@ async function checkSubmoduleHostsAllowed(
   submodulePaths?: string[],
 ): Promise<boolean> {
   if (!isNetworkPolicyActive()) return true;
+  if (settingsStore.getState().offlineMode) {
+    return (await checkNetworkAllowed(null, undefined)) === null;
+  }
 
   const listed = await getSubmodules(repoPath);
   if (!listed.success || !listed.data) {
     return (await checkNetworkAllowed(null, undefined)) === null;
   }
 
-  // An EMPTY list is not "no submodules": the backend emits a bare `--` and
-  // git then updates every one of them, so it is checked as the "all of them"
-  // it really is. A non-empty list narrows the check with it — refusing
-  // because some OTHER submodule points off the allowlist would block an
-  // update that was never going to contact that host.
-  const wanted =
-    submodulePaths && submodulePaths.length > 0
-      ? new Set(submodulePaths.map((p) => p.replace(/\/+$/, '')))
-      : null;
-
-  for (const submodule of listed.data) {
-    if (wanted && !wanted.has(submodule.path)) continue;
-    if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) continue;
+  for (const submodule of selectSubmodules(listed.data, submodulePaths)) {
+    if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) {
+      // Resolves against the superproject's remote, so that remote is the
+      // host to check — the one case it decides anything.
+      if (await checkNetworkAllowed(repoPath, undefined)) return false;
+      continue;
+    }
     if (await checkNetworkAllowed(null, submodule.url ?? undefined)) return false;
   }
   return true;
@@ -3043,15 +3088,16 @@ export async function updateSubmodules(
   },
 ): Promise<CommandResult<void>> {
   // `git submodule update` fetches (and clones with --init), so it belongs
-  // behind the same gate as fetch/pull. The superproject's remote is checked
-  // first — it is where `.gitmodules` is read from, and the host a relative
-  // submodule url resolves against.
-  if (!await checkNetworkPermission('update submodules', repoPath)) {
+  // behind the same gate as fetch/pull — applied to every host named in
+  // `.gitmodules`, which is where the clones and fetches this spawns actually
+  // go, rather than to the superproject's own remote.
+  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths)) {
     return blockedResult();
   }
-  // ...and then every host named in `.gitmodules`, which is where the clones
-  // and fetches this spawns actually go.
-  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths)) {
+  // The confirm, when the user asked for one. The hard blocks were settled
+  // above against the submodule hosts, so none is named here for the
+  // allowlist to resolve — an empty target list runs only the confirm.
+  if (!await checkNetworkPermission('update submodules', repoPath, undefined, undefined, [])) {
     return blockedResult();
   }
 

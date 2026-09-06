@@ -60,25 +60,34 @@ fn token_remote_url(repo_path: &Path, remote_name: &str) -> Option<String> {
     remote.url().ok().map(|u| u.to_string())
 }
 
-/// Build the `git` command for a submodule operation, optionally carrying an
-/// auth token.
+/// Build the `git` command for a submodule operation, run inside `cwd`,
+/// optionally carrying an auth token.
 ///
 /// The token is fed to git through a credential helper in the environment, so
 /// the per-submodule `git clone` / `git fetch` children that `git submodule
 /// update` spawns inherit it too. It is scoped to the host of `token_remote` —
-/// the remote the frontend resolved the token against — because the children
-/// ask for credentials for each submodule's url from .gitmodules, which may
-/// point anywhere, and the token belongs to one provider only.
-fn submodule_command(
-    repo_path: &Path,
+/// the remote the frontend resolved the token against, looked up in
+/// `token_repo`, the SUPERPROJECT — because the children ask for credentials
+/// for each submodule's url from .gitmodules, which may point anywhere, and
+/// the token belongs to one provider only.
+///
+/// `cwd` and `token_repo` differ for a nested level: `git submodule update
+/// --recursive` hands its nested clones the credential helper it was itself
+/// given, and the Rust recursion that replaces `--recursive` under a policy
+/// (see [`update_submodules`]) has to hand them the same thing. Looking
+/// `token_remote` up in the nested repository would find that repository's
+/// own `origin` — the submodule's url — or nothing.
+fn submodule_command_in(
+    cwd: &Path,
+    token_repo: &Path,
     args: &[&str],
     token: Option<&str>,
     token_remote: Option<&str>,
 ) -> GitCommand {
     let mut cmd = create_command("git");
-    cmd.current_dir(repo_path).args(args);
+    cmd.current_dir(cwd).args(args);
     if let (Some(token_value), Some(remote_name)) = (token, token_remote) {
-        if let Some(remote_url) = token_remote_url(repo_path, remote_name) {
+        if let Some(remote_url) = token_remote_url(token_repo, remote_name) {
             apply_token_credential_helper(&mut cmd, token_value, &remote_url);
         }
     }
@@ -98,7 +107,19 @@ fn run_git_command_with_token(
     token: Option<&str>,
     token_remote: Option<&str>,
 ) -> Result<String> {
-    let output = submodule_command(repo_path, args, token, token_remote)
+    run_git_command_in(repo_path, repo_path, args, token, token_remote)
+}
+
+/// [`run_git_command_with_token`], run inside `cwd` with the token scoped
+/// against `token_repo` — see [`submodule_command_in`].
+fn run_git_command_in(
+    cwd: &Path,
+    token_repo: &Path,
+    args: &[&str],
+    token: Option<&str>,
+    token_remote: Option<&str>,
+) -> Result<String> {
+    let output = submodule_command_in(cwd, token_repo, args, token, token_remote)
         .output()
         .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git: {}", e)))?;
 
@@ -229,39 +250,185 @@ fn guard_submodule_url(repo_path: &str, url: &str) -> Result<()> {
     crate::services::security::guard_url(url)
 }
 
-/// Guard every submodule `git submodule update` is about to contact.
+/// One entry of `.gitmodules`: where the submodule lives and where git will
+/// fetch it from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubmoduleTarget {
+    path: String,
+    url: Option<String>,
+}
+
+/// Every submodule `.gitmodules` declares in the repository at `repo_path`.
+fn list_submodule_targets(repo_path: &Path) -> Result<Vec<SubmoduleTarget>> {
+    let repo = git2::Repository::open(repo_path)?;
+    let targets = repo
+        .submodules()?
+        .iter()
+        .map(|submodule| SubmoduleTarget {
+            path: submodule.path().to_string_lossy().to_string(),
+            url: submodule.url().ok().flatten().map(str::to_string),
+        })
+        .collect();
+    Ok(targets)
+}
+
+/// Whether `wanted` — a path the caller hands git after `--` — selects the
+/// submodule at `sm_path`.
+///
+/// Those paths are PATHSPECS, not submodule names: `git submodule update --
+/// vendor` registers and clones every submodule under `vendor/`. A guard
+/// that looked for `vendor` as an exact submodule path matched nothing,
+/// guarded nothing, and let git clone `vendor/b` from a host the allowlist
+/// never admitted. The exact path and the directory-prefix form are the two
+/// spellings reproduced here; anything else is handled by
+/// [`select_submodules`] falling back to every submodule.
+fn pathspec_selects(wanted: &str, sm_path: &str) -> bool {
+    let wanted = wanted.trim_end_matches('/');
+    sm_path == wanted
+        || sm_path
+            .strip_prefix(wanted)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Whether a pathspec carries glob characters git would expand.
+fn pathspec_has_glob(wanted: &str) -> bool {
+    wanted.contains(['*', '?', '['])
+}
+
+/// The submodules a `submodule_paths` list selects out of `all`.
+///
+/// Every one of them when the list is absent or empty (the args builder emits
+/// a bare `--` for an empty list, and git then updates every submodule), when
+/// an entry carries glob characters (git's pathspec matching is not reproduced
+/// here, and guessing at it would guess OPEN), and when an entry selects
+/// nothing (the operation then has a destination this guard cannot see, which
+/// is the fail-closed rule the rest of the gate uses). Otherwise exactly the
+/// submodules the pathspecs name, in `.gitmodules` order.
+fn select_submodules(
+    all: Vec<SubmoduleTarget>,
+    submodule_paths: Option<&[String]>,
+) -> Vec<SubmoduleTarget> {
+    let Some(wanted) = submodule_paths.filter(|paths| !paths.is_empty()) else {
+        return all;
+    };
+    if wanted.iter().any(|p| pathspec_has_glob(p)) {
+        return all;
+    }
+    for entry in wanted {
+        if !all.iter().any(|s| pathspec_selects(entry, &s.path)) {
+            return all;
+        }
+    }
+    all.into_iter()
+        .filter(|s| wanted.iter().any(|entry| pathspec_selects(entry, &s.path)))
+        .collect()
+}
+
+/// Whether a policy that could refuse a submodule host is in force.
+fn network_policy_active() -> bool {
+    let settings = crate::services::security::global().snapshot();
+    settings.offline_mode || !settings.remote_allowlist.is_empty()
+}
+
+/// Guard every submodule `git submodule update` is about to contact, and
+/// return the ones the run is narrowed to — `None` when no policy is in force,
+/// in which case nothing was listed either.
 ///
 /// `submodule_paths` narrows the run to specific submodules, and the guard
-/// narrows with it: refusing the whole operation because some OTHER submodule
-/// in the repository points off the allowlist would block an update that was
-/// never going to contact that host.
+/// narrows with it ([`select_submodules`]): refusing the whole operation
+/// because some OTHER submodule in the repository points off the allowlist
+/// would block an update that was never going to contact that host.
 ///
 /// A submodule whose URL cannot be read is handed to the gate as an
 /// unresolved target — the same fail-closed rule the rest of the gate uses,
 /// rather than being skipped as if it had no destination.
-fn guard_submodule_urls(repo_path: &str, submodule_paths: Option<&[String]>) -> Result<()> {
-    let settings = crate::services::security::global().snapshot();
-    if !settings.offline_mode && settings.remote_allowlist.is_empty() {
+fn guard_submodule_urls(
+    repo_path: &Path,
+    submodule_paths: Option<&[String]>,
+) -> Result<Option<Vec<SubmoduleTarget>>> {
+    if !network_policy_active() {
         // Nothing could refuse anything, so do not pay to open the repository
         // and enumerate `.gitmodules` on every update.
-        return Ok(());
+        return Ok(None);
     }
 
-    let repo = git2::Repository::open(Path::new(repo_path))?;
-    for submodule in repo.submodules()? {
-        let sm_path = submodule.path().to_string_lossy().to_string();
-        if let Some(wanted) = submodule_paths {
-            if !wanted.iter().any(|p| p.trim_end_matches('/') == sm_path) {
-                continue;
-            }
-        }
-        match submodule.url().ok().flatten() {
-            Some(url) => guard_submodule_url(repo_path, url)?,
+    let selected = select_submodules(list_submodule_targets(repo_path)?, submodule_paths);
+    let repo_path = repo_path.to_string_lossy();
+    for submodule in &selected {
+        match &submodule.url {
+            Some(url) => guard_submodule_url(&repo_path, url)?,
             None => crate::services::security::check(
                 &crate::services::security::global().snapshot(),
                 None,
             )?,
         }
+    }
+    Ok(Some(selected))
+}
+
+/// How deep a submodule tree is followed before the recursion gives up.
+///
+/// git's own `--recursive` has no limit, but a superproject whose submodule
+/// commit names the superproject itself recurses forever; this is the one
+/// thing standing between that repository and a full disk.
+const MAX_SUBMODULE_DEPTH: usize = 64;
+
+/// The Rust half of `--recursive`, used whenever a policy is in force.
+///
+/// `git submodule update --recursive` clones every level of the tree in one
+/// run, and a nested submodule's url is not knowable until its parent has
+/// been cloned — so under an allowlist of `github.com`, a github.com
+/// submodule whose own `.gitmodules` named gitlab.com was cloned from
+/// gitlab.com in that same run, nothing refused and nothing logged. The
+/// "guard runs again on the next update" backstop never preceded that first
+/// clone: the clone dialog and Update All always ask for `--recursive`.
+///
+/// So under a policy `--recursive` is not handed to git at all. The top level
+/// is updated, then each submodule that update left initialised is opened,
+/// ITS `.gitmodules` is guarded, it is updated without recursion, and so on
+/// down — every level's hosts checked before that level is contacted.
+/// `args` is the top-level command minus its pathspecs, so `--init` and
+/// `--remote` apply at every depth exactly as `--recursive` applies them.
+fn update_nested_submodules(
+    superproject: &Path,
+    parent: &Path,
+    submodules: &[SubmoduleTarget],
+    args: &[&str],
+    token: Option<&str>,
+    token_remote: Option<&str>,
+    depth: usize,
+) -> Result<()> {
+    if depth > MAX_SUBMODULE_DEPTH {
+        return Err(LeviathanError::OperationFailed(format!(
+            "Submodules nested more than {} levels deep under {}; not recursing further",
+            MAX_SUBMODULE_DEPTH,
+            parent.display()
+        )));
+    }
+    for submodule in submodules {
+        let sub_path = parent.join(&submodule.path);
+        // One the update left uninitialised — no `--init`, or a path git
+        // skipped — has no `.gitmodules` of its own to read, and git's
+        // `--recursive` would not descend into it either. `open` does not
+        // walk up to the superproject the way `discover` would, so an empty
+        // directory is reliably "not a repository".
+        if git2::Repository::open(&sub_path).is_err() {
+            continue;
+        }
+        let nested = guard_submodule_urls(&sub_path, None)?.unwrap_or_default();
+        if nested.is_empty() {
+            continue;
+        }
+        run_git_command_in(&sub_path, superproject, args, token, token_remote)?;
+        update_nested_submodules(
+            superproject,
+            &sub_path,
+            &nested,
+            args,
+            token,
+            token_remote,
+            depth + 1,
+        )?;
     }
     Ok(())
 }
@@ -360,27 +527,29 @@ pub async fn update_submodules(
     // to whichever remote happens to be called `origin`.
 
     // `git submodule update` fetches (and clones with --init), so it is gated
-    // like fetch/pull. The superproject's remote is checked first — it is the
-    // repository git reads `.gitmodules` out of, and the host a relative
-    // submodule url resolves against.
-    crate::services::security::guard_remote(&path, None)?;
+    // like fetch/pull. Offline mode refuses outright, before anything is
+    // opened. Under an allowlist the superproject's own remote is deliberately
+    // NOT checked: it is only where a RELATIVE submodule url resolves to, and
+    // `guard_submodule_url` checks it for exactly those. Checking it for every
+    // update refused a local-only superproject — no remotes at all — whose
+    // `.gitmodules` named nothing but allowlisted hosts.
+    let settings = crate::services::security::global().snapshot();
+    if settings.offline_mode {
+        crate::services::security::check(&settings, None)?;
+    }
 
     // ...and then every host it is actually going to contact. The clones and
     // fetches this spawns go to the urls in `.gitmodules`, which are
     // repository content and can name any host: an allowlist of `github.com`
     // on a github.com superproject used to sit there while this reached
-    // gitlab.com. Nested submodules under `--recursive` cannot be enumerated
-    // until their parent is cloned, so the backstop for those is the same one
-    // every other path relies on — the guard runs again on the next update.
-    // An EMPTY list is not "no submodules": the args builder emits a bare
-    // `--`, and git then updates every submodule. Treated as `None` here so
-    // that case is guarded as the "all of them" it really is.
-    guard_submodule_urls(
-        &path,
+    // gitlab.com. An EMPTY list is not "no submodules": the args builder
+    // emits a bare `--`, and git then updates every submodule. Treated as
+    // `None` here so that case is guarded as the "all of them" it really is.
+    let repo_path = Path::new(&path);
+    let selected = guard_submodule_urls(
+        repo_path,
         submodule_paths.as_deref().filter(|paths| !paths.is_empty()),
     )?;
-
-    let repo_path = Path::new(&path);
 
     let mut args = vec!["submodule", "update"];
 
@@ -388,13 +557,23 @@ pub async fn update_submodules(
         args.push("--init");
     }
 
-    if recursive.unwrap_or(false) {
+    // Nested submodules cannot be guarded until their parent is cloned, so
+    // under a policy `--recursive` is not git's to do: the tree is walked in
+    // Rust below (`update_nested_submodules`), one guarded level at a time.
+    // With no policy in force there is nothing to guard, and git's own
+    // recursion is kept so the common case pays nothing for this.
+    let recursive = recursive.unwrap_or(false);
+    let guarded_recursion = recursive && selected.is_some();
+    if recursive && !guarded_recursion {
         args.push("--recursive");
     }
 
     if remote.unwrap_or(false) {
         args.push("--remote");
     }
+
+    // The command every nested level runs: the same flags, no pathspecs.
+    let nested_args = args.clone();
 
     let paths_owned: Vec<String>;
     if let Some(ref paths) = submodule_paths {
@@ -409,6 +588,18 @@ pub async fn update_submodules(
     }
 
     run_git_command_with_token(repo_path, &args, token.as_deref(), token_remote.as_deref())?;
+
+    if let (true, Some(top_level)) = (guarded_recursion, selected) {
+        update_nested_submodules(
+            repo_path,
+            repo_path,
+            &top_level,
+            &nested_args,
+            token.as_deref(),
+            token_remote.as_deref(),
+            1,
+        )?;
+    }
     Ok(())
 }
 
@@ -700,6 +891,474 @@ mod tests {
 
         blocked_message(
             update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+        );
+    }
+
+    // ---- the paths after `--` are pathspecs ----
+    //
+    // `git submodule update -- vendor` registers and clones every submodule
+    // under `vendor/` (verified against git 2.43). Matching the entries as
+    // exact submodule paths guarded nothing for that spelling, so with an
+    // allowlist of github.com and `vendor/b` on gitlab.com, git cloned
+    // `vendor/b` from gitlab.com.
+
+    #[test]
+    fn a_pathspec_selects_the_exact_path_and_everything_under_it() {
+        assert!(pathspec_selects("vendor/a", "vendor/a"));
+        assert!(pathspec_selects("vendor/a/", "vendor/a"));
+        assert!(pathspec_selects("vendor", "vendor/a"));
+        assert!(pathspec_selects("vendor/", "vendor/a"));
+        assert!(pathspec_selects("vendor", "vendor/a/b"));
+        // A prefix that is not a directory boundary selects nothing.
+        assert!(!pathspec_selects("vend", "vendor/a"));
+        assert!(!pathspec_selects("vendor/a", "vendor/ab"));
+        assert!(!pathspec_selects("vendor/a", "vendor"));
+        assert!(!pathspec_selects("", "vendor/a"));
+    }
+
+    fn targets(entries: &[(&str, &str)]) -> Vec<SubmoduleTarget> {
+        entries
+            .iter()
+            .map(|(path, url)| SubmoduleTarget {
+                path: path.to_string(),
+                url: Some(url.to_string()),
+            })
+            .collect()
+    }
+
+    fn paths(selected: &[SubmoduleTarget]) -> Vec<&str> {
+        selected.iter().map(|s| s.path.as_str()).collect()
+    }
+
+    #[test]
+    fn a_directory_pathspec_selects_every_submodule_under_it() {
+        let all = targets(&[
+            ("vendor/a", "https://github.com/x/a.git"),
+            ("vendor/b", "https://gitlab.com/x/b.git"),
+            ("lib/c", "https://github.com/x/c.git"),
+        ]);
+        let selected = select_submodules(all, Some(&["vendor".to_string()]));
+        assert_eq!(paths(&selected), vec!["vendor/a", "vendor/b"]);
+    }
+
+    #[test]
+    fn an_exact_pathspec_still_narrows_to_that_one_submodule() {
+        let all = targets(&[
+            ("vendor/a", "https://github.com/x/a.git"),
+            ("vendor/b", "https://gitlab.com/x/b.git"),
+        ]);
+        let selected = select_submodules(all.clone(), Some(&["vendor/a".to_string()]));
+        assert_eq!(paths(&selected), vec!["vendor/a"]);
+        let selected = select_submodules(all, Some(&["vendor/a/".to_string()]));
+        assert_eq!(paths(&selected), vec!["vendor/a"]);
+    }
+
+    #[test]
+    fn a_glob_pathspec_falls_back_to_every_submodule() {
+        // git expands the glob; this guard does not reproduce that, and a
+        // guess would guess open. Every submodule is the fail-closed answer.
+        let all = targets(&[
+            ("vendor/a", "https://github.com/x/a.git"),
+            ("lib/c", "https://github.com/x/c.git"),
+        ]);
+        for glob in ["vendor/*", "vendor/?", "vendor/[ab]"] {
+            let selected = select_submodules(all.clone(), Some(&[glob.to_string()]));
+            assert_eq!(paths(&selected), vec!["vendor/a", "lib/c"], "{glob}");
+        }
+    }
+
+    #[test]
+    fn a_pathspec_that_selects_nothing_falls_back_to_every_submodule() {
+        let all = targets(&[
+            ("vendor/a", "https://github.com/x/a.git"),
+            ("lib/c", "https://github.com/x/c.git"),
+        ]);
+        let selected = select_submodules(
+            all.clone(),
+            Some(&["vendor/a".to_string(), "nothing/here".to_string()]),
+        );
+        assert_eq!(paths(&selected), vec!["vendor/a", "lib/c"]);
+        // An absent or empty list is "all of them" too.
+        assert_eq!(paths(&select_submodules(all.clone(), None)).len(), 2);
+        assert_eq!(paths(&select_submodules(all, Some(&[]))).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn update_submodules_guards_every_submodule_a_directory_pathspec_selects() {
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[
+                ("vendor/a", "https://github.com/x/a.git"),
+                ("vendor/b", "https://gitlab.com/x/b.git"),
+            ],
+        );
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        // `-- vendor` is what git receives, and git clones BOTH.
+        let message = blocked_message(
+            update_submodules(
+                repo.path_str(),
+                Some(vec!["vendor".to_string()]),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+        assert!(
+            message.contains("gitlab.com"),
+            "the refusal should name the host under the directory, got: {}",
+            message
+        );
+    }
+
+    #[tokio::test]
+    async fn update_submodules_fails_closed_on_a_glob_pathspec() {
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[
+                ("vendor/a", "https://github.com/x/a.git"),
+                ("vendor/b", "https://gitlab.com/x/b.git"),
+            ],
+        );
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        blocked_message(
+            update_submodules(
+                repo.path_str(),
+                Some(vec!["vendor/*".to_string()]),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn update_submodules_fails_closed_on_a_pathspec_that_selects_nothing() {
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[
+                ("vendor/a", "https://github.com/x/a.git"),
+                ("vendor/b", "https://gitlab.com/x/b.git"),
+            ],
+        );
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        // Whatever git makes of a path that names no submodule, the guard
+        // cannot see the destination — so it refuses rather than guessing.
+        blocked_message(
+            update_submodules(
+                repo.path_str(),
+                Some(vec!["nothing/here".to_string()]),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+    }
+
+    // ---- the superproject's own remote is not the question ----
+
+    #[tokio::test]
+    async fn update_submodules_under_an_allowlist_does_not_need_a_superproject_remote() {
+        // A local-only superproject — no remotes at all — whose `.gitmodules`
+        // names nothing but allowlisted hosts. Its own remote is only where a
+        // RELATIVE url would resolve, and there is none; checking it anyway
+        // refused this with "Could not determine the remote URL".
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit(
+            "Add .gitmodules",
+            &[(
+                ".gitmodules",
+                "[submodule \"vendor/dep\"]\n\tpath = vendor/dep\n\turl = https://github.com/x/y.git\n",
+            )],
+        );
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let result = update_submodules(repo.path_str(), None, None, None, None, None, None).await;
+        assert_not_blocked(
+            &result,
+            "an allowlisted submodule on a superproject with no remote",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_relative_url_on_a_superproject_with_no_remote_is_still_refused() {
+        // The one case the superproject's remote decides: a relative url with
+        // no remote to resolve against has no host the allowlist can see.
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit(
+            "Add .gitmodules",
+            &[(
+                ".gitmodules",
+                "[submodule \"vendor/dep\"]\n\tpath = vendor/dep\n\turl = ../dep.git\n",
+            )],
+        );
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        blocked_message(
+            update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_mode_refuses_update_submodules_before_anything_is_listed() {
+        // Offline mode is the one policy that refuses without looking: a
+        // superproject with no submodules at all is still refused.
+        let repo = TestRepo::with_initial_commit();
+        let _guard = test_support::offline();
+
+        blocked_message(
+            update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+        );
+    }
+
+    // ---- nested submodules under --recursive ----
+    //
+    // A nested submodule's url lives in its PARENT's `.gitmodules`, which does
+    // not exist until the parent is cloned. Handing git `--recursive` cloned
+    // the whole tree in one run, so under an allowlist of dep.test a dep.test
+    // submodule whose own `.gitmodules` named nested.test was cloned from
+    // nested.test in that same run — nothing refused, nothing logged. The
+    // clone dialog and Update All always ask for `--recursive`, so "the guard
+    // runs again on the next update" never preceded that first clone.
+
+    /// A superproject → `vendor/mid` → `leafdir` tree whose two submodule
+    /// hosts are `dep.test` and `nested.test` respectively.
+    ///
+    /// Both submodules have been cloned once and then deinitialised at every
+    /// level, so their object stores sit under `.git/modules` and a later
+    /// `git submodule update --init` reconnects them WITHOUT a transport —
+    /// git only clones when the gitdir is absent. The urls are `file://<host>/
+    /// <path>`: git ignores the host part of a file url, the gate does not,
+    /// so the tree exercises the allowlist with no network and no
+    /// `protocol.file.allow` in the children's config (which the sandboxed
+    /// git of `create_command` does not have).
+    fn nested_submodule_tree() -> (TestRepo, TestRepo, TestRepo) {
+        let leaf = TestRepo::with_initial_commit();
+        let mid = TestRepo::with_initial_commit();
+        let leaf_url = format!("file://nested.test{}", leaf.path.display());
+        git_in(&mid.path, &["submodule", "add", &leaf_url, "leafdir"]);
+        git_in(&mid.path, &["commit", "-m", "add leaf"]);
+
+        let superproject = TestRepo::with_initial_commit();
+        let mid_url = format!("file://dep.test{}", mid.path.display());
+        git_in(
+            &superproject.path,
+            &["submodule", "add", &mid_url, "vendor/mid"],
+        );
+        git_in(&superproject.path, &["commit", "-m", "add mid"]);
+        git_in(
+            &superproject.path,
+            &["submodule", "update", "--init", "--recursive"],
+        );
+        assert!(
+            superproject
+                .path
+                .join("vendor/mid/leafdir/README.md")
+                .exists(),
+            "the fixture tree must be fully cloned before it is deinitialised"
+        );
+
+        git_in(
+            &superproject.path.join("vendor/mid"),
+            &["submodule", "deinit", "-f", "--all"],
+        );
+        git_in(&superproject.path, &["submodule", "deinit", "-f", "--all"]);
+        assert!(
+            !superproject.path.join("vendor/mid/README.md").exists(),
+            "deinit must empty the submodule working tree"
+        );
+
+        (superproject, mid, leaf)
+    }
+
+    #[tokio::test]
+    async fn a_nested_submodule_off_the_allowlist_is_refused_at_its_own_depth() {
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+        let _guard = test_support::allowlist(&["dep.test"]);
+
+        let message = blocked_message(
+            update_submodules(
+                superproject.path_str(),
+                None,
+                Some(true),
+                Some(true),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+        assert!(
+            message.contains("nested.test"),
+            "the refusal should name the nested host, got: {}",
+            message
+        );
+
+        // The allowlisted level was updated; the refused one was never touched.
+        assert!(
+            superproject.path.join("vendor/mid/README.md").exists(),
+            "the top-level submodule on the allowlist must still be updated"
+        );
+        assert!(
+            !superproject
+                .path
+                .join("vendor/mid/leafdir/README.md")
+                .exists(),
+            "the nested submodule off the allowlist was checked out anyway"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fully_allowlisted_nested_tree_is_updated_completely() {
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+        let _guard = test_support::allowlist(&["dep.test", "nested.test"]);
+
+        let result = update_submodules(
+            superproject.path_str(),
+            None,
+            Some(true),
+            Some(true),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "update_submodules failed: {:?}",
+            result.err()
+        );
+        assert!(
+            superproject
+                .path
+                .join("vendor/mid/leafdir/README.md")
+                .exists(),
+            "the Rust recursion must reach the bottom of the tree"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_nested_tree_narrowed_to_a_path_only_recurses_into_that_path() {
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+        let _guard = test_support::allowlist(&["dep.test", "nested.test"]);
+
+        let result = update_submodules(
+            superproject.path_str(),
+            Some(vec!["vendor".to_string()]),
+            Some(true),
+            Some(true),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "update_submodules failed: {:?}",
+            result.err()
+        );
+        assert!(superproject
+            .path
+            .join("vendor/mid/leafdir/README.md")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn without_a_policy_recursion_is_left_to_git() {
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+
+        let result = update_submodules(
+            superproject.path_str(),
+            None,
+            Some(true),
+            Some(true),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "update_submodules failed: {:?}",
+            result.err()
+        );
+        assert!(superproject
+            .path
+            .join("vendor/mid/leafdir/README.md")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn without_init_the_recursion_skips_an_uninitialised_submodule() {
+        // git's `--recursive` does not descend into a submodule the update
+        // left uninitialised; neither does the Rust walk.
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+        let _guard = test_support::allowlist(&["dep.test", "nested.test"]);
+
+        let result = update_submodules(
+            superproject.path_str(),
+            None,
+            None,
+            Some(true),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "update_submodules failed: {:?}",
+            result.err()
+        );
+        assert!(!superproject.path.join("vendor/mid/README.md").exists());
+    }
+
+    /// The nested levels are run inside the submodule but the token stays
+    /// scoped to the SUPERPROJECT's remote — the host it was resolved for —
+    /// exactly as git's `--recursive` children inherit it. Looking the remote
+    /// up in the nested repository would find that repository's own `origin`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_nested_level_scopes_the_token_to_the_superproject_remote() {
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+        superproject.add_remote("origin", "https://token-host.test/super.git");
+        git_in(&superproject.path, &["submodule", "update", "--init"]);
+        let nested = superproject.path.join("vendor/mid");
+
+        let mut cmd = submodule_command_in(
+            &nested,
+            &superproject.path,
+            &["credential", "fill"],
+            Some("ghp_secret"),
+            Some("origin"),
+        );
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().expect("failed to spawn git credential fill");
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"protocol=https\nhost=token-host.test\n\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("password=ghp_secret"),
+            "a nested level lost the token: {}",
+            stdout
         );
     }
 
@@ -1149,7 +1808,8 @@ mod tests {
     /// printed.
     #[cfg(unix)]
     fn fill_credential(repo: &TestRepo, token: &str, token_remote: &str, request: &str) -> String {
-        let mut cmd = submodule_command(
+        let mut cmd = submodule_command_in(
+            &repo.path,
             &repo.path,
             &["credential", "fill"],
             Some(token),
@@ -1379,7 +2039,8 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
         repo.add_remote("origin", "https://example.com/super.git");
 
-        let cmd = submodule_command(
+        let cmd = submodule_command_in(
+            &repo.path,
             &repo.path,
             &["submodule", "update"],
             Some("ghp_secret"),
@@ -1408,7 +2069,8 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
         repo.add_remote("origin", "https://example.com/super.git");
 
-        let cmd = submodule_command(
+        let cmd = submodule_command_in(
+            &repo.path,
             &repo.path,
             &["submodule", "update"],
             Some("ghp_secret"),
@@ -1432,7 +2094,13 @@ mod tests {
     async fn test_submodule_command_without_a_token_injects_nothing() {
         let repo = TestRepo::with_initial_commit();
 
-        let cmd = submodule_command(&repo.path, &["submodule", "update"], None, Some("origin"));
+        let cmd = submodule_command_in(
+            &repo.path,
+            &repo.path,
+            &["submodule", "update"],
+            None,
+            Some("origin"),
+        );
         let keys: Vec<String> = cmd
             .get_envs()
             .map(|(k, _)| k.to_string_lossy().to_string())

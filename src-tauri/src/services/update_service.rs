@@ -392,12 +392,21 @@ pub async fn check_for_update_manual(app: &tauri::AppHandle) -> Result<UpdateChe
     let updater = gated_updater(app)?;
 
     match updater.check().await {
-        Ok(Some(update)) => Ok(UpdateCheckEvent {
-            update_available: true,
-            current_version,
-            latest_version: Some(update.version.clone()),
-            release_notes: update.body.clone(),
-        }),
+        Ok(Some(update)) => {
+            // The BINARY's host is the manifest's choice, and only the install
+            // path used to check it — where a refusal is `Skipped` and logged.
+            // A check that announced the update anyway left Settings saying
+            // "Update available" for a binary nothing would ever fetch, with
+            // no explanation. Refusing here, naming the host, is what the
+            // click gets back.
+            guard_update_download(update.download_url.as_str())?;
+            Ok(UpdateCheckEvent {
+                update_available: true,
+                current_version,
+                latest_version: Some(update.version.clone()),
+                release_notes: update.body.clone(),
+            })
+        }
         Ok(None) => Ok(UpdateCheckEvent {
             update_available: false,
             current_version,
@@ -626,6 +635,35 @@ mod tests {
             .expect("the download call");
         assert!(guard < announced, "guard before the update-available emit");
         assert!(guard < downloaded, "guard before the download starts");
+    }
+
+    #[test]
+    fn the_manual_check_refuses_a_binary_host_it_would_never_install_from() {
+        // Same structural pin as the install path above. The manual check
+        // had no guard at all: it announced an update whose binary the
+        // install path would then refuse — `Skipped`, logged, never shown —
+        // so Settings said "Update available" forever with nothing installed
+        // or explained. The guard has to run BEFORE the availability is
+        // reported, so the click gets the refusal, host and all.
+        let source = include_str!("update_service.rs");
+        let body = source
+            .split_once("pub async fn check_for_update_manual")
+            .expect("the manual check exists")
+            .1;
+        let body = body
+            .split_once("\n}\n")
+            .expect("the manual check has a body")
+            .0;
+        let guard = body
+            .find("guard_update_download")
+            .expect("the manual check guards the binary's host");
+        let announced = body
+            .find("update_available: true")
+            .expect("the availability report");
+        assert!(
+            guard < announced,
+            "guard the binary's host before reporting the update as available"
+        );
     }
 
     // ---- the scheduled loop ----

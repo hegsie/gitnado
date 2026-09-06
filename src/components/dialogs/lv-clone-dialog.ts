@@ -8,6 +8,7 @@ import { customElement, state, query } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import {
   isNetworkGateRefusal,
+  isOperationCancelled,
   cloneRepository,
   cancelClone,
   getSubmodules,
@@ -581,11 +582,15 @@ export class LvCloneDialog extends LitElement {
           this.close();
         }, 500);
       } else {
-        // The gate already explained a block, and a declined confirm is the
-        // user's own decision — showing "Cancelled" as a red error in the
-        // dialog reports their click back to them as a failure.
-        if (!isNetworkGateRefusal(result.error)) {
+        // The gate already explained a block, a declined confirm is the
+        // user's own decision, and a cancelled clone is the user's own Cancel
+        // — showing any of them as a red error in the dialog reports their
+        // click back to them as a failure. `isOperationCancelled` is the code
+        // fetch, pull and push already return for the same click.
+        if (!isNetworkGateRefusal(result.error) && !isOperationCancelled(result.error)) {
           this.error = result.error?.message ?? 'Failed to clone repository';
+        } else {
+          this.progressText = '';
         }
         this.isCloning = false;
         // Cleared alongside isCloning: leaving it set keeps Cancel disabled, so

@@ -209,12 +209,36 @@ describe('lv-clone-dialog cancellation', () => {
     await flush();
     await el.updateComplete;
 
-    // Backend reports the cancellation as a failed clone.
-    finishClone?.(Promise.reject(new Error('Clone cancelled')));
+    // The backend reports the cancellation with the code every other
+    // cancellable operation uses (`OperationCancelled`).
+    finishClone?.(Promise.reject({ code: 'OPERATION_CANCELLED', message: 'Operation cancelled' }));
     await flush();
     await el.updateComplete;
 
     // The dialog must now be closable: Cancel goes back to plain dismissal.
+    expect(cancelButton(el).disabled).to.be.false;
+    // And the user's own Cancel is not painted back at them as a red failure,
+    // the way a declined network confirm already is not.
+    // Compared as text rather than as nodes: a DOM node in an assertion
+    // failure does not serialise out of the browser.
+    expect(
+      el.shadowRoot!.querySelector('.error-message')?.textContent ?? '',
+      'a cancelled clone must not be shown as an error',
+    ).to.equal('');
+    expect(el.shadowRoot!.querySelector('.progress-text') === null).to.equal(true);
+  });
+
+  it('still shows a real clone failure as an error', async () => {
+    await startClone(el);
+
+    finishClone?.(
+      Promise.reject({ code: 'CUSTOM_ERROR', message: 'git clone failed: repository not found' }),
+    );
+    await flush();
+    await el.updateComplete;
+
+    const error = el.shadowRoot!.querySelector('.error-message')?.textContent ?? '';
+    expect(error, 'a failed clone must be reported').to.contain('repository not found');
     expect(cancelButton(el).disabled).to.be.false;
   });
 });

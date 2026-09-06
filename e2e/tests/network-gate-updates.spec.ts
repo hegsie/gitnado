@@ -155,6 +155,32 @@ test.describe('Settings Dialog — the updater respects the network gate', () =>
     await expect(updateError(page)).toHaveCount(0);
   });
 
+  test('a binary the manifest puts on an unlisted host is refused by the check itself', async ({
+    page,
+  }) => {
+    // The manifest host is on the allowlist, so the frontend gate lets the
+    // check through — but `latest.json` names the BINARY's host, and only the
+    // backend can see that. Its refusal has to come back from the check: the
+    // manual check used to announce the update and leave the install path to
+    // refuse it silently, so Settings said "Update available" forever.
+    await startCommandCaptureWithMocks(page, updateMocks);
+    await injectCommandError(
+      page,
+      'check_for_update',
+      'Remote "https://cdn.example.net/Leviathan.AppImage" is not in your allowlist',
+      'BLOCKED',
+    );
+    await setSecurity(page, { remoteAllowlist: ['github.com'] });
+    await openSettings(page);
+
+    await checkButton(page).click();
+
+    await expect(updateError(page)).toBeVisible();
+    await expect(updateError(page)).toContainText('cdn.example.net');
+    await expect(page.locator('lv-settings-dialog .update-status.available')).toHaveCount(0);
+    await expect(checkButton(page)).toBeEnabled();
+  });
+
   test('a failed check reports the backend error instead of showing nothing', async ({ page }) => {
     await startCommandCaptureWithMocks(page, updateMocks);
     await injectCommandError(page, 'check_for_update', 'Update check failed: connection reset');
