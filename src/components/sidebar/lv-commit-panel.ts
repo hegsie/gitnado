@@ -7,6 +7,7 @@ import { showToast } from '../../services/notification.service.ts';
 import { showPrompt } from '../../services/dialog.service.ts';
 import { repositoryStore, settingsStore } from '../../stores/index.ts';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { safeUnlisten } from '../../services/tauri-api.ts';
 import type { CommitTemplate, ConventionalType } from '../../services/git.service.ts';
 import type { Commit } from '../../types/git.types.ts';
 import { RefLockController, tryAcquireRefOpOrWarn, releaseRefOp } from '../../utils/ref-lock.ts';
@@ -1005,7 +1006,12 @@ export class LvCommitPanel extends LitElement {
       if (event.payload.loaded) {
         this.checkAiAvailability();
       }
-    }).then(unlisten => { this.modelCompleteUnlisten = unlisten; });
+    })
+      .then(unlisten => { this.modelCompleteUnlisten = unlisten; })
+      .catch(() => {
+        // No Tauri event bridge (unit tests, plain browser): the periodic
+        // availability poll below still notices a model that loads later.
+      });
 
     // If AI isn't available yet, poll periodically to catch backend auto-loading
     // a model on startup (which can take 10-30 seconds)
@@ -1021,7 +1027,8 @@ export class LvCommitPanel extends LitElement {
     window.removeEventListener('ai-settings-changed', this.boundHandleAiSettingsChanged);
     window.removeEventListener('repository-refresh', this.boundHandleRepositoryRefresh);
     window.removeEventListener('git-identity-changed', this.boundHandleIdentityChanged);
-    this.modelCompleteUnlisten?.();
+    safeUnlisten(this.modelCompleteUnlisten);
+    this.modelCompleteUnlisten = undefined;
     if (this.aiRetryTimer) clearTimeout(this.aiRetryTimer);
     this.unsubscribeStore?.();
   }

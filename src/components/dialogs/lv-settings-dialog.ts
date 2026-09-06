@@ -30,6 +30,7 @@ import type { AiProviderInfo, AiProviderType } from '../../services/ai.service.t
 import type { SystemCapabilities, ModelEntry, DownloadedModel, DownloadProgress, LocalModelStatus } from '../../services/local-ai.service.ts';
 import type { McpStatus } from '../../services/mcp.service.ts';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { safeUnlisten } from '../../services/tauri-api.ts';
 import '../common/lv-toggle.ts';
 
 /**
@@ -511,9 +512,14 @@ export class LvSettingsDialog extends LitElement {
     super.disconnectedCallback();
     this.settingsUnsubscribe?.();
     this.settingsUnsubscribe = null;
-    this.downloadProgressUnlisten?.();
-    this.downloadCompleteUnlisten?.();
-    this.downloadErrorUnlisten?.();
+    // Raw Tauri unlisten closures reject where there is no event bridge, and
+    // a teardown has no one to hand that rejection to.
+    safeUnlisten(this.downloadProgressUnlisten);
+    safeUnlisten(this.downloadCompleteUnlisten);
+    safeUnlisten(this.downloadErrorUnlisten);
+    this.downloadProgressUnlisten = null;
+    this.downloadCompleteUnlisten = null;
+    this.downloadErrorUnlisten = null;
   }
 
   protected updated(): void {
@@ -1153,15 +1159,31 @@ export class LvSettingsDialog extends LitElement {
     }
   }
 
+  /**
+   * `listen()`, resolving to null where there is no Tauri event bridge (unit
+   * tests that mock `invoke` alone, a plain browser). connectedCallback fires
+   * this without awaiting it, so a rejection here would be unhandled.
+   */
+  private async listenOrNull<T>(
+    event: string,
+    handler: (event: { payload: T }) => void,
+  ): Promise<UnlistenFn | null> {
+    try {
+      return await listen<T>(event, handler);
+    } catch {
+      return null;
+    }
+  }
+
   private async setupDownloadListeners(): Promise<void> {
-    this.downloadProgressUnlisten = await listen<DownloadProgress>('model-download-progress', (event) => {
+    this.downloadProgressUnlisten = await this.listenOrNull<DownloadProgress>('model-download-progress', (event) => {
       this.downloadProgress = {
         ...this.downloadProgress,
         [event.payload.modelId]: event.payload,
       };
     });
 
-    this.downloadCompleteUnlisten = await listen<{ modelId: string; loaded?: boolean; loadError?: string }>('model-download-complete', (event) => {
+    this.downloadCompleteUnlisten = await this.listenOrNull<{ modelId: string; loaded?: boolean; loadError?: string }>('model-download-complete', (event) => {
       // Remove from progress tracking and refresh the model list
       const { [event.payload.modelId]: _, ...rest } = this.downloadProgress;
       this.downloadProgress = rest;
@@ -1178,7 +1200,7 @@ export class LvSettingsDialog extends LitElement {
       }
     });
 
-    this.downloadErrorUnlisten = await listen<{ modelId: string; error: string }>('model-download-error', (event) => {
+    this.downloadErrorUnlisten = await this.listenOrNull<{ modelId: string; error: string }>('model-download-error', (event) => {
       this.aiError = `Download failed for ${event.payload.modelId}: ${event.payload.error}`;
       // Remove from progress tracking and refresh downloaded models list
       const { [event.payload.modelId]: _, ...rest } = this.downloadProgress;

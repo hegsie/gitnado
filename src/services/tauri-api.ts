@@ -100,15 +100,56 @@ export async function invokeCommand<T, A = unknown>(
 }
 
 /**
- * Listen to a Tauri event
+ * Call a listener's unlisten function so that teardown can never throw or
+ * reject, whatever state the event bridge is in.
+ *
+ * The closure `listen()` returns reads `window.__TAURI_EVENT_PLUGIN_INTERNALS__`
+ * and then makes an IPC round trip. Outside a real webview (unit tests that
+ * mock `invoke` and nothing else, a plain-browser preview) that global is
+ * absent, so the call rejects — and a disconnectedCallback has nowhere to send
+ * that rejection. It surfaces as an unhandled rejection that the test runner
+ * charges to whichever test happens to be running, i.e. as an intermittent
+ * failure of an unrelated test under load. The listener dies with the webview
+ * anyway, so the failure is swallowed here, once, rather than at every
+ * teardown site — that is the hand-enumerated list that goes stale.
+ */
+export function safeUnlisten(unlisten: UnlistenFn | null | undefined): void {
+  if (!unlisten) return;
+  try {
+    // Typed as `() => void`, but the closure Tauri returns is async: a failure
+    // arrives as a rejected promise, not a throw.
+    const result = unlisten() as unknown;
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => {
+        /* no event bridge — nothing to unregister */
+      });
+    }
+  } catch {
+    /* no event bridge — nothing to unregister */
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Listen to a Tauri event.
+ *
+ * The unlisten this resolves to is teardown-safe — see `safeUnlisten`.
  */
 export async function listenToEvent<T>(
   event: string,
   handler: (payload: T) => void
 ): Promise<UnlistenFn> {
-  return listen<T>(event, (event) => {
+  const unlisten = await listen<T>(event, (event) => {
     handler(event.payload);
   });
+  return () => safeUnlisten(unlisten);
 }
 
 /**

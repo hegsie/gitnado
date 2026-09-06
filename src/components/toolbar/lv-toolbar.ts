@@ -791,7 +791,7 @@ export class LvToolbar extends LitElement {
     if (!repo) {
       return { disabled: true, idle: false, count: 0, label: `${name} — open a repository first` };
     }
-    if (repo.remotes.length === 0) {
+    if ((repo.remotes ?? []).length === 0) {
       return {
         disabled: true,
         idle: false,
@@ -881,7 +881,7 @@ export class LvToolbar extends LitElement {
       showToast('Please open a repository first', 'warning');
       return;
     }
-    if (repo.remotes.length === 0) {
+    if ((repo.remotes ?? []).length === 0) {
       showToast('No remote configured for this repository — add one first.', 'warning');
       return;
     }
@@ -930,8 +930,12 @@ export class LvToolbar extends LitElement {
   }
 
   private detectProvider(repo: OpenRepository): 'github' | 'ado' | 'gitlab' | 'bitbucket' | null {
-    const originRemote = repo.remotes.find(r => r.name === 'origin') ?? repo.remotes[0];
-    if (!originRemote) return null;
+    // The store seeds `remotes` as [] and the backend returns a Vec, so it is
+    // never missing in the app — but this runs inside render(), where a throw
+    // rejects the whole toolbar update. Tolerate a missing collection.
+    const remotes = repo.remotes ?? [];
+    const originRemote = remotes.find(r => r.name === 'origin') ?? remotes[0];
+    if (!originRemote?.url) return null;
 
     const url = originRemote.url.toLowerCase();
     if (url.includes('github.com') || url.includes('github.')) return 'github';
@@ -1067,7 +1071,9 @@ export class LvToolbar extends LitElement {
   }
 
   private renderTabBadges(repo: OpenRepository) {
-    const dirty = repo.status.length > 0;
+    // Same tolerance as detectProvider: never missing in the app, but a
+    // render function must not throw on a missing collection.
+    const dirty = (repo.status ?? []).length > 0;
     const ab = repo.currentBranch?.aheadBehind;
     const showAheadBehind = ab && (ab.ahead > 0 || ab.behind > 0);
     return html`

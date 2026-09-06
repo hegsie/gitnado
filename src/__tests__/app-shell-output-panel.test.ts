@@ -23,13 +23,14 @@ const mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect } from '@open-wc/testing';
+import { expect, waitUntil } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
 import { dialogs } from '../stores/dialog.store.ts';
 import { uiStore } from '../stores/ui.store.ts';
 import { repositoryStore } from '../stores/repository.store.ts';
 import type { Repository } from '../types/git.types.ts';
+import { collectUnhandledRejections } from '../test-utils/unhandled-rejections.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -126,7 +127,13 @@ describe('app-shell output panel wiring', () => {
       await el.updateComplete;
       repositoryStore.setState({
         openRepositories: [
-          { repository: { ...mockRepo(), path: '/repo/a', name: 'a' }, branches: [], currentBranch: null },
+          {
+            repository: { ...mockRepo(), path: '/repo/a', name: 'a' },
+            branches: [],
+            currentBranch: null,
+            remotes: [],
+            status: [],
+          },
         ] as never,
         activeIndex: 0,
       });
@@ -143,7 +150,13 @@ describe('app-shell output panel wiring', () => {
 
       repositoryStore.setState({
         openRepositories: [
-          { repository: { ...mockRepo(), path: '/repo/b', name: 'b' }, branches: [], currentBranch: null },
+          {
+            repository: { ...mockRepo(), path: '/repo/b', name: 'b' },
+            branches: [],
+            currentBranch: null,
+            remotes: [],
+            status: [],
+          },
         ] as never,
         activeIndex: 0,
       });
@@ -172,6 +185,34 @@ describe('app-shell output panel wiring', () => {
       const warnings = uiStore.getState().toasts.filter((t) => t.type === 'warning');
       expect(warnings.length, 'the user is told why nothing happened').to.equal(1);
       expect(warnings[0].message).to.match(/open a repository/i);
+    } finally {
+      el.remove();
+    }
+  });
+});
+
+describe('app-shell teardown without the event plugin internals', () => {
+  it('disconnects without an unhandled rejection', async () => {
+    // Every listen() here SUCCEEDS — the mock resolves the IPC call — so the
+    // shell holds real unlisten closures for the update, model-download,
+    // remote-operation and git-command listeners. Each of those reads
+    // __TAURI_EVENT_PLUGIN_INTERNALS__ before its IPC call, and that global
+    // does not exist outside a webview. A rejection from disconnectedCallback
+    // has no owner: the runner charges it to whichever test runs next.
+    delete (globalThis as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__;
+    const el = createAppShell();
+    document.body.appendChild(el);
+    try {
+      await el.updateComplete;
+      await waitUntil(
+        () => (el as any).updateUnlisteners.length >= 5,
+        'the update and model-download listeners never attached',
+      );
+
+      const rejections = await collectUnhandledRejections(() => {
+        el.remove();
+      });
+      expect(rejections, 'teardown must not reject').to.deep.equal([]);
     } finally {
       el.remove();
     }

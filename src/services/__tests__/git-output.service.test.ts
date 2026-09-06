@@ -2,9 +2,11 @@ import { expect } from '@open-wc/testing';
 
 // Mock the Tauri IPC bridge before importing anything that reaches for it.
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
-(globalThis as unknown as { __TAURI_INTERNALS__: { invoke: MockInvoke } }).__TAURI_INTERNALS__ = {
+const tauriInternals: { invoke: MockInvoke; transformCallback?: () => number } = {
   invoke: () => Promise.resolve(null),
 };
+(globalThis as unknown as { __TAURI_INTERNALS__: typeof tauriInternals }).__TAURI_INTERNALS__ =
+  tauriInternals;
 
 import { clearLogEntries, getLogEntries } from '../output-log.service.ts';
 import {
@@ -12,6 +14,7 @@ import {
   startGitCommandLogging,
   stopGitCommandLogging,
 } from '../git-output.service.ts';
+import { collectUnhandledRejections } from '../../test-utils/unhandled-rejections.ts';
 
 describe('git-output.service', () => {
   beforeEach(() => {
@@ -83,5 +86,45 @@ describe('git-output.service', () => {
       durationMs: 1,
     });
     expect(getLogEntries().length).to.equal(1);
+  });
+});
+
+describe('git-output.service teardown without the event plugin internals', () => {
+  beforeEach(() => {
+    // The IPC layer is present and listen() SUCCEEDS (an event id resolves)…
+    tauriInternals.transformCallback = () => 1;
+    tauriInternals.invoke = () => Promise.resolve(1);
+    // …but the event plugin's own internals — which the unlisten closure reads
+    // before its IPC call — are not. That is every unit test that mocks
+    // `invoke` and nothing else, and the plain-browser preview.
+    delete (globalThis as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__;
+  });
+
+  afterEach(() => {
+    stopGitCommandLogging();
+    delete tauriInternals.transformCallback;
+    tauriInternals.invoke = () => Promise.resolve(null);
+  });
+
+  it('stopping neither throws nor rejects when the unlisten closure cannot reach the bridge', async () => {
+    await startGitCommandLogging();
+
+    const rejections = await collectUnhandledRejections(() => {
+      expect(() => stopGitCommandLogging()).to.not.throw();
+    });
+    expect(rejections, 'a rejection here is charged to whatever test runs next').to.deep.equal([]);
+  });
+
+  it('can start again after a stop that could not reach the bridge', async () => {
+    await startGitCommandLogging();
+    stopGitCommandLogging();
+
+    const listens: string[] = [];
+    tauriInternals.invoke = (command: string) => {
+      listens.push(command);
+      return Promise.resolve(2);
+    };
+    await startGitCommandLogging();
+    expect(listens).to.deep.equal(['plugin:event|listen']);
   });
 });

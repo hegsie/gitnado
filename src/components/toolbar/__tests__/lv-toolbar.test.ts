@@ -31,6 +31,7 @@ import {
 } from '../../../utils/ref-lock.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
 import { runFetch, runPush } from '../../../services/remote-operations.service.ts';
+import { collectUnhandledRejections } from '../../../test-utils/unhandled-rejections.ts';
 
 /**
  * Commands parked until the test releases them, so a real operation can be
@@ -957,5 +958,44 @@ describe('lv-toolbar menu bar routed actions', () => {
     el.dispatchEvent(new CustomEvent('clone-repository'));
 
     expect(opened).to.equal(0);
+  });
+});
+
+// The store seeds every collection (`createEmptyRepoData`) and the backend
+// returns `Vec`s, so `remotes`/`status` are never missing in the app. But a
+// render function must not throw on a missing collection: a throw inside
+// render() rejects the whole toolbar update, and the rejection is charged to
+// whichever test happens to be running.
+describe('lv-toolbar tabs for a repo missing its collections', () => {
+  beforeEach(() => {
+    repositoryStore.getState().reset();
+    mockInvoke = () => Promise.resolve(null);
+  });
+
+  it('renders the tab with no provider icon and no dirty badge, and never throws', async () => {
+    const el = await createToolbar();
+    const bare = { repository: mockRepo('/repo/bare', 'bare'), branches: [], currentBranch: null };
+    repositoryStore.setState({
+      openRepositories: [
+        bare,
+        { ...bare, repository: mockRepo('/repo/nulls', 'nulls'), remotes: null, status: null },
+      ] as never,
+      activeIndex: 0,
+    });
+
+    const rejections = await collectUnhandledRejections(async () => {
+      await el.updateComplete;
+    });
+
+    expect(rejections, 'the render must not reject').to.deep.equal([]);
+    expect(tabs(el)).to.have.length(2);
+    expect(el.shadowRoot!.querySelector('.provider-icon')).to.equal(null);
+    expect(el.shadowRoot!.querySelector('.tab-dirty')).to.equal(null);
+    // The remote buttons read the same collection and must degrade the same
+    // way: no remote means the operation is unavailable, not a crash.
+    const fetchBtn = el.shadowRoot!.querySelector('.remote-btn.fetch') as HTMLButtonElement | null;
+    expect(fetchBtn, 'the fetch button is rendered').to.not.equal(null);
+    expect(fetchBtn!.disabled, 'no remote means fetch is unavailable').to.be.true;
+    expect(fetchBtn!.getAttribute('title')).to.match(/remote/i);
   });
 });

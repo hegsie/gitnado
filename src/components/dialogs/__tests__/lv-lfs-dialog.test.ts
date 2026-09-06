@@ -15,6 +15,8 @@ const gatedCommands = new Set<string>();
 const gateReleases = new Map<string, () => void>();
 /** Every repo path `get_lfs_status` was asked for, in order. */
 const statusReads: string[] = [];
+/** When set, what `get_lfs_status` answers instead of the default. */
+let statusOverride: unknown = null;
 
 function gate(command: string): void {
   gatedCommands.add(command);
@@ -52,6 +54,7 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
 
   if (command === 'get_lfs_status') {
     statusReads.push(((args as { path?: string }) ?? {}).path ?? '');
+    if (statusOverride) return statusOverride;
   }
 
   if (gatedCommands.has(command)) {
@@ -99,6 +102,7 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
 import '../lv-lfs-dialog.ts';
 import type { LvLfsDialog } from '../lv-lfs-dialog.ts';
 import { resetMaintenanceLocks } from '../../../utils/maintenance-confirms.ts';
+import { collectUnhandledRejections } from '../../../test-utils/unhandled-rejections.ts';
 
 describe('lv-lfs-dialog', () => {
   beforeEach(() => {
@@ -110,7 +114,32 @@ describe('lv-lfs-dialog', () => {
     gateReleases.forEach((resolve) => resolve());
     gateReleases.clear();
     statusReads.length = 0;
+    statusOverride = null;
     resetMaintenanceLocks();
+  });
+
+  it('renders the empty pattern state, not a rejected render, when the status carries no patterns', async () => {
+    // The backend's LfsStatus always carries `patterns` (a Vec). A status
+    // without it must still render — a throw inside render() rejects the whole
+    // update and is charged to whichever test is running at the time.
+    statusOverride = { installed: true, version: '3.0.0', enabled: false };
+
+    const el = await fixture<LvLfsDialog>(
+      html`<lv-lfs-dialog ?open=${true} .repositoryPath=${'/test/repo'}></lv-lfs-dialog>`,
+    );
+    await waitUntil(
+      () => (el as unknown as { status: unknown }).status !== null,
+      'the status never loaded',
+    );
+
+    const rejections = await collectUnhandledRejections(async () => {
+      await el.updateComplete;
+    });
+
+    expect(rejections, 'the render must not reject').to.deep.equal([]);
+    expect(el.shadowRoot!.querySelector('.pattern-list .empty-text')?.textContent).to.contain(
+      'No patterns configured',
+    );
   });
 
   it('renders when open', async () => {

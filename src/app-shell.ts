@@ -161,7 +161,7 @@ import * as unifiedProfileService from './services/unified-profile.service.ts';
 import { settingsStore } from './stores/settings.store.ts';
 import { workspaceStore } from './stores/workspace.store.ts';
 import * as workspaceService from './services/workspace.service.ts';
-import { listenToEvent } from './services/tauri-api.ts';
+import { listenToEvent, safeUnlisten } from './services/tauri-api.ts';
 import {
   startGitCommandLogging,
   stopGitCommandLogging,
@@ -2108,8 +2108,10 @@ export class AppShell extends LitElement {
     }
     // Stop periodic token validation
     unifiedProfileService.stopPeriodicTokenValidation();
-    // Clean up update listeners
-    this.updateUnlisteners.forEach((unlisten) => unlisten());
+    // Clean up update listeners. The update service hands back raw Tauri
+    // unlisten closures, which reject where there is no event bridge — and a
+    // teardown has no one to hand that rejection to.
+    this.updateUnlisteners.forEach((unlisten) => safeUnlisten(unlisten));
     this.updateUnlisteners = [];
     // Unsubscribe from progress service
     this.progressUnsubscribe?.();

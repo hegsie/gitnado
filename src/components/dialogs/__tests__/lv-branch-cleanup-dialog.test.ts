@@ -22,7 +22,7 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import { settingsStore } from '../../../stores/settings.store.ts';
 import { uiStore } from '../../../stores/ui.store.ts';
 import type { CleanupCandidate } from '../../../types/git.types.ts';
@@ -923,7 +923,15 @@ describe('lv-branch-cleanup-dialog (fixture)', () => {
 
       clearHistory();
       (el.shadowRoot!.querySelector('.btn-danger') as HTMLButtonElement).click();
-      await settle(el);
+      // The outcome toast is the LAST thing the handler does, after the
+      // confirm, the refused delete, the declined escalation and the prune
+      // gate have each made their IPC round trip — wait for that signal, not
+      // for a timer that a loaded machine can outrun.
+      await waitUntil(
+        () => !(el as unknown as { deleting: boolean }).deleting,
+        'the delete flow never finished',
+      );
+      await el.updateComplete;
 
       const forced = findCommands('delete_branch').filter(
         (c) => (c.args as { force?: boolean }).force === true,

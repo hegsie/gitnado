@@ -21,6 +21,7 @@ import {
   claimGitOperationForEntry,
   logGitCommand,
 } from './output-log.service.ts';
+import { safeUnlisten } from './tauri-api.ts';
 
 /** Payload of the backend's `git-command-executed` event. */
 export interface GitCommandExecutedEvent {
@@ -88,8 +89,15 @@ export async function startGitCommandLogging(): Promise<void> {
   return starting;
 }
 
-/** Stop recording backend git invocations. */
+/**
+ * Stop recording backend git invocations.
+ *
+ * Never throws or rejects, mirroring the start side: `listen()` can succeed
+ * against a mocked `invoke` while the event plugin's own internals — which the
+ * unlisten closure reads — are absent, and this runs from the shell's
+ * disconnectedCallback, which has no one to hand a rejection to.
+ */
 export function stopGitCommandLogging(): void {
-  unlisten?.();
+  safeUnlisten(unlisten);
   unlisten = undefined;
 }
