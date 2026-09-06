@@ -426,10 +426,13 @@ impl GitCommand {
 
     /// Report a run this command performed OUTSIDE `output()`/`status()`.
     ///
-    /// `remote::run_push_command` spawns the child itself so a cancellation can
-    /// kill it mid-transfer; without this hook the operation users most want to
-    /// read in the panel — a force push and the remote's rejection of it —
-    /// would be the one that never appears.
+    /// Two callers spawn the child themselves so a cancellation can kill it
+    /// mid-transfer: `remote::run_push_command` and
+    /// `repository::run_clone_command`. Without this hook the operations users
+    /// most want to read in the panel — a force push and the remote's rejection
+    /// of it, a shallow clone and why it failed — would be the ones that never
+    /// appear. Both call it on success AND on a non-zero exit, never on
+    /// cancel/timeout.
     pub fn report_run(&self, started: Instant, output: &Output) {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
