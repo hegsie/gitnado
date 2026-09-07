@@ -327,6 +327,23 @@ pub fn guard_url(url: &str) -> Result<()> {
 /// targets the repository's default remote. Offline mode short-circuits before
 /// the repository is opened, so the common refusal costs nothing.
 pub fn guard_remote(repo_path: &str, remote: Option<&str>) -> Result<()> {
+    guard_remote_for(repo_path, remote, false)
+}
+
+/// [`guard_remote`] for a PUSH-class operation — push, push tag, delete
+/// remote tag, multi-remote push.
+///
+/// A push contacts `remote.<name>.pushurl` when one is configured, and git2
+/// and `git push` both honour it; the fetch URL says nothing about where the
+/// objects are going. The token scoping in `remote.rs::push_remote_url`
+/// already knew this; the allowlist did not, so `url = github.com` with
+/// `pushurl = gitlab.example` passed a `github.com` allowlist and pushed to
+/// gitlab.example.
+pub fn guard_push_remote(repo_path: &str, remote: Option<&str>) -> Result<()> {
+    guard_remote_for(repo_path, remote, true)
+}
+
+fn guard_remote_for(repo_path: &str, remote: Option<&str>, for_push: bool) -> Result<()> {
     let settings = global().snapshot();
     if settings.offline_mode {
         return check(&settings, None);
@@ -334,33 +351,51 @@ pub fn guard_remote(repo_path: &str, remote: Option<&str>) -> Result<()> {
     if settings.remote_allowlist.is_empty() {
         return Ok(());
     }
-    let url = resolve_remote_url(repo_path, remote);
+    let url = resolve_remote_url(repo_path, remote, for_push);
     check(&settings, url.as_deref())
 }
 
 /// The URL an operation against `remote` will contact.
 ///
-/// Mirrors `resolveRemoteUrl` in the frontend: a value that already looks like
-/// a URL is passed through, a named remote is looked up, and a caller that
-/// named none falls back to `origin` and then to whatever remote exists.
-fn resolve_remote_url(repo_path: &str, remote: Option<&str>) -> Option<String> {
+/// Mirrors `resolveRemoteUrl` / `resolveRemotePushUrl` in the frontend: a
+/// value that already looks like a URL is passed through, a named remote is
+/// looked up, and a caller that named none gets the remote git itself would
+/// use. With `for_push` the remote's `pushurl` wins when it has one, because
+/// that is the URL a push actually reaches.
+///
+/// "Named none" does NOT mean `origin`. A `git fetch` with no remote, a
+/// relative submodule url, and `git lfs pull` all go to the current branch's
+/// tracking remote first (`branch.<n>.remote`), and only then to `origin` —
+/// the rule `remote::resolve_fetch_remote` already applies for fetch and pull.
+/// Assuming `origin` here judged the wrong host in the ordinary fork layout:
+/// origin on github.com, the branch tracking `upstream` on gitlab.com, and a
+/// `github.com` allowlist waving through a fetch that went to gitlab.
+fn resolve_remote_url(repo_path: &str, remote: Option<&str>, for_push: bool) -> Option<String> {
     if let Some(remote) = remote {
         if looks_like_url(remote) {
             return Some(remote.to_string());
         }
     }
+    let url_of = |found: git2::Remote<'_>| -> Option<String> {
+        if for_push {
+            if let Ok(Some(push_url)) = found.pushurl() {
+                return Some(push_url.to_string());
+            }
+        }
+        found.url().ok().map(|u| u.to_string())
+    };
     let repo = git2::Repository::open(Path::new(repo_path)).ok()?;
-    let wanted = remote.unwrap_or("origin");
-    if let Ok(found) = repo.find_remote(wanted) {
-        return found.url().ok().map(|u| u.to_string());
+    let wanted = match remote {
+        Some(name) => name.to_string(),
+        None => crate::commands::remote::resolve_fetch_remote(&repo, None),
+    };
+    if let Ok(found) = repo.find_remote(&wanted) {
+        return url_of(found);
     }
     if remote.is_none() {
         let names = repo.remotes().ok()?;
         let first = names.iter().filter_map(|s| s.ok().flatten()).next()?;
-        return repo
-            .find_remote(first)
-            .ok()
-            .and_then(|r| r.url().ok().map(|u| u.to_string()));
+        return repo.find_remote(first).ok().and_then(url_of);
     }
     None
 }
@@ -1444,19 +1479,122 @@ mod tests {
         repo.add_remote("upstream", "git@gitlab.example.test:acme/app.git");
 
         assert_eq!(
-            resolve_remote_url(&repo.path_str(), Some("upstream")).as_deref(),
+            resolve_remote_url(&repo.path_str(), Some("upstream"), false).as_deref(),
             Some("git@gitlab.example.test:acme/app.git")
         );
         // No name given means the repository's default remote.
         assert_eq!(
-            resolve_remote_url(&repo.path_str(), None).as_deref(),
+            resolve_remote_url(&repo.path_str(), None, false).as_deref(),
             Some("https://github.com/me/app.git")
         );
         // A URL passed where a name was expected travels through untouched.
         assert_eq!(
-            resolve_remote_url(&repo.path_str(), Some("https://other.test/x.git")).as_deref(),
+            resolve_remote_url(&repo.path_str(), Some("https://other.test/x.git"), false)
+                .as_deref(),
             Some("https://other.test/x.git")
         );
+    }
+
+    /// A push goes to `pushurl` when the remote has one — git2 and `git push`
+    /// both contact it — so that is the URL a push-class guard must judge.
+    /// A fetch keeps judging the fetch URL, and a remote with no `pushurl`
+    /// pushes to its one URL.
+    #[test]
+    fn a_push_resolves_the_push_url_and_a_fetch_the_fetch_url() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.add_remote("mirror", "https://github.com/org/mirror.git");
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("remote.origin.pushurl", "https://gitlab.example/org/x.git")
+            .unwrap();
+
+        assert_eq!(
+            resolve_remote_url(&repo.path_str(), Some("origin"), true).as_deref(),
+            Some("https://gitlab.example/org/x.git")
+        );
+        assert_eq!(
+            resolve_remote_url(&repo.path_str(), None, true).as_deref(),
+            Some("https://gitlab.example/org/x.git"),
+            "the default remote's pushurl counts too"
+        );
+        assert_eq!(
+            resolve_remote_url(&repo.path_str(), Some("origin"), false).as_deref(),
+            Some("https://github.com/org/x.git")
+        );
+        assert_eq!(
+            resolve_remote_url(&repo.path_str(), Some("mirror"), true).as_deref(),
+            Some("https://github.com/org/mirror.git"),
+            "no pushurl falls back to the remote's url"
+        );
+    }
+
+    /// The ordinary fork layout: `origin` is the user's fork on github.com,
+    /// the branch tracks `upstream` on gitlab.com. git's default remote for
+    /// a fetch with no remote named is the tracking remote — and so is the
+    /// gate's now, rather than `origin`.
+    fn fork_layout_tracking_upstream() -> crate::test_utils::TestRepo {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/me/app.git");
+        repo.add_remote("upstream", "https://gitlab.com/acme/app.git");
+        let git_repo = repo.repo();
+        let branch = repo.current_branch();
+        let mut cfg = git_repo.config().unwrap();
+        cfg.set_str(&format!("branch.{}.remote", branch), "upstream")
+            .unwrap();
+        cfg.set_str(
+            &format!("branch.{}.merge", branch),
+            &format!("refs/heads/{}", branch),
+        )
+        .unwrap();
+        repo
+    }
+
+    #[test]
+    fn no_remote_named_means_the_tracking_remote_not_origin() {
+        let repo = fork_layout_tracking_upstream();
+        assert_eq!(
+            resolve_remote_url(&repo.path_str(), None, false).as_deref(),
+            Some("https://gitlab.com/acme/app.git")
+        );
+        // Naming a remote still means that remote.
+        assert_eq!(
+            resolve_remote_url(&repo.path_str(), Some("origin"), false).as_deref(),
+            Some("https://github.com/me/app.git")
+        );
+    }
+
+    /// End to end: `git fetch --deepen` names no remote, so it goes to the
+    /// tracking remote, and the gate must refuse it by THAT host.
+    #[tokio::test]
+    async fn a_remote_less_fetch_is_judged_on_the_tracking_remote() {
+        let repo = fork_layout_tracking_upstream();
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let refused = blocked(crate::commands::remote::deepen_repository(repo.path_str(), 5).await);
+        assert!(refused.contains("gitlab.com"), "got: {refused}");
+        let refused = blocked(crate::commands::remote::unshallow_repository(repo.path_str()).await);
+        assert!(refused.contains("gitlab.com"), "got: {refused}");
+    }
+
+    /// The gate itself: the same repository passes a `github.com` allowlist
+    /// for a fetch and is refused for a push, naming the host it would have
+    /// reached.
+    #[test]
+    fn the_push_guard_judges_the_push_url() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("remote.origin.pushurl", "https://gitlab.example/org/x.git")
+            .unwrap();
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        assert!(guard_remote(&repo.path_str(), Some("origin")).is_ok());
+        let refused = blocked(guard_push_remote(&repo.path_str(), Some("origin")));
+        assert!(refused.contains("gitlab.example"), "got: {refused}");
     }
 
     // ---- the test-support lock itself ----

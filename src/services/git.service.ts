@@ -24,16 +24,26 @@ export type NetworkBlockReason = 'offline' | 'allowlist' | 'declined';
  *
  * `get_remotes` reads the local config; it does not touch the network, so this
  * is safe to call from inside the gate.
+ *
+ * No name given means the remote git itself would use — the current branch's
+ * tracking remote, then `origin` — which is what `get_fetch_remote` answers,
+ * exactly as `push` asks `get_push_remote`. Assuming `origin` judged the wrong
+ * host in the ordinary fork layout (origin on github.com, the branch tracking
+ * `upstream` on gitlab.com), for every caller that names no remote: LFS, a
+ * relative submodule url, deepen/unshallow.
  */
 async function resolveRemoteUrl(repoPath: string, remote?: string): Promise<string | null> {
   if (remote && /^([a-z][a-z0-9+.-]*:\/\/|git@|ssh:\/\/)/i.test(remote)) {
     return remote;
   }
+  let wanted = remote;
+  if (wanted === undefined) {
+    const resolved = await invokeCommand<string>('get_fetch_remote', { path: repoPath });
+    if (resolved.success && resolved.data) wanted = resolved.data;
+  }
   const result = await invokeCommand<Remote[]>("get_remotes", { path: repoPath });
   if (!result.success || !result.data) return null;
-  // No name given means the operation targets the repo's default remote.
-  const wanted = remote ?? 'origin';
-  const match = result.data.find((r) => r.name === wanted) ?? result.data[0];
+  const match = result.data.find((r) => r.name === (wanted ?? 'origin')) ?? result.data[0];
   return match?.url ?? null;
 }
 
@@ -1356,7 +1366,15 @@ export async function push(
       args.remote = resolved.data;
     }
   }
-  if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote)) {
+  // Judged on the remote's PUSH url, like the tag paths already are: git2 and
+  // `git push` both contact `remote.<n>.pushurl` when one is set (the Remote
+  // dialog itself can set one, on any host), so the fetch url says nothing
+  // about where this push is going. Only an allowlist needs the lookup.
+  const pushUrl =
+    args?.path && args.remote && settingsStore.getState().remoteAllowlist.length > 0
+      ? await resolveRemotePushUrl(args.path, args.remote)
+      : null;
+  if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote, pushUrl)) {
     return blockedResult();
   }
 
@@ -1396,7 +1414,25 @@ export async function push(
 export async function pushToMultipleRemotes(
   args: PushToMultipleRemotesCommand & { silent?: boolean },
 ): Promise<CommandResult<MultiPushResult>> {
-  if (!await checkNetworkPermission('push', args?.path ?? null)) {
+  // Every destination is gated, each on its PUSH url (see `push`), and the
+  // user is asked once for the whole set. Gating the repository's default
+  // remote alone — what this used to do — judged a host the gesture might
+  // not even touch, and none of the ones it would.
+  const remotes = args?.remotes ?? [];
+  const pushUrls =
+    args?.path && remotes.length > 0 && settingsStore.getState().remoteAllowlist.length > 0
+      ? await Promise.all(remotes.map((name) => resolveRemotePushUrl(args.path, name)))
+      : remotes.map(() => null);
+  const targets: NetworkRemoteTarget[] = remotes.map((name, i) => ({ name, url: pushUrls[i] }));
+  if (
+    !await checkNetworkPermission(
+      'push',
+      args?.path ?? null,
+      undefined,
+      undefined,
+      targets.length > 0 ? targets : undefined,
+    )
+  ) {
     return blockedResult();
   }
   // If no token is provided, try to find one for the repository
