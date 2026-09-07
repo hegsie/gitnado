@@ -86,7 +86,7 @@ describe('progress.service', () => {
   });
 
   describe('cancelOperation', () => {
-    it('a Cancel click adds no row to the output panel', () => {
+    it('a Cancel click adds no row to the output panel', async () => {
       // The fetch/pull/push being cancelled already has its row; the cancel
       // itself carries no repo path, so before it was skipped every click
       // left a bare `cancel_operation` row in EVERY repository's panel.
@@ -96,6 +96,9 @@ describe('progress.service', () => {
       progressService.cancelOperation(id);
 
       expect(invokeCallArgs.some((c) => c.command === 'cancel_operation')).to.be.true;
+      // The IPC wrapper writes its row only after the (un-awaited) invoke
+      // settles, so let that happen before looking.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(getLogEntries().length).to.equal(0);
     });
 
