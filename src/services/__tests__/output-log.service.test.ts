@@ -162,6 +162,21 @@ describe('output-log.service', () => {
       }
     });
 
+    it('skips a Cancel click on a fetch/pull/push or a clone', () => {
+      // `cancel_repository_scan` and `cancel_embedding_build` were skipped;
+      // their siblings were not, so every Cancel click added a bare
+      // `cancel_operation` / `cancel_clone` row — with no repoPath, in EVERY
+      // repository's panel.
+      expect(shouldLogToOutput('cancel_operation')).to.be.false;
+      expect(shouldLogToOutput('cancel_clone')).to.be.false;
+    });
+
+    it('a Cancel click through the IPC wrapper adds no row', async () => {
+      await invokeCommand('cancel_operation', { operationId: 'op-1' });
+      await invokeCommand('cancel_clone', {});
+      expect(getLogEntries().length).to.equal(0);
+    });
+
     it('still logs the repository operations that look like plumbing', () => {
       // The skip list is by exact name, so neighbouring real operations that
       // the user did run must keep their rows.
@@ -728,6 +743,61 @@ describe('output-log.service', () => {
       });
 
       expect(getLogEntries().length).to.equal(2);
+    });
+
+    it('a late run never REPLACES the row of an operation that cannot confirm it', async () => {
+      // "Set upstream" has no builder, so its operation knows no subcommand
+      // and matches ANY real run permissively. Open the Worktrees dialog
+      // within the late-claim window and — before the backend stopped
+      // reporting reads — `git worktree list --porcelain` arrived with no
+      // pending operation, matched the settled set-upstream, and SPLICED ITS
+      // ROW OUT: the panel then showed a command the user never ran in place
+      // of the one they did. A permissive late claim may only append.
+      await invokeCommand('set_upstream_branch', {
+        path: '/repo',
+        branch: 'main',
+        upstream: 'origin/main',
+      });
+      expect(getLogEntries().length).to.equal(1);
+      expect(getLogEntries()[0].command).to.equal('set_upstream_branch');
+
+      recordGitCommandEvent({
+        command: 'git worktree list --porcelain',
+        output: 'worktree /repo\nHEAD abc\nbranch refs/heads/main',
+        success: true,
+        durationMs: 12,
+        repoPath: '/repo',
+      });
+
+      const entries = getLogEntries();
+      const setUpstream = entries.find((e) => e.command === 'set_upstream_branch');
+      expect(setUpstream, 'the set-upstream row must survive').to.not.be.undefined;
+      expect(setUpstream?.success).to.be.true;
+      // The real run stands on its own row rather than wearing the other's.
+      expect(entries.length).to.equal(2);
+      expect(entries.find((e) => e.gitCommand === 'git worktree list --porcelain')).to.not.be
+        .undefined;
+    });
+
+    it('a late run still replaces the row of an operation it CONFIRMS', async () => {
+      // The strictness above must not undo the ordinary late claim: a real
+      // `git push --force-with-lease` arriving just after `push` settled is
+      // exactly the doubling this module exists to remove.
+      await invokeCommand('push', { path: '/repo', remote: 'origin', forceWithLease: true });
+      expect(getLogEntries().length).to.equal(1);
+
+      recordGitCommandEvent({
+        command: 'git -C /repo push --force-with-lease origin main',
+        output: 'forced update',
+        success: true,
+        durationMs: 40,
+        repoPath: '/repo',
+      });
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].synthesized).to.be.false;
+      expect(entries[0].gitCommand).to.equal('git -C /repo push --force-with-lease origin main');
     });
 
     it('a failure after a successful real run is carried onto that row', async () => {

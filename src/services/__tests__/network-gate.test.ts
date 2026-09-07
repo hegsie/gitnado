@@ -23,6 +23,7 @@ import {
   fetch,
   pull,
   push,
+  pushToMultipleRemotes,
   pushTag,
   deleteRemoteTag,
   lfsPull,
@@ -664,6 +665,215 @@ describe('network security gate', () => {
       const call = invokeHistory.find((c) => c.command === 'pull');
       expect(call, 'pull still runs').to.not.be.undefined;
       expect((call!.args as Record<string, unknown>).remote).to.equal(undefined);
+    });
+  });
+
+  describe('an operation that names no remote is judged on the tracking remote', () => {
+    // git's default remote for a remote-less fetch, LFS transfer or relative
+    // submodule url is `branch.<n>.remote`, then origin. The gate assumed
+    // origin, so in the fork layout — origin on github.com, the branch
+    // tracking upstream on gitlab.com — a github.com allowlist waved through
+    // an LFS pull that went to gitlab.
+    const installTrackingUpstream = () => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_fetch_remote'
+            ? 'upstream'
+            : command === 'get_remotes'
+              ? [
+                  { name: 'origin', url: 'https://github.com/me/app.git', pushUrl: null },
+                  { name: 'upstream', url: 'https://gitlab.com/acme/app.git', pushUrl: null },
+                ]
+              : null,
+        );
+    };
+
+    it('blocks an LFS pull whose tracking remote is off the list', async () => {
+      installTrackingUpstream();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
+    });
+
+    it('allows it when the tracking remote is on the list', async () => {
+      installTrackingUpstream();
+      settingsStore.setState({ remoteAllowlist: ['gitlab.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+  });
+
+  describe('an LFS transfer is judged on the LFS endpoint, not the git remote', () => {
+    // git-lfs reads `lfs.url` from `.lfsconfig`, a file committed to the
+    // repository, before it falls back to the remote — so the host an LFS
+    // pull reaches is chosen by whoever pushed the repository.
+    const installLfsEndpoint = (endpoint: string | null) => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_lfs_endpoint'
+            ? endpoint
+            : command === 'get_fetch_remote'
+              ? 'origin'
+              : command === 'get_remotes'
+                ? [{ name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null }]
+                : null,
+        );
+    };
+
+    it('blocks an LFS pull whose committed endpoint is off the list', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
+    });
+
+    it('blocks an LFS fetch the same way', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsFetch('/repo', ['main']);
+
+      expect(result.success).to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'lfs_fetch')).to.equal(false);
+    });
+
+    it('allows an LFS pull whose endpoint is on the list', async () => {
+      installLfsEndpoint('https://github.com/o/r.git');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+
+    it('falls back to the git remote when no endpoint can be resolved', async () => {
+      installLfsEndpoint(null);
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+    });
+
+    it('does not look the endpoint up when no allowlist is configured', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: [] });
+
+      await lfsPull('/repo');
+
+      expect(invokeHistory.some((c) => c.command === 'get_lfs_endpoint')).to.equal(false);
+    });
+  });
+
+  describe('the push gate judges the PUSH url', () => {
+    // git2 and `git push` contact `remote.<n>.pushurl` when one is set — and
+    // the Remote dialog can set one, on any host — so a push gated on the
+    // fetch url passed a github.com allowlist while pushing to gitlab.
+    const installSplitPushUrl = () => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_push_remote'
+            ? 'origin'
+            : command === 'get_remotes'
+              ? [
+                  {
+                    name: 'origin',
+                    url: 'https://github.com/org/x.git',
+                    pushUrl: 'https://gitlab.example/org/x.git',
+                  },
+                  { name: 'mirror', url: 'https://github.com/org/mirror.git', pushUrl: null },
+                ]
+              : null,
+        );
+    };
+
+    it('blocks a push whose push url is off the list even though its fetch url is on it', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'push')).to.equal(false);
+    });
+
+    it('allows a push whose push url is on the list', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['gitlab.example'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'push')).to.equal(true);
+    });
+
+    it('a remote with no push url is judged on its url', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', remote: 'mirror', silent: true });
+
+      expect(result.success).to.equal(true);
+    });
+
+    it('blocks a multi-remote push when ANY destination pushes off the list', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await pushToMultipleRemotes({
+        path: '/repo',
+        remotes: ['mirror', 'origin'],
+        force: false,
+        forceWithLease: false,
+        pushTags: false,
+        silent: true,
+      });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'push_to_multiple_remotes')).to.equal(false);
+    });
+
+    it('allows a multi-remote push when every destination pushes on the list', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await pushToMultipleRemotes({
+        path: '/repo',
+        remotes: ['mirror'],
+        force: false,
+        forceWithLease: false,
+        pushTags: false,
+        silent: true,
+      });
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'push_to_multiple_remotes')).to.equal(true);
+    });
+
+    it('does not look the push url up when no allowlist is configured', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: [] });
+
+      await push({ path: '/repo', silent: true });
+
+      expect(
+        invokeHistory.some((c) => c.command === 'get_remotes'),
+        'the common path pays no extra round trip',
+      ).to.equal(false);
     });
   });
 

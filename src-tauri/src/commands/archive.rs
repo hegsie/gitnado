@@ -2,11 +2,10 @@
 //! Export repository snapshots as zip/tar archives
 
 use std::path::Path;
-use std::process::Command;
 use tauri::command;
 
 use crate::error::{LeviathanError, Result};
-use crate::utils::reject_flag_like;
+use crate::utils::{create_command, reject_flag_like};
 
 /// Map a user-supplied format string to the value understood by
 /// `git archive --format=<fmt>`. Returns an error for unsupported formats.
@@ -57,7 +56,9 @@ pub async fn create_archive(
         reject_flag_like(&prefix_str, "Prefix")?;
     }
 
-    let mut cmd = Command::new("git");
+    // A user operation, so it goes through `create_command` and the export the
+    // user ran shows in the Output panel.
+    let mut cmd = create_command("git");
     cmd.current_dir(repo_path)
         .arg("archive")
         .arg(format!("--format={}", format_arg))
@@ -103,7 +104,9 @@ pub async fn get_archive_files(path: String, tree_ref: Option<String>) -> Result
 
     reject_flag_like(ref_str, "Reference")?;
 
-    let output = Command::new("git")
+    // A read: no `--output`, so `create_command` files it as the listing it
+    // is and keeps it out of the Output panel.
+    let output = create_command("git")
         .current_dir(repo_path)
         .arg("archive")
         .arg("--format=tar")

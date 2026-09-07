@@ -470,13 +470,18 @@ export function claimGitOperationForEntry(
   );
   if (!settled || settled.settledEntryId === undefined) return;
 
-  // Same rule as `settleGitOperation`: a failure may only be carried onto the
-  // real row when the subcommand CONFIRMS the claim. An unconfirmed operation
-  // that failed keeps the row it already wrote — two rows are the honest
-  // outcome, and recolouring a real invocation that succeeded with an
-  // unrelated error is not.
+  // Stricter than the in-flight path: a late claim REPLACES a row the panel
+  // has already shown, so only a claim CONFIRMED by a matching subcommand may
+  // take it. The permissive fallback (an operation with no builder, hence no
+  // known subcommand, or a run whose subcommand it does not name) is a
+  // compatibility guess — good enough to suppress a row that has not been
+  // written yet, not good enough to splice out one that has. Without this, a
+  // read the backend happened to report — `git worktree list` when the
+  // Worktrees dialog opened 1.5 s after "Set upstream" settled — replaced the
+  // set-upstream row with a line for a command the user never ran. Two rows
+  // are the honest outcome; a wrong row is not.
   const confirmed = confirms(settled, subcommand);
-  if (settled.settledFailure !== undefined && !confirmed) return;
+  if (!confirmed) return;
 
   const index = entryIndex(settled.settledEntryId);
   if (index < 0) return;
@@ -535,6 +540,11 @@ const SKIP_COMMANDS = new Set([
   'drop_search_index',
   'build_embedding_index',
   'cancel_embedding_build',
+  // Cancelling a fetch/pull/push or a clone: the operation being cancelled
+  // already has its row, and the cancel carries no repo path, so it used to
+  // add a bare `cancel_operation` row to EVERY repository's panel per click.
+  'cancel_operation',
+  'cancel_clone',
 ]);
 
 /**

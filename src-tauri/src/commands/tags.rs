@@ -249,8 +249,11 @@ pub async fn push_tag(
     // renamed — the tag push errored "Remote not found: origin", naming a
     // remote the user never configured, with no way to make it succeed.
     let remote_name = crate::commands::remote::resolve_push_remote(&repo, remote);
-    // Offline mode / remote allowlist, enforced backend-side too.
-    crate::services::security::guard_remote(&path, Some(&remote_name))?;
+    // Offline mode / remote allowlist, enforced backend-side too — on the
+    // remote's PUSH url, which is where this push goes.
+    crate::services::security::guard_push_remote(&path, Some(&remote_name))?;
+    // The pre-push hook below uploads LFS objects reachable from the tag.
+    crate::commands::lfs::guard_lfs_upload(&path, Some(&remote_name))?;
     let mut remote_obj = repo
         .find_remote(&remote_name)
         .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
@@ -289,7 +292,7 @@ pub async fn delete_remote_tag(
     let repo = git2::Repository::open(Path::new(&path))?;
 
     let remote_name = remote.as_deref().unwrap_or("origin");
-    crate::services::security::guard_remote(&path, Some(remote_name))?;
+    crate::services::security::guard_push_remote(&path, Some(remote_name))?;
     let mut remote_obj = repo
         .find_remote(remote_name)
         .map_err(|_| LeviathanError::RemoteNotFound(remote_name.to_string()))?;
@@ -396,6 +399,127 @@ pub async fn edit_tag_message(path: String, name: String, message: String) -> Re
 mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
+
+    // ---- the gate judges the PUSH url ----
+
+    fn blocked_message<T: std::fmt::Debug>(result: Result<T>) -> String {
+        match result {
+            Err(LeviathanError::NetworkBlocked(message)) => message,
+            other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
+        }
+    }
+
+    /// origin fetches from github.com and pushes to gitlab.example — where a
+    /// tag push and a remote-tag delete really go.
+    #[tokio::test]
+    async fn test_tag_pushes_are_refused_when_the_push_url_is_off_the_allowlist() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("remote.origin.pushurl", "https://gitlab.example/org/x.git")
+            .unwrap();
+        repo.create_lightweight_tag("v1");
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let message = blocked_message(
+            push_tag(
+                repo.path_str(),
+                "v1".to_string(),
+                Some("origin".to_string()),
+                None,
+                None,
+            )
+            .await,
+        );
+        assert!(message.contains("gitlab.example"), "push_tag: {}", message);
+
+        let message = blocked_message(
+            delete_remote_tag(
+                repo.path_str(),
+                "v1".to_string(),
+                Some("origin".to_string()),
+                None,
+            )
+            .await,
+        );
+        assert!(
+            message.contains("gitlab.example"),
+            "delete_remote_tag: {}",
+            message
+        );
+    }
+
+    /// A tag push runs the pre-push hook, which in an LFS repository uploads
+    /// to the endpoint a committed `.lfsconfig` names — so it is gated on
+    /// that endpoint too, not only on the git remote.
+    #[tokio::test]
+    async fn test_push_tag_is_refused_when_the_lfs_upload_endpoint_is_off_the_allowlist() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.create_commit(
+            "lfs",
+            &[
+                (
+                    ".gitattributes",
+                    "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+                ),
+                (
+                    ".lfsconfig",
+                    "[lfs]\n\tpushurl = https://evil.example.net/org/x.git/info/lfs\n",
+                ),
+            ],
+        );
+        repo.create_lightweight_tag("v1");
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let message = blocked_message(
+            push_tag(
+                repo.path_str(),
+                "v1".to_string(),
+                Some("origin".to_string()),
+                None,
+                None,
+            )
+            .await,
+        );
+        assert!(message.contains("evil.example.net"), "got: {}", message);
+    }
+
+    #[tokio::test]
+    async fn test_tag_pushes_without_a_push_url_are_judged_on_the_remote_url() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.create_lightweight_tag("v1");
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        // Through the gate; whatever happens next on the network is not a
+        // refusal.
+        for result in [
+            push_tag(
+                repo.path_str(),
+                "v1".to_string(),
+                Some("origin".to_string()),
+                None,
+                None,
+            )
+            .await,
+            delete_remote_tag(
+                repo.path_str(),
+                "v1".to_string(),
+                Some("origin".to_string()),
+                None,
+            )
+            .await,
+        ] {
+            assert!(
+                !matches!(result, Err(LeviathanError::NetworkBlocked(_))),
+                "an allowlisted push url must pass the gate: {:?}",
+                result
+            );
+        }
+    }
 
     // ---- push destination resolution ----
 

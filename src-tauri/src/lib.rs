@@ -523,6 +523,7 @@ pub fn run() {
             commands::lfs::get_lfs_files,
             commands::lfs::lfs_pull,
             commands::lfs::lfs_fetch,
+            commands::lfs::get_lfs_endpoint,
             commands::lfs::lfs_prune,
             commands::lfs::lfs_migrate,
             // Repository maintenance

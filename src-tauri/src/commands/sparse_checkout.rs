@@ -1,10 +1,10 @@
 //! Sparse checkout command handlers
 //! Manage sparse checkout configuration via git CLI
 
-use std::process::Command;
 use tauri::command;
 
 use crate::error::{LeviathanError, Result};
+use crate::utils::create_command;
 
 /// Sparse checkout configuration
 #[derive(Debug, Clone, serde::Serialize)]
@@ -15,9 +15,13 @@ pub struct SparseCheckoutConfig {
     pub patterns: Vec<String>,
 }
 
-/// Helper to run a git command and return stdout as a String
+/// Helper to run a git command and return stdout as a String.
+///
+/// Through `create_command`, so the `sparse-checkout set/add/disable` the
+/// user ran shows in the Output panel (the `list` and `config --get` reads
+/// behind `get_sparse_checkout_config` are filtered out there as reads).
 fn run_git(path: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
+    let output = create_command("git")
         .arg("-C")
         .arg(path)
         .args(args)
@@ -38,7 +42,7 @@ fn run_git(path: &str, args: &[&str]) -> Result<String> {
 
 /// Helper to run a git command, tolerating non-zero exit codes (returns empty string)
 fn run_git_optional(path: &str, args: &[&str]) -> String {
-    Command::new("git")
+    create_command("git")
         .arg("-C")
         .arg(path)
         .args(args)
@@ -156,7 +160,7 @@ mod tests {
     /// (which can invoke a man pager and give a misleading non-zero exit,
     /// causing these tests to silently skip on a fully capable git).
     fn git_supports_sparse_checkout() -> bool {
-        let out = match Command::new("git").arg("--version").output() {
+        let out = match create_command("git").arg("--version").output() {
             Ok(o) if o.status.success() => o,
             _ => return false,
         };

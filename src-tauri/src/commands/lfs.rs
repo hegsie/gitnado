@@ -1,5 +1,27 @@
 //! Git LFS command handlers
 //! Manage large files with Git Large File Storage
+//!
+//! # Where an LFS transfer goes, and what the network gate can see
+//!
+//! `git lfs` does not simply talk to the git remote: its endpoint comes from
+//! `lfs.url` / `lfs.pushurl` / `remote.<r>.lfsurl` / `remote.<r>.lfspushurl`,
+//! any of which a COMMITTED `.lfsconfig` may set, before it falls back to the
+//! remote's url. [`resolve_lfs_endpoint`] follows that order, and the gate on
+//! `lfs_pull` / `lfs_fetch` (downloads) and on every push-class command
+//! (uploads, through the git-lfs pre-push hook) judges that endpoint.
+//!
+//! Two residuals are accepted and documented rather than closed here:
+//!
+//! - With `filter.lfs` installed globally (what `git lfs install` does), the
+//!   CLI clone and every later checkout SMUDGE pointers, and that smudge
+//!   fetches from `lfs.url` too — a host the clone gate, which sees only the
+//!   clone URL, cannot judge until the repository exists. Setting
+//!   `GIT_LFS_SKIP_SMUDGE=1` on the clone child would close the clone half
+//!   at the cost of every LFS clone arriving as pointers; that is a clone-path
+//!   decision (`repository.rs`) and is not made here.
+//! - For an SSH remote the endpoint is whatever `git-lfs-authenticate` on
+//!   that SSH host returns. The allowlist judges the SSH host, which is the
+//!   party the user trusted; the URL it hands back is not re-checked.
 
 use std::path::Path;
 use tauri::command;
@@ -45,6 +67,260 @@ pub struct LfsStatus {
     pub file_count: u32,
     /// Total size of LFS files
     pub total_size: u64,
+}
+
+/// The configuration git-lfs reads: git's own config, with the repository's
+/// `.lfsconfig` layered UNDERNEATH it.
+///
+/// From git-lfs-config(5): "Settings from Git configuration files override
+/// the `.lfsconfig` file", and "If the `.lfsconfig` file is missing, the
+/// index is checked for a version of the file, and that is used instead. If
+/// both are missing, `HEAD` is checked for the file." The file is picked
+/// once, by that order — a working-tree `.lfsconfig` that lacks a key does not
+/// fall through to the committed one.
+struct LfsConfig {
+    git: Option<git2::Config>,
+    /// The `.lfsconfig` git-lfs would use, parsed. Kept alive as a temp file
+    /// when it had to be materialised from the index or HEAD.
+    lfsconfig: Option<(git2::Config, Option<tempfile::NamedTempFile>)>,
+}
+
+impl LfsConfig {
+    fn load(repo: &git2::Repository) -> Self {
+        LfsConfig {
+            git: repo.config().ok(),
+            lfsconfig: Self::open_lfsconfig(repo),
+        }
+    }
+
+    fn open_lfsconfig(
+        repo: &git2::Repository,
+    ) -> Option<(git2::Config, Option<tempfile::NamedTempFile>)> {
+        if let Some(workdir) = repo.workdir() {
+            let file = workdir.join(".lfsconfig");
+            if file.is_file() {
+                return git2::Config::open(&file).ok().map(|cfg| (cfg, None));
+            }
+        }
+        let bytes = Self::index_blob(repo).or_else(|| Self::head_blob(repo))?;
+        // libgit2 parses config from a file, so a committed `.lfsconfig` is
+        // materialised in a private temp file for as long as this is alive.
+        let mut file = tempfile::Builder::new()
+            .prefix("leviathan-lfsconfig-")
+            .tempfile()
+            .ok()?;
+        std::io::Write::write_all(&mut file, &bytes).ok()?;
+        std::io::Write::flush(&mut file).ok()?;
+        let cfg = git2::Config::open(file.path()).ok()?;
+        Some((cfg, Some(file)))
+    }
+
+    fn index_blob(repo: &git2::Repository) -> Option<Vec<u8>> {
+        let index = repo.index().ok()?;
+        let entry = index.get_path(Path::new(".lfsconfig"), 0)?;
+        repo.find_blob(entry.id).ok().map(|b| b.content().to_vec())
+    }
+
+    fn head_blob(repo: &git2::Repository) -> Option<Vec<u8>> {
+        let tree = repo.head().ok()?.peel_to_tree().ok()?;
+        let entry = tree.get_path(Path::new(".lfsconfig")).ok()?;
+        entry
+            .to_object(repo)
+            .ok()?
+            .as_blob()
+            .map(|b| b.content().to_vec())
+    }
+
+    /// `key` as git-lfs would see it: git config first, `.lfsconfig` second.
+    fn get(&self, key: &str) -> Option<String> {
+        let from_git = self
+            .git
+            .as_ref()
+            .and_then(|cfg| cfg.get_string(key).ok())
+            .filter(|v| !v.trim().is_empty());
+        from_git.or_else(|| {
+            self.lfsconfig
+                .as_ref()
+                .and_then(|(cfg, _)| cfg.get_string(key).ok())
+                .filter(|v| !v.trim().is_empty())
+        })
+    }
+}
+
+/// The remote git-lfs resolves a download against, per `config.Remote()` in
+/// git-lfs: `branch.<current>.remote`, then `remote.lfsdefault`, then the
+/// only remote if there is exactly one, then `origin`.
+fn lfs_default_remote(repo: &git2::Repository, cfg: &LfsConfig) -> String {
+    let tracking = repo
+        .head()
+        .ok()
+        .filter(|head| head.is_branch())
+        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .and_then(|branch| cfg.get(&format!("branch.{}.remote", branch)));
+    if let Some(remote) = tracking {
+        return remote;
+    }
+    if let Some(remote) = cfg.get("remote.lfsdefault") {
+        return remote;
+    }
+    let names: Vec<String> = repo
+        .remotes()
+        .ok()
+        .map(|list| {
+            list.iter()
+                .filter_map(|name| name.ok().flatten().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.len() == 1 {
+        return names[0].clone();
+    }
+    "origin".to_string()
+}
+
+/// Which way an LFS transfer moves objects. git-lfs consults the push-side
+/// keys (`lfs.pushurl`, `remote.<r>.lfspushurl`, `remote.<r>.pushurl`) first
+/// for an upload and never for a download.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LfsOperation {
+    Download,
+    Upload,
+}
+
+/// The endpoint a transfer against `remote` reaches, per `RemoteEndpoint` in
+/// git-lfs: `remote.<r>.lfspushurl` (uploads only), `remote.<r>.lfsurl`, else
+/// derived from `remote.<r>.pushurl` (uploads only) or `remote.<r>.url`.
+///
+/// The derived endpoint (`<url>.git/info/lfs`, or the https form of an ssh
+/// remote) is on the SAME host as the clone URL, which is all the allowlist
+/// judges — so the clone URL itself is what comes back.
+fn lfs_remote_endpoint(
+    repo: &git2::Repository,
+    cfg: &LfsConfig,
+    remote: &str,
+    operation: LfsOperation,
+) -> Option<String> {
+    if operation == LfsOperation::Upload {
+        if let Some(url) = cfg.get(&format!("remote.{}.lfspushurl", remote)) {
+            return Some(url);
+        }
+    }
+    if let Some(url) = cfg.get(&format!("remote.{}.lfsurl", remote)) {
+        return Some(url);
+    }
+    let found = repo.find_remote(remote).ok()?;
+    if operation == LfsOperation::Upload {
+        if let Ok(Some(push_url)) = found.pushurl() {
+            return Some(push_url.to_string());
+        }
+    }
+    found.url().ok().map(str::to_string)
+}
+
+/// The URL an LFS transfer will actually contact.
+///
+/// git-lfs does NOT simply talk to the git remote. Its endpoint finder
+/// (`lfsapi/endpoint_finder.go`, `getEndpoint`) takes, in order: `lfs.pushurl`
+/// (uploads only), then `lfs.url`; then the endpoint for the resolved remote
+/// ([`lfs_remote_endpoint`]), falling back to `origin`'s. And every one of the
+/// `lfs.*` / `remote.<r>.lfs*` keys may come from `.lfsconfig` — a file
+/// COMMITTED TO THE REPOSITORY. So the host an LFS transfer reaches is chosen
+/// by whoever pushed the repository, and gating the transfer on the git
+/// remote (all it used to do) let an allowlist of `github.com` sit there
+/// while `git lfs pull` in a github.com clone transferred from wherever its
+/// `.lfsconfig` said. This is what the allowlist has to judge.
+///
+/// `remote` is the remote the caller already resolved — a push knows its
+/// destination, and the pre-push hook hands git-lfs that same name — or
+/// `None` for git-lfs's own choice (`lfs_default_remote`).
+///
+/// `None` when nothing names an endpoint — the gate then fails closed, as it
+/// does for any target it cannot see. git-lfs's last resort, `FETCH_HEAD`,
+/// is deliberately not followed: it names whichever remote was fetched last,
+/// and a guess is not something to admit through an allowlist.
+pub(crate) fn resolve_lfs_endpoint(
+    repo_path: &Path,
+    operation: LfsOperation,
+    remote: Option<&str>,
+) -> Option<String> {
+    let repo = git2::Repository::open(repo_path).ok()?;
+    let cfg = LfsConfig::load(&repo);
+    if operation == LfsOperation::Upload {
+        if let Some(url) = cfg.get("lfs.pushurl") {
+            return Some(url);
+        }
+    }
+    if let Some(url) = cfg.get("lfs.url") {
+        return Some(url);
+    }
+    let remote = remote
+        .map(str::to_string)
+        .unwrap_or_else(|| lfs_default_remote(&repo, &cfg));
+    if remote != "origin" {
+        if let Some(url) = lfs_remote_endpoint(&repo, &cfg, &remote, operation) {
+            return Some(url);
+        }
+    }
+    lfs_remote_endpoint(&repo, &cfg, "origin", operation)
+}
+
+/// The offline/allowlist gate for an LFS UPLOAD riding a push.
+///
+/// git-lfs installs a `pre-push` hook, and both push paths run it — so a
+/// push in an LFS repository uploads objects to the LFS endpoint before git
+/// sends a single ref, and that endpoint is chosen by the same committed
+/// `.lfsconfig` as a download's. Called by every push-class command after
+/// its own remote gate; `remote` is the destination that gate just judged.
+/// A repository with no LFS filter in force uploads nothing and is waved
+/// through without opening anything further.
+pub(crate) fn guard_lfs_upload(path: &str, remote: Option<&str>) -> Result<()> {
+    let settings = crate::services::security::global().snapshot();
+    if settings.offline_mode || settings.remote_allowlist.is_empty() {
+        return crate::services::security::check(&settings, None);
+    }
+    let repo_path = Path::new(path);
+    if !is_lfs_enabled(repo_path) {
+        return Ok(());
+    }
+    // The hook is handed the remote git resolved for the push, so with none
+    // named the destination is the push remote, not git-lfs's own default.
+    let push_remote = match remote {
+        Some(name) => name.to_string(),
+        None => {
+            let repo = git2::Repository::open(repo_path)?;
+            crate::commands::remote::resolve_push_remote(&repo, None)
+        }
+    };
+    let endpoint = resolve_lfs_endpoint(repo_path, LfsOperation::Upload, Some(&push_remote));
+    crate::services::security::check(&settings, endpoint.as_deref())
+}
+
+/// The offline/allowlist gate for an LFS transfer, judged on the endpoint
+/// git-lfs will contact rather than on the git remote.
+///
+/// Offline mode and an empty allowlist are decided before the repository is
+/// opened, exactly as `guard_remote` does; only a configured allowlist pays
+/// for the resolution.
+fn guard_lfs_transfer(path: &str) -> Result<()> {
+    let settings = crate::services::security::global().snapshot();
+    if settings.offline_mode || settings.remote_allowlist.is_empty() {
+        return crate::services::security::check(&settings, None);
+    }
+    let endpoint = resolve_lfs_endpoint(Path::new(path), LfsOperation::Download, None);
+    crate::services::security::check(&settings, endpoint.as_deref())
+}
+
+/// The URL an LFS transfer in this repository will contact, for the
+/// frontend's half of the gate — so its allowlist toast can name the LFS
+/// endpoint a committed `.lfsconfig` chose, rather than the git remote it
+/// would otherwise (wrongly) judge. `None` when no endpoint can be resolved.
+#[command]
+pub async fn get_lfs_endpoint(path: String) -> Result<Option<String>> {
+    Ok(resolve_lfs_endpoint(
+        Path::new(&path),
+        LfsOperation::Download,
+        None,
+    ))
 }
 
 /// URL of the remote `git lfs` will talk to: the current branch's upstream
@@ -481,9 +757,9 @@ pub async fn get_lfs_files(path: String) -> Result<Vec<LfsFile>> {
 /// Pull (download) LFS files
 #[command]
 pub async fn lfs_pull(path: String, token: Option<String>) -> Result<String> {
-    // LFS transfers ride the repository's remote, so they belong behind the
-    // same offline/allowlist gate as fetch and pull.
-    crate::services::security::guard_remote(&path, None)?;
+    // Behind the same offline/allowlist gate as fetch and pull — judged on
+    // the LFS endpoint, not the git remote; see `resolve_lfs_endpoint`.
+    guard_lfs_transfer(&path)?;
     let repo_path = Path::new(&path);
 
     run_lfs_command_with_token(repo_path, &["pull"], token.as_deref())
@@ -496,7 +772,7 @@ pub async fn lfs_fetch(
     refs: Option<Vec<String>>,
     token: Option<String>,
 ) -> Result<String> {
-    crate::services::security::guard_remote(&path, None)?;
+    guard_lfs_transfer(&path)?;
     let repo_path = Path::new(&path);
     let token = token.as_deref();
 
@@ -1255,5 +1531,333 @@ mod tests {
             "the token must not reach a user-visible message: {}",
             text
         );
+    }
+
+    // ---- the allowlist judges the LFS endpoint, not the git remote ----
+    //
+    // git-lfs resolves its endpoint from `lfs.url` / `remote.<r>.lfsurl`,
+    // both of which a committed `.lfsconfig` may set, and only then from the
+    // git remote. A gate on the git remote alone therefore let a github.com
+    // clone transfer to whatever host its `.lfsconfig` named.
+
+    use crate::services::security::test_support;
+
+    fn blocked_message<T: std::fmt::Debug>(result: Result<T>) -> String {
+        match result {
+            Err(LeviathanError::NetworkBlocked(message)) => message,
+            other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
+        }
+    }
+
+    fn assert_not_blocked<T: std::fmt::Debug>(result: &Result<T>, what: &str) {
+        assert!(
+            !matches!(result, Err(LeviathanError::NetworkBlocked(_))),
+            "{} must not be refused by the gate, got {:?}",
+            what,
+            result
+        );
+    }
+
+    const HOSTILE_LFSCONFIG: &str = "[lfs]\n\turl = https://evil.example.net/o/r.git/info/lfs\n";
+
+    #[tokio::test]
+    async fn a_committed_lfsconfig_pointing_off_the_allowlist_is_refused() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        repo.create_commit("hostile .lfsconfig", &[(".lfsconfig", HOSTILE_LFSCONFIG)]);
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let message = blocked_message(lfs_pull(repo.path_str(), None).await);
+        assert!(
+            message.contains("evil.example.net"),
+            "the refusal should name the LFS host, got: {}",
+            message
+        );
+        let message = blocked_message(lfs_fetch(repo.path_str(), None, None).await);
+        assert!(message.contains("evil.example.net"), "got: {}", message);
+    }
+
+    #[tokio::test]
+    async fn a_lfsconfig_present_only_in_the_index_or_head_still_counts() {
+        // git-lfs falls back to the index's copy, then HEAD's, when the
+        // working-tree file is missing — so deleting it locally must not open
+        // the gate.
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        repo.create_commit("hostile .lfsconfig", &[(".lfsconfig", HOSTILE_LFSCONFIG)]);
+        std::fs::remove_file(repo.path.join(".lfsconfig")).unwrap();
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let message = blocked_message(lfs_pull(repo.path_str(), None).await);
+        assert!(
+            message.contains("evil.example.net"),
+            "index copy: {}",
+            message
+        );
+
+        // Gone from the index too: HEAD still has it.
+        {
+            let git_repo = repo.repo();
+            let mut index = git_repo.index().unwrap();
+            index.remove_path(Path::new(".lfsconfig")).unwrap();
+            index.write().unwrap();
+        }
+        let message = blocked_message(lfs_pull(repo.path_str(), None).await);
+        assert!(
+            message.contains("evil.example.net"),
+            "HEAD copy: {}",
+            message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remote_lfsurl_off_the_allowlist_is_refused() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("remote.origin.lfsurl", "https://evil.example.net/lfs")
+            .unwrap();
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let message = blocked_message(lfs_pull(repo.path_str(), None).await);
+        assert!(message.contains("evil.example.net"), "got: {}", message);
+    }
+
+    #[tokio::test]
+    async fn with_no_lfs_override_the_git_remote_is_judged_as_before() {
+        let allowed = TestRepo::with_initial_commit();
+        allowed.add_remote("origin", "https://github.com/o/r.git");
+        let refused = TestRepo::with_initial_commit();
+        refused.add_remote("origin", "https://gitlab.com/o/r.git");
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        // Passes the gate, then fails or succeeds on git-lfs itself — either
+        // way not a NetworkBlocked.
+        assert_not_blocked(
+            &lfs_pull(allowed.path_str(), None).await,
+            "an LFS pull whose only endpoint is the allowlisted remote",
+        );
+        let message = blocked_message(lfs_pull(refused.path_str(), None).await);
+        assert!(message.contains("gitlab.com"), "got: {}", message);
+    }
+
+    #[tokio::test]
+    async fn offline_mode_refuses_before_any_resolution() {
+        let _guard = test_support::offline();
+
+        // Not a repository at all: a gate that resolved first would fail on
+        // the missing repo (or worse, open it); offline mode must answer
+        // before anything is looked at.
+        let result = lfs_pull("/definitely/not/a/repository".to_string(), None).await;
+        blocked_message(result);
+        let result = lfs_fetch("/definitely/not/a/repository".to_string(), None, None).await;
+        blocked_message(result);
+    }
+
+    // ---- resolve_lfs_endpoint follows git-lfs's own order ----
+
+    #[test]
+    fn git_config_overrides_a_committed_lfsconfig() {
+        // "Settings from Git configuration files override the .lfsconfig
+        // file" — so a user's local `lfs.url` wins over the repository's.
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        repo.create_commit("hostile .lfsconfig", &[(".lfsconfig", HOSTILE_LFSCONFIG)]);
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://evil.example.net/o/r.git/info/lfs")
+        );
+
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("lfs.url", "https://lfs.corp.example/o/r")
+            .unwrap();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://lfs.corp.example/o/r")
+        );
+    }
+
+    #[test]
+    fn the_remote_is_the_branch_remote_then_lfsdefault_then_the_sole_remote_then_origin() {
+        let repo = TestRepo::with_initial_commit();
+
+        // The only remote wins over "origin" when origin does not exist.
+        repo.add_remote("upstream", "https://github.com/up/r.git");
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://github.com/up/r.git")
+        );
+
+        // With several remotes and nothing else configured, origin.
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://github.com/o/r.git")
+        );
+
+        // remote.lfsdefault beats origin...
+        let git_repo = repo.repo();
+        let mut cfg = git_repo.config().unwrap();
+        cfg.set_str("remote.lfsdefault", "upstream").unwrap();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://github.com/up/r.git")
+        );
+
+        // ...and the current branch's tracking remote beats lfsdefault, with
+        // that remote's lfsurl taking precedence over its clone url.
+        repo.add_remote("fork", "https://github.com/me/r.git");
+        let branch = repo.current_branch();
+        cfg.set_str(&format!("branch.{}.remote", branch), "fork")
+            .unwrap();
+        cfg.set_str("remote.fork.lfsurl", "https://lfs.fork.example/me/r")
+            .unwrap();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://lfs.fork.example/me/r")
+        );
+    }
+
+    #[test]
+    fn a_repository_with_no_remote_and_no_override_has_no_endpoint() {
+        // Nothing names a host, so the gate fails closed rather than guessing.
+        let repo = TestRepo::with_initial_commit();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn get_lfs_endpoint_reports_what_the_gate_will_judge() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        repo.create_commit("hostile .lfsconfig", &[(".lfsconfig", HOSTILE_LFSCONFIG)]);
+
+        assert_eq!(
+            get_lfs_endpoint(repo.path_str()).await.unwrap().as_deref(),
+            Some("https://evil.example.net/o/r.git/info/lfs")
+        );
+    }
+
+    // ---- reads never reach the Output panel ----
+
+    #[tokio::test]
+    async fn get_lfs_status_and_get_lfs_files_report_nothing_to_the_output_panel() {
+        // Opening the LFS dialog used to add FOUR rows per open — `git lfs
+        // version` twice, with no repository, so in EVERY repository's panel —
+        // plus `git lfs track` and `git lfs ls-files`.
+        crate::utils::test_sink::install();
+        let repo = TestRepo::with_initial_commit();
+        repo.create_file(
+            ".gitattributes",
+            "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        );
+
+        get_lfs_status(repo.path_str()).await.unwrap();
+        let _ = get_lfs_files(repo.path_str()).await;
+
+        let reported = crate::utils::test_sink::recorded_for(&repo.path_str());
+        assert!(reported.is_empty(), "reads were reported: {:?}", reported);
+        assert!(
+            !crate::utils::test_sink::recorded()
+                .iter()
+                .any(|entry| entry.command.starts_with("git lfs version")),
+            "`git lfs version` must never be reported"
+        );
+
+        // A write next to those reads still is — whether or not git-lfs is
+        // installed here, the invocation ran and the panel is told.
+        let _ = lfs_track(repo.path_str(), "*.psd".to_string()).await;
+        let reported = crate::utils::test_sink::recorded_for(&repo.path_str());
+        assert!(
+            reported
+                .iter()
+                .any(|entry| entry.command == "git lfs track *.psd"),
+            "the write was not reported: {:?}",
+            reported
+        );
+    }
+
+    // ---- uploads: the push-side keys come first, and only for uploads ----
+
+    #[test]
+    fn an_upload_prefers_the_push_side_keys_and_a_download_ignores_them() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        let git_repo = repo.repo();
+        let mut cfg = git_repo.config().unwrap();
+
+        // remote.<r>.pushurl: where a push goes, so where its LFS upload goes.
+        cfg.set_str("remote.origin.pushurl", "https://push.example/o/r.git")
+            .unwrap();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Upload, Some("origin")).as_deref(),
+            Some("https://push.example/o/r.git")
+        );
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, Some("origin")).as_deref(),
+            Some("https://github.com/o/r.git")
+        );
+
+        // remote.<r>.lfspushurl beats that for uploads only.
+        cfg.set_str("remote.origin.lfspushurl", "https://lfs-push.example/o/r")
+            .unwrap();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Upload, Some("origin")).as_deref(),
+            Some("https://lfs-push.example/o/r")
+        );
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, Some("origin")).as_deref(),
+            Some("https://github.com/o/r.git")
+        );
+
+        // lfs.pushurl beats everything for uploads; lfs.url for downloads.
+        cfg.set_str("lfs.pushurl", "https://lfs-global-push.example/o/r")
+            .unwrap();
+        cfg.set_str("lfs.url", "https://lfs-global.example/o/r")
+            .unwrap();
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Upload, Some("origin")).as_deref(),
+            Some("https://lfs-global-push.example/o/r")
+        );
+        assert_eq!(
+            resolve_lfs_endpoint(&repo.path, LfsOperation::Download, None).as_deref(),
+            Some("https://lfs-global.example/o/r")
+        );
+    }
+
+    /// A push in an LFS repository uploads through the pre-push hook to the
+    /// endpoint a committed `.lfsconfig` chose — so the push gate has to see
+    /// it. A repository with no LFS filter uploads nothing and is left alone.
+    #[test]
+    fn guard_lfs_upload_judges_the_upload_endpoint_of_an_lfs_repository() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        repo.create_commit(
+            "hostile push endpoint",
+            &[(
+                ".lfsconfig",
+                "[lfs]\n\tpushurl = https://evil.example.net/o/r.git/info/lfs\n",
+            )],
+        );
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        // No LFS filter in force: nothing would be uploaded, nothing refused.
+        assert_not_blocked(
+            &guard_lfs_upload(&repo.path_str(), Some("origin")),
+            "a push in a repository without LFS",
+        );
+
+        repo.create_file(
+            ".gitattributes",
+            "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        );
+        let message = blocked_message(guard_lfs_upload(&repo.path_str(), Some("origin")));
+        assert!(message.contains("evil.example.net"), "got: {}", message);
     }
 }

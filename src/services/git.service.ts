@@ -24,16 +24,26 @@ export type NetworkBlockReason = 'offline' | 'allowlist' | 'declined';
  *
  * `get_remotes` reads the local config; it does not touch the network, so this
  * is safe to call from inside the gate.
+ *
+ * No name given means the remote git itself would use — the current branch's
+ * tracking remote, then `origin` — which is what `get_fetch_remote` answers,
+ * exactly as `push` asks `get_push_remote`. Assuming `origin` judged the wrong
+ * host in the ordinary fork layout (origin on github.com, the branch tracking
+ * `upstream` on gitlab.com), for every caller that names no remote: LFS, a
+ * relative submodule url, deepen/unshallow.
  */
 async function resolveRemoteUrl(repoPath: string, remote?: string): Promise<string | null> {
   if (remote && /^([a-z][a-z0-9+.-]*:\/\/|git@|ssh:\/\/)/i.test(remote)) {
     return remote;
   }
+  let wanted = remote;
+  if (wanted === undefined) {
+    const resolved = await invokeCommand<string>('get_fetch_remote', { path: repoPath });
+    if (resolved.success && resolved.data) wanted = resolved.data;
+  }
   const result = await invokeCommand<Remote[]>("get_remotes", { path: repoPath });
   if (!result.success || !result.data) return null;
-  // No name given means the operation targets the repo's default remote.
-  const wanted = remote ?? 'origin';
-  const match = result.data.find((r) => r.name === wanted) ?? result.data[0];
+  const match = result.data.find((r) => r.name === (wanted ?? 'origin')) ?? result.data[0];
   return match?.url ?? null;
 }
 
@@ -307,6 +317,25 @@ export async function checkOutboundHostAllowed(
  */
 export function isNetworkGateRefusal(error?: { code?: string }): boolean {
   return error?.code === 'BLOCKED' || error?.code === 'CANCELLED';
+}
+
+/**
+ * Surface a refusal the BACKEND gate made after the frontend gate had let the
+ * operation through.
+ *
+ * The two gates judge the same thing from different vantage points, and the
+ * backend can see what the frontend cannot: the `submodule.<name>.url` git
+ * really clones from, a cloned submodule's own origin, an LFS endpoint. Every
+ * dialog treats a `BLOCKED` result as "the gate already explained itself" and
+ * shows nothing — right when the frontend gate refused and toasted, wrong when
+ * only the backend did. So a `BLOCKED` reaching here is one the user has not
+ * been told about yet, and it is toasted with the backend's own reason.
+ */
+function surfaceBackendRefusal<T>(result: CommandResult<T>): CommandResult<T> {
+  if (!result.success && result.error?.code === 'BLOCKED' && result.error.message) {
+    showToast(result.error.message, 'error');
+  }
+  return result;
 }
 
 /**
@@ -1392,7 +1421,15 @@ export async function push(
       args.remote = resolved.data;
     }
   }
-  if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote)) {
+  // Judged on the remote's PUSH url, like the tag paths already are: git2 and
+  // `git push` both contact `remote.<n>.pushurl` when one is set (the Remote
+  // dialog itself can set one, on any host), so the fetch url says nothing
+  // about where this push is going. Only an allowlist needs the lookup.
+  const pushUrl =
+    args?.path && args.remote && settingsStore.getState().remoteAllowlist.length > 0
+      ? await resolveRemotePushUrl(args.path, args.remote)
+      : null;
+  if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote, pushUrl)) {
     return blockedResult();
   }
 
@@ -1432,7 +1469,25 @@ export async function push(
 export async function pushToMultipleRemotes(
   args: PushToMultipleRemotesCommand & { silent?: boolean },
 ): Promise<CommandResult<MultiPushResult>> {
-  if (!await checkNetworkPermission('push', args?.path ?? null)) {
+  // Every destination is gated, each on its PUSH url (see `push`), and the
+  // user is asked once for the whole set. Gating the repository's default
+  // remote alone — what this used to do — judged a host the gesture might
+  // not even touch, and none of the ones it would.
+  const remotes = args?.remotes ?? [];
+  const pushUrls =
+    args?.path && remotes.length > 0 && settingsStore.getState().remoteAllowlist.length > 0
+      ? await Promise.all(remotes.map((name) => resolveRemotePushUrl(args.path, name)))
+      : remotes.map(() => null);
+  const targets: NetworkRemoteTarget[] = remotes.map((name, i) => ({ name, url: pushUrls[i] }));
+  if (
+    !await checkNetworkPermission(
+      'push',
+      args?.path ?? null,
+      undefined,
+      undefined,
+      targets.length > 0 ? targets : undefined,
+    )
+  ) {
     return blockedResult();
   }
   // If no token is provided, try to find one for the repository
@@ -2385,7 +2440,7 @@ export async function pushTag(
     }
   }
 
-  return invokeCommand<void>("push_tag", args);
+  return surfaceBackendRefusal(await invokeCommand<void>("push_tag", args));
 }
 
 export async function getPushRemote(
@@ -2431,7 +2486,7 @@ export async function deleteRemoteTag(
     }
   }
 
-  return invokeCommand<void>("delete_remote_tag", args);
+  return surfaceBackendRefusal(await invokeCommand<void>("delete_remote_tag", args));
 }
 
 export async function getTagDetails(
@@ -3046,6 +3101,12 @@ function selectSubmodules(all: Submodule[], submodulePaths?: string[]): Submodul
 async function checkSubmoduleHostsAllowed(
   repoPath: string,
   submodulePaths?: string[],
+  /** Whether the update carries `--init`. Without it git skips a submodule
+   * that was never registered — verified: exit 0, nothing contacted — so its
+   * host is not one this update will reach and must not refuse it. The
+   * backend gate, which can see the config url git really clones from, is
+   * the authority; this only spares the user a refusal for nothing. */
+  init = false,
 ): Promise<boolean> {
   if (!isNetworkPolicyActive()) return true;
   if (settingsStore.getState().offlineMode) {
@@ -3058,6 +3119,7 @@ async function checkSubmoduleHostsAllowed(
   }
 
   for (const submodule of selectSubmodules(listed.data, submodulePaths)) {
+    if (!submodule.initialized && !init) continue;
     if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) {
       // Resolves against the superproject's remote, so that remote is the
       // host to check — the one case it decides anything.
@@ -3127,7 +3189,7 @@ export async function updateSubmodules(
   // behind the same gate as fetch/pull — applied to every host named in
   // `.gitmodules`, which is where the clones and fetches this spawns actually
   // go, rather than to the superproject's own remote.
-  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths)) {
+  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths, options?.init)) {
     return blockedResult();
   }
   // The confirm, when the user asked for one. The hard blocks were settled
@@ -3151,7 +3213,7 @@ export async function updateSubmodules(
     tokenRemote = resolved.remoteName;
   }
 
-  return invokeCommand<void>("update_submodules", {
+  return surfaceBackendRefusal(await invokeCommand<void>("update_submodules", {
     path: repoPath,
     submodulePaths: options?.submodulePaths,
     init: options?.init,
@@ -3159,7 +3221,7 @@ export async function updateSubmodules(
     remote: options?.remote,
     token,
     tokenRemote,
-  });
+  }));
 }
 
 export async function syncSubmodules(
@@ -3340,25 +3402,47 @@ export async function getLfsFiles(
   return invokeCommand<LfsFile[]>("get_lfs_files", { path: repoPath });
 }
 
+/**
+ * The URL an LFS transfer will contact, for the allowlist.
+ *
+ * git-lfs does not talk to the git remote: its endpoint comes from `lfs.url`
+ * / `remote.<r>.lfsurl`, which a COMMITTED `.lfsconfig` may set, before it
+ * falls back to the remote. The backend resolves it the way git-lfs does
+ * (`get_lfs_endpoint`); judged on the git remote alone, a github.com
+ * allowlist waved through a pull that transferred from wherever the
+ * repository's own `.lfsconfig` pointed. `null` when nothing names one — the
+ * gate then falls back to the remote, and the backend's own check (which
+ * fails closed) is the backstop. Only an allowlist needs the lookup.
+ */
+async function resolveLfsEndpoint(repoPath: string): Promise<string | null> {
+  if (settingsStore.getState().remoteAllowlist.length === 0) return null;
+  const result = await invokeCommand<string | null>('get_lfs_endpoint', { path: repoPath });
+  return result.success && result.data ? result.data : null;
+}
+
 export async function lfsPull(
   repoPath: string,
 ): Promise<CommandResult<string>> {
-  if (!await checkNetworkPermission('LFS pull', repoPath)) {
+  const endpoint = await resolveLfsEndpoint(repoPath);
+  if (!await checkNetworkPermission('LFS pull', repoPath, undefined, endpoint)) {
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
-  return invokeCommand<string>("lfs_pull", { path: repoPath, token });
+  return surfaceBackendRefusal(await invokeCommand<string>("lfs_pull", { path: repoPath, token }));
 }
 
 export async function lfsFetch(
   repoPath: string,
   refs?: string[],
 ): Promise<CommandResult<string>> {
-  if (!await checkNetworkPermission('LFS fetch', repoPath)) {
+  const endpoint = await resolveLfsEndpoint(repoPath);
+  if (!await checkNetworkPermission('LFS fetch', repoPath, undefined, endpoint)) {
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
-  return invokeCommand<string>("lfs_fetch", { path: repoPath, refs, token });
+  return surfaceBackendRefusal(
+    await invokeCommand<string>("lfs_fetch", { path: repoPath, refs, token }),
+  );
 }
 
 export async function lfsPrune(

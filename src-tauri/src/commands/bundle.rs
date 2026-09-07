@@ -2,11 +2,11 @@
 //! Create and manage Git bundles for offline object transfer
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tauri::command;
 
 use crate::error::{LeviathanError, Result};
-use crate::utils::reject_flag_like;
+use crate::utils::{create_command, reject_flag_like};
 
 /// Reference in a bundle
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -56,7 +56,7 @@ pub async fn bundle_create(
     // We place `--` directly before `<file>` to defend the file path from
     // being parsed as a bundle-create option. `--all` and explicit refs are
     // rev-list arguments and must come AFTER `<file>`.
-    let mut cmd = Command::new("git");
+    let mut cmd = create_command("git");
     cmd.current_dir(repo_path).arg("bundle").arg("create");
 
     if !all && refs.is_empty() {
@@ -110,7 +110,7 @@ pub async fn bundle_create(
     // Get refs count by listing the bundle
     let refs_count = if all {
         // Get all refs from the repo
-        let list_output = Command::new("git")
+        let list_output = create_command("git")
             .current_dir(repo_path)
             .arg("show-ref")
             .output()
@@ -155,7 +155,7 @@ pub async fn bundle_verify(path: String, bundle_path: String) -> Result<BundleVe
 
     // Run git bundle verify. `--` keeps a malicious bundle_path from being
     // parsed as a flag, mirroring bundle_list_heads / bundle_unbundle.
-    let output = Command::new("git")
+    let output = create_command("git")
         .current_dir(repo_path)
         .arg("bundle")
         .arg("verify")
@@ -259,7 +259,7 @@ pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
     }
 
     // Run git bundle list-heads
-    let output = Command::new("git")
+    let output = create_command("git")
         .arg("bundle")
         .arg("list-heads")
         .arg("--")
@@ -315,7 +315,7 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
     }
 
     // First verify the bundle is valid for this repository
-    let verify_output = Command::new("git")
+    let verify_output = create_command("git")
         .current_dir(repo_path)
         .arg("bundle")
         .arg("verify")
@@ -335,7 +335,7 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
     // Use git fetch to unbundle - this fetches all refs from the bundle.
     // `--` terminates options so a malicious bundle_path cannot be parsed
     // as a flag like `--upload-pack=`.
-    let output = Command::new("git")
+    let output = create_command("git")
         .current_dir(repo_path)
         .arg("fetch")
         .arg("--")
@@ -349,7 +349,7 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
     // git fetch from bundle may fail with "*:*" on some versions, try alternative approach
     if !output.status.success() {
         // Get list of refs in the bundle first
-        let list_output = Command::new("git")
+        let list_output = create_command("git")
             .arg("bundle")
             .arg("list-heads")
             .arg("--")
@@ -386,7 +386,7 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
                 if refname == "HEAD" || !refname.starts_with("refs/") || refname.starts_with('-') {
                     continue;
                 }
-                let fetch_result = Command::new("git")
+                let fetch_result = create_command("git")
                     .current_dir(repo_path)
                     .arg("fetch")
                     .arg("--")
@@ -466,6 +466,41 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
 mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
+
+    /// A bundle export is a user operation, so the panel shows the real
+    /// `git bundle create` line — not the bare IPC name it used to fall back
+    /// to while this file spawned git behind `create_command`'s back.
+    #[tokio::test]
+    async fn test_bundle_create_is_reported_to_the_output_panel() {
+        crate::utils::test_sink::install();
+        let repo = TestRepo::with_initial_commit();
+        let bundle_file = repo.path.join("panel.bundle");
+
+        bundle_create(
+            repo.path_str(),
+            bundle_file.to_string_lossy().to_string(),
+            vec![],
+            true,
+        )
+        .await
+        .unwrap();
+
+        let reported = crate::utils::test_sink::recorded_for(&repo.path_str());
+        let create = reported
+            .iter()
+            .find(|entry| entry.command.starts_with("git bundle create -- "))
+            .unwrap_or_else(|| panic!("git bundle create was not reported: {:?}", reported));
+        assert!(create.success);
+        assert!(create.command.ends_with(" --all"), "{}", create.command);
+        // The `show-ref` the same command ran to count refs is a read.
+        assert!(
+            !reported
+                .iter()
+                .any(|entry| entry.command.contains("show-ref")),
+            "{:?}",
+            reported
+        );
+    }
 
     #[tokio::test]
     async fn test_bundle_create_all_refs() {

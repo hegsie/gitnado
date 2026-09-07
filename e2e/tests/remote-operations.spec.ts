@@ -612,6 +612,76 @@ test.describe('Push Operation', () => {
 // Pull Operation Tests
 // ============================================================================
 
+// ============================================================================
+// The push gate judges the PUSH url
+// ============================================================================
+test.describe('Push gate follows the push URL', () => {
+  type SettingsStoreWindow = {
+    __LEVIATHAN_STORES__?: {
+      settingsStore?: {
+        getState: () => { setRemoteAllowlist: (domains: string[]) => void };
+      };
+    };
+  };
+
+  /** Set the allowlist through the store, the way the Settings dialog does. */
+  async function setAllowlist(page: Page, domains: string[]): Promise<void> {
+    await page.waitForFunction(
+      () =>
+        typeof (window as unknown as SettingsStoreWindow).__LEVIATHAN_STORES__?.settingsStore !==
+        'undefined'
+    );
+    await page.evaluate((list) => {
+      (window as unknown as SettingsStoreWindow)
+        .__LEVIATHAN_STORES__!.settingsStore!.getState()
+        .setRemoteAllowlist(list);
+    }, domains);
+  }
+
+  /** origin fetches from github.com and pushes to gitlab.example. */
+  const splitRemotes = [
+    {
+      name: 'origin',
+      url: 'https://github.com/org/x.git',
+      pushUrl: 'https://gitlab.example/org/x.git',
+    },
+  ];
+
+  test('a push whose push URL is off the allowlist is refused, naming that host', async ({
+    page,
+  }) => {
+    await setupOpenRepository(page, withAheadBehind(2, 0));
+    await startCommandCaptureWithMocks(page, { get_remotes: splitRemotes, get_push_remote: 'origin' });
+    await setAllowlist(page, ['github.com']);
+
+    await dashboardButton(page, /Push/i).click();
+
+    // The gate refuses before anything reaches the backend, and says why —
+    // naming the host the push would really have gone to.
+    const toast = page.locator('.toast');
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText('not in your allowlist');
+    await expect(toast).toContainText('gitlab.example');
+    expect(await findCommand(page, 'push')).toHaveLength(0);
+    // And the unpushed commits are still there to be pushed elsewhere.
+    await expect(page.locator('.badge.push')).toHaveText('2');
+  });
+
+  test('a push whose push URL is on the allowlist goes through', async ({ page }) => {
+    await setupOpenRepository(page, withAheadBehind(2, 0));
+    await startCommandCaptureWithMocks(page, { get_remotes: splitRemotes, get_push_remote: 'origin' });
+    await setAllowlist(page, ['gitlab.example']);
+
+    await dashboardButton(page, /Push/i).click();
+
+    await waitForCommand(page, 'push');
+    expect(await findCommand(page, 'push')).toHaveLength(1);
+    // The badge clears: the push really happened, and nothing refused it.
+    await expect(page.locator('.badge.push')).not.toBeVisible();
+    await expect(page.locator('.toast.error')).toHaveCount(0);
+  });
+});
+
 test.describe('Pull Operation', () => {
   let app: AppPage;
 

@@ -3,6 +3,7 @@ import { setupOpenRepository } from '../fixtures/tauri-mock';
 import {
   startCommandCaptureWithMocks,
   findCommand,
+  injectCommandError,
   openViaCommandPalette,
 } from '../fixtures/test-helpers';
 
@@ -109,6 +110,39 @@ test.describe('Submodule Dialog — the allowlist covers the submodule hosts', (
     // Refused before the request is ever made — the point of the gate.
     expect(await findCommand(page, 'update_submodules')).toHaveLength(0);
     // And nothing claims success behind the error.
+    await expect(dialog(page).locator('.message.success')).toHaveCount(0);
+  });
+
+  test('a refusal only the backend could make is still shown to the user', async ({ page }) => {
+    // The frontend gate reads `.gitmodules`; the backend gate reads the
+    // `submodule.<name>.url` git really clones from and a cloned submodule's
+    // own origin, which can point elsewhere after an upstream rename or a
+    // `remote set-url`. When only the backend refuses, the user must still be
+    // told why — the dialog itself treats BLOCKED as "already explained".
+    await startCommandCaptureWithMocks(page, {
+      get_remotes: SUPERPROJECT_ON_GITHUB,
+      get_submodules: submoduleRows([
+        { name: 'lib/utils', path: 'lib/utils', url: 'https://github.com/user/utils.git' },
+        { name: 'vendor/plugin', path: 'vendor/plugin', url: 'https://github.com/vendor/plugin.git' },
+      ]),
+    });
+    await injectCommandError(
+      page,
+      'update_submodules',
+      'Remote "https://gitlab.com/user/utils.git" is not in your allowlist',
+      'BLOCKED',
+    );
+    await setSecurity(page, { remoteAllowlist: ['github.com'] });
+    await openSubmoduleDialog(page);
+
+    await updateAllButton(page).click();
+
+    // The frontend gate let it through (github.com is listed)...
+    await expect
+      .poll(async () => (await findCommand(page, 'update_submodules')).length)
+      .toBeGreaterThan(0);
+    // ...and the backend's own reason reaches the user, naming the real host.
+    await expect(page.locator('.toast.error').first()).toContainText('gitlab.com');
     await expect(dialog(page).locator('.message.success')).toHaveCount(0);
   });
 

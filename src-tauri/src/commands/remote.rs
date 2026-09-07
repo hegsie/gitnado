@@ -202,9 +202,11 @@ pub async fn get_remotes(path: String) -> Result<Vec<Remote>> {
 /// for a call site that forgets it. `resolve` names the remote the operation
 /// will ACTUALLY contact — assuming "origin" evaluates the allowlist against
 /// the wrong host in the ordinary fork layout, which is the same reason
-/// `get_pull_remote` and `get_push_remote` exist.
+/// `get_pull_remote` and `get_push_remote` exist. `for_push` judges the
+/// remote's `pushurl` when it has one, which is where a push really goes.
 fn guard_remote_op(
     path: &str,
+    for_push: bool,
     resolve: impl FnOnce(&git2::Repository) -> Option<String>,
 ) -> Result<()> {
     // Offline mode refuses everything, so don't pay for opening the repository
@@ -214,7 +216,23 @@ fn guard_remote_op(
     }
     let repo = git2::Repository::open(Path::new(path)).ok();
     let remote = repo.as_ref().and_then(resolve);
-    crate::services::security::guard_remote(path, remote.as_deref())
+    if for_push {
+        crate::services::security::guard_push_remote(path, remote.as_deref())
+    } else {
+        crate::services::security::guard_remote(path, remote.as_deref())
+    }
+}
+
+/// The gate for a push to SEVERAL remotes: every destination is checked
+/// before any is contacted, so one disallowed remote refuses the whole
+/// gesture rather than half-pushing. Judged on each remote's push URL.
+fn guard_push_destinations(path: &str, remotes: &[String]) -> Result<()> {
+    for r in remotes {
+        crate::services::security::guard_push_remote(path, Some(r))?;
+        // ...and the LFS endpoint its pre-push upload would reach.
+        crate::commands::lfs::guard_lfs_upload(path, Some(r))?;
+    }
+    Ok(())
 }
 
 /// Fetch from remote
@@ -239,7 +257,7 @@ pub async fn fetch(
     // alt-tabbed back into the app. That is exactly the noise the background
     // fetch is documented to avoid.
     let quiet = quiet.unwrap_or(false);
-    guard_remote_op(&path, |repo| {
+    guard_remote_op(&path, false, |repo| {
         Some(resolve_fetch_remote(repo, remote.clone()))
     })?;
     // Claimed BEFORE the timeout wrapper, and handed to the blocking task
@@ -1047,7 +1065,7 @@ pub async fn pull(
     timeout_secs: Option<u64>,
     operation_id: Option<String>,
 ) -> Result<()> {
-    guard_remote_op(&path, |repo| {
+    guard_remote_op(&path, false, |repo| {
         let (_, head_refname) = resolve_pull_branch(repo, branch.as_deref()).ok()?;
         Some(resolve_pull_remote(repo, remote.clone(), &head_refname))
     })?;
@@ -1438,9 +1456,13 @@ pub async fn push(
     if let Some(ref r) = remote {
         reject_flag_like(r, "Remote name")?;
     }
-    guard_remote_op(&path, |repo| {
+    guard_remote_op(&path, true, |repo| {
         Some(resolve_push_remote(repo, remote.clone()))
     })?;
+    // In an LFS repository the pre-push hook uploads objects BEFORE any ref
+    // is sent, to an endpoint a committed `.lfsconfig` may choose — gated on
+    // that endpoint, for the same destination the gate above just judged.
+    crate::commands::lfs::guard_lfs_upload(&path, remote.as_deref())?;
 
     // The claim the racing retry is about. Push has no abort point at all, so
     // when the network timeout fires the git2/CLI push keeps running against
@@ -1901,11 +1923,7 @@ pub async fn push_to_multiple_remotes(
     for r in &remotes {
         reject_flag_like(r, "Remote name")?;
     }
-    // Every destination is checked, so one disallowed remote refuses the whole
-    // gesture rather than half-pushing.
-    for r in &remotes {
-        crate::services::security::guard_remote(&path, Some(r))?;
-    }
+    guard_push_destinations(&path, &remotes)?;
 
     // Each push is blocking network I/O for potentially seconds; running them
     // sequentially on the async executor blocks a Tokio worker for the full
@@ -2226,6 +2244,74 @@ mod tests {
     use crate::test_utils::TestRepo;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    // ---- the push gate judges the push URL, the fetch gate the fetch URL ----
+    //
+    // git2 and `git push` contact `remote.<n>.pushurl` when one is set; the
+    // token scoping (`push_remote_url`) knew that and the allowlist did not.
+
+    /// origin fetches from github.com and pushes to gitlab.example.
+    fn repo_with_split_push_url() -> TestRepo {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.add_remote("mirror", "https://github.com/org/mirror.git");
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("remote.origin.pushurl", "https://gitlab.example/org/x.git")
+            .unwrap();
+        repo
+    }
+
+    fn blocked_host(result: Result<()>) -> String {
+        match result {
+            Err(LeviathanError::NetworkBlocked(message)) => message,
+            other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn a_push_is_refused_on_its_push_url_while_a_fetch_passes_on_its_fetch_url() {
+        let repo = repo_with_split_push_url();
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let fetch = guard_remote_op(&repo.path_str(), false, |repo| {
+            Some(resolve_fetch_remote(repo, None))
+        });
+        assert!(fetch.is_ok(), "the fetch URL is on the list: {:?}", fetch);
+
+        let push = guard_remote_op(&repo.path_str(), true, |repo| {
+            Some(resolve_push_remote(repo, None))
+        });
+        assert!(
+            blocked_host(push).contains("gitlab.example"),
+            "the refusal must name the host the push would have reached"
+        );
+    }
+
+    #[test]
+    fn a_push_to_a_remote_without_a_push_url_is_judged_on_its_url() {
+        let repo = repo_with_split_push_url();
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let push = guard_remote_op(&repo.path_str(), true, |repo| {
+            Some(resolve_push_remote(repo, Some("mirror".to_string())))
+        });
+        assert!(push.is_ok(), "no pushurl falls back to the url: {:?}", push);
+    }
+
+    #[test]
+    fn a_multi_remote_push_is_refused_when_any_push_url_is_off_the_allowlist() {
+        let repo = repo_with_split_push_url();
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        assert!(guard_push_destinations(&repo.path_str(), &["mirror".to_string()]).is_ok());
+        let refused = guard_push_destinations(
+            &repo.path_str(),
+            &["mirror".to_string(), "origin".to_string()],
+        );
+        assert!(blocked_host(refused).contains("gitlab.example"));
+    }
 
     // ---- a timed-out remote operation is never abandoned silently ----
 
@@ -5280,7 +5366,9 @@ mod tests {
 pub async fn deepen_repository(path: String, depth: u32) -> Result<()> {
     // `git fetch --deepen` is a fetch.
     crate::services::security::guard_remote(&path, None)?;
-    let output = std::process::Command::new("git")
+    // Through `create_command` like every other user operation: no credential
+    // prompt can hang it, and the panel shows the fetch it ran.
+    let output = crate::utils::create_command("git")
         .arg("-C")
         .arg(&path)
         .arg("fetch")
@@ -5303,7 +5391,7 @@ pub async fn deepen_repository(path: String, depth: u32) -> Result<()> {
 #[command]
 pub async fn unshallow_repository(path: String) -> Result<()> {
     crate::services::security::guard_remote(&path, None)?;
-    let output = std::process::Command::new("git")
+    let output = crate::utils::create_command("git")
         .arg("-C")
         .arg(&path)
         .arg("fetch")

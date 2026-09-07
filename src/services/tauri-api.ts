@@ -120,12 +120,15 @@ export function safeUnlisten(unlisten: UnlistenFn | null | undefined): void {
     // arrives as a rejected promise, not a throw.
     const result = unlisten() as unknown;
     if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch(() => {
-        /* no event bridge — nothing to unregister */
+      void Promise.resolve(result).catch((error: unknown) => {
+        // No event bridge — nothing to unregister. Logged rather than dropped:
+        // a REAL IPC unregister failure looks identical from here, and a
+        // listener that silently stays attached is a bug nobody can see.
+        console.debug('[tauri-api] unlisten failed', error);
       });
     }
-  } catch {
-    /* no event bridge — nothing to unregister */
+  } catch (error) {
+    console.debug('[tauri-api] unlisten failed', error);
   }
 }
 
