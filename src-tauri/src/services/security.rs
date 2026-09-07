@@ -231,9 +231,17 @@ pub fn url_host(url: &str) -> Option<String> {
 }
 
 /// `user@host:path` — the scp-like form. The frontend's
-/// `/^[^@\/]+@([^:\/]+):/` is the same rule, short only of the bracketed IPv6
-/// literal its character classes cannot express — which it declines rather than
-/// mis-reads, so it never approves more than this does.
+/// `/^[^@\/]+@(\[[^\]\/]+\]|[^:\/\[][^:\/]*):/` is the same rule, bracketed
+/// IPv6 literal included.
+///
+/// That parenthesis used to read `([^:\/]+)` there, and the comment here
+/// claimed it "declines rather than mis-reads" the bracketed form. It did not:
+/// it stopped at the first colon INSIDE the literal, so
+/// `git@[2001:db8::1]:team/app.git` resolved to `[2001` while this half
+/// resolved the whole `[2001:db8::1]`. The two gates then disagreed in the
+/// direction that cannot be worked around — the backend allowed the remote and
+/// the frontend refused it first, naming a remote the allowlist did name, and
+/// no entry could make it pass. Any change to either half has to move both.
 ///
 /// The host is the one after the FIRST `@` and before the FIRST `:`, which is
 /// how git reads this form: `git@github.com:x@evil.test:y` is the path
@@ -790,6 +798,60 @@ mod tests {
             url_host("git@github.com:owner/repo.git").as_deref(),
             Some("github.com")
         );
+    }
+
+    /// A self-hosted box with no DNS is reached by literal address, and git
+    /// accepts the bracketed IPv6 scp form. This half has always read it whole;
+    /// the frontend's `[^:\/]+` stopped at the first colon inside the literal
+    /// and read `[2001`, so the gate the user could see (Settings > Security)
+    /// listed a host its own frontend could never match. Both halves read the
+    /// same host now, with and without a port.
+    #[test]
+    fn a_bracketed_ipv6_scp_remote_yields_the_whole_literal() {
+        assert_eq!(
+            url_host("git@[2001:db8::1]:team/app.git").as_deref(),
+            Some("[2001:db8::1]")
+        );
+        // No path: no colon after the closing bracket, so this falls through to
+        // the `https://` fallback — and lands on the same host. The frontend's
+        // `?? cloneUrlHost('https://' + url)` is that same fallback.
+        assert_eq!(
+            target_host("git@[2001:db8::1]").as_deref(),
+            Some("[2001:db8::1]")
+        );
+        assert_eq!(
+            url_host("ssh://git@[2001:db8::1]:2222/team/app.git").as_deref(),
+            Some("[2001:db8::1]")
+        );
+        assert_eq!(
+            parse_target("ssh://git@[2001:db8::1]:2222/team/app.git")
+                .map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("[2001:db8::1]".to_string(), Some(2222), true))
+        );
+    }
+
+    /// ...and the allowlist entry the user writes for it works. `[2001:db8::1]`
+    /// is the form both halves normalise to; a bare `2001:db8::1` is not a
+    /// parseable authority on EITHER side, so both refuse it alike rather than
+    /// one allowing what the other blocks.
+    #[test]
+    fn a_bracketed_ipv6_allowlist_entry_matches_that_remote() {
+        assert!(check(
+            &settings(false, &["[2001:db8::1]"]),
+            Some("git@[2001:db8::1]:team/app.git")
+        )
+        .is_ok());
+        assert!(check(
+            &settings(false, &["[2001:db8::1]"]),
+            Some("ssh://git@[2001:db8::1]:2222/team/app.git")
+        )
+        .is_ok());
+        // A different address is a different host.
+        assert!(check(
+            &settings(false, &["[2001:db8::1]"]),
+            Some("git@[2001:db8::2]:team/app.git")
+        )
+        .is_err());
     }
 
     #[test]

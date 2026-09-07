@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
-import { injectCommandMock, openViaCommandPalette } from '../fixtures/test-helpers';
+import {
+  findCommand,
+  injectCommandMock,
+  openViaCommandPalette,
+  startCommandCaptureWithMocks,
+} from '../fixtures/test-helpers';
 
 /**
  * E2E tests for the Credential Management dialog (lv-credentials-dialog).
@@ -201,5 +206,64 @@ test.describe('Credentials Dialog - testing a remote', () => {
     const result = page.locator('lv-credentials-dialog .test-result');
     await expect(result).toContainText('Protocol: https');
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toBeVisible();
+  });
+
+  test('an http remote erases the http credential it found, not an https one', async ({ page }) => {
+    await startCommandCaptureWithMocks(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'http://git.internal.test/team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: true,
+        host: 'git.internal.test',
+        protocol: 'http',
+        username: 'someone',
+        message: 'Credentials found for git.internal.test',
+      },
+      erase_credentials: null,
+      'plugin:dialog|message': 'Ok',
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('Protocol: http');
+    await result.locator('button', { hasText: 'Erase Credentials' }).click();
+
+    // `git credential reject protocol=https` matches nothing for an http
+    // remote: the user confirms a re-authentication warning and the credential
+    // stays exactly where it was.
+    await expect
+      .poll(async () => (await findCommand(page, 'erase_credentials'))[0]?.args)
+      .toEqual({ path: '/tmp/test-repo', host: 'git.internal.test', protocol: 'http' });
+  });
+
+  test('a git:// remote is told it needs no credential and offered no erase', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'git://git.internal.test/team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: false,
+        host: 'git.internal.test',
+        protocol: 'git',
+        username: null,
+        message: 'No credentials found for git.internal.test',
+      },
+    });
+    await openTestTab(page);
+
+    // `git://` does not authenticate at all, so "No Credentials Found" reads as
+    // a fault to go and fix when there is nothing to fix — and an erase button
+    // there rejects an entry git would never have consulted.
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('No Credentials Needed');
+    await expect(result).not.toContainText('No Credentials Found');
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
   });
 });

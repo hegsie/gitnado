@@ -268,6 +268,61 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(el.shadowRoot!.textContent).to.not.include('No Credentials Found');
   });
 
+  it('erases the http credential an http remote actually stores', async () => {
+    mockRemotes = [remote('http://git.internal.test/team/app.git')];
+    mockTestResult = testResult({ protocol: 'http', host: 'git.internal.test' });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('Protocol: http');
+    expect(offersErase(el), 'http stores a credential just as https does').to.be.true;
+
+    [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.test-result button')]
+      .find((b) => b.textContent?.includes('Erase Credentials'))!
+      .click();
+    await waitFor(() => invokeCalls.some((c) => c.command === 'erase_credentials'));
+
+    // The erase has to name the protocol the credential was found under, or it
+    // rejects an entry that does not exist and the re-authentication warning
+    // the user just confirmed describes nothing.
+    expect(invokeCalls.find((c) => c.command === 'erase_credentials')!.args).to.deep.equal({
+      path: '/test/repo',
+      host: 'git.internal.test',
+      protocol: 'http',
+    });
+  });
+
+  it('tells a git:// remote it needs no stored credential instead of reporting one missing', async () => {
+    mockRemotes = [remote('git://git.internal.test/team/app.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'git',
+      host: 'git.internal.test',
+      username: null,
+      message: 'No credentials found for git.internal.test',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    // `git://` never authenticates, so "No Credentials Found" reads as a fault
+    // to go and fix when there is nothing to fix.
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
+    expect(el.shadowRoot!.textContent).to.not.include('No Credentials Found');
+  });
+
+  it('offers no erase for a transport that stores no credential', async () => {
+    mockRemotes = [remote('git://git.internal.test/team/app.git')];
+    mockTestResult = testResult({ protocol: 'git', host: 'git.internal.test' });
+    const el = await openTestTab();
+    await runTest(el);
+
+    // git reaches `git://` and `file://` without ever consulting a credential
+    // helper, so erasing an entry there promises a re-authentication that
+    // never happens.
+    expect(offersErase(el), 'nothing git will ever use is stored here').to.be.false;
+    expect(invokeCalls.some((c) => c.command === 'erase_credentials')).to.be.false;
+  });
+
   it('still reports a missing HTTPS credential as one', async () => {
     mockRemotes = [remote('https://git.example.test/team/app.git')];
     mockTestResult = testResult({ success: false, username: null, message: 'No credentials found' });

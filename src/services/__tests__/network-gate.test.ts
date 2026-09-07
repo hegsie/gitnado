@@ -262,6 +262,42 @@ describe('network security gate', () => {
       expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
     });
 
+    // A self-hosted box with no DNS is reached by literal address, and git
+    // accepts the bracketed IPv6 scp form. `[^:/]+` stopped at the first colon
+    // INSIDE the literal, so the host read as "[2001" — which no allowlist
+    // entry can ever name — while the BACKEND gate read the whole
+    // "[2001:db8::1]" and allowed it. Fetch, pull and push were refused here,
+    // first, with a message naming a remote the list does name.
+    it('reads the whole bracketed IPv6 literal of an scp-form remote', async () => {
+      mockRemotes('git@[2001:db8::1]:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'the allowlist names this exact host').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    it('reads a bracketed IPv6 ssh:// URL, with a port, as the same host', async () => {
+      mockRemotes('ssh://git@[2001:db8::1]:2222/team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'the port does not change the host').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    it('still refuses a bracketed IPv6 remote that is not on the list', async () => {
+      mockRemotes('git@[2001:db8::2]:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'a different address is a different host').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+    });
+
     // Settings > SSH > Test Connection hands the gate whatever the user typed,
     // and the backend accepts `git@host` as readily as a bare host. Deriving
     // the host from the string as-is returns nothing for that form, so it used

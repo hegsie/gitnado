@@ -28,6 +28,14 @@
  *
  * Every service that invokes a command capable of leaving the machine is swept
  * here — see SWEPT_MODULES, and the exclusions named beside it.
+ *
+ * The last hole was one level down: the sweep could only judge a command it
+ * RECOGNISED. `get_commit_status` is a real api.github.com request, it was the
+ * one provider API left on the ungated `invokeCommand`, and it appeared in
+ * neither NETWORK_COMMANDS nor LOCAL_COMMANDS — so this file called it, watched
+ * it go out with offline mode on, and reported green. The two sets are now
+ * required to PARTITION every command the sweep reaches, so a command nobody
+ * has classified fails the suite instead of being ignored by it.
  */
 
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
@@ -102,7 +110,8 @@ const NETWORK_COMMANDS = new Set([
   'create_gitlab_issue', 'create_gitlab_merge_request', 'create_issue',
   'create_pull_request', 'create_release', 'delete_release',
   'get_ado_pull_request', 'get_ado_work_items', 'get_bitbucket_pull_request',
-  'get_check_runs', 'get_gitlab_labels', 'get_gitlab_merge_request',
+  'get_check_runs', 'get_commit_status',
+  'get_gitlab_labels', 'get_gitlab_merge_request',
   'get_issue', 'get_issue_comments', 'get_latest_release', 'get_pull_request',
   'get_pull_request_reviews', 'get_release_by_tag', 'get_workflow_runs',
   'list_ado_organizations', 'list_ado_pipeline_runs', 'list_ado_pull_requests',
@@ -165,6 +174,105 @@ const LOCAL_COMMANDS = new Set([
   'start_auto_update_check',
   'stop_auto_update_check',
   'is_auto_update_running',
+
+  // ---- the rest of the surface the sweep touches ---------------------------
+  //
+  // Local git and configuration work: reads and writes under the repository
+  // directory, the app's own config files, and the OS keyring. None of them
+  // opens a socket, and none of them is behind the BACKEND gate either (the
+  // scanner in `scripts/security-lock.mjs` finds no `guard_*` on any path from
+  // these commands).
+  //
+  // They are listed so the two sets above PARTITION everything the sweep
+  // reaches — see the partition test below. Without that, a command in neither
+  // set was simply invisible: `get_commit_status` is a real api.github.com
+  // request, it sat on the ungated wrapper, and this file called it, watched it
+  // go out with offline mode on, and stayed green, because nobody had
+  // classified it. A new command now has to be put in one set or the other
+  // before the suite passes.
+  'abort_cherry_pick', 'abort_merge', 'abort_rebase', 'abort_revert', 'add_bookmark',
+  'add_gitattribute', 'add_key_to_agent', 'add_remote', 'add_sparse_checkout_patterns',
+  'add_to_gitignore', 'add_worktree', 'amend_commit', 'apply_patch', 'apply_patch_to_index',
+  'apply_profile', 'apply_stash', 'apply_unified_profile', 'assign_profile_to_repository',
+  'assign_unified_profile_to_repository', 'auto_detect_merge_tool', 'bisect_bad',
+  'bisect_good', 'bisect_reset', 'bisect_skip', 'bisect_start', 'bundle_create',
+  'bundle_list_heads', 'bundle_unbundle', 'bundle_verify', 'cancel_clone', 'check_ignore',
+  'check_ignore_verbose', 'checkout', 'checkout_file_from_branch', 'checkout_file_from_commit',
+  'checkout_with_autostash', 'cherry_pick', 'cherry_pick_from_branch', 'cherry_pick_range',
+  'clean_all', 'clean_files', 'commit_merge', 'compare_branches', 'continue_cherry_pick',
+  'continue_rebase', 'continue_revert', 'convert_file_encoding', 'create_archive',
+  'create_branch', 'create_commit', 'create_orphan_branch', 'create_patch', 'create_stash',
+  'create_tag', 'deinit_submodule', 'delete_alias', 'delete_branch', 'delete_branch_rule',
+  'delete_custom_action', 'delete_git_credentials', 'delete_global_account', 'delete_hook',
+  'delete_migration_backup', 'delete_profile', 'delete_ssh_key', 'delete_tag',
+  'delete_template', 'delete_unified_profile', 'describe', 'detect_conflict_markers',
+  'detect_file_encoding', 'detect_profile_for_repository',
+  'detect_unified_profile_for_repository', 'disable_sparse_checkout', 'discard_changes',
+  'drop_commit', 'drop_stash', 'edit_commit_date', 'edit_tag_message',
+  'enable_sparse_checkout', 'erase_credentials', 'execute_interactive_rebase',
+  'execute_unified_profiles_migration', 'filter_commits', 'fixup_commit', 'generate_ssh_key',
+  'get_aliases', 'get_all_git_config', 'get_archive_files', 'get_assigned_profile',
+  'get_assigned_unified_profile', 'get_available_helpers', 'get_available_merge_tools',
+  'get_avatar_url', 'get_avatar_urls', 'get_bisect_status', 'get_blob_content',
+  'get_bookmarks', 'get_branch_diff_commits', 'get_branch_rules', 'get_branch_tracking_info',
+  'get_branches', 'get_cleanable_files', 'get_cleanup_candidates', 'get_clone_filter_info',
+  'get_commit', 'get_commit_file_diff', 'get_commit_files', 'get_commit_history',
+  'get_commit_info_for_copy', 'get_commit_message', 'get_commit_message_rules',
+  'get_commit_template', 'get_commit_total', 'get_commits_signature_info',
+  'get_common_attributes', 'get_common_settings', 'get_config_list', 'get_config_value',
+  'get_conflict_details', 'get_conflicts', 'get_contributor_stats', 'get_conventional_types',
+  'get_credential_helpers', 'get_current_git_identity', 'get_current_identity',
+  'get_custom_actions', 'get_diff', 'get_diff_tool', 'get_diff_with_options',
+  'get_editor_config', 'get_fetch_remote', 'get_fetch_status', 'get_file_at_commit',
+  'get_file_blame', 'get_file_diff', 'get_file_history', 'get_file_hunks', 'get_file_log',
+  'get_file_path_for_copy', 'get_git_config', 'get_gitattributes', 'get_gitflow_config',
+  'get_gitignore', 'get_gitignore_templates', 'get_global_account', 'get_global_accounts',
+  'get_global_accounts_by_type', 'get_gpg_config', 'get_gpg_keys', 'get_hook', 'get_hooks',
+  'get_image_versions', 'get_lfs_files', 'get_lfs_status', 'get_line_ending_config',
+  'get_merge_tool_config', 'get_migration_backup_info', 'get_note', 'get_notes',
+  'get_notes_refs', 'get_pack_info', 'get_pr_template_content', 'get_pr_templates',
+  'get_profile_preferred_account', 'get_profiles', 'get_profiles_config',
+  'get_public_key_content', 'get_pull_remote', 'get_push_remote', 'get_rebase_commits',
+  'get_rebase_state', 'get_rebase_todo', 'get_recent_repos', 'get_reflog',
+  'get_refs_by_commit', 'get_remotes', 'get_repo_statistics', 'get_repo_stats',
+  'get_repository_account', 'get_repository_preferred_account', 'get_repository_stats',
+  'get_signing_config', 'get_signing_status', 'get_sorted_file_status',
+  'get_sparse_checkout_config', 'get_ssh_config', 'get_ssh_keys', 'get_stashes', 'get_status',
+  'get_submodules', 'get_tag_details', 'get_tags', 'get_undo_history', 'get_unified_profile',
+  'get_unified_profiles', 'get_unified_profiles_config', 'get_user_identity', 'get_worktrees',
+  'gitflow_finish_feature', 'gitflow_finish_hotfix', 'gitflow_finish_release',
+  'gitflow_record_squash_finish', 'gitflow_start_feature', 'gitflow_start_hotfix',
+  'gitflow_start_release', 'init_gitflow', 'init_lfs', 'init_repository',
+  'is_ancestor_of_head', 'is_auto_fetch_running', 'is_ignored', 'launch_diff_tool',
+  'launch_merge_tool', 'lfs_track', 'lfs_untrack', 'list_agent_keys', 'list_diff_tools',
+  'list_templates', 'list_tracked_files', 'lock_worktree', 'merge',
+  'needs_unified_profiles_migration', 'open_file_manager', 'open_in_configured_editor',
+  'open_in_default_app', 'open_in_editor', 'open_repository', 'open_terminal', 'pop_stash',
+  'preview_merge', 'preview_rebase', 'preview_unified_profiles_migration', 'prune_worktrees',
+  'read_file_content', 'rebase', 'record_action', 'record_repo_opened', 'redo_last_action',
+  'remove_bookmark', 'remove_from_gitignore', 'remove_gitattribute', 'remove_note',
+  'remove_profile_default_account', 'remove_remote', 'remove_submodule', 'remove_worktree',
+  'rename_branch', 'rename_remote', 'reorder_commits', 'reset', 'reset_to_reflog',
+  'resolve_conflict', 'resolve_conflict_take_side', 'restore_migration_backup',
+  'reveal_in_file_manager', 'revert', 'reword_commit', 'run_custom_action', 'run_fsck',
+  'run_gc', 'run_prune', 'save_custom_action', 'save_global_account', 'save_hook',
+  'save_profile', 'save_template', 'save_unified_profile', 'search_commits',
+  'search_commits_by_content', 'search_commits_by_file', 'search_in_commit_messages',
+  'search_in_commits', 'search_in_diff', 'search_in_files', 'set_alias', 'set_branch_rule',
+  'set_commit_message_rules', 'set_commit_signing', 'set_config_value',
+  'set_credential_helper', 'set_default_global_account', 'set_default_unified_profile',
+  'set_diff_tool', 'set_editor_config', 'set_git_config', 'set_line_ending_config',
+  'set_merge_tool_config', 'set_note', 'set_profile_default_account', 'set_remote_url',
+  'set_signing_key', 'set_sparse_checkout_patterns', 'set_tag_signing', 'set_upstream_branch',
+  'set_user_identity', 'shortlog', 'skip_cherry_pick', 'skip_rebase_commit', 'skip_revert',
+  'squash_commits', 'stage_files', 'stage_hunk', 'stage_hunk_by_index', 'stage_lines',
+  'stash_show', 'stop_auto_fetch', 'store_git_credentials', 'toggle_hook',
+  'trigger_auto_fetch', 'unassign_profile_from_repository',
+  'unassign_unified_profile_from_repository', 'undo_last_action', 'unlock_worktree',
+  'unset_config_value', 'unset_credential_helper', 'unset_git_config', 'unset_upstream_branch',
+  'unstage_files', 'unstage_hunk', 'unstage_hunk_by_index', 'update_bookmark',
+  'update_gitattribute', 'update_global_account_cached_user', 'update_rebase_todo',
+  'validate_commit_message', 'verify_commit_signature', 'write_file_content'
 ]);
 
 /**
@@ -350,6 +458,40 @@ describe('network gate coverage', () => {
     expect(
       Array.from(leaked, ([fn, cmd]) => `${fn} -> ${cmd}`),
       'these reached the network with offline mode on',
+    ).to.deep.equal([]);
+  });
+
+  it('the two sets classify every command the sweep reaches', async () => {
+    // The offline assertion above can only judge a command it recognises, so a
+    // command in NEITHER set is one it silently ignores. That is how
+    // `get_commit_status` — a real api.github.com request, on the ungated
+    // `invokeCommand` — was swept, watched going out with offline mode on, and
+    // reported green: the two hand-kept lists were never required to be total.
+    //
+    // They are now. A command reached here and in neither set is a
+    // classification nobody has made: put it in NETWORK_COMMANDS (and gate it,
+    // or the offline assertion above fails) or in LOCAL_COMMANDS (a claim that
+    // it never leaves the machine).
+    settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    const unclassified = new Set<string>();
+    for (const { fn, args } of sweptCallables()) {
+      invoked.length = 0;
+      try {
+        await fn(...args);
+      } catch {
+        /* a rejected call still reveals what it invoked */
+      }
+      for (const command of invoked) {
+        if (!NETWORK_COMMANDS.has(command) && !LOCAL_COMMANDS.has(command)) {
+          unclassified.add(command);
+        }
+      }
+    }
+
+    expect(
+      [...unclassified].sort(),
+      'classify these as network or local — an unclassified command is one the offline sweep ignores',
     ).to.deep.equal([]);
   });
 
@@ -555,6 +697,10 @@ describe('network gate coverage', () => {
       'deepen_repository',
       'unshallow_repository',
       'test_credentials',
+      // The one hosting-provider API left on the ungated wrapper. It was in
+      // neither classification set, so the sweep called it, watched it reach
+      // api.github.com with offline mode on, and stayed green.
+      'get_commit_status',
       // The three provider checks in unified-profile.service. They prove the
       // driven calls above really do reach a provider API: without them the
       // module could be listed, swept and assert nothing at all.

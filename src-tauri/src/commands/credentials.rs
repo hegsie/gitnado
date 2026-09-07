@@ -535,12 +535,16 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
 
     let repo_path = Path::new(&path);
 
+    let target = credential_target(&remote_url);
+    // Worked out from the whole target, before it is taken apart, so the
+    // question put to the credential helper is the one the result reports.
+    let lookup = credential_lookup_query(&target);
     let CredentialTarget {
         protocol,
         display_host: host,
         ssh_destination,
         port,
-    } = credential_target(&remote_url);
+    } = target;
 
     if protocol == "ssh" {
         // For SSH, test the connection
@@ -590,8 +594,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
         // Send credential request
         use std::io::Write;
         if let Some(mut stdin) = child.stdin.take() {
-            let input = format!("protocol=https\nhost={}\n\n", host);
-            let _ = stdin.write_all(input.as_bytes());
+            let _ = stdin.write_all(lookup.as_bytes());
         }
 
         let output = child.wait_with_output().map_err(|e| {
@@ -656,6 +659,25 @@ struct CredentialTarget {
     ssh_destination: String,
     /// The port for `ssh -p`, when the URL named one.
     port: Option<u16>,
+}
+
+/// The request written to `git credential fill`'s stdin for a target.
+///
+/// The protocol is the target's own, not a fixed `https`. Asking about `https`
+/// while REPORTING the URL's scheme made the two halves disagree: an
+/// `http://` remote with a working stored credential came back "No Credentials
+/// Found", and an unrelated `https` credential for the same host came back
+/// "Credentials Working / Protocol: http" — with an erase button pointed at
+/// `protocol=http`, which matches nothing.
+fn credential_lookup_query(target: &CredentialTarget) -> String {
+    credential_query(&target.protocol, &target.display_host)
+}
+
+/// A `git credential` request for one protocol/host pair. `erase_credentials`
+/// writes the same shape, so a credential found by the test is the credential
+/// the erase button then rejects.
+fn credential_query(protocol: &str, host: &str) -> String {
+    format!("protocol={}\nhost={}\n\n", protocol, host)
 }
 
 fn credential_target(remote_url: &str) -> CredentialTarget {
@@ -777,8 +799,7 @@ pub async fn erase_credentials(path: String, host: String, protocol: String) -> 
     // Send credential info to reject
     use std::io::Write;
     if let Some(mut stdin) = child.stdin.take() {
-        let input = format!("protocol={}\nhost={}\n\n", protocol, host);
-        let _ = stdin.write_all(input.as_bytes());
+        let _ = stdin.write_all(credential_query(&protocol, &host).as_bytes());
     }
 
     let _ = child.wait();
@@ -1090,6 +1111,94 @@ mod tests {
         let target = credential_target("http://git.internal.test/team/app.git");
         assert_eq!(target.protocol, "http");
         assert_eq!(target.display_host, "git.internal.test");
+        // The REPORTED protocol above is only half of it: the lookup handed to
+        // `git credential fill` has to name the same one, or the dialog
+        // describes an entry the helper was never asked about.
+        assert_eq!(
+            credential_query(&target.protocol, &target.display_host),
+            "protocol=http\nhost=git.internal.test\n\n"
+        );
+    }
+
+    /// Point a repo at a `store` credential helper holding `entries`, each one
+    /// a store-file line (`http://user:pass@host`).
+    fn repo_with_stored_credentials(entries: &[&str]) -> TestRepo {
+        let repo = TestRepo::with_initial_commit();
+        let store = repo.path.join("credential-store");
+        std::fs::write(&store, format!("{}\n", entries.join("\n"))).expect("write store");
+        repo.repo()
+            .config()
+            .expect("config")
+            .set_str(
+                "credential.helper",
+                &format!("store --file={}", store.display()),
+            )
+            .expect("set credential.helper");
+        repo
+    }
+
+    /// The credential a remote actually uses has to be the one looked up.
+    ///
+    /// The lookup was pinned to `protocol=https` while the reported protocol
+    /// was the URL's own scheme, so an `http://` remote with a working stored
+    /// credential came back "No credentials found" — about a remote that works.
+    #[tokio::test]
+    async fn an_http_remote_finds_its_stored_http_credential() {
+        let repo = repo_with_stored_credentials(&["http://http-user:http-pass@git.internal.test"]);
+
+        let result = test_credentials(
+            repo.path_str(),
+            "http://git.internal.test/team/app.git".to_string(),
+        )
+        .await
+        .expect("test_credentials");
+
+        assert!(result.success, "got: {:?}", result);
+        assert_eq!(result.protocol, "http");
+        assert_eq!(result.username.as_deref(), Some("http-user"));
+    }
+
+    /// ...and a credential stored under a DIFFERENT protocol for the same host
+    /// is not it. Reporting one is worse than reporting nothing: the dialog
+    /// said "Credentials Working / Protocol: http" about an `https` entry, and
+    /// the erase button then rejected `protocol=http`, which matches nothing —
+    /// so the user confirmed a re-authentication warning for a no-op.
+    #[tokio::test]
+    async fn an_http_remote_does_not_report_the_hosts_https_credential() {
+        let repo =
+            repo_with_stored_credentials(&["https://https-user:https-pass@git.internal.test"]);
+
+        let result = test_credentials(
+            repo.path_str(),
+            "http://git.internal.test/team/app.git".to_string(),
+        )
+        .await
+        .expect("test_credentials");
+
+        assert!(
+            !result.success,
+            "an https credential is not an http one: {:?}",
+            result
+        );
+        assert_eq!(result.username, None);
+    }
+
+    /// The everyday `https://` remote keeps finding its own credential.
+    #[tokio::test]
+    async fn an_https_remote_finds_its_stored_https_credential() {
+        let repo =
+            repo_with_stored_credentials(&["https://https-user:https-pass@git.internal.test"]);
+
+        let result = test_credentials(
+            repo.path_str(),
+            "https://git.internal.test/team/app.git".to_string(),
+        )
+        .await
+        .expect("test_credentials");
+
+        assert!(result.success, "got: {:?}", result);
+        assert_eq!(result.protocol, "https");
+        assert_eq!(result.username.as_deref(), Some("https-user"));
     }
 
     /// The everyday remote forms still resolve the way they always did.
