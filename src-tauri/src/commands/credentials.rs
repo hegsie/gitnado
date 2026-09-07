@@ -535,28 +535,23 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
 
     let repo_path = Path::new(&path);
 
-    // Determine protocol and host from URL
-    let (protocol, host) = if remote_url.starts_with("git@") || remote_url.starts_with("ssh://") {
-        ("ssh".to_string(), extract_host(&remote_url))
-    } else {
-        ("https".to_string(), extract_host(&remote_url))
-    };
+    let CredentialTarget {
+        protocol,
+        display_host: host,
+        ssh_destination,
+        port,
+    } = credential_target(&remote_url);
 
     if protocol == "ssh" {
         // For SSH, test the connection
-        let output = create_command("ssh")
-            .args([
-                "-T",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "BatchMode=yes",
-                &format!("git@{}", host),
-            ])
-            .output()
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to test SSH connection: {}", e))
-            })?;
+        let mut command = create_command("ssh");
+        command.args(ssh_probe_args());
+        if let Some(port) = port {
+            command.args(["-p".to_string(), port.to_string()]);
+        }
+        let output = command.arg(&ssh_destination).output().map_err(|e| {
+            LeviathanError::OperationFailed(format!("Failed to test SSH connection: {}", e))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -636,33 +631,81 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
     }
 }
 
-/// Extract host from URL
-fn extract_host(url: &str) -> String {
-    // Handle various URL formats:
-    // - https://github.com/user/repo.git
-    // - git@github.com:user/repo.git
-    // - ssh://git@github.com/user/repo.git
+/// Where a credential test is going.
+///
+/// Worked out with the SAME parse the network gate above uses, so the host the
+/// allowlist judged is the host that is then contacted. Deciding the protocol on
+/// `starts_with("git@")` instead reported every scp-form remote with another
+/// login — `deploy@git.example.test:team/app.git`, an ordinary corporate remote
+/// — as HTTPS: `git credential fill` was asked about a host that has no HTTPS
+/// credentials, the dialog reported "No credentials found" for a remote that
+/// works, and the erase button then offered to drop `https` credentials that
+/// were never in play. Reading the host after the LAST `@` was worse still —
+/// the gate reads the FIRST, as git does — so a URL whose two differ passed the
+/// allowlist as one host and opened a connection to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CredentialTarget {
+    /// `ssh`, or the URL's own scheme. The dialog shows it and hands it back to
+    /// `erase_credentials`, so it has to name the protocol the credential was
+    /// actually looked up under.
+    protocol: String,
+    /// What the dialog shows, and what `git credential` is asked about. git's
+    /// `host` field carries the port, so this does too.
+    display_host: String,
+    /// `[user@]host` for `ssh`, keeping the login the URL named.
+    ssh_destination: String,
+    /// The port for `ssh -p`, when the URL named one.
+    port: Option<u16>,
+}
 
-    if let Some(rest) = url.strip_prefix("https://") {
-        rest.split('/').next().unwrap_or("").to_string()
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        rest.split('/').next().unwrap_or("").to_string()
-    } else if let Some(rest) = url.strip_prefix("ssh://") {
-        rest.split('@')
-            .next_back()
-            .and_then(|s| s.split('/').next())
-            .unwrap_or("")
-            .to_string()
-    } else if url.contains('@') && url.contains(':') {
-        // git@host:path format
-        url.split('@')
-            .next_back()
-            .and_then(|s| s.split(':').next())
-            .unwrap_or("")
-            .to_string()
+fn credential_target(remote_url: &str) -> CredentialTarget {
+    let Some(target) = crate::services::security::parse_target(remote_url) else {
+        // Nothing a URL parser recognises — a filesystem remote, say. Report it
+        // as typed rather than invent a host for it.
+        let as_typed = remote_url.trim().to_string();
+        return CredentialTarget {
+            protocol: "https".to_string(),
+            ssh_destination: as_typed.clone(),
+            display_host: as_typed,
+            port: None,
+        };
+    };
+
+    let display_host = match target.port {
+        Some(port) => format!("{}:{}", target.host, port),
+        None => target.host.clone(),
+    };
+    let protocol = if target.is_ssh {
+        "ssh".to_string()
     } else {
-        url.to_string()
+        target.scheme.unwrap_or_else(|| "https".to_string())
+    };
+    let login = target.user.as_deref().unwrap_or("git");
+
+    CredentialTarget {
+        protocol,
+        ssh_destination: format!("{}@{}", login, target.host),
+        display_host,
+        port: target.port,
     }
+}
+
+/// The `ssh -T` probe options.
+///
+/// `ConnectTimeout` counts as much as the rest: without it a user whose network
+/// drops outbound :22 waits out the kernel's TCP timeout — around two minutes —
+/// with the dialog stuck on "Testing". `test_ssh_connection` runs the same
+/// probe and has always set one.
+fn ssh_probe_args() -> [&'static str; 7] {
+    [
+        "-T",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+    ]
 }
 
 /// Extract username from SSH response
@@ -941,45 +984,106 @@ mod tests {
         );
     }
 
+    /// An scp-form remote whose login is not `git` is an ordinary corporate
+    /// remote, and git reaches it over SSH. Classifying it as HTTPS ran
+    /// `git credential fill` against a host that has no HTTPS credentials, told
+    /// the user "No credentials found" about a remote that works, and then
+    /// offered to erase `https` credentials that were never in play.
     #[test]
-    fn test_extract_host_https() {
-        assert_eq!(
-            extract_host("https://github.com/user/repo.git"),
-            "github.com"
+    fn an_scp_remote_with_another_login_is_tested_over_ssh_as_that_user() {
+        let target = credential_target("deploy@git.example.test:team/app.git");
+        assert_eq!(target.protocol, "ssh");
+        assert_eq!(target.display_host, "git.example.test");
+        assert_eq!(target.ssh_destination, "deploy@git.example.test");
+    }
+
+    /// An `ssh://` URL names its login too — CodeCommit's is an access-key id,
+    /// and `git@` is not a substitute for it.
+    #[test]
+    fn an_ssh_url_is_tested_as_the_login_it_names() {
+        let target = credential_target(
+            "ssh://APKAEXAMPLEKEYID@git-codecommit.eu-west-1.amazonaws.com/v1/repos/app",
         );
-        assert_eq!(extract_host("https://gitlab.com/user/repo"), "gitlab.com");
+        assert_eq!(target.protocol, "ssh");
         assert_eq!(
-            extract_host("https://bitbucket.org/user/repo.git"),
-            "bitbucket.org"
+            target.ssh_destination,
+            "APKAEXAMPLEKEYID@git-codecommit.eu-west-1.amazonaws.com"
         );
     }
 
+    /// The host handed to `ssh` must be the host the allowlist judged.
+    ///
+    /// The gate reads the host after the FIRST `@`, which is the one git reads:
+    /// `git@github.com:x@evil.test:y` is the path `x@evil.test:y` on
+    /// `github.com`. Reading the LAST one here meant such a URL passed a
+    /// `github.com` allowlist and then opened a connection to `evil.test`.
     #[test]
-    fn test_extract_host_http() {
+    fn the_host_contacted_is_the_host_the_gate_judged() {
+        let url = "git@github.com:x@evil.test:y";
+        let target = credential_target(url);
         assert_eq!(
-            extract_host("http://github.com/user/repo.git"),
-            "github.com"
+            Some(target.display_host.as_str()),
+            crate::services::security::url_host(url).as_deref(),
+            "the gate and the destination must read one host"
         );
-        assert_eq!(
-            extract_host("http://internal-git.company.com/repo"),
-            "internal-git.company.com"
-        );
+        assert_eq!(target.ssh_destination, "git@github.com");
     }
 
+    /// A non-default port belongs in git's `host` field and on the ssh command
+    /// line; dropping it asks the wrong server.
     #[test]
-    fn test_extract_host_ssh() {
-        assert_eq!(extract_host("git@github.com:user/repo.git"), "github.com");
-        assert_eq!(
-            extract_host("git@gitlab.com:group/project.git"),
-            "gitlab.com"
-        );
+    fn a_port_survives_into_the_credential_lookup() {
+        let https = credential_target("https://gitlab.example.test:8443/team/app.git");
+        assert_eq!(https.protocol, "https");
+        assert_eq!(https.display_host, "gitlab.example.test:8443");
+
+        let ssh = credential_target("ssh://git@git.example.test:2222/team/app.git");
+        assert_eq!(ssh.protocol, "ssh");
+        assert_eq!(ssh.ssh_destination, "git@git.example.test");
+        assert_eq!(ssh.port, Some(2222));
     }
 
+    /// An `http://` remote is looked up under `http`. Reporting it as `https`
+    /// asked the credential helper about a protocol the remote does not use,
+    /// and pointed the erase button at that same wrong entry.
     #[test]
-    fn test_extract_host_ssh_url() {
-        assert_eq!(
-            extract_host("ssh://git@github.com/user/repo.git"),
-            "github.com"
+    fn an_http_remote_is_not_reported_as_https() {
+        let target = credential_target("http://git.internal.test/team/app.git");
+        assert_eq!(target.protocol, "http");
+        assert_eq!(target.display_host, "git.internal.test");
+    }
+
+    /// The everyday remote forms still resolve the way they always did.
+    #[test]
+    fn the_ordinary_remote_forms_keep_their_protocol_and_host() {
+        for (url, protocol, host) in [
+            ("https://github.com/user/repo.git", "https", "github.com"),
+            ("https://gitlab.com/user/repo", "https", "gitlab.com"),
+            (
+                "https://bitbucket.org/user/repo.git",
+                "https",
+                "bitbucket.org",
+            ),
+            ("git@github.com:user/repo.git", "ssh", "github.com"),
+            ("git@gitlab.com:group/project.git", "ssh", "gitlab.com"),
+            ("ssh://git@github.com/user/repo.git", "ssh", "github.com"),
+        ] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, protocol, "protocol for {url}");
+            assert_eq!(target.display_host, host, "host for {url}");
+        }
+    }
+
+    /// Without a connect timeout a user whose network drops outbound :22 waits
+    /// out the kernel's TCP timeout — around two minutes — with the dialog
+    /// stuck on "Testing". `test_ssh_connection` runs the same probe and has
+    /// always set one.
+    #[test]
+    fn the_ssh_probe_gives_up_rather_than_hanging() {
+        assert!(
+            ssh_probe_args().contains(&"ConnectTimeout=10"),
+            "got: {:?}",
+            ssh_probe_args()
         );
     }
 
