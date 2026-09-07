@@ -75,6 +75,58 @@ async function resolveRemotePushUrl(repoPath: string, remote?: string): Promise<
  *
  * Returns null when allowed, or the reason it was refused.
  */
+/**
+ * Whether a target is a place on THIS machine — a filesystem path or a
+ * host-less `file://` URL.
+ *
+ * Mirrors `is_local_target` in `src-tauri/src/services/security.rs`; any change
+ * to either half has to move both, exactly as `cloneUrlHost` and `url_host`
+ * already do.
+ *
+ * A push to `/mnt/usb/repo.git` or `file:///srv/git/app.git` opens no socket at
+ * all, so offline mode ("block every operation that leaves this machine") and
+ * the remote allowlist (a list of HOSTS) have nothing to say about it. Both
+ * refused one: offline mode answered before it looked at the target, and the
+ * allowlist read `/mnt/usb/repo.git` as the host `mnt`.
+ *
+ * Deliberately EXCLUDED, because they do leave the machine: a UNC path
+ * (`\\server\share`, and its `//server/share` spelling), a `file://` URL that
+ * carries a host, anything in the scp-like `user@host:path` form (so
+ * `~user@host:repo.git` is read as the ssh remote git reads it), and anything
+ * else carrying a scheme, so a path with a URL embedded in it cannot smuggle
+ * one past this. A path that is really a network MOUNT is not excluded —
+ * nothing in the string says so, and the kernel, not this app, does that I/O.
+ */
+function isLocalTarget(target: string): boolean {
+  const trimmed = target.trim();
+  if (!trimmed) return false;
+  // UNC, in either spelling.
+  if (trimmed.startsWith('//') || trimmed.startsWith('\\\\')) return false;
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      const host = new URL(trimmed).hostname;
+      // The URL spec folds `file://localhost/…` to an empty host; anything
+      // else names another machine.
+      return host === '' || host === 'localhost';
+    } catch {
+      return false;
+    }
+  }
+  // A scheme, or the scp-like form, means a transport — never a path.
+  if (trimmed.includes('://') || /^[^@/]+@(\[[^\]/]+\]|[^:/\[][^:/]*):/.test(trimmed)) {
+    return false;
+  }
+  return (
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('./') ||
+    trimmed.startsWith('../') ||
+    trimmed.startsWith('.\\') ||
+    trimmed.startsWith('..\\') ||
+    trimmed.startsWith('~') ||
+    /^[A-Za-z]:[\\/]/.test(trimmed)
+  );
+}
+
 async function checkNetworkAllowed(
   repoPath: string | null,
   remote?: string,
@@ -91,6 +143,22 @@ async function checkNetworkAllowed(
 ): Promise<NetworkBlockReason | null> {
   const settings = settingsStore.getState();
 
+  // Nothing is in force, so nothing has to be resolved — the hot path for
+  // every push and fetch on a machine with neither setting on.
+  if (!settings.offlineMode && settings.remoteAllowlist.length === 0) return null;
+
+  // An allowlist that cannot see the URL must refuse, not wave the operation
+  // through: silently allowing is the failure mode that made this setting
+  // decorative. Offline mode used to refuse here without resolving anything,
+  // which is why it refused a push to a USB disk; it needs the target too, to
+  // tell a remote that leaves the machine from one that does not.
+  const url =
+    resolvedUrl ?? (repoPath ? await resolveRemoteUrl(repoPath, remote) : (remote ?? null));
+
+  // A remote on this machine is neither setting's business. Same carve-out the
+  // backend's `check` makes, ahead of the offline branch for the same reason.
+  if (url && isLocalTarget(url)) return null;
+
   if (settings.offlineMode) {
     if (!silent) {
       showToast('Offline mode is enabled. Disable in Settings > Security.', 'warning');
@@ -99,12 +167,6 @@ async function checkNetworkAllowed(
   }
 
   if (settings.remoteAllowlist.length === 0) return null;
-
-  // An allowlist that cannot see the URL must refuse, not wave the operation
-  // through: silently allowing is the failure mode that made this setting
-  // decorative.
-  const url =
-    resolvedUrl ?? (repoPath ? await resolveRemoteUrl(repoPath, remote) : (remote ?? null));
   // Try the string as it stands, then as an https URL. Branching on '@'
   // instead broke the bare `git@host` form the SSH connection test hands over:
   // `cloneUrlHost`'s scheme-less branch only matches the scp shape
@@ -1463,8 +1525,12 @@ export async function push(
   // `git push` both contact `remote.<n>.pushurl` when one is set (the Remote
   // dialog itself can set one, on any host), so the fetch url says nothing
   // about where this push is going. Only an allowlist needs the lookup.
+  // Resolved whenever ANY policy is in force, not just an allowlist: offline
+  // mode now judges the target too (a remote on this machine is permitted), and
+  // judging a push on the FETCH url would let a local fetch url excuse a
+  // `pushurl` that leaves the machine.
   const pushUrl =
-    args?.path && args.remote && settingsStore.getState().remoteAllowlist.length > 0
+    args?.path && args.remote && isNetworkPolicyActive()
       ? await resolveRemotePushUrl(args.path, args.remote)
       : null;
   if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote, pushUrl)) {

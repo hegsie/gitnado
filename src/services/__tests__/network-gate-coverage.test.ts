@@ -41,9 +41,17 @@
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 const invoked: string[] = [];
 
+/**
+ * Per-test replies, cleared in `afterEach`. The sweep needs shapes that are
+ * merely permissive; a test about a SPECIFIC remote (a filesystem one, say)
+ * needs the command to answer with that remote.
+ */
+const responses: Record<string, unknown> = {};
+
 (globalThis as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
   invoke: ((command: string) => {
     invoked.push(command);
+    if (command in responses) return Promise.resolve(responses[command]);
     // Shapes permissive enough that callers which post-process a result don't
     // throw before reaching their invoke.
     if (command === 'get_remotes') return Promise.resolve([]);
@@ -438,6 +446,7 @@ function drivenCalls(): SweptCall[] {
 describe('network gate coverage', () => {
   afterEach(() => {
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+    for (const key of Object.keys(responses)) delete responses[key];
   });
 
   it('offline mode stops every exported function from reaching a network command', async () => {
@@ -542,6 +551,92 @@ describe('network gate coverage', () => {
     }
 
     expect(blocked, 'these are local reads and must not be gated').to.deep.equal([]);
+  });
+
+  /**
+   * A remote that is a place on this machine — a USB disk, a `file://` path —
+   * opens no socket, so neither offline mode nor the allowlist has anything to
+   * say about it. Both refused one: offline mode answered before it looked at
+   * the target at all, and the allowlist read `/mnt/usb/repo.git` as the host
+   * `mnt`, so the only entry that could permit it was the literal `mnt` — and
+   * no entry at all could permit `file:///…`, which has no host.
+   *
+   * Same principle as the loopback carve-out the AI endpoints already get, and
+   * as the Offline Mode description itself: "block every operation that leaves
+   * this machine".
+   */
+  it('offline mode permits a push and a fetch to a remote on this machine', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+    responses.get_remotes = [
+      { name: 'backup', url: '/mnt/usb/repo.git', pushUrl: null },
+      { name: 'archive', url: 'file:///srv/git/app.git', pushUrl: null },
+    ];
+
+    invoked.length = 0;
+    await gitService.push({ path: '/repo', remote: 'backup' });
+    expect(invoked.includes('push'), 'a push to a USB disk never leaves the machine').to.equal(
+      true,
+    );
+
+    invoked.length = 0;
+    await gitService.fetch({ path: '/repo', remote: 'archive' });
+    expect(invoked.includes('fetch'), 'a fetch from a file:// path opens no socket').to.equal(
+      true,
+    );
+  });
+
+  it('an allowlist permits a remote on this machine', async () => {
+    settingsStore.setState({
+      offlineMode: false,
+      confirmNetworkOps: false,
+      remoteAllowlist: ['github.com'],
+    });
+    responses.get_remotes = [{ name: 'backup', url: '/mnt/usb/repo.git', pushUrl: null }];
+
+    invoked.length = 0;
+    await gitService.push({ path: '/repo', remote: 'backup' });
+    expect(
+      invoked.includes('push'),
+      'an allowlist of hosts cannot be asked about a path, and must not refuse one',
+    ).to.equal(true);
+  });
+
+  it('a remote that only looks local is still refused', async () => {
+    // The exclusions: a UNC path is SMB, and a `file://` URL WITH a host is
+    // handed to the transport with that host. Both leave the machine.
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    for (const url of ['//server/share/repo.git', 'file://server/share/repo.git']) {
+      responses.get_remotes = [{ name: 'smb', url, pushUrl: null }];
+      invoked.length = 0;
+      const result = await gitService.push({ path: '/repo', remote: 'smb' });
+      expect(invoked.includes('push'), `${url} leaves this machine`).to.equal(false);
+      expect(result.success).to.equal(false);
+    }
+  });
+
+  /**
+   * The fetch url says nothing about where a push goes. Resolving the PUSH url
+   * only when an allowlist existed meant that, with offline mode on, a remote
+   * whose fetch url is a local path and whose `pushurl` is a real host was
+   * judged on the path and let through — the backend gate then refused it,
+   * which is the two gates disagreeing.
+   */
+  it('a local fetch url does not excuse a push url that leaves the machine', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+    responses.get_remotes = [
+      { name: 'origin', url: '/mnt/usb/repo.git', pushUrl: 'https://github.com/o/r.git' },
+    ];
+
+    invoked.length = 0;
+    const result = await gitService.push({ path: '/repo', remote: 'origin' });
+    expect(invoked.includes('push'), 'the push goes to github.com').to.equal(false);
+    expect(result.success).to.equal(false);
+
+    // The same remote's FETCH url is local, and a fetch really does stay here.
+    invoked.length = 0;
+    await gitService.fetch({ path: '/repo', remote: 'origin' });
+    expect(invoked.includes('fetch')).to.equal(true);
   });
 
   it('every command in LOCAL_COMMANDS is absent from NETWORK_COMMANDS', () => {

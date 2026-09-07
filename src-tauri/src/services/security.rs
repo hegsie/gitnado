@@ -375,6 +375,12 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
 /// The core check. `target` is the URL (or bare host) the operation will
 /// contact; `None` means the caller could not work one out.
 pub fn check(settings: &SecuritySettings, target: Option<&str>) -> Result<()> {
+    // A filesystem remote never leaves the machine, so neither setting applies
+    // — the same carve-out `is_loopback_host` makes for an endpoint, and ahead
+    // of the offline branch for the same reason.
+    if target.is_some_and(is_local_target) {
+        return Ok(());
+    }
     if settings.offline_mode {
         return Err(GitnadoError::NetworkBlocked(
             "Offline mode is enabled. Disable in Settings > Security.".to_string(),
@@ -412,8 +418,10 @@ pub fn guard_url(url: &str) -> Result<()> {
 /// Guard an operation against a remote of `repo_path`.
 ///
 /// `remote` is a remote NAME (`origin`) or a URL; `None` means the operation
-/// targets the repository's default remote. Offline mode short-circuits before
-/// the repository is opened, so the common refusal costs nothing.
+/// targets the repository's default remote. With no policy in force nothing is
+/// resolved at all, so the common case costs nothing; once one is, the remote's
+/// URL is read from the local config so a filesystem remote can be told apart
+/// from one that leaves the machine.
 pub fn guard_remote(repo_path: &str, remote: Option<&str>) -> Result<()> {
     guard_remote_for(repo_path, remote, false)
 }
@@ -433,12 +441,14 @@ pub fn guard_push_remote(repo_path: &str, remote: Option<&str>) -> Result<()> {
 
 fn guard_remote_for(repo_path: &str, remote: Option<&str>, for_push: bool) -> Result<()> {
     let settings = global().snapshot();
-    if settings.offline_mode {
-        return check(&settings, None);
-    }
-    if settings.remote_allowlist.is_empty() {
+    if !settings.offline_mode && settings.remote_allowlist.is_empty() {
         return Ok(());
     }
+    // Offline mode used to refuse here without ever looking at the target, so
+    // a push to `/mnt/usb/repo.git` was refused as if it were leaving the
+    // machine. `check` makes that judgement now, and it needs the URL to make
+    // it — the lookup is a local config read, and only on a path a policy is
+    // in force on.
     let url = resolve_remote_url(repo_path, remote, for_push);
     check(&settings, url.as_deref())
 }
@@ -508,6 +518,77 @@ fn is_loopback_host(host: &str) -> bool {
             .parse::<std::net::IpAddr>()
             .map(|ip| ip.is_loopback())
             .unwrap_or(false)
+}
+
+/// Whether a target is a place on THIS machine — a filesystem path or a
+/// host-less `file://` URL.
+///
+/// Same principle as [`is_loopback_host`], one layer further in: a push to
+/// `/mnt/usb/repo.git` or `file:///srv/git/app.git` opens no socket at all, so
+/// offline mode ("block every operation that leaves this machine") and the
+/// remote allowlist (a list of HOSTS) have no business refusing it. They both
+/// did: offline mode refused a push to a USB disk, and the allowlist read
+/// `/mnt/usb/repo.git` as the host `mnt` — so the only way to permit it was to
+/// allowlist the literal string `mnt`, and no entry at all could permit a
+/// `file://` URL, whose host is empty.
+///
+/// Deliberately EXCLUDED, because they do leave the machine:
+///
+/// - a UNC path (`\\server\share`, and its `//server/share` spelling), which
+///   is SMB;
+/// - `file://host/path` with a host component — git hands it to the transport
+///   with that host, and on Windows it is the UNC form again. Only an empty
+///   host (`file:///…`, and `file://localhost/…`, which the URL spec folds to
+///   the same thing) is this machine;
+/// - anything [`scp_like_host`] recognises, so `~user@host:repo.git` is read as
+///   the ssh remote git would read it rather than as a `~` path;
+/// - anything else carrying a scheme, so a path with a URL embedded in it
+///   cannot smuggle one past this.
+///
+/// A path that is really a network MOUNT (NFS, or a mapped `Z:` drive) is not
+/// excluded, because nothing in the string says so — telling it apart needs the
+/// OS mount table. The kernel, not this app, does that I/O, and git opens no
+/// socket for it; the same is already true of every local operation the gate
+/// permits.
+fn is_local_target(target: &str) -> bool {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // UNC, in either spelling.
+    if trimmed.starts_with("//") || trimmed.starts_with(r"\\") {
+        return false;
+    }
+    if trimmed
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file://"))
+    {
+        return match url::Url::parse(trimmed) {
+            Ok(parsed) => parsed
+                .host_str()
+                .is_none_or(|host| host.is_empty() || is_loopback_host(host)),
+            Err(_) => false,
+        };
+    }
+    if trimmed.contains("://") || scp_like_host(trimmed).is_some() {
+        return false;
+    }
+    trimmed.starts_with('/')
+        || trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed.starts_with(".\\")
+        || trimmed.starts_with("..\\")
+        || trimmed.starts_with('~')
+        || is_windows_drive_path(trimmed)
+}
+
+/// `C:\repos\app.git` / `C:/repos/app.git`.
+fn is_windows_drive_path(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(drive), Some(':'), Some('/' | '\\')) if drive.is_ascii_alphabetic()
+    )
 }
 
 /// Whether an AI provider endpoint may be contacted.
@@ -958,15 +1039,67 @@ mod tests {
         .is_ok());
     }
 
+    /// Two refusals that used to be pinned as one. This asserted only
+    /// `is_err()` on `/srv/repos/local.git` under the label "unresolvable" —
+    /// but that target resolved perfectly well (to the host `srv`) and was
+    /// refused by the allowlist branch instead, which `is_err()` cannot tell
+    /// apart. It is a filesystem path, and it is permitted now; the two
+    /// refusals are pinned separately, on their messages.
     #[test]
     fn an_unresolvable_target_is_refused_when_an_allowlist_exists() {
         let message = blocked(check(&settings(false, &["github.com"]), None));
         assert!(message.contains("Could not determine"), "{message}");
-        assert!(check(
+        // No authority at all: nothing to match an allowlist entry against.
+        let message = blocked(check(&settings(false, &["github.com"]), Some("https://")));
+        assert!(message.contains("Could not determine"), "{message}");
+    }
+
+    #[test]
+    fn a_host_missing_from_the_allowlist_is_refused_by_name() {
+        let message = blocked(check(
             &settings(false, &["github.com"]),
-            Some("/srv/repos/local.git")
-        )
-        .is_err());
+            Some("https://gitlab.example.test/o/r.git"),
+        ));
+        assert!(message.contains("is not in your allowlist"), "{message}");
+        assert!(message.contains("gitlab.example.test"), "{message}");
+    }
+
+    /// The exclusions from [`is_local_target`]: every one of these can reach
+    /// another machine, so none of them may take the carve-out.
+    #[test]
+    fn a_target_that_can_leave_the_machine_is_not_local() {
+        for target in [
+            // UNC — SMB, in both spellings.
+            r"\\server\share\repo.git",
+            "//server/share/repo.git",
+            // a `file://` URL WITH a host component
+            "file://server/share/repo.git",
+            // git reads this as an ssh remote on `host`, not as a `~` path
+            "~user@host:repo.git",
+            // ordinary remotes
+            "https://github.com/o/r.git",
+            "ssh://git@github.com/o/r.git",
+            "git@github.com:o/r.git",
+            "github.com",
+            // a path with a URL embedded in it
+            "/srv/repos/https://evil.test",
+            "",
+        ] {
+            assert!(!is_local_target(target), "{target} is not on this machine");
+        }
+
+        for target in [
+            "/mnt/usb/repo.git",
+            "./sub/repo.git",
+            "../sibling/repo.git",
+            "~/backups/app.git",
+            r"C:\repos\app.git",
+            "C:/repos/app.git",
+            "file:///srv/git/app.git",
+            "file://localhost/srv/git/app.git",
+        ] {
+            assert!(is_local_target(target), "{target} never leaves the machine");
+        }
     }
 
     #[test]
@@ -1004,6 +1137,49 @@ mod tests {
         assert!(is_loopback_host("127.0.0.1"));
         assert!(is_loopback_host("[::1]"));
         assert!(!is_loopback_host("example.test"));
+    }
+
+    // ---- filesystem remotes ----
+
+    #[test]
+    fn offline_mode_permits_a_filesystem_remote() {
+        assert!(check(&settings(true, &[]), Some("/mnt/usb/repo.git")).is_ok());
+        assert!(check(&settings(true, &[]), Some("file:///srv/git/app.git")).is_ok());
+        assert!(check(&settings(true, &[]), Some("~/backups/app.git")).is_ok());
+        assert!(check(&settings(true, &[]), Some("C:\\repos\\app.git")).is_ok());
+    }
+
+    #[test]
+    fn an_allowlist_permits_a_filesystem_remote() {
+        assert!(check(&settings(false, &["github.com"]), Some("/mnt/usb/repo.git")).is_ok());
+        assert!(check(
+            &settings(false, &["github.com"]),
+            Some("file:///srv/git/app.git")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_filesystem_remote_is_permitted_while_offline_end_to_end() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        repo.add_remote("backup", "/mnt/usb/repo.git");
+        repo.add_remote("archive", "file:///srv/git/app.git");
+        let _guard = test_support::offline();
+
+        assert!(guard_remote(&repo.path_str(), Some("backup")).is_ok());
+        assert!(guard_push_remote(&repo.path_str(), Some("backup")).is_ok());
+        assert!(guard_remote(&repo.path_str(), Some("archive")).is_ok());
+        assert!(guard_push_remote(&repo.path_str(), Some("archive")).is_ok());
+    }
+
+    #[test]
+    fn a_filesystem_remote_is_permitted_by_an_allowlist_end_to_end() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        repo.add_remote("backup", "/mnt/usb/repo.git");
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        assert!(guard_remote(&repo.path_str(), Some("backup")).is_ok());
+        assert!(guard_push_remote(&repo.path_str(), Some("backup")).is_ok());
     }
 
     // ---- state syncing ----
