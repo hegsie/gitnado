@@ -139,7 +139,6 @@ mod tests {
         );
     }
 
-    use super::*;
     use tempfile::TempDir;
 
     #[test]
