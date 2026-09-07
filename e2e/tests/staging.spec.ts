@@ -1159,6 +1159,40 @@ test.describe('Changes filter', () => {
     ).toHaveCount(0);
   });
 
+  test('a filtered stage-all does not blame the filter for a skipped conflict', async ({
+    page,
+  }) => {
+    // The filter shows every unstaged file, so it withholds nothing: the file
+    // left unstaged was skipped by the conflict guard, which says so itself.
+    // Claiming "the filter is hiding the rest" here contradicts that warning.
+    await setupOpenRepository(
+      page,
+      withModifiedFiles([
+        { path: 'src/utils/helper.ts', status: 'modified', isStaged: false, isConflicted: false },
+        { path: 'src/utils/merge.ts', status: 'conflicted', isStaged: false, isConflicted: true },
+      ])
+    );
+
+    await filterInput(page).fill('src/utils');
+    await expect(rightPanel.getUnstagedFile('src/utils/helper.ts')).toBeVisible();
+    await expect(rightPanel.getUnstagedFile('src/utils/merge.ts')).toBeVisible();
+    await filterInput(page).blur();
+
+    await startCommandCapture(page);
+    await page.keyboard.press('s');
+
+    await waitForCommand(page, 'stage_files');
+    const args = (await findCommand(page, 'stage_files'))[0].args as { paths: string[] };
+    expect(args.paths).toEqual(['src/utils/helper.ts']);
+
+    await expect(
+      page.locator('lv-toast-container .toast', { hasText: '1 conflicted file skipped' }),
+    ).toBeVisible();
+    await expect(
+      page.locator('lv-toast-container .toast', { hasText: 'is hiding the rest' }),
+    ).toHaveCount(0);
+  });
+
   test('the filter works in tree view, keeping only ancestors of matches', async ({ page }) => {
     await page.locator('lv-file-status .view-toggle').click();
     await expect(page.locator('lv-file-status .folder-item')).not.toHaveCount(0);

@@ -271,6 +271,38 @@ describe('lv-file-status conflicted staging guards', () => {
     expect(messages.some((m) => m.includes('1 conflicted file skipped'))).to.be.true;
   });
 
+  it('does not blame the filter for a file only the conflict guard skipped', async () => {
+    // The filter shows BOTH unstaged files, so it is hiding nothing: the one
+    // file left unstaged was skipped by the conflict guard, which said so in
+    // its own warning. A "the filter is hiding the rest" toast here would
+    // contradict that warning and name a filter that withheld nothing.
+    const entries = [
+      makeEntry({ path: 'src/feat-a.ts' }),
+      makeEntry({ path: 'src/feat-b.ts', status: 'conflicted', isConflicted: true }),
+    ];
+    const el = await renderFileStatus(entries);
+    const internal = internalOf(el);
+    internal.filterQuery = 'feat';
+    await el.updateComplete;
+
+    invokeHistory.length = 0;
+    const state = uiStore.getState();
+    state.toasts.forEach((t) => state.removeToast(t.id));
+    await internal.handleStageAllShown();
+
+    const calls = stageCalls();
+    expect(calls.length).to.equal(1);
+    expect((calls[0].args as { paths: string[] }).paths).to.deep.equal(['src/feat-a.ts']);
+
+    const messages = toastMessages();
+    expect(
+      messages.some((m) => m.includes('is hiding the rest')),
+      `the filter hid nothing, so no filtered-scope toast is due; got: ${JSON.stringify(messages)}`,
+    ).to.be.false;
+    // The conflict warning is still the one and only explanation.
+    expect(messages.some((m) => m.includes('1 conflicted file skipped'))).to.be.true;
+  });
+
   it('reports the unstaged count for a filtered unstage', async () => {
     const entries = [
       makeEntry({ path: 'src/feat-a.ts', isStaged: true }),
