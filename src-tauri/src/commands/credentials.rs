@@ -690,6 +690,31 @@ fn credential_query(protocol: &str, host: &str) -> String {
 }
 
 fn credential_target(remote_url: &str) -> CredentialTarget {
+    let trimmed_url = remote_url.trim();
+    // A scheme-less path is a repository on this machine, and `git clone
+    // /srv/git/bare.git` leaves `origin` in exactly that form. `parse_target`
+    // resolves one all the same — its fallback reads the string as
+    // `https://{}` and the WHATWG special-scheme parse skips the extra slashes
+    // — so this reported a host invented from a path: `srv` for
+    // `/srv/git/repo.git`, `c` for `C:\repos\x.git`, `..` for a relative
+    // submodule remote. The user was sent to fix HTTPS credentials for a host
+    // that appears nowhere in their config, while the SAME repository spelled
+    // `file:///srv/git/repo.git` was correctly told nothing is stored for it.
+    //
+    // The GATE is untouched: `parse_target` is still the one parse the
+    // allowlist and the destination share, and it still resolves these to the
+    // host it always did. This is what the DIALOG reports, and it must not
+    // name a value the user cannot find anywhere.
+    if is_local_path(trimmed_url) {
+        return CredentialTarget {
+            protocol: "file".to_string(),
+            ssh_destination: trimmed_url.to_string(),
+            display_host: trimmed_url.to_string(),
+            port: None,
+            resolved: false,
+        };
+    }
+
     let Some(target) = crate::services::security::parse_target(remote_url) else {
         // Nothing a URL parser recognises as `[user@]host` — `file://`, whose
         // URLs carry no host at all. Report it as typed rather than invent a
@@ -732,6 +757,36 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
         port: target.port,
         resolved: true,
     }
+}
+
+/// Whether a remote names a path on this machine rather than something to
+/// connect to.
+///
+/// The scheme-less forms git leaves in `remote.<name>.url` after cloning a
+/// local repository: an absolute path, a `~` path, a path relative to the
+/// superproject (`../sibling.git` — how a relative submodule remote is
+/// written), a Windows drive path and a UNC share. A remote that carries a
+/// scheme is never one of these: `file://` already keeps its own scheme
+/// through the unresolved branch above.
+///
+/// No hostname begins with `/`, `.` or `~`, so those cost nothing. The drive
+/// letter needs its separator, though — without it the single-letter host and
+/// port form `x:22` reads as a drive.
+fn is_local_path(remote_url: &str) -> bool {
+    if url_scheme(remote_url).is_some() {
+        return false;
+    }
+    if remote_url.starts_with('/')
+        || remote_url.starts_with('.')
+        || remote_url.starts_with('~')
+        || remote_url.starts_with("\\\\")
+    {
+        return true;
+    }
+    let bytes = remote_url.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && matches!(bytes.get(2), Some(b'/') | Some(b'\\'))
 }
 
 /// The scheme a remote string carries, if it carries one at all.
@@ -1175,21 +1230,65 @@ mod tests {
         assert_eq!(target.display_host, "file:///srv/git/repo.git");
     }
 
-    /// A bare local path does NOT come through the fallback below: the gate's
-    /// parse reads `/srv/git/repo.git` as the host `srv` (url's special-scheme
-    /// parse skips the leading slashes), and the dialog reports the host the
-    /// gate judged — the two must not disagree about where a remote points.
-    /// Pinned here so the change above is visibly confined to the URLs the
-    /// parse actually refuses.
+    /// A scheme-less local path is a path, not a host.
+    ///
+    /// `parse_target` resolves one all the same: its fallback reads the string
+    /// as `https://{}`, and the WHATWG special-scheme parse skips the extra
+    /// slashes, so `/srv/git/repo.git` comes back as the host `srv`,
+    /// `C:\repos\x.git` as `c` and a relative submodule remote
+    /// `../sibling.git` as `..`. `git clone /srv/git/bare.git` leaves `origin`
+    /// in exactly that form, so the dialog sent the user off to fix HTTPS
+    /// credentials for a host that appears nowhere in their config — while the
+    /// SAME repository spelled `file:///srv/git/repo.git` was correctly told
+    /// nothing is stored for it. One remote, two contradictory verdicts.
     #[test]
-    fn a_bare_local_path_still_follows_the_gates_parse() {
-        let target = credential_target("/srv/git/repo.git");
+    fn a_bare_local_path_is_reported_as_the_local_path_it_is() {
+        for url in [
+            "/srv/git/repo.git",
+            "~/repos/x.git",
+            "../sibling.git",
+            "./x.git",
+            ".",
+            "C:\\repos\\x.git",
+            "c:/repos/x.git",
+            "\\\\server\\share\\repo.git",
+        ] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "file", "{url} is a local path");
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+            assert!(!target.resolved, "{url} names no host to contact");
+        }
+    }
+
+    /// ...and a single-letter host with a port is still a host: the drive
+    /// check needs the separator, or `x:22` reads as a drive.
+    #[test]
+    fn a_single_letter_host_with_a_port_is_not_a_drive() {
+        let target = credential_target("x:22");
+        assert_eq!(target.protocol, "https");
+        assert_eq!(target.display_host, "x:22");
+    }
+
+    /// The DISPLAY above moved; the GATE did not.
+    ///
+    /// `parse_target` stays the one parse the allowlist and the destination
+    /// share, and it still resolves a bare path to the host it always did — the
+    /// dialog simply stops repeating a hostname that was invented from a path.
+    #[test]
+    fn reporting_a_local_path_does_not_move_the_gate() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let settings = crate::services::security::SecuritySettings {
+            offline_mode: false,
+            remote_allowlist: vec!["github.com".to_string()],
+        };
         assert_eq!(
-            Some(target.display_host.as_str()),
-            crate::services::security::parse_target("/srv/git/repo.git")
-                .map(|t| t.host)
-                .as_deref(),
-            "the dialog and the gate must read one host"
+            crate::services::security::parse_target("/srv/git/repo.git").map(|t| t.host),
+            Some("srv".to_string()),
+            "the gate's parse is untouched"
+        );
+        assert!(
+            crate::services::security::check(&settings, Some("/srv/git/repo.git")).is_err(),
+            "a bare path is still refused by a configured allowlist"
         );
     }
 
