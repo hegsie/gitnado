@@ -1077,6 +1077,52 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     );
   });
 
+  test('closes the stale offer when the dropped folder has become a repository', async ({
+    page,
+  }) => {
+    await startCommandCaptureWithMocks(page, {
+      classify_repository_path: {
+        path: '/projects/new-thing',
+        name: 'new-thing',
+        exists: true,
+        isDirectory: true,
+        isRepository: false,
+        isBare: false,
+      },
+    });
+
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
+    const dialog = page.locator('lv-scan-repositories-dialog');
+    await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
+
+    // The user does exactly what the offer asked for — creates a repository in
+    // that folder from a terminal — and drops it again, which is the only way
+    // back into this dialog.
+    await injectCommandMock(page, {
+      classify_repository_path: {
+        path: '/projects/new-thing',
+        name: 'new-thing',
+        exists: true,
+        isDirectory: true,
+        isRepository: true,
+        isBare: false,
+      },
+      open_repository: repositoryPayload('/projects/new-thing'),
+      get_repository_info: repositoryPayload('/projects/new-thing'),
+    });
+
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
+
+    // The repository opens — and the modal that still called it "not a Git
+    // repository", and still offered to initialize one there, goes with it.
+    await expect(app.welcomeScreen).not.toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.toast')).toContainText('Opened new-thing');
+    await expect(dialog.locator('.body')).not.toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: 'Initialize a repository here' })
+    ).toHaveCount(0);
+  });
+
   test('rescans and says so when the same folder is dropped again', async ({ page }) => {
     await startCommandCaptureWithMocks(page, {
       classify_repository_path: {
