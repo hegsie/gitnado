@@ -225,6 +225,36 @@ test.describe('Pull Requests sidebar section', () => {
     expect(await findCommand(page, 'list_pull_requests')).toHaveLength(0);
   });
 
+  test('re-checks offline mode when the section is re-expanded', async ({ page }) => {
+    await openWithGitHub(page, {
+      get_keyring_token: 'gh-token',
+      list_pull_requests: [PR_FIXTURE],
+    });
+
+    const setOffline = (value: boolean): Promise<void> =>
+      page.evaluate((offline) => {
+        const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+          settingsStore: { getState: () => { setOfflineMode: (v: boolean) => void } };
+        };
+        stores.settingsStore.getState().setOfflineMode(offline);
+      }, value);
+
+    await setOffline(true);
+    await prSectionHeader(page).click();
+    await expect(prList(page)).toContainText('offline mode is enabled');
+
+    // Turning offline mode off and re-opening the section must re-check: the
+    // offline state costs no provider call to recompute, so replaying it from
+    // the cache would make the section lie about the user's own settings.
+    await setOffline(false);
+    await prSectionHeader(page).click();
+    await prSectionHeader(page).click();
+
+    await waitForCommand(page, 'list_pull_requests');
+    await expect(prList(page)).not.toContainText('offline mode is enabled');
+    await expect(prList(page).locator('.pr-item')).toHaveCount(1);
+  });
+
   test('names the allowlist as the reason and recovers once it is widened', async ({ page }) => {
     await openWithGitHub(page, {
       get_keyring_token: 'gh-token',
