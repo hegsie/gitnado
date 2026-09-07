@@ -551,19 +551,32 @@ export class LvCloneDialog extends LitElement {
         ? `${this.destination}/${this.repoName}`
         : this.destination;
 
-      const result = await cloneRepository({
-        url: this.url.trim(),
-        path: fullPath,
-        ...(branch ? { branch } : {}),
-        ...(this.depth !== null ? { depth: this.depth } : {}),
-        ...(this.filter ? { filter: this.filter } : {}),
-        ...(this.singleBranch ? { singleBranch: true } : {}),
-      });
+      const result = await cloneRepository(
+        {
+          url: this.url.trim(),
+          path: fullPath,
+          ...(branch ? { branch } : {}),
+          ...(this.depth !== null ? { depth: this.depth } : {}),
+          ...(this.filter ? { filter: this.filter } : {}),
+          ...(this.singleBranch ? { singleBranch: true } : {}),
+        },
+        // The footer already offers "Cancel Clone" while the service is still
+        // awaiting the network gate and the token lookup. A cancel pressed
+        // before the command is sent would otherwise be reset by the backend
+        // when the clone starts, and this dialog would wait on "Cancelling…"
+        // for a cancellation that never comes.
+        { isCancelled: () => this.isCancelling },
+      );
 
       if (result.success && result.data) {
         this.progress = 100;
         this.progressText = 'Clone complete!';
         this.isComplete = true;
+        // A cancel that reached the backend after the clone had already
+        // finished (it reaps a child that has succeeded) still returns success
+        // here. Left set, `isCancelling` keeps the footer button disabled for
+        // the whole submodule phase, so the dialog cannot be closed.
+        this.isCancelling = false;
 
         // Add the repository to the store FIRST: the submodule phase below runs
         // against a repository that is already open, so however that phase
@@ -591,6 +604,13 @@ export class LvCloneDialog extends LitElement {
           this.error = result.error?.message ?? 'Failed to clone repository';
         } else {
           this.progressText = '';
+          // The progress section vanishes when `isCloning` clears below, so
+          // the cancel has to be acknowledged somewhere or the user's click
+          // leaves no trace — the same toast fetch, pull and push show for
+          // theirs. A gate refusal is not toasted: it announced itself already.
+          if (isOperationCancelled(result.error)) {
+            showToast('Clone cancelled', 'info');
+          }
         }
         this.isCloning = false;
         // Cleared alongside isCloning: leaving it set keeps Cancel disabled, so

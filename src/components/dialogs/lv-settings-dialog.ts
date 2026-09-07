@@ -619,7 +619,9 @@ export class LvSettingsDialog extends LitElement {
       // key that was never the problem.
       this.aiError = gitService.isNetworkGateRefusal(result.error)
         ? (result.error?.message ?? msg('Blocked by security settings'))
-        : `${aiService.getProviderDisplayName(providerType)} is not available. Check your API key and try again.`;
+        : msg(
+            str`${aiService.getProviderDisplayName(providerType)} is not available. Check your API key and try again.`,
+          );
     }
   }
 
@@ -1196,12 +1198,13 @@ export class LvSettingsDialog extends LitElement {
       } else if (event.payload.loaded === false) {
         // The download succeeded but the engine refused the model - the user
         // still has no AI, so say so instead of silently refreshing the list.
-        this.aiError = `Loading failed for ${event.payload.modelId}: ${event.payload.loadError ?? 'unknown error'}`;
+        const reason = event.payload.loadError ?? msg('unknown error');
+        this.aiError = msg(str`Loading failed for ${event.payload.modelId}: ${reason}`);
       }
     });
 
     this.downloadErrorUnlisten = await this.listenOrNull<{ modelId: string; error: string }>('model-download-error', (event) => {
-      this.aiError = `Download failed for ${event.payload.modelId}: ${event.payload.error}`;
+      this.aiError = msg(str`Download failed for ${event.payload.modelId}: ${event.payload.error}`);
       // Remove from progress tracking and refresh downloaded models list
       const { [event.payload.modelId]: _, ...rest } = this.downloadProgress;
       this.downloadProgress = rest;

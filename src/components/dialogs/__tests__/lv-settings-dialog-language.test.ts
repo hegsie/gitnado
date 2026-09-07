@@ -164,7 +164,18 @@ describe('lv-settings-dialog language setting', () => {
    * French unchanged is English that leaked into the French UI.
    */
   it('leaves no English text behind when the dialog switches to French', async () => {
-    const LOCALISED = '.section-title, .setting-name, .setting-description';
+    // `.error-text` is the AI banner: its message is a string built when the
+    // error happens, so it is provoked in each language below rather than
+    // relying on the re-render. Without it here, a bare template rendered
+    // into the banner showed English under "fr" with nothing to catch it.
+    const LOCALISED = '.section-title, .setting-name, .setting-description, .error-text';
+    // The mock answers `test_ai_provider` with nothing, which the dialog
+    // reports as the provider being unavailable.
+    const provokeAiError = async (): Promise<void> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).handleTestProvider('open_ai');
+      await el.updateComplete;
+    };
     const visibleText = (): Set<string> =>
       new Set(
         Array.from(el.shadowRoot?.querySelectorAll(LOCALISED) ?? []).map(
@@ -179,11 +190,17 @@ describe('lv-settings-dialog language setting', () => {
      */
     const SAME_IN_FRENCH = new Set(['Port']);
 
+    await provokeAiError();
     const english = visibleText();
     expect(english.size, 'the dialog rendered its rows in English').to.be.greaterThan(50);
+    expect(
+      [...english].some((text) => text.includes('OpenAI is not available')),
+      'control: the AI banner is on screen and part of the comparison'
+    ).to.be.true;
 
     await choose(el, 'fr');
     await waitUntil(() => sectionTitles(el)[0] === 'Apparence');
+    await provokeAiError();
 
     const leftInEnglish = [...visibleText()].filter(
       (text) => text !== '' && english.has(text) && !SAME_IN_FRENCH.has(text)

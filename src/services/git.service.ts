@@ -643,8 +643,37 @@ async function getCloneToken(url: string): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * Hooks the clone dialog hands `cloneRepository`.
+ */
+export interface CloneRepositoryOptions {
+  /**
+   * Reports whether the user has cancelled the clone in the meantime.
+   *
+   * Everything before the `clone_repository` invoke is asynchronous — the
+   * network gate can await a native confirm, and the token lookup a keyring
+   * round trip — while the dialog already shows "Cancel Clone". A cancel
+   * pressed in that window sets the backend's cancellation flag, but the
+   * backend RESETS that flag when the clone starts (a stale cancellation must
+   * not kill the next clone), so the clone it was meant to stop ran to
+   * completion with the dialog locked on "Cancelling…". Checked immediately
+   * before the invoke so a cancel that has already landed stops the clone
+   * from ever starting.
+   */
+  isCancelled?: () => boolean;
+}
+
+/** The result every cancellable operation returns for the user's own Cancel. */
+function cancelledResult<T>(): CommandResult<T> {
+  return {
+    success: false,
+    error: { code: 'OPERATION_CANCELLED', message: 'Operation cancelled' },
+  };
+}
+
 export async function cloneRepository(
   args: CloneRepositoryCommand,
+  options?: CloneRepositoryOptions,
 ): Promise<CommandResult<Repository>> {
   if (!await checkNetworkPermission('clone', null, args.url)) {
     return blockedResult();
@@ -664,6 +693,13 @@ export async function cloneRepository(
   const timeoutSecs = settingsStore.getState().networkOperationTimeout;
   if (args && timeoutSecs > 0) {
     args.timeoutSecs = timeoutSecs;
+  }
+
+  // Last chance to honour a cancel that landed during the awaits above: once
+  // the command is sent the backend clears the cancellation flag and the clone
+  // runs. See `CloneRepositoryOptions.isCancelled`.
+  if (options?.isCancelled?.()) {
+    return cancelledResult();
   }
 
   return invokeCommand<Repository>("clone_repository", args);

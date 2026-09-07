@@ -705,6 +705,145 @@ describe('lv-account-repo-picker', () => {
         'control: the provider select is disabled too',
       ).to.be.true;
     });
+
+    /**
+     * Lock the picker and assert that every action button inside the state
+     * message it is showing is disabled. The state messages are reachable
+     * mid-clone (pick "From account", land on any of them, paste a URL below,
+     * Clone), and their "Connect an account" / "Reconnect" / "Retry" buttons
+     * stayed live while the rest of the dialog was locked — each click was
+     * swallowed by a guard further along, so they were silent no-ops.
+     */
+    async function expectStateActionsLocked(
+      el: LvAccountRepoPicker,
+      state: string,
+      expectedLabels: string[],
+    ): Promise<void> {
+      const before = Array.from(
+        el.shadowRoot!.querySelectorAll(`[data-state="${state}"] .link-btn`),
+      ) as HTMLButtonElement[];
+      expect(
+        before.map((b) => b.textContent!.trim()),
+        `control: the "${state}" state offers its actions`,
+      ).to.deep.equal(expectedLabels);
+      expect(before.every((b) => !b.disabled), 'control: live before the lock').to.be.true;
+
+      el.disabled = true;
+      await el.updateComplete;
+
+      const after = Array.from(
+        el.shadowRoot!.querySelectorAll(`[data-state="${state}"] .link-btn`),
+      ) as HTMLButtonElement[];
+      expect(after.length).to.equal(expectedLabels.length);
+      for (const button of after) {
+        expect(button.disabled, `"${button.textContent!.trim()}" in "${state}" is locked`).to.be
+          .true;
+      }
+    }
+
+    it('locks "Connect an account" when no account is connected', async () => {
+      const el = await mount();
+      await expectStateActionsLocked(el, 'no-accounts', ['Connect an account']);
+    });
+
+    it('locks "Connect an account" for a provider with no account', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories'
+          ? { repositories: [repo('alpha')], nextPage: null }
+          : null,
+      );
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+      const select = el.shadowRoot!.querySelector('#repo-provider') as HTMLSelectElement;
+      select.value = 'bitbucket';
+      select.dispatchEvent(new Event('change'));
+      await el.updateComplete;
+
+      await expectStateActionsLocked(el, 'no-provider-accounts', ['Connect an account']);
+    });
+
+    it('locks Retry on an empty listing', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories' ? { repositories: [], nextPage: null } : null,
+      );
+      const el = await mount();
+      await waitForState(el, 'empty');
+
+      await expectStateActionsLocked(el, 'empty', ['Retry']);
+    });
+
+    it('locks Retry on a provider API error', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories'
+          ? Promise.reject({ code: 'OPERATION_FAILED', message: 'GitHub API error 500' })
+          : null,
+      );
+      const el = await mount();
+      await waitForState(el, 'error');
+
+      await expectStateActionsLocked(el, 'error', ['Retry']);
+    });
+
+    it('locks Reconnect and Retry when the account has no credential', async () => {
+      unifiedProfileStore.getState().setAccounts([gitlabAccount]);
+      mockInvoke = () => Promise.resolve(null);
+      const el = await mount();
+      await waitForState(el, 'no-credential');
+
+      await expectStateActionsLocked(el, 'no-credential', ['Reconnect account', 'Retry']);
+    });
+
+    it('locks Reconnect and Retry when the token was rejected', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories'
+          ? Promise.reject({ code: 'AUTH_REQUIRED', message: 'Authentication required' })
+          : null,
+      );
+      const el = await mount();
+      await waitForState(el, 'auth-expired');
+
+      await expectStateActionsLocked(el, 'auth-expired', ['Reconnect account', 'Retry']);
+    });
+
+    it('locks Retry on a failed "Load more"', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command, args) => {
+        if (command !== 'list_github_repositories') return null;
+        const page = (args as { page?: number }).page ?? 1;
+        if (page === 2) {
+          return Promise.reject({ code: 'OPERATION_FAILED', message: 'GitHub API error 502' });
+        }
+        return { repositories: [repo('alpha')], nextPage: 2 };
+      });
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+      (el.shadowRoot!.querySelector('[data-action="load-more"]') as HTMLButtonElement).click();
+      await waitForState(el, 'load-more-error');
+
+      await expectStateActionsLocked(el, 'load-more-error', ['Retry']);
+    });
+
+    it('locks Retry on a "Load more" the allowlist refused', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories'
+          ? { repositories: [repo('alpha')], nextPage: 2 }
+          : null,
+      );
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+      // The allowlist changes underneath a listing that is already on screen,
+      // so the next page is refused and the block offers a Retry.
+      settingsStore.setState({ offlineMode: false, remoteAllowlist: ['gitlab.com'] });
+      (el.shadowRoot!.querySelector('[data-action="load-more"]') as HTMLButtonElement).click();
+      await waitForState(el, 'blocked');
+
+      await expectStateActionsLocked(el, 'blocked', ['Retry']);
+    });
   });
 
   describe('account switching', () => {

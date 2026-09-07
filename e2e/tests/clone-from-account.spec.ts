@@ -295,6 +295,62 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(dialogs.github.dialog).toBeHidden();
     });
 
+    test('a cancel pressed before the clone command is sent stops it and releases the dialog', async ({
+      page,
+    }) => {
+      await openAccountSource(page, dialogs);
+      await expect(repoItems(page)).toHaveCount(2);
+      await repoItems(page).first().click();
+      await dialogs.clone.fillPath('/home/user/projects');
+
+      // The clone looks its token up in the keyring before it sends the
+      // command, and the footer already reads "Cancel Clone" while it waits.
+      // Park the FIRST such lookup (the listing above has already had its
+      // token; the lookups that follow the parked one go through untouched)
+      // and hand the test a way to let it through once Cancel has been pressed.
+      await page.evaluate(() => {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+          }
+        ).__TAURI_INTERNALS__;
+        const original = internals.invoke;
+        let parked = false;
+        internals.invoke = (command: string, args?: unknown) => {
+          if (command === 'get_keyring_token' && !parked) {
+            parked = true;
+            return new Promise((resolve) => {
+              (window as unknown as { __releaseKeyring: (v: unknown) => void }).__releaseKeyring =
+                resolve;
+            });
+          }
+          return original(command, args);
+        };
+      });
+      await startCommandCapture(page);
+
+      await dialogs.clone.clone();
+      const cancelClone = page.getByRole('button', { name: 'Cancel Clone' });
+      await expect(cancelClone).toBeVisible();
+      await cancelClone.click();
+      await waitForCommand(page, 'cancel_clone');
+
+      await page.evaluate(() =>
+        (window as unknown as { __releaseKeyring: (v: unknown) => void }).__releaseKeyring(null),
+      );
+
+      // The cancel took effect: the clone was never sent, the user is told, and
+      // the dialog is theirs again rather than stuck on "Cancelling…".
+      await expect(
+        page.locator('lv-toast-container .toast', { hasText: 'Clone cancelled' }),
+      ).toBeVisible();
+      await expect(cancelClone).toHaveCount(0);
+      await expect(page.locator('lv-clone-dialog').getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
+      await expect(dialogs.clone.urlInput).toBeEnabled();
+      await expect(dialogs.clone.cloneButton).toBeEnabled();
+      expect(await findCommand(page, 'clone_repository')).toHaveLength(0);
+    });
+
     test('a nested trip through the manager and a provider dialog comes back one dialog at a time', async ({
       page,
     }) => {
@@ -608,6 +664,39 @@ test.describe('Clone Dialog - from a connected account', () => {
     );
     await expect(repoItems(page)).toHaveCount(1);
     await expect(repoItems(page).first()).toContainText('alpha');
+  });
+
+  test('mid-clone, a state message\'s actions are locked with the rest of the dialog', async ({
+    page,
+  }) => {
+    await initializeUnifiedProfileStore(page, { profiles: [defaultProfile], accounts: [] });
+    await openAccountSource(page, dialogs);
+    const empty = page.locator('[data-state="no-accounts"]');
+    await expect(empty).toBeVisible();
+    const connect = empty.getByRole('button', { name: 'Connect an account' });
+    await expect(connect).toBeEnabled();
+
+    // The URL field sits below the picker, so a clone can start from a state
+    // message. One that never finishes keeps the dialog locked for the test.
+    await dialogs.clone.fillUrl('https://github.com/octocat/dotfiles.git');
+    await dialogs.clone.fillPath('/home/user/projects');
+    await page.evaluate(() => {
+      const internals = (
+        window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+        }
+      ).__TAURI_INTERNALS__;
+      const original = internals.invoke;
+      internals.invoke = (command: string, args?: unknown) =>
+        command === 'clone_repository' ? new Promise(() => {}) : original(command, args);
+    });
+    await dialogs.clone.clone();
+    await expect(page.getByRole('button', { name: 'Cancel Clone' })).toBeVisible();
+
+    // Previously this button looked live while the clone dialog swallowed its
+    // click — a silent no-op next to a form that was visibly locked.
+    await expect(connect).toBeDisabled();
+    await expect(dialogs.clone.urlInput).toBeDisabled();
   });
 
   test('explains a rejected token and offers to reconnect', async ({ page }) => {
