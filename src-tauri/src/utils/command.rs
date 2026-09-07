@@ -197,6 +197,7 @@ fn git_subcommand_at(args: &[String]) -> Option<(usize, &str)> {
 }
 
 /// The subcommand of a `git` invocation, see [`git_subcommand_at`].
+#[cfg(test)]
 fn git_subcommand(args: &[String]) -> Option<&str> {
     git_subcommand_at(args).map(|(_, subcommand)| subcommand)
 }

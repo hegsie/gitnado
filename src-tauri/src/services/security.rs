@@ -464,6 +464,18 @@ pub fn guard_endpoint(endpoint: &str) -> Result<()> {
 /// Both guards nest on the thread that holds them: a test may build a
 /// `TestRepo` before or after switching a policy on, and a writer may open a
 /// second, inner policy. Dropping a writer restores what it replaced.
+///
+/// Two shapes no test uses today, named so a future CI hang is a message
+/// rather than a mystery:
+///
+/// - Nesting is PER THREAD. A test that holds a writer and then spawns a
+///   thread which builds a `TestRepo` (or takes `no_policy()`) and joins it
+///   deadlocks silently: the reader on the new thread waits for the writer
+///   the joining thread will never drop.
+/// - `Hold::UnderWriter` keeps the OUTER writer alive for as long as a
+///   `TestRepo` built under it lives, so a `TestRepo` that outlives the
+///   writer guard's scope keeps that policy pinned — and every other writer
+///   waiting — until the repo itself is dropped.
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::{global, SecuritySettings};
