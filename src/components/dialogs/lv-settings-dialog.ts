@@ -572,7 +572,7 @@ export class LvSettingsDialog extends LitElement {
       this.activeProvider = providerType;
       window.dispatchEvent(new CustomEvent('ai-settings-changed'));
     } else {
-      this.aiError = result.error?.message ?? 'Failed to set provider';
+      this.aiError = result.error?.message ?? msg('Failed to set provider');
     }
   }
 
@@ -588,7 +588,7 @@ export class LvSettingsDialog extends LitElement {
       await this.loadAiProviders();
       window.dispatchEvent(new CustomEvent('ai-settings-changed'));
     } else {
-      this.aiError = result.error?.message ?? 'Failed to save API key';
+      this.aiError = result.error?.message ?? msg('Failed to save API key');
     }
   }
 
@@ -599,7 +599,7 @@ export class LvSettingsDialog extends LitElement {
       await this.loadAiProviders();
       window.dispatchEvent(new CustomEvent('ai-settings-changed'));
     } else {
-      this.aiError = result.error?.message ?? 'Failed to set model';
+      this.aiError = result.error?.message ?? msg('Failed to set model');
     }
   }
 
@@ -807,7 +807,7 @@ export class LvSettingsDialog extends LitElement {
         if (token !== this.mergeToolWriteToken) return;
         // Keep the select showing the tool that is still configured.
         select.value = this.mergeToolName ?? '';
-        showToast(result.error?.message ?? 'Failed to clear merge tool', 'error');
+        showToast(result.error?.message ?? msg('Failed to clear merge tool'), 'error');
         return;
       }
       // A newer change already owns the control and reports its own outcome,
@@ -913,7 +913,7 @@ export class LvSettingsDialog extends LitElement {
         if (token !== this.diffToolWriteToken) return;
         // Keep the select showing the tool that is still configured.
         select.value = this.diffToolName ?? '';
-        showToast(result.error?.message ?? 'Failed to clear diff tool', 'error');
+        showToast(result.error?.message ?? msg('Failed to clear diff tool'), 'error');
         return;
       }
       // A newer change already owns the control and reports its own outcome,
@@ -1216,7 +1216,7 @@ export class LvSettingsDialog extends LitElement {
     this.aiError = null;
     const result = await localAiService.downloadModel(modelId);
     if (!result.success) {
-      this.aiError = result.error?.message ?? 'Failed to start download';
+      this.aiError = result.error?.message ?? msg('Failed to start download');
     }
   }
 
@@ -1226,7 +1226,7 @@ export class LvSettingsDialog extends LitElement {
     // If the cancel failed, keep the progress entry (the download is still
     // running) and surface the error instead of silently dropping the UI row.
     if (!result.success) {
-      this.aiError = result.error?.message ?? 'Failed to cancel download';
+      this.aiError = result.error?.message ?? msg('Failed to cancel download');
       return;
     }
     const { [modelId]: _, ...rest } = this.downloadProgress;
@@ -1248,7 +1248,7 @@ export class LvSettingsDialog extends LitElement {
       // The AI surfaces cache availability and listen only to this event.
       window.dispatchEvent(new CustomEvent('ai-settings-changed'));
     } else {
-      this.aiError = result.error?.message ?? 'Failed to delete model';
+      this.aiError = result.error?.message ?? msg('Failed to delete model');
     }
   }
 
@@ -1262,7 +1262,7 @@ export class LvSettingsDialog extends LitElement {
       // localAiService.loadModel already announces `ai-settings-changed`.
       await Promise.all([this.loadLocalAiData(), this.loadAiProviders()]);
     } else {
-      this.aiError = result.error?.message ?? 'Failed to load model';
+      this.aiError = result.error?.message ?? msg('Failed to load model');
       await this.loadLocalAiData();
     }
   }
@@ -1274,7 +1274,7 @@ export class LvSettingsDialog extends LitElement {
       // localAiService.unloadModel already announces `ai-settings-changed`.
       await Promise.all([this.loadLocalAiData(), this.loadAiProviders()]);
     } else {
-      this.aiError = result.error?.message ?? 'Failed to unload model';
+      this.aiError = result.error?.message ?? msg('Failed to unload model');
     }
   }
 
@@ -1314,7 +1314,7 @@ export class LvSettingsDialog extends LitElement {
     if (this.mcpStatus.running) {
       const result = await mcpService.stopMcpServer();
       if (!result.success) {
-        this.mcpError = result.error?.message ?? 'Failed to stop MCP server';
+        this.mcpError = result.error?.message ?? msg('Failed to stop MCP server');
       }
     } else {
       // Persist the config first so the server comes back on the next launch
@@ -1324,14 +1324,14 @@ export class LvSettingsDialog extends LitElement {
         allowedOrigins: this.mcpAllowedOrigins,
       });
       if (!saved.success) {
-        this.mcpError = saved.error?.message ?? 'Failed to save MCP settings';
+        this.mcpError = saved.error?.message ?? msg('Failed to save MCP settings');
         this.mcpToggling = false;
         return;
       }
       this.mcpEnabled = true;
       const result = await mcpService.startMcpServer();
       if (!result.success) {
-        this.mcpError = result.error?.message ?? 'Failed to start MCP server';
+        this.mcpError = result.error?.message ?? msg('Failed to start MCP server');
       }
     }
 
@@ -1354,7 +1354,7 @@ export class LvSettingsDialog extends LitElement {
       allowedOrigins: this.mcpAllowedOrigins,
     });
     if (!result.success) {
-      this.mcpError = result.error?.message ?? 'Failed to disable the MCP server';
+      this.mcpError = result.error?.message ?? msg('Failed to disable the MCP server');
     }
 
     await this.loadMcpStatus();
@@ -1375,7 +1375,7 @@ export class LvSettingsDialog extends LitElement {
     });
     this.mcpError = result.success
       ? null
-      : (result.error?.message ?? 'Failed to save MCP port');
+      : (result.error?.message ?? msg('Failed to save MCP port'));
   }
 
   /**

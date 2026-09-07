@@ -638,6 +638,51 @@
 <trans-unit id="sa6d63ff474ed0ca3">
   <source>unknown error</source>
   <target>erreur inconnue</target></trans-unit>
+<trans-unit id="s32793431a738a1be">
+  <source>Failed to set provider</source>
+  <target>Échec de la définition du fournisseur</target></trans-unit>
+<trans-unit id="s50b18aabd90ee355">
+  <source>Failed to save API key</source>
+  <target>Échec de l'enregistrement de la clé API</target></trans-unit>
+<trans-unit id="se553c9bfbd649d2c">
+  <source>Failed to set model</source>
+  <target>Échec de la définition du modèle</target></trans-unit>
+<trans-unit id="se93301bfc26498ce">
+  <source>Failed to clear merge tool</source>
+  <target>Échec de la suppression de l'outil de fusion</target></trans-unit>
+<trans-unit id="s98e950e15fb380a7">
+  <source>Failed to clear diff tool</source>
+  <target>Échec de la suppression de l'outil de diff</target></trans-unit>
+<trans-unit id="sc24f98763051cf0b">
+  <source>Failed to start download</source>
+  <target>Échec du démarrage du téléchargement</target></trans-unit>
+<trans-unit id="s62cb03f8de2cfcff">
+  <source>Failed to cancel download</source>
+  <target>Échec de l'annulation du téléchargement</target></trans-unit>
+<trans-unit id="sf5d2d1e9dbcf5331">
+  <source>Failed to delete model</source>
+  <target>Échec de la suppression du modèle</target></trans-unit>
+<trans-unit id="s6a8e97f496d4c0ba">
+  <source>Failed to load model</source>
+  <target>Échec du chargement du modèle</target></trans-unit>
+<trans-unit id="s8a4061c3e0759881">
+  <source>Failed to unload model</source>
+  <target>Échec du déchargement du modèle</target></trans-unit>
+<trans-unit id="s39e07d32192cd4ee">
+  <source>Failed to stop MCP server</source>
+  <target>Échec de l'arrêt du serveur MCP</target></trans-unit>
+<trans-unit id="s4f2af727ff3e16bb">
+  <source>Failed to save MCP settings</source>
+  <target>Échec de l'enregistrement des paramètres MCP</target></trans-unit>
+<trans-unit id="sf43fcb91e6c031cc">
+  <source>Failed to start MCP server</source>
+  <target>Échec du démarrage du serveur MCP</target></trans-unit>
+<trans-unit id="s8f8df09149ceea0d">
+  <source>Failed to disable the MCP server</source>
+  <target>Échec de la désactivation du serveur MCP</target></trans-unit>
+<trans-unit id="s3420935f88f459e9">
+  <source>Failed to save MCP port</source>
+  <target>Échec de l'enregistrement du port MCP</target></trans-unit>
 </body>
 </file>
 </xliff>
