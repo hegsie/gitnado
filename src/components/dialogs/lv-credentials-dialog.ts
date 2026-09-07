@@ -585,11 +585,24 @@ export class LvCredentialsDialog extends LitElement {
   }
 
   /**
+   * Whether git stores a credential for this transport at all.
+   *
+   * Only `https` and `http` are answered out of a credential helper. SSH
+   * authenticates with a key, and `git://` and `file://` do not authenticate,
+   * so for all three `git credential reject` matches nothing — a button
+   * offered there warns "you will need to re-authenticate" and then does
+   * precisely nothing.
+   */
+  private usesStoredCredentials(protocol: string): boolean {
+    return protocol === 'https' || protocol === 'http';
+  }
+
+  /**
    * Erase the stored credential the test just found.
    *
-   * Offered for HTTPS only. SSH authenticates with a key, and there is no
-   * credential-helper entry to reject — `git credential reject protocol=ssh`
-   * is a silent no-op — so the button would promise something it cannot do.
+   * Offered for the transports `usesStoredCredentials` names, and only after a
+   * test found one — that is the entry `erase_credentials` then rejects, under
+   * the very protocol it was found under.
    */
   private async handleEraseCredentials(): Promise<void> {
     if (!this.testResult) return;
@@ -789,7 +802,11 @@ export class LvCredentialsDialog extends LitElement {
                       </svg>
                       ${this.testResult.protocol === 'ssh'
                         ? 'SSH Authentication Failed'
-                        : 'No Credentials Found'}
+                        : this.usesStoredCredentials(this.testResult.protocol)
+                          ? 'No Credentials Found'
+                          : // `git://` and `file://` never authenticate, so a
+                            // missing credential is not a fault to go and fix.
+                            'No Credentials Needed'}
                     `}
               </div>
               <div class="test-result-details">
@@ -802,7 +819,7 @@ export class LvCredentialsDialog extends LitElement {
               ${this.testResult.message
                 ? html`<div class="test-result-message">${this.testResult.message}</div>`
                 : ''}
-              ${this.testResult.success && this.testResult.protocol !== 'ssh'
+              ${this.testResult.success && this.usesStoredCredentials(this.testResult.protocol)
                 ? html`
                     <div class="form-actions" style="margin-top: var(--spacing-sm)">
                       <button class="btn btn-secondary" @click=${this.handleEraseCredentials}>
