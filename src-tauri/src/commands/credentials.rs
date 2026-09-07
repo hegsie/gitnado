@@ -1302,20 +1302,26 @@ mod tests {
             Some("srv".to_string()),
             "the gate's parse is untouched"
         );
+        // ...and the gate PERMITS it, because a filesystem remote never leaves
+        // the machine — the carve-out `is_local_target` added alongside this.
+        // The two changes were made independently and meet here: this one
+        // decides what the dialog REPORTS, that one decides what the gate
+        // PERMITS, and both agree a local path is local.
         assert!(
-            crate::services::security::check(&settings, Some("/srv/git/repo.git")).is_err(),
-            "a bare path is still refused by a configured allowlist"
+            crate::services::security::check(&settings, Some("/srv/git/repo.git")).is_ok(),
+            "a filesystem remote opens no socket, so an allowlist has no business refusing it"
         );
     }
 
     /// Keeping the scheme must not move the GATE.
     ///
     /// `parse_target` stays the single source of truth for both the allowlist
-    /// and the destination: a host-less URL still resolves to no host, so a
-    /// configured allowlist still refuses it — this change is about what the
-    /// DIALOG reports, not about what the gate permits.
+    /// and the destination — this change is about what the DIALOG reports.
+    /// A host-less URL still resolves to no host; whether that is then refused
+    /// is the gate's own business, and it refuses everything except the local
+    /// targets it deliberately carves out.
     #[test]
-    fn a_host_less_remote_is_still_refused_by_a_configured_allowlist() {
+    fn a_host_less_remote_still_resolves_to_no_target() {
         // The verdict below is computed from the settings passed in, but the
         // gate is reached all the same, and the policy lock is what keeps that
         // from racing a test that switches a policy on.
@@ -1329,11 +1335,18 @@ mod tests {
                 crate::services::security::parse_target(url).is_none(),
                 "{url} must still resolve to no target"
             );
-            assert!(
-                crate::services::security::check(&settings, Some(url)).is_err(),
-                "{url} must still be refused"
-            );
         }
+        // `ssh://` names no host and could reach anywhere, so it is refused.
+        assert!(
+            crate::services::security::check(&settings, Some("ssh://")).is_err(),
+            "a host-less ssh url must still be refused"
+        );
+        // `file://` is local, so the carve-out permits it — the same rule the
+        // loopback exemption has always applied to endpoints.
+        assert!(
+            crate::services::security::check(&settings, Some("file:///srv/git/repo.git")).is_ok(),
+            "a file:// remote never leaves the machine"
+        );
     }
 
     /// A scheme-carrying URL with no host must not be handed to the ssh probe:
