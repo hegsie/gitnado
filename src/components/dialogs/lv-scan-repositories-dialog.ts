@@ -778,6 +778,17 @@ export class LvScanRepositoriesDialog extends LitElement {
       `;
     }
 
+    // A failed scan used to offer nothing but Close: the folder was gone from
+    // the dialog, so recovering meant Close, the welcome screen, Scan and
+    // picking the same folder again in an OS picker. Retrying needs a folder to
+    // retry against, so the empty-path failure keeps Close alone.
+    if (this.phase === 'error' && this.scanPath) {
+      return html`
+        <button class="btn btn-secondary" @click=${this.close}>Close</button>
+        <button class="btn btn-primary" @click=${this.handleScanFromOffer}>Try again</button>
+      `;
+    }
+
     return html`<button class="btn btn-secondary" @click=${this.close}>Close</button>`;
   }
 

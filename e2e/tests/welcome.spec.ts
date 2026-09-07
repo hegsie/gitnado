@@ -929,7 +929,7 @@ test.describe('Welcome Screen - scan for repositories', () => {
     await expect(dialog.locator('.result-item')).toHaveCount(0);
   });
 
-  test('surfaces a scan failure', async ({ page }) => {
+  test('surfaces a scan failure and offers a retry', async ({ page }) => {
     await injectCommandMock(page, { 'plugin:dialog|open': '/code' });
     await injectCommandError(page, 'scan_for_repositories', '/code no longer exists');
 
@@ -937,6 +937,15 @@ test.describe('Welcome Screen - scan for repositories', () => {
 
     const dialog = page.locator('lv-scan-repositories-dialog');
     await expect(dialog.locator('.error-message')).toContainText('no longer exists');
+
+    // A failed scan used to be a dead end: Close was the only way out, and the
+    // folder went with it. The folder is often only briefly unreachable (a
+    // network volume, a rename), so retrying it is the recovery.
+    await injectCommandMock(page, { scan_for_repositories: scanResultPayload() });
+    await dialog.getByRole('button', { name: 'Try again' }).click();
+
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+    await expect(dialog.locator('.error-message')).toHaveCount(0);
   });
 
   test('does not open the scan dialog when the folder picker is cancelled', async ({ page }) => {

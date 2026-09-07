@@ -262,6 +262,47 @@ describe('lv-scan-repositories-dialog', () => {
     expect(text(el, '.error-message')).to.contain('no longer exists');
   });
 
+  it('offers a retry when the scan fails', async () => {
+    let attempts = 0;
+    mockResponses['scan_for_repositories'] = (args) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('/code no longer exists');
+      return scanResult({ root: args.path as string });
+    };
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    await openDialog(el, 'scan');
+    await waitUntil(() => query(el, '.error-message') !== null, 'the scan error');
+
+    // Without this the only way out of a failed scan was Close, the welcome
+    // screen, Scan, and picking the folder again in an OS picker.
+    buttonWithText(el, 'Try again').click();
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the retry results');
+
+    expect(
+      invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').map((c) => c.args.path),
+    ).to.deep.equal(['/code', '/code']);
+    expect(query(el, '.error-message'), 'the failure is cleared').to.equal(null);
+  });
+
+  it('does not offer a retry when there is no folder to scan', async () => {
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    // The only way into that branch: the offer step with nothing to scan.
+    await openDialog(el, 'offer', '');
+    buttonWithText(el, 'Scan it for repositories').click();
+    await waitUntil(() => query(el, '.error-message') !== null, 'the missing-folder error');
+    expect(text(el, '.error-message')).to.contain('No folder was chosen');
+    expect(
+      queryAll<HTMLButtonElement>(el, 'button').map((b) => (b.textContent ?? '').trim()),
+      'retrying nothing would just fail again',
+    ).to.deep.equal(['Close']);
+  });
+
   it('cancels a running scan', async () => {
     let finishScan: (value: unknown) => void = () => {};
     mockResponses['scan_for_repositories'] = () =>
