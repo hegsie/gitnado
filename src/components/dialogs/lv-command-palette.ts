@@ -311,7 +311,7 @@ export class LvCommandPalette extends LitElement {
 
   private loadRecentCommands(): void {
     try {
-      const stored = localStorage.getItem('leviathan-recent-commands');
+      const stored = localStorage.getItem('gitnado-recent-commands');
       this.recentCommands = stored ? JSON.parse(stored) : [];
     } catch {
       this.recentCommands = [];
@@ -320,7 +320,7 @@ export class LvCommandPalette extends LitElement {
 
   private saveRecentCommand(id: string): void {
     this.recentCommands = [id, ...this.recentCommands.filter(c => c !== id)].slice(0, 5);
-    localStorage.setItem('leviathan-recent-commands', JSON.stringify(this.recentCommands));
+    localStorage.setItem('gitnado-recent-commands', JSON.stringify(this.recentCommands));
   }
 
   private getAllCommands(): PaletteCommand[] {

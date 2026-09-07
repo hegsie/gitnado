@@ -4,7 +4,7 @@ use std::{io::Write, path::Path};
 use tauri::command;
 
 use super::path_utils::validate_path_within_repo;
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{
     ConflictDetails, ConflictEntry, ConflictFile, ConflictHunk, ConflictMarker, ConflictMarkerFile,
 };
@@ -76,14 +76,14 @@ pub async fn merge(
         match repo.state() {
             git2::RepositoryState::Clean => {}
             git2::RepositoryState::Merge => {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "You have not concluded your merge (MERGE_HEAD exists). \
                  Resolve the conflicts and commit, or abort the merge, before merging again."
                         .to_string(),
                 ));
             }
             state => {
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Cannot merge: another operation is in progress ({:?}). \
                  Complete or abort it first.",
                     state
@@ -114,7 +114,7 @@ pub async fn merge(
             let refname = head
                 .name()
                 .ok()
-                .ok_or_else(|| LeviathanError::InvalidReference)?;
+                .ok_or_else(|| GitnadoError::InvalidReference)?;
 
             // Collect the conflicting paths so the error can name them, like
             // git's "Your local changes to the following files ..." message.
@@ -134,7 +134,7 @@ pub async fn merge(
                 Ok(()) => {}
                 Err(e) if e.code() == git2::ErrorCode::Conflict => {
                     let files = conflict_paths.borrow().join(", ");
-                    return Err(LeviathanError::OperationFailed(if files.is_empty() {
+                    return Err(GitnadoError::OperationFailed(if files.is_empty() {
                         "Your local changes would be overwritten by merge. \
                      Commit or stash them before you merge."
                             .to_string()
@@ -165,7 +165,7 @@ pub async fn merge(
             // conflict-resolution flow that needs MERGE_HEAD intact (and
             // `abort_merge` to undo), so return before any cleanup.
             if repo.index()?.has_conflicts() {
-                return Err(LeviathanError::MergeConflict);
+                return Err(GitnadoError::MergeConflict);
             }
 
             // git runs pre-merge-commit before creating the automatic merge commit,
@@ -353,7 +353,7 @@ pub async fn abort_merge(path: String) -> Result<()> {
 
     // git: "fatal: There is no merge to abort (MERGE_HEAD missing)."
     if repo.state() != git2::RepositoryState::Merge {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "There is no merge to abort (MERGE_HEAD missing).".to_string(),
         ));
     }
@@ -413,7 +413,7 @@ pub async fn commit_merge(
     let mut repo = git2::Repository::open(Path::new(&path))?;
 
     if repo.state() != git2::RepositoryState::Merge {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No merge in progress".to_string(),
         ));
     }
@@ -425,14 +425,14 @@ pub async fn commit_merge(
         true
     })?;
     if merge_oids.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "MERGE_HEAD not found".to_string(),
         ));
     }
     let repo = repo;
 
     if repo.index()?.has_conflicts() {
-        return Err(LeviathanError::MergeConflict);
+        return Err(GitnadoError::MergeConflict);
     }
 
     // Default to git's own MERGE_MSG (what `git commit` would use mid-merge).
@@ -540,7 +540,7 @@ async fn commit_merge_signed(path: &str, message: &str, is_squash: bool) -> Resu
         .current_dir(path)
         .args(["commit", "-S", "-m", message])
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git commit: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git commit: {}", e)))?;
 
     if !output.status.success() {
         // Restore the merge metadata we cleared so the user can retry or abort.
@@ -552,7 +552,7 @@ async fn commit_merge_signed(path: &str, message: &str, is_squash: bool) -> Resu
             }
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Git commit failed: {}",
             stderr
         )));
@@ -575,7 +575,7 @@ pub async fn rebase(path: String, onto: String) -> Result<usize> {
     // progress or the working tree is dirty, instead of starting the rebase
     // and failing partway through with a misleading libgit2 error.
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
@@ -596,7 +596,7 @@ pub async fn rebase(path: String, onto: String) -> Result<usize> {
         .iter()
         .any(|s| s.status().intersects(blocking));
     if has_changes {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Working directory has uncommitted changes. Commit or stash them first.".to_string(),
         ));
     }
@@ -649,7 +649,7 @@ pub async fn rebase(path: String, onto: String) -> Result<usize> {
             let old_oid = op.id();
 
             if repo.index()?.has_conflicts() {
-                return Err(LeviathanError::RebaseConflict);
+                return Err(GitnadoError::RebaseConflict);
             }
 
             // A commit whose patch is already present on `onto` becomes empty.
@@ -681,7 +681,7 @@ pub async fn rebase(path: String, onto: String) -> Result<usize> {
                 Some(&format!("{}\n", rewritten.join("\n"))),
             );
         }
-    } else if matches!(result, Err(LeviathanError::RebaseConflict)) {
+    } else if matches!(result, Err(GitnadoError::RebaseConflict)) {
         // Paused, not finished. Hand the pairs replayed so far to whichever
         // continue_rebase eventually completes this rebase, so the hook
         // describes the whole thing rather than only the last leg.
@@ -693,7 +693,7 @@ pub async fn rebase(path: String, onto: String) -> Result<usize> {
     }
 
     match result {
-        Err(LeviathanError::RebaseConflict) => Err(LeviathanError::RebaseConflict),
+        Err(GitnadoError::RebaseConflict) => Err(GitnadoError::RebaseConflict),
         Err(e) => {
             let _ = rebase.abort();
             Err(e)
@@ -708,7 +708,7 @@ pub async fn rebase(path: String, onto: String) -> Result<usize> {
 /// when the rebase finishes or is aborted — so a file there is scoped to
 /// exactly one rebase and needs no separate cleanup.
 fn rewritten_list_path(repo: &git2::Repository) -> std::path::PathBuf {
-    repo.path().join("rebase-merge").join("leviathan-rewritten")
+    repo.path().join("rebase-merge").join("gitnado-rewritten")
 }
 
 /// Append pairs replayed so far, so a conflict pause does not lose them.
@@ -750,7 +750,7 @@ fn take_rewritten(repo: &git2::Repository) -> Vec<String> {
 /// removes the directory when the rebase finishes or is aborted, so the file is
 /// scoped to exactly one rebase and needs no separate cleanup.
 fn skipped_count_path(repo: &git2::Repository) -> std::path::PathBuf {
-    repo.path().join("rebase-merge").join("leviathan-skipped")
+    repo.path().join("rebase-merge").join("gitnado-skipped")
 }
 
 /// Add the skips of one leg to the running total, so a conflict pause does not
@@ -830,15 +830,14 @@ pub async fn preview_rebase(
     // Reject ref values that could be parsed as a flag, e.g.
     // `--exec=/tmp/payload` would run an arbitrary command via `git rebase`.
     if onto.starts_with('-') {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Rebase target must not start with '-'".into(),
         ));
     }
 
     // Create a temp directory for the ghost worktree
-    let temp_dir = tempfile::tempdir().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to create temp dir: {}", e))
-    })?;
+    let temp_dir = tempfile::tempdir()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create temp dir: {}", e)))?;
     let temp_path = temp_dir.path().to_string_lossy().to_string();
 
     // Add a detached worktree at HEAD
@@ -851,12 +850,10 @@ pub async fn preview_rebase(
         .arg(&temp_path)
         .arg("HEAD")
         .output()
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create worktree: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create worktree: {}", e)))?;
 
     if !add_output.status.success() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Failed to create worktree: {}",
             String::from_utf8_lossy(&add_output.stderr)
         )));
@@ -871,9 +868,7 @@ pub async fn preview_rebase(
         .arg("--")
         .arg(&onto)
         .output()
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to run ghost rebase: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run ghost rebase: {}", e)))?;
 
     let mut conflicts = Vec::new();
     // A failure that is NOT a conflict — a dirty worktree, an unknown ref. The
@@ -954,7 +949,7 @@ pub async fn preview_rebase(
     // Reported only after the worktree is removed, so a failed preview does not
     // strand a worktree registration in the user's repository.
     if let Some(message) = preview_failure {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Could not preview the rebase: {}",
             message
         )));
@@ -1036,7 +1031,7 @@ pub async fn continue_rebase(path: String) -> Result<usize> {
             // all of them.
             append_rewritten(&repo, &rewritten);
             append_skipped(&repo, skipped);
-            return Err(LeviathanError::RebaseConflict);
+            return Err(GitnadoError::RebaseConflict);
         }
 
         if let Some(new_oid) = commit_or_skip_empty(&repo, &mut rebase, &signature, Some(old_oid))?
@@ -1278,7 +1273,7 @@ fn continue_rebase_cli(path: &str) -> Result<usize> {
             .env("LC_ALL", "C")
             .args(&args)
             .output()
-            .map_err(|e| LeviathanError::OperationFailed(e.to_string()))?;
+            .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
 
         if output.status.success() {
             // Exit 0 does NOT mean "finished": `git rebase --continue` also
@@ -1294,7 +1289,7 @@ fn continue_rebase_cli(path: &str) -> Result<usize> {
                 // does: whichever continue finishes the rebase is the only
                 // surface that can report them.
                 append_skipped(&repo, carried + pending + skipped);
-                return Err(LeviathanError::RebasePaused);
+                return Err(GitnadoError::RebasePaused);
             }
             return Ok(carried + pending + skipped);
         }
@@ -1317,7 +1312,7 @@ fn continue_rebase_cli(path: &str) -> Result<usize> {
             // A conflict is raised by a LATER commit, so the pending one was
             // dealt with — dropped or committed — before git got there.
             append_skipped(&repo, carried + pending + skipped);
-            return Err(LeviathanError::RebaseConflict);
+            return Err(GitnadoError::RebaseConflict);
         }
         // A hard failure can leave the same commit pending, and the next
         // Continue reads it off the rebase state again — so counting it here
@@ -1326,13 +1321,11 @@ fn continue_rebase_cli(path: &str) -> Result<usize> {
             &repo,
             carried + skipped + if skipped > 0 { pending } else { 0 },
         );
-        return Err(LeviathanError::OperationFailed(
-            if stderr.trim().is_empty() {
-                stdout.to_string()
-            } else {
-                stderr.to_string()
-            },
-        ));
+        return Err(GitnadoError::OperationFailed(if stderr.trim().is_empty() {
+            stdout.to_string()
+        } else {
+            stderr.to_string()
+        }));
     }
 }
 
@@ -1359,9 +1352,9 @@ pub async fn abort_rebase(path: String) -> Result<()> {
             .env("LC_ALL", "C")
             .args(["rebase", "--abort"])
             .output()
-            .map_err(|e| LeviathanError::OperationFailed(e.to_string()))?;
+            .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
         if !output.status.success() {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
@@ -1394,7 +1387,7 @@ pub async fn is_ancestor_of_head(path: String, oid: String) -> Result<bool> {
     let head = repo
         .head()?
         .target()
-        .ok_or(LeviathanError::InvalidReference)?;
+        .ok_or(GitnadoError::InvalidReference)?;
     if head == target {
         return Ok(true);
     }
@@ -1422,14 +1415,14 @@ pub async fn get_rebase_commits(path: String, onto: String) -> Result<RebasePlan
         .or_else(|_| repo.find_reference(&format!("refs/remotes/{}", onto)))
         .or_else(|_| repo.find_reference(&onto))
     {
-        Ok(r) => r.target().ok_or(LeviathanError::InvalidReference)?,
+        Ok(r) => r.target().ok_or(GitnadoError::InvalidReference)?,
         Err(_) => repo.revparse_single(&onto)?.peel_to_commit()?.id(),
     };
 
     let head_oid = repo
         .head()?
         .target()
-        .ok_or_else(|| LeviathanError::InvalidReference)?;
+        .ok_or_else(|| GitnadoError::InvalidReference)?;
 
     let mut revwalk = repo.revwalk()?;
     revwalk.push(head_oid)?;
@@ -1489,12 +1482,12 @@ pub async fn execute_interactive_rebase(
     crate::utils::reject_flag_like(&onto, "Rebase target")?;
 
     // A unique name per call, like apply_patch_to_index. The fixed
-    // /tmp/leviathan-rebase-todo it replaces meant two rebases running at
+    // /tmp/gitnado-rebase-todo it replaces meant two rebases running at
     // once would read each other's plan — one repo silently rewritten with the
     // other's drops — and the predictable path in a world-writable directory
     // was a symlink target for anyone on the machine.
     let mut todo_file = tempfile::Builder::new()
-        .prefix("leviathan-rebase-todo-")
+        .prefix("gitnado-rebase-todo-")
         .tempfile()?;
     todo_file.write_all(todo.as_bytes())?;
     todo_file.flush()?;
@@ -1526,14 +1519,14 @@ pub async fn execute_interactive_rebase(
         .env("LC_ALL", "C")
         .args(["rebase", "-i", &onto])
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(e.to_string()))?;
+        .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("CONFLICT") || stderr.contains("conflict") {
-            return Err(LeviathanError::RebaseConflict);
+            return Err(GitnadoError::RebaseConflict);
         }
-        return Err(LeviathanError::OperationFailed(stderr.to_string()));
+        return Err(GitnadoError::OperationFailed(stderr.to_string()));
     }
 
     // Exit 0 does NOT mean "finished": `git rebase -i` also exits 0 when it
@@ -2085,7 +2078,7 @@ pub async fn get_blob_content(path: String, oid: String) -> Result<String> {
     let blob = repo.find_blob(blob_oid)?;
 
     if blob.is_binary() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot display binary file".to_string(),
         ));
     }
@@ -2096,7 +2089,7 @@ pub async fn get_blob_content(path: String, oid: String) -> Result<String> {
     // text into the resolved file. The caller treats the error like any
     // other unreadable side and offers verbatim (raw-bytes) resolution.
     String::from_utf8(blob.content().to_vec())
-        .map_err(|_| LeviathanError::OperationFailed("File content is not valid UTF-8".to_string()))
+        .map_err(|_| GitnadoError::OperationFailed("File content is not valid UTF-8".to_string()))
 }
 
 /// Mark a file as resolved with the given content.
@@ -2127,7 +2120,7 @@ pub async fn resolve_conflict(
         for entry in [&c.our, &c.their, &c.ancestor].into_iter().flatten() {
             if String::from_utf8_lossy(&entry.path) == file_path.as_str() {
                 if std::str::from_utf8(&entry.path).is_err() {
-                    return Err(LeviathanError::OperationFailed(format!(
+                    return Err(GitnadoError::OperationFailed(format!(
                         "'{}' has a non-UTF-8 name and can't be resolved in the app — resolve it with git in a terminal",
                         file_path
                     )));
@@ -2139,7 +2132,7 @@ pub async fn resolve_conflict(
         }
     }
     if special_mode && !delete_file.unwrap_or(false) {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "'{}' is a symlink or submodule conflict — choose a side instead of writing text",
             file_path
         )));
@@ -2213,7 +2206,7 @@ pub async fn resolve_conflict_take_side(
                 .unwrap_or(false)
         })
         .ok_or_else(|| {
-            LeviathanError::OperationFailed(format!("No conflict found for '{}'", file_path))
+            GitnadoError::OperationFailed(format!("No conflict found for '{}'", file_path))
         })?;
 
     // A NON-UTF-8 filename cannot round-trip through the String API — the
@@ -2226,7 +2219,7 @@ pub async fn resolve_conflict_take_side(
         .flatten()
         .any(|e| std::str::from_utf8(&e.path).is_err())
     {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "'{}' has a non-UTF-8 name and can't be resolved in the app — resolve it with git in a terminal",
             file_path
         )));
@@ -2236,7 +2229,7 @@ pub async fn resolve_conflict_take_side(
         "ours" => conflict.our,
         "theirs" => conflict.their,
         other => {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Invalid side '{}': expected 'ours' or 'theirs'",
                 other
             )));
@@ -2291,7 +2284,7 @@ pub async fn resolve_conflict_take_side(
                 // conflict with no submodule involved, so the message must
                 // not assume one.
                 if meta.file_type().is_dir() && std::fs::remove_dir(&full_path).is_err() {
-                    return Err(LeviathanError::OperationFailed(format!(
+                    return Err(GitnadoError::OperationFailed(format!(
                         "'{}' is a directory with files in it (the other side made this path a directory) — move or remove it, then take this side again",
                         file_path
                     )));
@@ -2440,7 +2433,7 @@ pub async fn get_conflict_details(path: String, file_path: String) -> Result<Con
     // Read file content and parse markers
     let full_path = validate_path_within_repo(Path::new(&path), &file_path)?;
     let content = std::fs::read_to_string(&full_path)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read file: {}", e)))?;
 
     let markers = parse_conflict_markers(&content);
 
@@ -2921,7 +2914,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         abort_merge(repo.path_str()).await.unwrap();
 
@@ -3369,7 +3362,7 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
         let err = execute_interactive_rebase(
             repo.path_str(),
-            "--exec=touch /tmp/leviathan-should-not-exist".to_string(),
+            "--exec=touch /tmp/gitnado-should-not-exist".to_string(),
             "pick abc123\n".to_string(),
         )
         .await
@@ -3380,7 +3373,7 @@ mod tests {
             err
         );
         assert!(
-            !std::path::Path::new("/tmp/leviathan-should-not-exist").exists(),
+            !std::path::Path::new("/tmp/gitnado-should-not-exist").exists(),
             "and refuse BEFORE spawning anything"
         );
     }
@@ -4065,7 +4058,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         let result = merge(
             repo.path_str(),
@@ -4366,7 +4359,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -4407,7 +4400,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -4451,7 +4444,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         // Simulate git's MERGE_MSG with conflict comment lines.
         let merge_msg = "Merge branch 'feature'\n\n# Conflicts:\n#\tshared.txt\n";
@@ -4618,7 +4611,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -4669,7 +4662,7 @@ mod tests {
         .await;
 
         let result = commit_merge(repo.path_str(), None, None).await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
         // Still mid-merge so the user can keep resolving
         assert_eq!(repo.repo().state(), git2::RepositoryState::Merge);
     }
@@ -4870,7 +4863,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::MergeConflict)));
+        assert!(matches!(result, Err(GitnadoError::MergeConflict)));
 
         let result = resolve_conflict_take_side(
             repo.path_str(),
@@ -6649,7 +6642,7 @@ mod tests {
 
         repo.checkout_branch("feature");
         let result = rebase(repo.path_str(), initial_branch.clone()).await;
-        assert!(matches!(result, Err(LeviathanError::RebaseConflict)));
+        assert!(matches!(result, Err(GitnadoError::RebaseConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -6681,7 +6674,7 @@ mod tests {
 
         repo.checkout_branch("feature");
         let result = rebase(repo.path_str(), initial_branch.clone()).await;
-        assert!(matches!(result, Err(LeviathanError::RebaseConflict)));
+        assert!(matches!(result, Err(GitnadoError::RebaseConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -6733,7 +6726,7 @@ mod tests {
         }
 
         let result = rebase(repo.path_str(), initial_branch.clone()).await;
-        assert!(matches!(result, Err(LeviathanError::RebaseConflict)));
+        assert!(matches!(result, Err(GitnadoError::RebaseConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -6781,7 +6774,7 @@ mod tests {
 
         repo.checkout_branch("feature");
         let result = rebase(repo.path_str(), initial_branch).await;
-        assert!(matches!(result, Err(LeviathanError::RebaseConflict)));
+        assert!(matches!(result, Err(GitnadoError::RebaseConflict)));
 
         resolve_conflict(
             repo.path_str(),
@@ -6824,7 +6817,7 @@ mod tests {
 
         repo.checkout_branch("feature");
         let result = rebase(repo.path_str(), initial_branch).await;
-        assert!(matches!(result, Err(LeviathanError::RebaseConflict)));
+        assert!(matches!(result, Err(GitnadoError::RebaseConflict)));
 
         resolve_conflict(
             repo.path_str(),

@@ -89,7 +89,7 @@ E2E tests run against the Vite dev server (`localhost:1420`). All Tauri IPC call
 - `e2e/fixtures/test-helpers.ts` — `startCommandCaptureWithMocks()`, `findCommand()`, `injectCommandMock()`, `injectCommandError()`, `autoConfirmDialogs()`
 - `e2e/pages/*.page.ts` — Page object models
 
-**Store access:** Zustand stores exposed on `window.__LEVIATHAN_STORES__` in dev mode. Repository store uses `openRepositories[]` + `activeIndex` (NOT `currentRepository`).
+**Store access:** Zustand stores exposed on `window.__GITNADO_STORES__` in dev mode. Repository store uses `openRepositories[]` + `activeIndex` (NOT `currentRepository`).
 
 ### E2E Test Conventions
 

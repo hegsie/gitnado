@@ -1,8 +1,8 @@
-# Copilot Instructions for Leviathan
+# Copilot Instructions for Gitnado
 
 ## Project Overview
 
-Leviathan is a modern, cross-platform Git GUI client built with **Tauri 2.0**, **Lit** (web components), and **Rust**. It's designed to be a fast, privacy-first alternative to existing Git clients with no telemetry, no account requirements, and offline-first operation.
+Gitnado is a modern, cross-platform Git GUI client built with **Tauri 2.0**, **Lit** (web components), and **Rust**. It's designed to be a fast, privacy-first alternative to existing Git clients with no telemetry, no account requirements, and offline-first operation.
 
 ### Key Technologies & Versions
 
@@ -16,7 +16,7 @@ Leviathan is a modern, cross-platform Git GUI client built with **Tauri 2.0**, *
 ## Repository Structure
 
 ```
-leviathan/
+gitnado/
 ├── src/                      # Frontend (TypeScript/Lit)
 │   ├── components/           # UI web components
 │   │   ├── common/           # Shared components (buttons, inputs, etc.)
@@ -85,8 +85,8 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cp
 
 ```bash
 # Clone the repository
-git clone https://github.com/hegsie/Leviathan.git
-cd Leviathan
+git clone https://github.com/hegsie/gitnado.git
+cd Gitnado
 
 # Install frontend dependencies
 npm install

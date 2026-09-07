@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// Git configuration entry
@@ -58,7 +58,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -70,7 +70,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
         if output.status.code() == Some(1) && stderr.is_empty() && stdout.is_empty() {
             Ok(String::new())
         } else {
-            Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+            Err(GitnadoError::OperationFailed(if stderr.is_empty() {
                 stdout
             } else {
                 stderr
@@ -97,7 +97,7 @@ pub(crate) fn run_git_config_raw(repo_path: Option<&Path>, args: &[&str]) -> Res
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -108,7 +108,7 @@ pub(crate) fn run_git_config_raw(repo_path: Option<&Path>, args: &[&str]) -> Res
         if output.status.code() == Some(1) && stderr.is_empty() {
             Ok(String::new())
         } else {
-            Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+            Err(GitnadoError::OperationFailed(if stderr.is_empty() {
                 "Failed to read git configuration".to_string()
             } else {
                 stderr
@@ -136,7 +136,7 @@ pub(crate) fn run_git_config_unset(repo_path: Option<&Path>, args: &[&str]) -> R
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     if output.status.success() {
         return Ok(());
@@ -149,7 +149,7 @@ pub(crate) fn run_git_config_unset(repo_path: Option<&Path>, args: &[&str]) -> R
         return Ok(());
     }
 
-    Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+    Err(GitnadoError::OperationFailed(if stderr.is_empty() {
         "Failed to unset git configuration value".to_string()
     } else {
         stderr

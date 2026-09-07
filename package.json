@@ -1,7 +1,12 @@
 {
-  "name": "leviathan",
-  "version": "0.8.0",
+  "name": "gitnado",
+  "version": "0.9.0",
   "description": "A fully-featured, open-source, cross-platform Git GUI client",
+  "homepage": "https://gitnado.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hegsie/gitnado.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

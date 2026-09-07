@@ -1,4 +1,4 @@
-//! Leviathan - Git GUI Client
+//! Gitnado - Git GUI Client
 //!
 //! A fully-featured, open-source, cross-platform Git GUI client
 //! built with Tauri 2.0 and Rust.
@@ -82,12 +82,12 @@ pub fn run() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "leviathan=debug,git2=warn".into()),
+                .unwrap_or_else(|_| "gitnado=debug,git2=warn".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("Starting Leviathan");
+    tracing::info!("Starting Gitnado");
 
     // Build the app with plugins
     let mut builder = tauri::Builder::default()
@@ -105,7 +105,9 @@ pub fn run() {
             .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
                 // On Windows/Linux, deep links arrive as command line arguments
                 if let Some(url) = argv.get(1) {
-                    if url.starts_with("leviathan://") {
+                    // `leviathan://` is the scheme from before the 0.9.0 rename;
+                    // it stays registered so links minted back then still open.
+                    if url.starts_with("gitnado://") || url.starts_with("leviathan://") {
                         tracing::info!("Received deep link via single-instance: {}", url);
                         let _ = app.emit("deep-link", url);
                     }
@@ -144,6 +146,16 @@ pub fn run() {
         .manage(RemoteOpRegistry::default())
         .manage(SharedCommitIndex::default())
         .setup(|app| {
+            // The identifier changed with the 0.9.0 rename, which moves the
+            // per-app config/data directories; carry over the old ones so
+            // settings and downloaded models survive the upgrade.
+            for dir in [app.path().app_config_dir(), app.path().app_data_dir()]
+                .into_iter()
+                .flatten()
+            {
+                crate::utils::app_paths::adopt_legacy_identifier_dir(&dir);
+            }
+
             // Initialize AI state with config directory
             let config_dir = app.path().app_config_dir().unwrap_or_default();
             app.manage(create_ai_state(config_dir.clone()));
@@ -222,7 +234,7 @@ pub fn run() {
             use tauri::tray::TrayIconBuilder;
 
             let show_hide =
-                MenuItemBuilder::with_id("show_hide", "Show/Hide Leviathan").build(app)?;
+                MenuItemBuilder::with_id("show_hide", "Show/Hide Gitnado").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
@@ -238,7 +250,7 @@ pub fn run() {
                         .expect("default window icon must be set in tauri.conf.json"),
                 )
                 .menu(&menu)
-                .tooltip("Leviathan")
+                .tooltip("Gitnado")
                 .on_menu_event(
                     move |app: &tauri::AppHandle, event: tauri::menu::MenuEvent| match event
                         .id()

@@ -4,7 +4,7 @@
 use std::process::Command;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Filter criteria for searching commits
 #[derive(Debug, serde::Deserialize)]
@@ -81,13 +81,13 @@ fn parse_log_line(line: &str) -> Option<FilteredCommit> {
 
 /// Execute a git log command and parse the output into FilteredCommit entries
 fn execute_git_log(cmd: &mut Command) -> Result<Vec<FilteredCommit>> {
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git log: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git log failed: {}",
             stderr
         )));

@@ -317,7 +317,7 @@ export const repositoryStore = createStore<RepositoryState>()(
       reset: () => set(initialState),
     }),
     {
-      name: 'leviathan-repositories',
+      name: 'gitnado-repositories',
       partialize: (state) => ({
         recentRepositories: state.recentRepositories,
         persistedOpenRepos: state.persistedOpenRepos,

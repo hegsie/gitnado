@@ -5,7 +5,7 @@ use std::path::Path;
 use tauri::command;
 
 use crate::commands::config::{run_git_config_raw, run_git_config_unset};
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 // ========================================================================
@@ -136,7 +136,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -146,7 +146,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
     } else if output.status.code() == Some(1) && stderr.is_empty() && stdout.is_empty() {
         Ok(String::new())
     } else {
-        Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+        Err(GitnadoError::OperationFailed(if stderr.is_empty() {
             stdout
         } else {
             stderr
@@ -269,13 +269,13 @@ fn extract_helper_name(cmd: &str) -> String {
 /// Both reject control characters and quotes outright.
 fn validate_url_pattern(pat: &str) -> Result<()> {
     if pat.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "url_pattern must not be empty".to_string(),
         ));
     }
     for ch in pat.chars() {
         if ch.is_control() {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "url_pattern contains invalid control character U+{:04X}",
                 ch as u32
             )));
@@ -286,7 +286,7 @@ fn validate_url_pattern(pat: &str) -> Result<()> {
             'a'..='z' | 'A'..='Z' | '0'..='9'
             | '.' | ':' | '/' | '-' | '_' | '*' | '+' | '%' | '@'
         ) {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "url_pattern contains disallowed character {:?} — only letters, digits, and .:-/_*+%@ are permitted",
                 ch
             )));
@@ -297,7 +297,7 @@ fn validate_url_pattern(pat: &str) -> Result<()> {
 
 fn validate_helper(helper: &str) -> Result<()> {
     if helper.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "helper must not be empty".to_string(),
         ));
     }
@@ -310,7 +310,7 @@ fn validate_helper(helper: &str) -> Result<()> {
     // file or inject additional lines.
     for ch in helper.chars() {
         if ch.is_control() {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "helper contains invalid control character U+{:04X}",
                 ch as u32
             )));
@@ -371,7 +371,7 @@ pub async fn unset_credential_helper(
     // with no path, is whatever directory the app process happens to be in,
     // not the repository on screen. Refuse instead of guessing.
     if !global && repo_path.is_none() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "A repository path is required to remove a repository-scoped credential helper"
                 .to_string(),
         ));
@@ -393,7 +393,7 @@ pub async fn unset_credential_helper(
     // genuine no-op — so the removal has to be confirmed, not assumed.
     let scope_name = if global { "global" } else { "local" };
     if let Some(origin) = key_origin_in_scope(repo_path, scope_name, &key) {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "\"{}\" is still set by {}, a file included from the {} git config. \
              Edit that file to remove it.",
             key, origin, scope_name
@@ -542,7 +542,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
             ])
             .output()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to test SSH connection: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to test SSH connection: {}", e))
             })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -576,7 +576,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
         cmd.stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to run git credential: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to run git credential: {}", e))
         })?;
 
         // Send credential request
@@ -587,7 +587,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
         }
 
         let output = child.wait_with_output().map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to get credential output: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to get credential output: {}", e))
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -689,7 +689,7 @@ pub async fn store_git_credentials(url: String, username: String, password: Stri
     tracing::info!("Storing git credentials for URL: {}", safe_url);
     credentials_service::store_credentials(&url, &username, &password).map_err(|e| {
         tracing::error!("Failed to store credentials for {}: {}", safe_url, e);
-        LeviathanError::OperationFailed(format!("Failed to store credentials: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to store credentials: {}", e))
     })?;
     tracing::info!("Successfully stored git credentials for URL: {}", safe_url);
     Ok(())
@@ -700,9 +700,8 @@ pub async fn store_git_credentials(url: String, username: String, password: Stri
 pub async fn delete_git_credentials(url: String) -> Result<()> {
     use crate::services::credentials_service;
 
-    credentials_service::delete_credentials(&url).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to delete credentials: {}", e))
-    })
+    credentials_service::delete_credentials(&url)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to delete credentials: {}", e)))
 }
 
 /// Erase stored credentials for a host
@@ -716,7 +715,7 @@ pub async fn erase_credentials(path: String, host: String, protocol: String) -> 
     cmd.stdin(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to run git credential: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to run git credential: {}", e))
     })?;
 
     // Send credential info to reject
@@ -731,7 +730,12 @@ pub async fn erase_credentials(path: String, host: String, protocol: String) -> 
     Ok(())
 }
 
-const INTEGRATION_SERVICE: &str = "leviathan-integrations";
+const INTEGRATION_SERVICE: &str = "gitnado-integrations";
+
+/// Service name from before the 0.9.0 rename. A token found under it is
+/// re-stored under `INTEGRATION_SERVICE` and the old entry removed, so existing
+/// integration sign-ins survive the upgrade.
+const LEGACY_INTEGRATION_SERVICE: &str = "leviathan-integrations";
 
 /// Build the macOS `security add-generic-password` argument list (M3).
 ///
@@ -761,51 +765,44 @@ pub(crate) fn build_security_add_args<'a>(service: &'a str, key: &'a str) -> Vec
     }
 }
 
-/// Store an integration token in the system keyring.
+/// Write `value` under `key` for `service`.
 ///
 /// On macOS, uses the `security` CLI. In debug builds `-A` is added so that
 /// any application can access the item without triggering authorization
 /// prompts (development convenience — the binary changes on every rebuild).
 /// In release builds `-A` is omitted for proper per-app keychain isolation.
-#[command]
-pub async fn store_keyring_token(key: String, value: String) -> Result<()> {
+fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         // Delete existing entry first (add-generic-password fails if it exists)
         let _ = std::process::Command::new("security")
-            .args([
-                "delete-generic-password",
-                "-s",
-                INTEGRATION_SERVICE,
-                "-a",
-                &key,
-            ])
+            .args(["delete-generic-password", "-s", service, "-a", key])
             .output();
 
         // `-w` last with no value => password read from stdin. This avoids
         // exposing the token via argv (`ps -E` is readable by any process
         // running under the same user).
         use std::io::Write as _;
-        let security_args = build_security_add_args(INTEGRATION_SERVICE, &key);
+        let security_args = build_security_add_args(service, key);
         let mut child = std::process::Command::new("security")
             .args(&security_args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run security: {e}")))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(value.as_bytes()).map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to write token: {e}"))
+                GitnadoError::OperationFailed(format!("Failed to write token: {e}"))
             })?;
         }
         let output = child
             .wait_with_output()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run security: {e}")))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Failed to store token: {stderr}"
             )));
         }
@@ -815,30 +812,21 @@ pub async fn store_keyring_token(key: String, value: String) -> Result<()> {
     {
         // Chunk transparently: Windows Credential Manager caps a secret at 2560
         // bytes, which large Entra tokens exceed.
-        crate::services::keyring_util::set(INTEGRATION_SERVICE, &key, &value)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to store token: {e}")))?;
+        crate::services::keyring_util::set(service, key, value)
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to store token: {e}")))?;
     }
 
-    tracing::debug!("Stored keyring token for key: {}", key);
     Ok(())
 }
 
-/// Retrieve an integration token from the system keyring.
-#[command]
-pub async fn get_keyring_token(key: String) -> Result<Option<String>> {
+/// Read `key` from `service`; `Ok(None)` when absent.
+fn read_keyring_token(service: &str, key: &str) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     {
         let output = std::process::Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                INTEGRATION_SERVICE,
-                "-a",
-                &key,
-                "-w",
-            ])
+            .args(["find-generic-password", "-s", service, "-a", key, "-w"])
             .output()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run security: {e}")))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
 
         if output.status.success() {
             let password = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -855,34 +843,85 @@ pub async fn get_keyring_token(key: String) -> Result<Option<String>> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        crate::services::keyring_util::get(INTEGRATION_SERVICE, &key)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get token: {e}")))
+        crate::services::keyring_util::get(service, key)
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get token: {e}")))
     }
 }
 
-/// Delete an integration token from the system keyring.
-#[command]
-pub async fn delete_keyring_token(key: String) -> Result<()> {
+/// Remove `key` from `service`. A missing entry is not an error.
+fn remove_keyring_token(service: &str, key: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("security")
-            .args([
-                "delete-generic-password",
-                "-s",
-                INTEGRATION_SERVICE,
-                "-a",
-                &key,
-            ])
+            .args(["delete-generic-password", "-s", service, "-a", key])
             .output();
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         // Removes the primary entry and any chunk entries a large token created.
-        crate::services::keyring_util::delete(INTEGRATION_SERVICE, &key)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to delete token: {e}")))?;
+        crate::services::keyring_util::delete(service, key)
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to delete token: {e}")))
     }
+}
 
+/// Read `key` under `service`, falling back to `legacy_service`. A legacy hit is
+/// re-stored under `service` and the old entry removed, so the fallback is taken
+/// once per key. The backend is passed in so the logic is unit-tested.
+fn read_with_legacy_fallback(
+    service: &str,
+    legacy_service: &str,
+    key: &str,
+    read: impl Fn(&str, &str) -> Result<Option<String>>,
+    write: impl Fn(&str, &str, &str) -> Result<()>,
+    remove: impl Fn(&str, &str) -> Result<()>,
+) -> Result<Option<String>> {
+    if let Some(value) = read(service, key)? {
+        return Ok(Some(value));
+    }
+    let Some(value) = read(legacy_service, key)? else {
+        return Ok(None);
+    };
+    write(service, key, &value)?;
+    if let Err(e) = remove(legacy_service, key) {
+        tracing::warn!(
+            "Adopted legacy keyring token for {} but could not remove the old entry: {}",
+            key,
+            e
+        );
+    }
+    Ok(Some(value))
+}
+
+/// Store an integration token in the system keyring.
+#[command]
+pub async fn store_keyring_token(key: String, value: String) -> Result<()> {
+    write_keyring_token(INTEGRATION_SERVICE, &key, &value)?;
+    tracing::debug!("Stored keyring token for key: {}", key);
+    Ok(())
+}
+
+/// Retrieve an integration token from the system keyring, adopting one stored
+/// under the pre-rename service name if that is where it lives.
+#[command]
+pub async fn get_keyring_token(key: String) -> Result<Option<String>> {
+    read_with_legacy_fallback(
+        INTEGRATION_SERVICE,
+        LEGACY_INTEGRATION_SERVICE,
+        &key,
+        read_keyring_token,
+        write_keyring_token,
+        remove_keyring_token,
+    )
+}
+
+/// Delete an integration token from the system keyring, under both the current
+/// and the pre-rename service name.
+#[command]
+pub async fn delete_keyring_token(key: String) -> Result<()> {
+    remove_keyring_token(INTEGRATION_SERVICE, &key)?;
+    remove_keyring_token(LEGACY_INTEGRATION_SERVICE, &key)?;
     tracing::debug!("Deleted keyring token for key: {}", key);
     Ok(())
 }
@@ -1062,7 +1101,7 @@ mod tests {
             Some(repo.path_str()),
             "cache".to_string(),
             Some(false),
-            Some("https://leviathan-scope.example".to_string()),
+            Some("https://gitnado-scope.example".to_string()),
         )
         .await
         .unwrap();
@@ -1072,7 +1111,7 @@ mod tests {
             .iter()
             .find(|h| {
                 h.scope == "url"
-                    && h.url_pattern.as_deref() == Some("https://leviathan-scope.example")
+                    && h.url_pattern.as_deref() == Some("https://gitnado-scope.example")
             })
             .expect("URL-scoped helper should be listed");
 
@@ -1088,7 +1127,7 @@ mod tests {
         let result = unset_credential_helper(
             None,
             Some(false),
-            Some("https://leviathan-scope.example".to_string()),
+            Some("https://gitnado-scope.example".to_string()),
         )
         .await;
 
@@ -1106,7 +1145,7 @@ mod tests {
         let result = unset_credential_helper(
             Some(dir.path().to_string_lossy().into_owned()),
             Some(false),
-            Some("https://leviathan-scope.example".to_string()),
+            Some("https://gitnado-scope.example".to_string()),
         )
         .await;
 
@@ -1141,7 +1180,7 @@ mod tests {
             Some(repo.path_str()),
             "cache".to_string(),
             Some(false),
-            Some("https://leviathan-remove.example".to_string()),
+            Some("https://gitnado-remove.example".to_string()),
         )
         .await
         .unwrap();
@@ -1149,7 +1188,7 @@ mod tests {
         unset_credential_helper(
             Some(repo.path_str()),
             Some(false),
-            Some("https://leviathan-remove.example".to_string()),
+            Some("https://gitnado-remove.example".to_string()),
         )
         .await
         .unwrap();
@@ -1158,7 +1197,7 @@ mod tests {
         assert!(
             !helpers
                 .iter()
-                .any(|h| h.url_pattern.as_deref() == Some("https://leviathan-remove.example")),
+                .any(|h| h.url_pattern.as_deref() == Some("https://gitnado-remove.example")),
             "the URL-scoped helper should be gone from the listing"
         );
     }
@@ -1594,6 +1633,100 @@ mod tests {
         let result = set_credential_helper(None, "osxkeychain\nevil".to_string(), None, None).await;
         assert!(result.is_err(), "injected helper must be rejected");
     }
+    // --- legacy service-name fallback -------------------------------------
+
+    type FakeKeyring =
+        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(String, String), String>>>;
+
+    fn read_fallback(store: &FakeKeyring, key: &str, write_fails: bool) -> Result<Option<String>> {
+        let r = store.clone();
+        let w = store.clone();
+        let d = store.clone();
+        read_with_legacy_fallback(
+            "gitnado-integrations",
+            "leviathan-integrations",
+            key,
+            move |s, k| Ok(r.borrow().get(&(s.to_string(), k.to_string())).cloned()),
+            move |s, k, v| {
+                if write_fails {
+                    return Err(GitnadoError::OperationFailed("write failed".into()));
+                }
+                w.borrow_mut()
+                    .insert((s.to_string(), k.to_string()), v.to_string());
+                Ok(())
+            },
+            move |s, k| {
+                d.borrow_mut().remove(&(s.to_string(), k.to_string()));
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn token_fallback_prefers_current_service() {
+        let store: FakeKeyring = Default::default();
+        store.borrow_mut().insert(
+            ("gitnado-integrations".into(), "github".into()),
+            "new".into(),
+        );
+        store.borrow_mut().insert(
+            ("leviathan-integrations".into(), "github".into()),
+            "old".into(),
+        );
+        assert_eq!(
+            read_fallback(&store, "github", false).unwrap().as_deref(),
+            Some("new")
+        );
+        assert_eq!(store.borrow().len(), 2, "nothing is touched");
+    }
+
+    #[test]
+    fn token_fallback_adopts_legacy_token_once() {
+        let store: FakeKeyring = Default::default();
+        store.borrow_mut().insert(
+            ("leviathan-integrations".into(), "gitlab".into()),
+            "tok".into(),
+        );
+
+        assert_eq!(
+            read_fallback(&store, "gitlab", false).unwrap().as_deref(),
+            Some("tok")
+        );
+        {
+            let s = store.borrow();
+            assert_eq!(
+                s.get(&("gitnado-integrations".into(), "gitlab".into()))
+                    .map(String::as_str),
+                Some("tok")
+            );
+            assert!(!s.contains_key(&("leviathan-integrations".into(), "gitlab".into())));
+        }
+        // Second read is served from the current service.
+        assert_eq!(
+            read_fallback(&store, "gitlab", false).unwrap().as_deref(),
+            Some("tok")
+        );
+    }
+
+    #[test]
+    fn token_fallback_propagates_write_failure_and_keeps_legacy() {
+        let store: FakeKeyring = Default::default();
+        store.borrow_mut().insert(
+            ("leviathan-integrations".into(), "jira".into()),
+            "tok".into(),
+        );
+        assert!(read_fallback(&store, "jira", true).is_err());
+        assert!(store
+            .borrow()
+            .contains_key(&("leviathan-integrations".into(), "jira".into())));
+    }
+
+    #[test]
+    fn token_fallback_none_when_absent_everywhere() {
+        let store: FakeKeyring = Default::default();
+        assert_eq!(read_fallback(&store, "bitbucket", false).unwrap(), None);
+        assert!(store.borrow().is_empty());
+    }
 }
 
 // ========================================================================
@@ -1607,7 +1740,7 @@ pub struct CredentialManagerStatus {
     pub gcm_available: bool,
     pub gcm_version: Option<String>,
     pub configured_helper: Option<String>,
-    pub using_leviathan_fallback: bool,
+    pub using_gitnado_fallback: bool,
 }
 
 /// Detect the system's Git Credential Manager and its configuration
@@ -1671,12 +1804,12 @@ pub async fn detect_credential_manager(path: String) -> Result<CredentialManager
             })
     });
 
-    let using_leviathan_fallback = !gcm_available && configured_helper.is_none();
+    let using_gitnado_fallback = !gcm_available && configured_helper.is_none();
 
     Ok(CredentialManagerStatus {
         gcm_available,
         gcm_version,
         configured_helper,
-        using_leviathan_fallback,
+        using_gitnado_fallback,
     })
 }

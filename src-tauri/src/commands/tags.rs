@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{Signature, Tag};
 use crate::services::credentials_service;
 
@@ -63,10 +63,10 @@ fn create_signed_tag_cli(
         .current_dir(path)
         .args(&args)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git tag: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git tag: {}", e)))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Failed to create signed tag: {}",
             stderr.trim()
         )));
@@ -130,9 +130,9 @@ pub async fn get_tag_details(path: String, name: String) -> Result<TagDetails> {
     let refname = format!("refs/tags/{}", name);
     let reference = repo
         .find_reference(&refname)
-        .map_err(|_| LeviathanError::TagNotFound(name.clone()))?;
+        .map_err(|_| GitnadoError::TagNotFound(name.clone()))?;
 
-    let ref_oid = reference.target().ok_or(LeviathanError::InvalidReference)?;
+    let ref_oid = reference.target().ok_or(GitnadoError::InvalidReference)?;
 
     // Try to get tag details if it's an annotated tag
     let details = if let Ok(tag) = repo.find_tag(ref_oid) {
@@ -251,7 +251,7 @@ pub async fn push_tag(
     let remote_name = crate::commands::remote::resolve_push_remote(&repo, remote);
     let mut remote_obj = repo
         .find_remote(&remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
 
     let mut push_opts = credentials_service::get_push_options(token);
 
@@ -289,7 +289,7 @@ pub async fn delete_remote_tag(
     let remote_name = remote.as_deref().unwrap_or("origin");
     let mut remote_obj = repo
         .find_remote(remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.to_string()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.to_string()))?;
 
     let mut push_opts = credentials_service::get_push_options(token.clone());
 
@@ -343,14 +343,14 @@ pub async fn edit_tag_message(path: String, name: String, message: String) -> Re
     let refname = format!("refs/tags/{}", name);
     let reference = repo
         .find_reference(&refname)
-        .map_err(|_| LeviathanError::TagNotFound(name.clone()))?;
+        .map_err(|_| GitnadoError::TagNotFound(name.clone()))?;
 
-    let ref_oid = reference.target().ok_or(LeviathanError::InvalidReference)?;
+    let ref_oid = reference.target().ok_or(GitnadoError::InvalidReference)?;
 
     // Get tag details - we need the target commit
-    let tag = repo.find_tag(ref_oid).map_err(|_| {
-        LeviathanError::OperationFailed("Cannot edit a lightweight tag".to_string())
-    })?;
+    let tag = repo
+        .find_tag(ref_oid)
+        .map_err(|_| GitnadoError::OperationFailed("Cannot edit a lightweight tag".to_string()))?;
 
     let target_oid = tag.target_id();
     let target_obj = repo.find_object(target_oid, None)?;

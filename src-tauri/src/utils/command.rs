@@ -176,7 +176,7 @@ pub fn apply_token_credential_helper(cmd: &mut Command, token: &str, remote_url:
         return;
     };
 
-    cmd.env("LEVIATHAN_GIT_TOKEN", token);
+    cmd.env("GITNADO_GIT_TOKEN", token);
     cmd.env("GIT_CONFIG_COUNT", "2");
     cmd.env("GIT_CONFIG_KEY_0", &key);
     cmd.env("GIT_CONFIG_VALUE_0", "");
@@ -187,7 +187,7 @@ pub fn apply_token_credential_helper(cmd: &mut Command, token: &str, remote_url:
     // leak into .git/config, the reflog, or a git error message.
     cmd.env(
         "GIT_CONFIG_VALUE_1",
-        "!f() { echo username=git; echo \"password=$LEVIATHAN_GIT_TOKEN\"; }; f",
+        "!f() { echo username=git; echo \"password=$GITNADO_GIT_TOKEN\"; }; f",
     );
 }
 
@@ -313,7 +313,7 @@ mod tests {
             Some("credential.https://example.com.helper")
         );
         assert_eq!(
-            envs.get("LEVIATHAN_GIT_TOKEN").map(String::as_str),
+            envs.get("GITNADO_GIT_TOKEN").map(String::as_str),
             Some("ghp_secret")
         );
     }
@@ -330,7 +330,7 @@ mod tests {
             .map(|(k, _)| k.to_string_lossy().to_string())
             .collect();
         assert!(!keys.iter().any(|k| k == "GIT_CONFIG_COUNT"));
-        assert!(!keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"));
+        assert!(!keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"));
     }
 
     /// An SSH remote DOES name a provider host, and the token is a provider
@@ -356,7 +356,7 @@ mod tests {
             Some("credential.https://github.com.helper")
         );
         assert_eq!(
-            envs.get("LEVIATHAN_GIT_TOKEN").map(String::as_str),
+            envs.get("GITNADO_GIT_TOKEN").map(String::as_str),
             Some("ghp_secret")
         );
     }
@@ -375,6 +375,6 @@ mod tests {
             .map(|(k, _)| k.to_string_lossy().to_string())
             .collect();
         assert!(!keys.iter().any(|k| k == "GIT_CONFIG_COUNT"));
-        assert!(!keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"));
+        assert!(!keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"));
     }
 }

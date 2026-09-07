@@ -4,7 +4,7 @@
 //! Token storage is handled by the frontend credential service (OS keyring).
 //! All API functions accept an optional token parameter from the frontend.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
@@ -15,7 +15,7 @@ const GITLAB_API_VERSION: &str = "v4";
 fn resolve_token(token: Option<String>) -> Result<String> {
     match token {
         Some(t) if !t.is_empty() => Ok(t),
-        _ => Err(LeviathanError::OperationFailed(
+        _ => Err(GitnadoError::OperationFailed(
             "GitLab token not configured".to_string(),
         )),
     }
@@ -32,7 +32,7 @@ async fn gitlab_get(url: &str, token: &str) -> Result<reqwest::Response> {
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Request failed: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Request failed: {}", e)))?;
 
     // If Bearer auth fails with 401, try PRIVATE-TOKEN (for PATs)
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -41,7 +41,7 @@ async fn gitlab_get(url: &str, token: &str) -> Result<reqwest::Response> {
             .header("PRIVATE-TOKEN", token)
             .send()
             .await
-            .map_err(|e| LeviathanError::OperationFailed(format!("Request failed: {}", e)));
+            .map_err(|e| GitnadoError::OperationFailed(format!("Request failed: {}", e)));
     }
 
     Ok(response)
@@ -64,7 +64,7 @@ async fn gitlab_post<T: Serialize + ?Sized>(
         .json(body)
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Request failed: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Request failed: {}", e)))?;
 
     // If Bearer auth fails with 401, try PRIVATE-TOKEN (for PATs)
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -75,7 +75,7 @@ async fn gitlab_post<T: Serialize + ?Sized>(
             .json(body)
             .send()
             .await
-            .map_err(|e| LeviathanError::OperationFailed(format!("Request failed: {}", e)));
+            .map_err(|e| GitnadoError::OperationFailed(format!("Request failed: {}", e)));
     }
 
     Ok(response)
@@ -259,9 +259,7 @@ pub async fn check_gitlab_connection(
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to check connection: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to check connection: {}", e)))?;
 
     // If Bearer auth fails with 401, try PRIVATE-TOKEN (for PATs)
     let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -272,7 +270,7 @@ pub async fn check_gitlab_connection(
             .send()
             .await
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to check connection: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to check connection: {}", e))
             })?
     } else {
         response
@@ -295,9 +293,10 @@ pub async fn check_gitlab_connection(
         web_url: String,
     }
 
-    let api_user: ApiUser = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse user data: {}", e))
-    })?;
+    let api_user: ApiUser = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse user data: {}", e)))?;
 
     Ok(GitLabConnectionStatus {
         connected: true,
@@ -318,13 +317,12 @@ pub async fn detect_gitlab_repo(
     path: String,
     remote_name: Option<String>,
 ) -> Result<Option<DetectedGitLabRepo>> {
-    let repo = git2::Repository::open(&path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to open repository: {}", e))
-    })?;
+    let repo = git2::Repository::open(&path)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
 
     let remotes = repo
         .remotes()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
 
     for candidate in remotes.iter().flatten().flatten() {
         if remote_name
@@ -426,7 +424,7 @@ pub async fn list_gitlab_merge_requests(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));
@@ -457,7 +455,7 @@ pub async fn list_gitlab_merge_requests(
     }
 
     let mrs: Vec<ApiMR> = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse merge requests: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse merge requests: {}", e))
     })?;
 
     Ok(mrs
@@ -505,7 +503,7 @@ pub async fn get_gitlab_merge_request(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));
@@ -536,7 +534,7 @@ pub async fn get_gitlab_merge_request(
     }
 
     let mr: ApiMR = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse merge request: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse merge request: {}", e))
     })?;
 
     Ok(GitLabMergeRequest {
@@ -602,7 +600,7 @@ pub async fn create_gitlab_merge_request(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));
@@ -633,7 +631,7 @@ pub async fn create_gitlab_merge_request(
     }
 
     let mr: ApiMR = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse merge request: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse merge request: {}", e))
     })?;
 
     Ok(GitLabMergeRequest {
@@ -690,7 +688,7 @@ pub async fn list_gitlab_issues(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));
@@ -721,7 +719,7 @@ pub async fn list_gitlab_issues(
     let issues: Vec<ApiIssue> = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse issues: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issues: {}", e)))?;
 
     Ok(issues
         .into_iter()
@@ -788,7 +786,7 @@ pub async fn create_gitlab_issue(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));
@@ -819,7 +817,7 @@ pub async fn create_gitlab_issue(
     let issue: ApiIssue = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
 
     Ok(GitLabIssue {
         iid: issue.iid,
@@ -884,7 +882,7 @@ pub async fn list_gitlab_pipelines(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));
@@ -904,9 +902,10 @@ pub async fn list_gitlab_pipelines(
         web_url: String,
     }
 
-    let pipelines: Vec<ApiPipeline> = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pipelines: {}", e))
-    })?;
+    let pipelines: Vec<ApiPipeline> = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse pipelines: {}", e)))?;
 
     Ok(pipelines
         .into_iter()
@@ -949,7 +948,7 @@ pub async fn get_gitlab_labels(
         }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitLab API error {}: {}",
             status, body
         )));

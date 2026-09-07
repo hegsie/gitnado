@@ -11,7 +11,7 @@ use tauri::{command, AppHandle, State};
 pub async fn check_for_update(app: AppHandle) -> Result<UpdateCheckEvent> {
     check_for_update_manual(&app)
         .await
-        .map_err(crate::error::LeviathanError::OperationFailed)
+        .map_err(crate::error::GitnadoError::OperationFailed)
 }
 
 /// Download and install the available update
@@ -19,7 +19,7 @@ pub async fn check_for_update(app: AppHandle) -> Result<UpdateCheckEvent> {
 pub async fn download_and_install_update(app: AppHandle) -> Result<()> {
     install_update(&app)
         .await
-        .map_err(crate::error::LeviathanError::OperationFailed)
+        .map_err(crate::error::GitnadoError::OperationFailed)
 }
 
 /// Start automatic update checking
@@ -30,7 +30,7 @@ pub async fn start_auto_update_check(
     interval_hours: u32,
 ) -> Result<()> {
     if interval_hours == 0 {
-        return Err(crate::error::LeviathanError::OperationFailed(
+        return Err(crate::error::GitnadoError::OperationFailed(
             "Interval must be greater than 0".to_string(),
         ));
     }

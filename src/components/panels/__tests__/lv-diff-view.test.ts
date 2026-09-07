@@ -218,7 +218,7 @@ describe('lv-diff-view', () => {
     confirmAnswer = 'Ok';
     // Word wrap is a shared setting now — start every test from a known off.
     settingsStore.getState().setWordWrap(false);
-    localStorage.removeItem('leviathan-diff-word-wrap');
+    localStorage.removeItem('gitnado-diff-word-wrap');
   });
 
   describe('async diff context pinning', () => {
@@ -1963,7 +1963,7 @@ describe('lv-diff-view', () => {
       clickWordWrapButton(el);
       await el.updateComplete;
 
-      expect(localStorage.getItem('leviathan-diff-word-wrap')).to.be.null;
+      expect(localStorage.getItem('gitnado-diff-word-wrap')).to.be.null;
     });
 
     it('stops following the setting once removed', async () => {

@@ -34,9 +34,9 @@ export default tseslint.config(
     // Every component, not just dialogs: lv-toolbar owns a document capture
     // Escape handler that stopPropagation()s, and sat outside the old glob.
     files: ['src/components/**/*.ts'],
-    plugins: { leviathan: { rules: { 'overlay-stack-membership': overlayStackMembership } } },
+    plugins: { gitnado: { rules: { 'overlay-stack-membership': overlayStackMembership } } },
     rules: {
-      'leviathan/overlay-stack-membership': 'error',
+      'gitnado/overlay-stack-membership': 'error',
     },
   },
   {

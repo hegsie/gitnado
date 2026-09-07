@@ -3,7 +3,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{AheadBehind, Branch, BranchTrackingInfo};
 
 /// Default stale threshold in days
@@ -155,7 +155,7 @@ pub async fn create_branch(
         let switch = (|| -> Result<()> {
             repo.checkout_tree(&obj, None)?;
             repo.set_head(reference.name().map_err(|_| {
-                LeviathanError::OperationFailed("Invalid reference name encoding".to_string())
+                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
             })?)?;
             Ok(())
         })();
@@ -189,7 +189,7 @@ pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> R
 
     let mut branch = repo
         .find_branch(&name, git2::BranchType::Local)
-        .map_err(|_| LeviathanError::BranchNotFound(name.clone()))?;
+        .map_err(|_| GitnadoError::BranchNotFound(name.clone()))?;
 
     // Enforce preventDeletion branch rules HERE rather than only in the cleanup
     // dialog's candidate listing: the sidebar and the graph ref menu call this
@@ -205,7 +205,7 @@ pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> R
     // protected.
     let rules = super::branch_rules::load_rules(Path::new(&path))?;
     if super::branch_rules::is_deletion_prevented(&rules, &name) {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Branch \"{}\" is protected by a branch rule and cannot be deleted. Remove the rule first.",
             name
         )));
@@ -227,7 +227,7 @@ pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> R
         let head = match repo.head() {
             Ok(h) => h,
             Err(_) => {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "Branch is not fully merged. Use force to delete anyway.".to_string(),
                 ))
             }
@@ -240,7 +240,7 @@ pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> R
             if head_oid == branch_oid || repo.graph_descendant_of(head_oid, branch_oid)? {
                 branch.delete()?;
             } else {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "Branch is not fully merged. Use force to delete anyway.".to_string(),
                 ));
             }
@@ -268,7 +268,7 @@ pub async fn rename_branch(
 
     let mut branch = repo
         .find_branch(&old_name, git2::BranchType::Local)
-        .map_err(|_| LeviathanError::BranchNotFound(old_name.clone()))?;
+        .map_err(|_| GitnadoError::BranchNotFound(old_name.clone()))?;
 
     // Capture existing upstream info before rename
     let upstream_name = branch
@@ -449,7 +449,7 @@ pub(crate) fn ensure_not_checked_out_elsewhere(
     branch_name: &str,
 ) -> Result<()> {
     if let Some(path) = branch_checked_out_elsewhere(repo, branch_name) {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "'{}' is already checked out at {}",
             branch_name, path
         )));
@@ -471,12 +471,12 @@ fn autostash_failure(
     stashed: bool,
     stash_oid: Option<git2::Oid>,
     msg: &str,
-) -> LeviathanError {
+) -> GitnadoError {
     if stashed {
         match auto_stash_index(repo, stash_oid) {
             Some(idx) => {
                 if let Err(pop_err) = repo.stash_pop(idx, None) {
-                    return LeviathanError::OperationFailed(format!(
+                    return GitnadoError::OperationFailed(format!(
                         "Checkout failed: {}. Additionally, failed to restore \
                          stashed changes: {}",
                         msg,
@@ -485,7 +485,7 @@ fn autostash_failure(
                 }
             }
             None => {
-                return LeviathanError::OperationFailed(format!(
+                return GitnadoError::OperationFailed(format!(
                     "Checkout failed: {}. Your changes could not be found to \
                      restore — they are still in the stash list, apply them \
                      manually.",
@@ -494,7 +494,7 @@ fn autostash_failure(
             }
         }
     }
-    LeviathanError::OperationFailed(format!("Checkout failed: {}", msg))
+    GitnadoError::OperationFailed(format!("Checkout failed: {}", msg))
 }
 
 fn auto_stash_index(repo: &mut git2::Repository, stash_oid: Option<git2::Oid>) -> Option<usize> {
@@ -530,7 +530,7 @@ pub(crate) fn ensure_checkoutable(repo: &git2::Repository) -> Result<()> {
     let Some(what) = in_progress_operation(repo.state()) else {
         return Ok(());
     };
-    Err(LeviathanError::OperationFailed(format!(
+    Err(GitnadoError::OperationFailed(format!(
         "Cannot switch branches while a {} is in progress. Finish or abort it first.",
         what
     )))
@@ -563,7 +563,7 @@ pub async fn checkout(path: String, ref_name: String, force: Option<bool>) -> Re
         let obj = branch.get().peel(git2::ObjectType::Commit)?;
         repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
         repo.set_head(branch.get().name().map_err(|_| {
-            LeviathanError::OperationFailed("Invalid reference name encoding".to_string())
+            GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
         })?)?;
     } else if let Ok(remote_branch) = repo.find_branch(&ref_name, git2::BranchType::Remote) {
         // Checking out a remote branch - use or create a local tracking branch.
@@ -582,7 +582,7 @@ pub async fn checkout(path: String, ref_name: String, force: Option<bool>) -> Re
                 let obj = local_branch.get().peel(git2::ObjectType::Commit)?;
                 repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
                 repo.set_head(local_branch.get().name().map_err(|_| {
-                    LeviathanError::OperationFailed("Invalid reference name encoding".to_string())
+                    GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
                 })?)?;
             } else {
                 // Create new local branch from the remote branch.
@@ -606,9 +606,7 @@ pub async fn checkout(path: String, ref_name: String, force: Option<bool>) -> Re
                     .get()
                     .name()
                     .map_err(|_| {
-                        LeviathanError::OperationFailed(
-                            "Invalid reference name encoding".to_string(),
-                        )
+                        GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
                     })?
                     .to_string();
 
@@ -652,7 +650,7 @@ pub async fn checkout(path: String, ref_name: String, force: Option<bool>) -> Re
                     let _ = new_branch.delete();
 
                     if !restored {
-                        return Err(LeviathanError::OperationFailed(format!(
+                        return Err(GitnadoError::OperationFailed(format!(
                             "Could not switch to {}: {}. The working tree still holds \
                              {}'s content — check it out again to recover.",
                             local_name, e, remote_name
@@ -698,7 +696,7 @@ pub async fn set_upstream_branch(
 
         let mut local_branch = repo
             .find_branch(&branch, git2::BranchType::Local)
-            .map_err(|_| LeviathanError::BranchNotFound(branch.clone()))?;
+            .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
         // Normalize upstream to shorthand form (e.g., "refs/remotes/origin/main" -> "origin/main")
         let upstream_short = if upstream.starts_with("refs/remotes/") {
@@ -715,7 +713,7 @@ pub async fn set_upstream_branch(
 
         // Check if the upstream reference exists
         repo.find_reference(&upstream_ref).map_err(|_| {
-            LeviathanError::OperationFailed(format!(
+            GitnadoError::OperationFailed(format!(
                 "Upstream reference not found: {}",
                 upstream_short
             ))
@@ -736,7 +734,7 @@ pub async fn unset_upstream_branch(path: String, branch: String) -> Result<()> {
 
     let mut local_branch = repo
         .find_branch(&branch, git2::BranchType::Local)
-        .map_err(|_| LeviathanError::BranchNotFound(branch.clone()))?;
+        .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
     // Remove the upstream (ignore error if no upstream was set)
     let _ = local_branch.set_upstream(None);
@@ -751,12 +749,12 @@ pub async fn get_branch_tracking_info(path: String, branch: String) -> Result<Br
 
     let local_branch = repo
         .find_branch(&branch, git2::BranchType::Local)
-        .map_err(|_| LeviathanError::BranchNotFound(branch.clone()))?;
+        .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
     let local_oid = local_branch
         .get()
         .target()
-        .ok_or_else(|| LeviathanError::OperationFailed("Branch has no target".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Branch has no target".to_string()))?;
 
     // Try to get upstream info
     let upstream_result = local_branch.upstream();
@@ -864,7 +862,7 @@ pub async fn create_orphan_branch(path: String, name: String, checkout: bool) ->
     //
     // Refused up front, so the repository is never touched.
     if !checkout {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "An orphan branch has no commits, so it is not a branch until its first commit is \
              made — git cannot create one without switching to it. Check it out, make the first \
              commit, then switch back."
@@ -881,12 +879,12 @@ pub async fn create_orphan_branch(path: String, name: String, checkout: bool) ->
         .args(&args)
         .output()
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to run git checkout --orphan: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to run git checkout --orphan: {}", e))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Git checkout --orphan failed: {}",
             stderr
         )));
@@ -1082,7 +1080,7 @@ pub async fn checkout_with_autostash(
             } else {
                 ""
             };
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "{}{}",
                 msg, restore_note
             )));
@@ -1194,7 +1192,7 @@ pub async fn checkout_with_autostash(
         if is_local_branch {
             let branch = repo.find_branch(&ref_name, git2::BranchType::Local)?;
             repo.set_head(branch.get().name().map_err(|_| {
-                LeviathanError::OperationFailed("Invalid reference name encoding".to_string())
+                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
             })?)?;
         } else if is_remote_branch {
             // Check out a remote branch by finding or creating a local tracking branch.
@@ -1218,7 +1216,7 @@ pub async fn checkout_with_autostash(
                 };
 
             let name = local_branch.get().name().map_err(|_| {
-                LeviathanError::OperationFailed("Invalid reference name encoding".to_string())
+                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
             })?;
             repo.set_head(name)?;
         } else {

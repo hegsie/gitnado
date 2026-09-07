@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{command, AppHandle, Emitter};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{Repository, RepositoryState};
 use crate::utils::create_command;
 
@@ -36,9 +36,7 @@ pub async fn open_repository(path: String) -> Result<Repository> {
     let path = Path::new(&path);
 
     if !path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(
-            path.display().to_string(),
-        ));
+        return Err(GitnadoError::RepositoryNotFound(path.display().to_string()));
     }
 
     let repo = git2::Repository::open(path)?;
@@ -84,7 +82,7 @@ pub async fn open_repository(path: String) -> Result<Repository> {
 /// passed to `git clone`.
 fn validate_clone_url(url: &str) -> Result<()> {
     if url.is_empty() {
-        return Err(LeviathanError::Custom("Clone URL is empty".into()));
+        return Err(GitnadoError::Custom("Clone URL is empty".into()));
     }
     // Leading-`-` and CR/LF are the universal CLI-safety rejections. Reuse
     // the shared helper so this stays consistent with every other git-CLI
@@ -132,7 +130,7 @@ fn validate_clone_url(url: &str) -> Result<()> {
         }
     };
     if !has_scheme && !looks_like_scp {
-        return Err(LeviathanError::Custom(format!(
+        return Err(GitnadoError::Custom(format!(
             "Unsupported clone URL scheme: {}",
             url
         )));
@@ -205,7 +203,7 @@ fn build_clone_command(
     // same way, so an ssh:// or git:// clone keeps using the user's own
     // credentials exactly as before.
     if let (Some(token_value), true) = (token, url.starts_with("https://")) {
-        cmd.env("LEVIATHAN_CLONE_TOKEN", token_value);
+        cmd.env("GITNADO_CLONE_TOKEN", token_value);
         // Two entries: the empty helper resets the list, so the token the
         // caller gave us wins outright the way in-URL credentials did. Without
         // the reset, a system helper holding a stale credential for the same
@@ -221,7 +219,7 @@ fn build_clone_command(
         // ignores the username.
         cmd.env(
             "GIT_CONFIG_VALUE_1",
-            "!f() { echo username=git; echo \"password=$LEVIATHAN_CLONE_TOKEN\"; }; f",
+            "!f() { echo username=git; echo \"password=$GITNADO_CLONE_TOKEN\"; }; f",
         );
     }
 
@@ -230,8 +228,8 @@ fn build_clone_command(
 
 /// Wrap git's stderr in the error the clone dialog displays, with any
 /// credentials embedded in a URL stripped first.
-fn clone_failed(stderr: &str) -> LeviathanError {
-    LeviathanError::Custom(format!(
+fn clone_failed(stderr: &str) -> GitnadoError {
+    GitnadoError::Custom(format!(
         "git clone failed: {}",
         crate::commands::credentials::redact_credentials_in_text(stderr.trim())
     ))
@@ -473,14 +471,14 @@ pub async fn clone_repository(
     // `--branch=<value>` style would otherwise re-introduce flag injection.
     if let Some(ref b) = branch {
         if b.starts_with('-') || b.contains('\n') || b.contains('\r') {
-            return Err(LeviathanError::Custom(
+            return Err(GitnadoError::Custom(
                 "Branch name must not start with '-' or contain newlines".into(),
             ));
         }
     }
     if let Some(ref f) = filter {
         if f.starts_with('-') || f.contains('\n') || f.contains('\r') {
-            return Err(LeviathanError::Custom(
+            return Err(GitnadoError::Custom(
                 "Filter spec must not start with '-' or contain newlines".into(),
             ));
         }
@@ -518,7 +516,7 @@ pub async fn clone_repository(
                 cmd.stderr(std::process::Stdio::piped());
 
                 let mut child = cmd.spawn().map_err(|e| {
-                    LeviathanError::Custom(format!("Failed to execute git command: {}", e))
+                    GitnadoError::Custom(format!("Failed to execute git command: {}", e))
                 })?;
 
                 let stderr_pipe = child.stderr.take();
@@ -577,13 +575,13 @@ pub async fn clone_repository(
 
                         return Err(match abnormal {
                             CloneOutcome::Cancelled => {
-                                LeviathanError::Custom("Clone cancelled".to_string())
+                                GitnadoError::Custom("Clone cancelled".to_string())
                             }
-                            CloneOutcome::TimedOut => LeviathanError::OperationTimeout(
+                            CloneOutcome::TimedOut => GitnadoError::OperationTimeout(
                                 "Clone operation timed out".to_string(),
                             ),
                             CloneOutcome::WaitFailed(e) => {
-                                LeviathanError::Custom(format!("Failed to wait for git: {}", e))
+                                GitnadoError::Custom(format!("Failed to wait for git: {}", e))
                             }
                             CloneOutcome::Finished(_) => unreachable!("handled above"),
                         });
@@ -596,12 +594,11 @@ pub async fn clone_repository(
                     return Err(clone_failed(&stderr));
                 }
 
-                git2::Repository::open(&dest_path).map_err(|e| {
-                    LeviathanError::Custom(format!("Failed to open cloned repo: {}", e))
-                })
+                git2::Repository::open(&dest_path)
+                    .map_err(|e| GitnadoError::Custom(format!("Failed to open cloned repo: {}", e)))
             })
             .await
-            .map_err(|e| LeviathanError::Custom(format!("Clone task failed: {}", e)))?;
+            .map_err(|e| GitnadoError::Custom(format!("Clone task failed: {}", e)))?;
 
             let repo = result?;
             let path = Path::new(&path);
@@ -743,7 +740,7 @@ pub async fn clone_repository(
                 builder.clone(&url_clone, &dest_path)
             })
             .await
-            .map_err(|e| LeviathanError::Custom(format!("Clone task failed: {}", e)))?;
+            .map_err(|e| GitnadoError::Custom(format!("Clone task failed: {}", e)))?;
 
             let repo = match result {
                 Ok(repo) => repo,
@@ -753,7 +750,7 @@ pub async fn clone_repository(
                     // checkout so a retry does not hit an occupied destination.
                     if CLONE_CANCELLED.load(Ordering::Relaxed) {
                         let _ = std::fs::remove_dir_all(Path::new(&path));
-                        return Err(LeviathanError::Custom("Clone cancelled".to_string()));
+                        return Err(GitnadoError::Custom("Clone cancelled".to_string()));
                     }
                     // A deadline abort leaves exactly the same partial checkout
                     // a cancellation does, and reported it as a bare libgit2
@@ -762,7 +759,7 @@ pub async fn clone_repository(
                     // with nothing saying the first attempt had timed out.
                     if timed_out.load(Ordering::Relaxed) {
                         let _ = std::fs::remove_dir_all(Path::new(&path));
-                        return Err(LeviathanError::OperationTimeout(
+                        return Err(GitnadoError::OperationTimeout(
                             "Clone operation timed out".to_string(),
                         ));
                     }
@@ -832,7 +829,7 @@ pub async fn clone_repository(
         if secs > 0 {
             match tokio::time::timeout(std::time::Duration::from_secs(secs), do_clone).await {
                 Ok(result) => result,
-                Err(_) => Err(LeviathanError::OperationTimeout(
+                Err(_) => Err(GitnadoError::OperationTimeout(
                     "Clone operation timed out".to_string(),
                 )),
             }
@@ -850,11 +847,11 @@ pub async fn get_clone_filter_info(path: String) -> Result<CloneFilterInfo> {
     let path_clone = path.clone();
     tokio::task::spawn_blocking(move || {
         let repo = git2::Repository::open(&path_clone).map_err(|e| {
-            LeviathanError::RepositoryNotFound(format!("Failed to open repository: {}", e))
+            GitnadoError::RepositoryNotFound(format!("Failed to open repository: {}", e))
         })?;
 
         let config = repo.config().map_err(|e| {
-            LeviathanError::Custom(format!("Failed to read repository config: {}", e))
+            GitnadoError::Custom(format!("Failed to read repository config: {}", e))
         })?;
 
         // Check for remote.<name>.promisor = true and remote.<name>.partialclonefilter
@@ -896,7 +893,7 @@ pub async fn get_clone_filter_info(path: String) -> Result<CloneFilterInfo> {
         })
     })
     .await
-    .map_err(|e| LeviathanError::Custom(format!("Task failed: {}", e)))?
+    .map_err(|e| GitnadoError::Custom(format!("Task failed: {}", e)))?
 }
 
 /// List all tracked files in the repository
@@ -909,13 +906,11 @@ pub async fn list_tracked_files(path: String) -> Result<Vec<String>> {
             .arg(&path_clone)
             .arg("ls-files")
             .output()
-            .map_err(|e| {
-                LeviathanError::Custom(format!("Failed to execute git ls-files: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::Custom(format!("Failed to execute git ls-files: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(LeviathanError::Custom(format!(
+            return Err(GitnadoError::Custom(format!(
                 "git ls-files failed: {}",
                 stderr.trim()
             )));
@@ -928,7 +923,7 @@ pub async fn list_tracked_files(path: String) -> Result<Vec<String>> {
         Ok(files)
     })
     .await
-    .map_err(|e| LeviathanError::Custom(format!("Task failed: {}", e)))?
+    .map_err(|e| GitnadoError::Custom(format!("Task failed: {}", e)))?
 }
 
 /// Initialize a new repository
@@ -965,7 +960,7 @@ pub async fn init_repository(
             format!("refs/heads/{}", branch)
         };
         if !full_ref.starts_with("refs/heads/") || !git2::Reference::is_valid_name(&full_ref) {
-            return Err(LeviathanError::Custom(format!(
+            return Err(GitnadoError::Custom(format!(
                 "Invalid initial branch name: {}",
                 branch
             )));
@@ -1459,7 +1454,7 @@ mod tests {
         );
 
         assert_eq!(
-            env_of(&cmd, "LEVIATHAN_CLONE_TOKEN"),
+            env_of(&cmd, "GITNADO_CLONE_TOKEN"),
             Some("ghp_s3cret".to_string())
         );
         assert_eq!(env_of(&cmd, "GIT_CONFIG_COUNT"), Some("2".to_string()));
@@ -1476,7 +1471,7 @@ mod tests {
         );
         let helper = env_of(&cmd, "GIT_CONFIG_VALUE_1").expect("helper must be configured");
         assert!(
-            helper.contains("$LEVIATHAN_CLONE_TOKEN"),
+            helper.contains("$GITNADO_CLONE_TOKEN"),
             "helper must read the token from the environment: {}",
             helper
         );
@@ -1509,7 +1504,7 @@ mod tests {
             args
         );
         assert_eq!(
-            env_of(&cmd, "LEVIATHAN_CLONE_TOKEN"),
+            env_of(&cmd, "GITNADO_CLONE_TOKEN"),
             Some("to/ken@we:ird".to_string())
         );
     }
@@ -1535,7 +1530,7 @@ mod tests {
         // nothing to do with credentials. The guard's subject is the
         // credential.helper override, and that must still be absent.
         for key in [
-            "LEVIATHAN_CLONE_TOKEN",
+            "GITNADO_CLONE_TOKEN",
             "GIT_CONFIG_COUNT",
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
@@ -1562,7 +1557,7 @@ mod tests {
             false,
             Some("ghp_s3cret"),
         );
-        assert_eq!(env_of(&ssh, "LEVIATHAN_CLONE_TOKEN"), None);
+        assert_eq!(env_of(&ssh, "GITNADO_CLONE_TOKEN"), None);
         assert_eq!(env_of(&ssh, "GIT_CONFIG_COUNT"), None);
         assert!(args_of(&ssh).contains(&"ssh://git@host/o/r.git".to_string()));
     }

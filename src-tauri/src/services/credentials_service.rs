@@ -12,7 +12,12 @@ use std::time::Instant;
 use crate::services::transfer_monitor::TransferMonitor;
 
 /// Service name for keychain storage
-const SERVICE_NAME: &str = "leviathan-git";
+const SERVICE_NAME: &str = "gitnado-git";
+
+/// Service name from before the 0.9.0 rename. An entry found under it is
+/// copied under `SERVICE_NAME` and then removed, so stored git credentials
+/// survive the upgrade without prompting again.
+const LEGACY_SERVICE_NAME: &str = "leviathan-git";
 
 /// Time-to-live for cached credentials (30 minutes).
 /// Expired entries are lazily removed on the next cache read.
@@ -308,6 +313,47 @@ impl CredentialsHelper {
     }
 }
 
+/// Read `account` from `service`, falling back to the same account under
+/// `legacy_service`. A legacy hit is written under `service` and, once that
+/// write succeeded, removed from `legacy_service` — so the fallback is taken
+/// once per entry. The backend is passed in so the decision logic is testable
+/// without a keyring.
+fn get_with_legacy_fallback(
+    service: &str,
+    legacy_service: &str,
+    account: &str,
+    get: impl Fn(&str, &str) -> Option<String>,
+    set: impl Fn(&str, &str, &str) -> bool,
+    delete: impl Fn(&str, &str) -> bool,
+) -> Option<String> {
+    if let Some(value) = get(service, account) {
+        return Some(value);
+    }
+    let value = get(legacy_service, account)?;
+    if set(service, account, &value) {
+        delete(legacy_service, account);
+    } else {
+        tracing::warn!(
+            "Found legacy keyring entry for {} but could not re-store it under {}",
+            account,
+            service
+        );
+    }
+    Some(value)
+}
+
+/// `keyring_get` under `SERVICE_NAME`, adopting a pre-rename entry if needed.
+fn keyring_get_migrating(account: &str) -> Option<String> {
+    get_with_legacy_fallback(
+        SERVICE_NAME,
+        LEGACY_SERVICE_NAME,
+        account,
+        keyring_get,
+        keyring_set,
+        keyring_delete,
+    )
+}
+
 /// Get stored credentials - checks memory cache first, then keychain
 fn get_stored_credentials(url: &str) -> Option<(String, String)> {
     let host = extract_host(url)?;
@@ -328,8 +374,8 @@ fn get_stored_credentials(url: &str) -> Option<(String, String)> {
     let username_key = format!("{}_username", host);
     let password_key = format!("{}_password", host);
 
-    let username = keyring_get(SERVICE_NAME, &username_key)?;
-    let password = keyring_get(SERVICE_NAME, &password_key)?;
+    let username = keyring_get_migrating(&username_key)?;
+    let password = keyring_get_migrating(&password_key)?;
 
     // Cache for faster future lookups
     cache_credentials(&host, &username, &password);
@@ -425,6 +471,10 @@ pub fn delete_credentials(url: &str) -> Result<(), String> {
     let password_key = format!("{}_password", host);
     keyring_delete(SERVICE_NAME, &username_key);
     keyring_delete(SERVICE_NAME, &password_key);
+    // A pre-rename entry that was never read (and so never adopted) must not
+    // outlive an explicit delete either.
+    keyring_delete(LEGACY_SERVICE_NAME, &username_key);
+    keyring_delete(LEGACY_SERVICE_NAME, &password_key);
 
     tracing::debug!("Deleted credentials for host: {}", host);
     Ok(())
@@ -1125,5 +1175,118 @@ mod tests {
         clear_cache();
         // After clear, cache is None — get should return None without panic
         assert!(get_cached_credentials("any.host.com").is_none());
+    }
+
+    // --- legacy service-name fallback -------------------------------------
+
+    /// An in-memory keyring keyed by (service, account).
+    fn fake_keyring() -> std::rc::Rc<std::cell::RefCell<HashMap<(String, String), String>>> {
+        std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()))
+    }
+
+    fn resolve(
+        store: &std::rc::Rc<std::cell::RefCell<HashMap<(String, String), String>>>,
+        account: &str,
+        set_succeeds: bool,
+    ) -> Option<String> {
+        let get_store = store.clone();
+        let set_store = store.clone();
+        let del_store = store.clone();
+        get_with_legacy_fallback(
+            "gitnado-git",
+            "leviathan-git",
+            account,
+            move |s, a| {
+                get_store
+                    .borrow()
+                    .get(&(s.to_string(), a.to_string()))
+                    .cloned()
+            },
+            move |s, a, v| {
+                if set_succeeds {
+                    set_store
+                        .borrow_mut()
+                        .insert((s.to_string(), a.to_string()), v.to_string());
+                }
+                set_succeeds
+            },
+            move |s, a| {
+                del_store
+                    .borrow_mut()
+                    .remove(&(s.to_string(), a.to_string()))
+                    .is_some()
+            },
+        )
+    }
+
+    #[test]
+    fn legacy_fallback_prefers_current_service() {
+        let store = fake_keyring();
+        store.borrow_mut().insert(
+            ("gitnado-git".into(), "h_username".into()),
+            "new-user".into(),
+        );
+        store.borrow_mut().insert(
+            ("leviathan-git".into(), "h_username".into()),
+            "old-user".into(),
+        );
+
+        assert_eq!(
+            resolve(&store, "h_username", true).as_deref(),
+            Some("new-user")
+        );
+        // Nothing is touched when the current entry exists.
+        assert_eq!(store.borrow().len(), 2);
+    }
+
+    #[test]
+    fn legacy_fallback_adopts_and_removes_old_entry() {
+        let store = fake_keyring();
+        store.borrow_mut().insert(
+            ("leviathan-git".into(), "h_password".into()),
+            "secret".into(),
+        );
+
+        assert_eq!(
+            resolve(&store, "h_password", true).as_deref(),
+            Some("secret")
+        );
+
+        let s = store.borrow();
+        assert_eq!(
+            s.get(&("gitnado-git".into(), "h_password".into()))
+                .map(String::as_str),
+            Some("secret")
+        );
+        assert!(
+            !s.contains_key(&("leviathan-git".into(), "h_password".into())),
+            "the legacy entry is removed once the new one is written"
+        );
+    }
+
+    #[test]
+    fn legacy_fallback_keeps_old_entry_when_rewrite_fails() {
+        let store = fake_keyring();
+        store.borrow_mut().insert(
+            ("leviathan-git".into(), "h_password".into()),
+            "secret".into(),
+        );
+
+        // The value is still returned so this session works …
+        assert_eq!(
+            resolve(&store, "h_password", false).as_deref(),
+            Some("secret")
+        );
+        // … and the only copy is not deleted.
+        assert!(store
+            .borrow()
+            .contains_key(&("leviathan-git".into(), "h_password".into())));
+    }
+
+    #[test]
+    fn legacy_fallback_returns_none_when_neither_exists() {
+        let store = fake_keyring();
+        assert_eq!(resolve(&store, "h_username", true), None);
+        assert!(store.borrow().is_empty());
     }
 }

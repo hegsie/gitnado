@@ -132,7 +132,7 @@ pub fn get_tool_list() -> Vec<McpTool> {
         },
         McpTool {
             name: "get_open_repositories".to_string(),
-            description: "Get list of repositories currently open in Leviathan".to_string(),
+            description: "Get list of repositories currently open in Gitnado".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {},
@@ -1079,7 +1079,7 @@ mod tests {
         // "/nonexistent/...": a leading-slash-only path has no drive prefix, so
         // `Path::is_absolute` is false for it on Windows and the earlier
         // "must be absolute" arm answered instead of the one under test.
-        let missing = std::env::temp_dir().join("leviathan-definitely-nonexistent-repo");
+        let missing = std::env::temp_dir().join("gitnado-definitely-nonexistent-repo");
         let result = validate_repo_path(&missing.to_string_lossy(), &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not exist"));

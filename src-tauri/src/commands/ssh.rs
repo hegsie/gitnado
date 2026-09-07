@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// SSH key information
@@ -215,7 +215,7 @@ pub async fn generate_ssh_key(
     // Create .ssh directory if it doesn't exist
     if !ssh_dir.exists() {
         fs::create_dir_all(&ssh_dir).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create .ssh directory: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to create .ssh directory: {}", e))
         })?;
     }
 
@@ -225,7 +225,7 @@ pub async fn generate_ssh_key(
 
     // Check if key already exists
     if key_path.exists() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Key already exists: {}",
             key_path.display()
         )));
@@ -254,11 +254,11 @@ pub async fn generate_ssh_key(
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run ssh-keygen: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run ssh-keygen: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "ssh-keygen failed: {}",
             stderr
         )));
@@ -417,7 +417,7 @@ pub async fn test_ssh_connection(host: String) -> Result<SshTestResult> {
     let output = command
         .arg(&ssh_host)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run ssh: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run ssh: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -470,11 +470,11 @@ pub async fn add_key_to_agent(key_path: String) -> Result<()> {
     let output = create_command("ssh-add")
         .arg(&key_path)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run ssh-add: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run ssh-add: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "ssh-add failed: {}",
             stderr
         )));
@@ -489,7 +489,7 @@ pub async fn list_agent_keys() -> Result<Vec<String>> {
     let output = create_command("ssh-add")
         .arg("-l")
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run ssh-add: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run ssh-add: {}", e)))?;
 
     if !output.status.success() {
         // Exit code 1 means "no identities", which is not an error
@@ -497,7 +497,7 @@ pub async fn list_agent_keys() -> Result<Vec<String>> {
         if stderr.contains("no identities") || stderr.contains("The agent has no identities") {
             return Ok(Vec::new());
         }
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "ssh-add failed: {}",
             stderr
         )));
@@ -520,14 +520,14 @@ pub async fn get_public_key_content(key_name: String) -> Result<String> {
     let public_path = ssh_dir.join(format!("{}.pub", key_name));
 
     if !public_path.exists() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Public key not found: {}",
             public_path.display()
         )));
     }
 
     fs::read_to_string(&public_path)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read public key: {}", e)))
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read public key: {}", e)))
 }
 
 /// Delete an SSH key pair
@@ -540,14 +540,14 @@ pub async fn delete_ssh_key(key_name: String) -> Result<()> {
     // Remove private key
     if private_path.exists() {
         fs::remove_file(&private_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to delete private key: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to delete private key: {}", e))
         })?;
     }
 
     // Remove public key
     if public_path.exists() {
         fs::remove_file(&public_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to delete public key: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to delete public key: {}", e))
         })?;
     }
 

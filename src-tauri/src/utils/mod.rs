@@ -1,5 +1,6 @@
 //! Utility modules
 
+pub mod app_paths;
 pub mod cli_safety;
 mod command;
 mod editor_command;

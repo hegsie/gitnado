@@ -12,7 +12,7 @@
 import { expect } from '@open-wc/testing';
 import { keyboardService } from '../keyboard.service.ts';
 
-const STORAGE_KEY = 'leviathan-keyboard-settings';
+const STORAGE_KEY = 'gitnado-keyboard-settings';
 
 /** Dispatch a keydown as though it originated inside `target`. */
 function typeIn(target: HTMLElement, init: KeyboardEventInit): KeyboardEvent {

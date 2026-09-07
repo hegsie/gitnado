@@ -18,7 +18,7 @@ test.describe('Welcome Screen', () => {
 
   test('should display welcome screen when no repository is open', async () => {
     await expect(app.welcomeScreen).toBeVisible();
-    await expect(app.welcomeLogo).toHaveText('Leviathan');
+    await expect(app.welcomeLogo).toHaveText('Gitnado');
     await expect(app.welcomeTagline).toContainText('Git client');
   });
 
@@ -128,7 +128,7 @@ test.describe('Welcome Screen with Recent Repositories', () => {
     // The recent list is restored from the persisted store, not from a command,
     // so seed it directly to guarantee an entry to click.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         repositoryStore: { setState: (s: Record<string, unknown>) => void };
       };
       stores.repositoryStore.setState({
@@ -423,7 +423,7 @@ test.describe('Init Dialog - Command Verification', () => {
     // The dialog reads the setting when it opens, so change it and reopen
     await dialogs.init.closeWithEscape();
     await page.evaluate(() => {
-      (window as any).__LEVIATHAN_STORES__.settingsStore.getState().setDefaultBranchName('trunk');
+      (window as any).__GITNADO_STORES__.settingsStore.getState().setDefaultBranchName('trunk');
     });
     await app.initButton.click();
     await dialogs.init.waitForOpen();
@@ -651,13 +651,13 @@ test.describe('Welcome Screen - recent repository rows', () => {
     await app.goto();
 
     await page.waitForFunction(
-      () => typeof (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ !== 'undefined',
+      () => typeof (window as unknown as Record<string, unknown>).__GITNADO_STORES__ !== 'undefined',
       { timeout: 10000 }
     );
 
     // Seed recents through the store: most recent first ⇒ rows are repo1, repo2.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         repositoryStore: {
           getState: () => {
             clearRecentRepositories: () => void;

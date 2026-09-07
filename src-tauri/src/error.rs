@@ -1,11 +1,11 @@
-//! Error types for Leviathan
+//! Error types for Gitnado
 
 use serde::Serialize;
 use thiserror::Error;
 
 /// Application error types
 #[derive(Error, Debug)]
-pub enum LeviathanError {
+pub enum GitnadoError {
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),
 
@@ -136,41 +136,41 @@ pub struct ErrorResponse {
     pub details: Option<String>,
 }
 
-impl From<LeviathanError> for ErrorResponse {
-    fn from(error: LeviathanError) -> Self {
+impl From<GitnadoError> for ErrorResponse {
+    fn from(error: GitnadoError) -> Self {
         let code = match &error {
-            LeviathanError::Git(_) => "GIT_ERROR",
-            LeviathanError::Io(_) => "IO_ERROR",
-            LeviathanError::Database(_) => "DB_ERROR",
-            LeviathanError::Serialization(_) => "SERIALIZATION_ERROR",
-            LeviathanError::RepositoryNotFound(_) => "REPO_NOT_FOUND",
-            LeviathanError::RepositoryNotOpen => "REPO_NOT_OPEN",
-            LeviathanError::InvalidPath(_) => "INVALID_PATH",
-            LeviathanError::FileNotFound(_) => "FILE_NOT_FOUND",
-            LeviathanError::BranchNotFound(_) => "BRANCH_NOT_FOUND",
-            LeviathanError::CommitNotFound(_) => "COMMIT_NOT_FOUND",
-            LeviathanError::TagNotFound(_) => "TAG_NOT_FOUND",
-            LeviathanError::RemoteNotFound(_) => "REMOTE_NOT_FOUND",
-            LeviathanError::OperationFailed(_) => "OPERATION_FAILED",
-            LeviathanError::AuthenticationRequired => "AUTH_REQUIRED",
-            LeviathanError::MergeConflict => "MERGE_CONFLICT",
-            LeviathanError::RebaseInProgress => "REBASE_IN_PROGRESS",
-            LeviathanError::RebaseConflict => "REBASE_CONFLICT",
-            LeviathanError::RebasePaused => "REBASE_PAUSED",
-            LeviathanError::CherryPickConflict => "CHERRY_PICK_CONFLICT",
-            LeviathanError::CherryPickInProgress => "CHERRY_PICK_IN_PROGRESS",
-            LeviathanError::RevertConflict => "REVERT_CONFLICT",
-            LeviathanError::RevertInProgress => "REVERT_IN_PROGRESS",
-            LeviathanError::InvalidReference => "INVALID_REFERENCE",
-            LeviathanError::NoTagsReachable(_) => "NO_TAGS_REACHABLE",
-            LeviathanError::Custom(_) => "CUSTOM_ERROR",
-            LeviathanError::OAuth(_) => "OAUTH_ERROR",
-            LeviathanError::OperationTimeout(_) => "OPERATION_TIMEOUT",
+            GitnadoError::Git(_) => "GIT_ERROR",
+            GitnadoError::Io(_) => "IO_ERROR",
+            GitnadoError::Database(_) => "DB_ERROR",
+            GitnadoError::Serialization(_) => "SERIALIZATION_ERROR",
+            GitnadoError::RepositoryNotFound(_) => "REPO_NOT_FOUND",
+            GitnadoError::RepositoryNotOpen => "REPO_NOT_OPEN",
+            GitnadoError::InvalidPath(_) => "INVALID_PATH",
+            GitnadoError::FileNotFound(_) => "FILE_NOT_FOUND",
+            GitnadoError::BranchNotFound(_) => "BRANCH_NOT_FOUND",
+            GitnadoError::CommitNotFound(_) => "COMMIT_NOT_FOUND",
+            GitnadoError::TagNotFound(_) => "TAG_NOT_FOUND",
+            GitnadoError::RemoteNotFound(_) => "REMOTE_NOT_FOUND",
+            GitnadoError::OperationFailed(_) => "OPERATION_FAILED",
+            GitnadoError::AuthenticationRequired => "AUTH_REQUIRED",
+            GitnadoError::MergeConflict => "MERGE_CONFLICT",
+            GitnadoError::RebaseInProgress => "REBASE_IN_PROGRESS",
+            GitnadoError::RebaseConflict => "REBASE_CONFLICT",
+            GitnadoError::RebasePaused => "REBASE_PAUSED",
+            GitnadoError::CherryPickConflict => "CHERRY_PICK_CONFLICT",
+            GitnadoError::CherryPickInProgress => "CHERRY_PICK_IN_PROGRESS",
+            GitnadoError::RevertConflict => "REVERT_CONFLICT",
+            GitnadoError::RevertInProgress => "REVERT_IN_PROGRESS",
+            GitnadoError::InvalidReference => "INVALID_REFERENCE",
+            GitnadoError::NoTagsReachable(_) => "NO_TAGS_REACHABLE",
+            GitnadoError::Custom(_) => "CUSTOM_ERROR",
+            GitnadoError::OAuth(_) => "OAUTH_ERROR",
+            GitnadoError::OperationTimeout(_) => "OPERATION_TIMEOUT",
             // Deliberately the SAME code: to the frontend this is a timeout
             // like any other. The distinction is internal to await_remote_task.
-            LeviathanError::OperationTimeoutAfterChange(_) => "OPERATION_TIMEOUT",
-            LeviathanError::OperationCancelled => "OPERATION_CANCELLED",
-            LeviathanError::RemoteOperationInFlight(_) => "REMOTE_OPERATION_IN_FLIGHT",
+            GitnadoError::OperationTimeoutAfterChange(_) => "OPERATION_TIMEOUT",
+            GitnadoError::OperationCancelled => "OPERATION_CANCELLED",
+            GitnadoError::RemoteOperationInFlight(_) => "REMOTE_OPERATION_IN_FLIGHT",
         };
 
         ErrorResponse {
@@ -182,43 +182,43 @@ impl From<LeviathanError> for ErrorResponse {
 }
 
 // Implement conversion to make errors work with Tauri commands
-impl serde::Serialize for LeviathanError {
+impl serde::Serialize for GitnadoError {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let response = ErrorResponse {
             code: match self {
-                LeviathanError::Git(_) => "GIT_ERROR",
-                LeviathanError::Io(_) => "IO_ERROR",
-                LeviathanError::Database(_) => "DB_ERROR",
-                LeviathanError::Serialization(_) => "SERIALIZATION_ERROR",
-                LeviathanError::RepositoryNotFound(_) => "REPO_NOT_FOUND",
-                LeviathanError::RepositoryNotOpen => "REPO_NOT_OPEN",
-                LeviathanError::InvalidPath(_) => "INVALID_PATH",
-                LeviathanError::FileNotFound(_) => "FILE_NOT_FOUND",
-                LeviathanError::BranchNotFound(_) => "BRANCH_NOT_FOUND",
-                LeviathanError::CommitNotFound(_) => "COMMIT_NOT_FOUND",
-                LeviathanError::TagNotFound(_) => "TAG_NOT_FOUND",
-                LeviathanError::RemoteNotFound(_) => "REMOTE_NOT_FOUND",
-                LeviathanError::OperationFailed(_) => "OPERATION_FAILED",
-                LeviathanError::AuthenticationRequired => "AUTH_REQUIRED",
-                LeviathanError::MergeConflict => "MERGE_CONFLICT",
-                LeviathanError::RebaseInProgress => "REBASE_IN_PROGRESS",
-                LeviathanError::RebaseConflict => "REBASE_CONFLICT",
-                LeviathanError::RebasePaused => "REBASE_PAUSED",
-                LeviathanError::CherryPickConflict => "CHERRY_PICK_CONFLICT",
-                LeviathanError::CherryPickInProgress => "CHERRY_PICK_IN_PROGRESS",
-                LeviathanError::RevertConflict => "REVERT_CONFLICT",
-                LeviathanError::RevertInProgress => "REVERT_IN_PROGRESS",
-                LeviathanError::InvalidReference => "INVALID_REFERENCE",
-                LeviathanError::NoTagsReachable(_) => "NO_TAGS_REACHABLE",
-                LeviathanError::Custom(_) => "CUSTOM_ERROR",
-                LeviathanError::OAuth(_) => "OAUTH_ERROR",
-                LeviathanError::OperationTimeout(_) => "OPERATION_TIMEOUT",
-                LeviathanError::OperationTimeoutAfterChange(_) => "OPERATION_TIMEOUT",
-                LeviathanError::OperationCancelled => "OPERATION_CANCELLED",
-                LeviathanError::RemoteOperationInFlight(_) => "REMOTE_OPERATION_IN_FLIGHT",
+                GitnadoError::Git(_) => "GIT_ERROR",
+                GitnadoError::Io(_) => "IO_ERROR",
+                GitnadoError::Database(_) => "DB_ERROR",
+                GitnadoError::Serialization(_) => "SERIALIZATION_ERROR",
+                GitnadoError::RepositoryNotFound(_) => "REPO_NOT_FOUND",
+                GitnadoError::RepositoryNotOpen => "REPO_NOT_OPEN",
+                GitnadoError::InvalidPath(_) => "INVALID_PATH",
+                GitnadoError::FileNotFound(_) => "FILE_NOT_FOUND",
+                GitnadoError::BranchNotFound(_) => "BRANCH_NOT_FOUND",
+                GitnadoError::CommitNotFound(_) => "COMMIT_NOT_FOUND",
+                GitnadoError::TagNotFound(_) => "TAG_NOT_FOUND",
+                GitnadoError::RemoteNotFound(_) => "REMOTE_NOT_FOUND",
+                GitnadoError::OperationFailed(_) => "OPERATION_FAILED",
+                GitnadoError::AuthenticationRequired => "AUTH_REQUIRED",
+                GitnadoError::MergeConflict => "MERGE_CONFLICT",
+                GitnadoError::RebaseInProgress => "REBASE_IN_PROGRESS",
+                GitnadoError::RebaseConflict => "REBASE_CONFLICT",
+                GitnadoError::RebasePaused => "REBASE_PAUSED",
+                GitnadoError::CherryPickConflict => "CHERRY_PICK_CONFLICT",
+                GitnadoError::CherryPickInProgress => "CHERRY_PICK_IN_PROGRESS",
+                GitnadoError::RevertConflict => "REVERT_CONFLICT",
+                GitnadoError::RevertInProgress => "REVERT_IN_PROGRESS",
+                GitnadoError::InvalidReference => "INVALID_REFERENCE",
+                GitnadoError::NoTagsReachable(_) => "NO_TAGS_REACHABLE",
+                GitnadoError::Custom(_) => "CUSTOM_ERROR",
+                GitnadoError::OAuth(_) => "OAUTH_ERROR",
+                GitnadoError::OperationTimeout(_) => "OPERATION_TIMEOUT",
+                GitnadoError::OperationTimeoutAfterChange(_) => "OPERATION_TIMEOUT",
+                GitnadoError::OperationCancelled => "OPERATION_CANCELLED",
+                GitnadoError::RemoteOperationInFlight(_) => "REMOTE_OPERATION_IN_FLIGHT",
             }
             .to_string(),
             message: self.to_string(),
@@ -228,5 +228,5 @@ impl serde::Serialize for LeviathanError {
     }
 }
 
-/// Result type alias for Leviathan operations
-pub type Result<T> = std::result::Result<T, LeviathanError>;
+/// Result type alias for Gitnado operations
+pub type Result<T> = std::result::Result<T, GitnadoError>;

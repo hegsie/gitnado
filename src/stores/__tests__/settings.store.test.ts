@@ -315,16 +315,16 @@ describe('settings.store', () => {
   });
 
   describe('persistence', () => {
-    it('should use leviathan-settings as storage key', () => {
+    it('should use gitnado-settings as storage key', () => {
       settingsStore.getState().setFontSize('large');
-      const stored = localStorage.getItem('leviathan-settings');
+      const stored = localStorage.getItem('gitnado-settings');
       expect(stored).to.be.a('string');
       expect(stored).to.not.be.null;
     });
 
     it('should store changed values in localStorage', () => {
       settingsStore.getState().setAutoFetchInterval(15);
-      const stored = JSON.parse(localStorage.getItem('leviathan-settings')!);
+      const stored = JSON.parse(localStorage.getItem('gitnado-settings')!);
       expect(stored.state.autoFetchInterval).to.equal(15);
     });
   });
@@ -437,7 +437,7 @@ describe('settings.store', () => {
   });
 
   describe('legacy diff word-wrap key', () => {
-    const LEGACY_KEY = 'leviathan-diff-word-wrap';
+    const LEGACY_KEY = 'gitnado-diff-word-wrap';
 
     const rehydrate = (): void => {
       (settingsStore as unknown as { persist: { rehydrate: () => void } }).persist.rehydrate();

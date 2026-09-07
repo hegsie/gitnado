@@ -6,7 +6,7 @@ use std::io::BufRead;
 use std::process::Command;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// A single search match within a file
 #[derive(Debug, Clone, serde::Serialize)]
@@ -166,14 +166,14 @@ pub async fn search_in_files(
         cmd.arg(pattern);
     }
 
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git grep: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git grep: {}", e)))?;
 
     // git grep returns exit code 1 when no matches are found (not an error)
     if !output.status.success() && output.status.code() != Some(1) {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git grep failed: {}",
             stderr
         )));
@@ -183,9 +183,7 @@ pub async fn search_in_files(
         &mut std::io::Cursor::new(&output.stdout),
         max_results as usize,
     )
-    .map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read git grep output: {}", e))
-    })?;
+    .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read git grep output: {}", e)))?;
 
     let mut file_map: HashMap<String, Vec<SearchResult>> = HashMap::new();
 
@@ -234,13 +232,13 @@ pub async fn search_in_diff(
         cmd.arg("--cached");
     }
 
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git diff: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git diff: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git diff failed: {}",
             stderr
         )));
@@ -355,13 +353,13 @@ pub async fn search_in_commits(
         .arg(format!("-{}", max_commits))
         .arg("--name-only");
 
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git log: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git log failed: {}",
             stderr
         )));
@@ -430,13 +428,13 @@ pub async fn search_in_commit_messages(
         .arg("--format=%H|%an|%at|%s")
         .arg(format!("-{}", max_commits));
 
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git log: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git log failed: {}",
             stderr
         )));
@@ -530,13 +528,13 @@ pub async fn search_commits_by_content(
         }
     }
 
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git log: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git log failed: {}",
             stderr
         )));
@@ -619,13 +617,13 @@ pub async fn search_commits_by_file(
         .arg("--")
         .arg(&file_pattern);
 
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git log: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git log failed: {}",
             stderr
         )));

@@ -30,8 +30,8 @@ const AUTH_TOKEN_LEN: usize = 43;
 /// start failing with it.
 pub const UNAUTHORIZED_MESSAGE: &str =
     "Unauthorized: this MCP server requires an 'Authorization: Bearer <token>' header. \
-     An MCP client configured before Leviathan added authentication must add that header. \
-     Copy the token from Leviathan Settings -> MCP Server.";
+     An MCP client configured before Gitnado added authentication must add that header. \
+     Copy the token from Gitnado Settings -> MCP Server.";
 
 /// Generate a new random bearer token for the MCP server
 pub fn generate_auth_token() -> String {
@@ -338,7 +338,7 @@ pub struct McpServer {
     config_dir: PathBuf,
     running: Arc<AtomicBool>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Paths of repositories currently open in Leviathan
+    /// Paths of repositories currently open in Gitnado
     open_repos: Arc<RwLock<Vec<String>>>,
     /// Error from the last failed start attempt, surfaced in the status
     last_error: Option<String>,
@@ -740,7 +740,7 @@ impl McpServer {
                 "tools": {}
             },
             "serverInfo": {
-                "name": "leviathan",
+                "name": "gitnado",
                 "version": env!("CARGO_PKG_VERSION")
             }
         });
@@ -838,7 +838,7 @@ impl McpServer {
              \r\n{body}",
             body.len(),
             if status == 401 {
-                "WWW-Authenticate: Bearer realm=\"Leviathan MCP\"\r\n"
+                "WWW-Authenticate: Bearer realm=\"Gitnado MCP\"\r\n"
             } else {
                 ""
             },
@@ -1057,7 +1057,7 @@ mod tests {
         assert!(response.result.is_some());
         let result = response.result.unwrap();
         assert_eq!(result["protocolVersion"], "2024-11-05");
-        assert_eq!(result["serverInfo"]["name"], "leviathan");
+        assert_eq!(result["serverInfo"]["name"], "gitnado");
         assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     }
 

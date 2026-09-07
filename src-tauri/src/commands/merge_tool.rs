@@ -6,7 +6,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// Merge tool configuration
@@ -52,7 +52,7 @@ fn run_git_config(repo_path: &Path, args: &[&str]) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -64,7 +64,7 @@ fn run_git_config(repo_path: &Path, args: &[&str]) -> Result<String> {
         if output.status.code() == Some(1) && stderr.is_empty() && stdout.is_empty() {
             Ok(String::new())
         } else {
-            Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+            Err(GitnadoError::OperationFailed(if stderr.is_empty() {
                 stdout
             } else {
                 stderr
@@ -138,7 +138,7 @@ pub async fn launch_merge_tool(path: String, file_path: String) -> Result<MergeT
     cmd.arg(&file_path);
 
     let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to launch merge tool: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to launch merge tool: {}", e))
     })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

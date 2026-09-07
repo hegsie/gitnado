@@ -1,7 +1,7 @@
 //! Commit message validation command handlers
 //!
 //! Allows users to validate commit messages against configurable rules.
-//! Rules are stored per-repository in `.git/leviathan/commit_rules.json`.
+//! Rules are stored per-repository in `.git/gitnado/commit_rules.json`.
 
 use std::fs;
 use std::path::Path;
@@ -9,7 +9,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Rules for validating commit messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,9 +87,8 @@ pub struct ValidationError {
 /// Get the path to the commit rules file for a repository
 fn get_rules_path(repo_path: &Path) -> Result<std::path::PathBuf> {
     let repo = git2::Repository::open(repo_path)?;
-    let git_dir = repo.path().to_path_buf();
-    let leviathan_dir = git_dir.join("leviathan");
-    Ok(leviathan_dir.join("commit_rules.json"))
+    let gitnado_dir = crate::utils::app_paths::repo_dir(repo.path());
+    Ok(gitnado_dir.join("commit_rules.json"))
 }
 
 /// Load commit message rules from the repository config
@@ -101,11 +100,11 @@ fn load_rules(repo_path: &Path) -> Result<Option<CommitMessageRules>> {
     }
 
     let content = fs::read_to_string(&rules_path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read commit rules file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to read commit rules file: {}", e))
     })?;
 
     let rules: CommitMessageRules = serde_json::from_str(&content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse commit rules file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse commit rules file: {}", e))
     })?;
 
     Ok(Some(rules))
@@ -115,22 +114,22 @@ fn load_rules(repo_path: &Path) -> Result<Option<CommitMessageRules>> {
 fn save_rules(repo_path: &Path, rules: &CommitMessageRules) -> Result<()> {
     let rules_path = get_rules_path(repo_path)?;
 
-    // Ensure the leviathan directory exists
+    // Ensure the gitnado directory exists
     if let Some(parent) = rules_path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
-            LeviathanError::OperationFailed(format!(
-                "Failed to create leviathan config directory: {}",
+            GitnadoError::OperationFailed(format!(
+                "Failed to create gitnado config directory: {}",
                 e
             ))
         })?;
     }
 
     let content = serde_json::to_string_pretty(rules).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to serialize commit rules: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to serialize commit rules: {}", e))
     })?;
 
     fs::write(&rules_path, content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to write commit rules file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to write commit rules file: {}", e))
     })?;
 
     Ok(())
@@ -839,10 +838,10 @@ mod tests {
         assert!(
             rules_path
                 .to_string_lossy()
-                .contains("leviathan/commit_rules.json")
+                .contains("gitnado/commit_rules.json")
                 || rules_path
                     .to_string_lossy()
-                    .contains("leviathan\\commit_rules.json")
+                    .contains("gitnado\\commit_rules.json")
         );
     }
 

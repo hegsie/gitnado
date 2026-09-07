@@ -78,7 +78,7 @@ describe('lv-command-palette hover selection', () => {
     executed.length = 0;
     // Executing a command persists it under "Recent", which reorders the list
     // for the next fixture. Clear it so each test sees the same three rows.
-    localStorage.removeItem('leviathan-recent-commands');
+    localStorage.removeItem('gitnado-recent-commands');
   });
 
   it('ignores a mouseenter that arrives with no pointer movement since open', async () => {

@@ -1,9 +1,9 @@
 //! MCP (Model Context Protocol) server management commands
 //!
 //! Provides Tauri commands for starting, stopping, and configuring
-//! the MCP server that allows external tools to query Leviathan.
+//! the MCP server that allows external tools to query Gitnado.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::services::ai::mcp::{McpConfig, McpState, McpStatus};
 use tauri::{command, State};
 
@@ -11,17 +11,14 @@ use tauri::{command, State};
 #[command]
 pub async fn start_mcp_server(state: State<'_, McpState>) -> Result<()> {
     let mut server = state.write().await;
-    server
-        .start()
-        .await
-        .map_err(LeviathanError::OperationFailed)
+    server.start().await.map_err(GitnadoError::OperationFailed)
 }
 
 /// Stop the MCP server
 #[command]
 pub async fn stop_mcp_server(state: State<'_, McpState>) -> Result<()> {
     let mut server = state.write().await;
-    server.stop().await.map_err(LeviathanError::OperationFailed)
+    server.stop().await.map_err(GitnadoError::OperationFailed)
 }
 
 /// Get the current MCP server status
@@ -47,7 +44,7 @@ pub async fn set_mcp_config(state: State<'_, McpState>, config: McpConfig) -> Re
     let mut server = state.write().await;
     server
         .set_config(config)
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 /// Generate a new MCP access token, invalidating the previous one
@@ -56,7 +53,7 @@ pub async fn regenerate_mcp_token(state: State<'_, McpState>) -> Result<String> 
     let mut server = state.write().await;
     server
         .regenerate_auth_token()
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 #[cfg(test)]

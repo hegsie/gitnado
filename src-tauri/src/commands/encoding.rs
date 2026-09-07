@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Information about a file's encoding
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -201,19 +201,19 @@ pub async fn detect_file_encoding(
     };
 
     if !full_path.exists() {
-        return Err(LeviathanError::InvalidPath(
+        return Err(GitnadoError::InvalidPath(
             full_path.to_string_lossy().to_string(),
         ));
     }
 
     if full_path.is_dir() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot detect encoding of a directory".to_string(),
         ));
     }
 
     let data = fs::read(&full_path)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read file: {}", e)))?;
 
     let is_binary = is_binary_data(&data);
     let has_bom = detect_bom(&data).is_some();
@@ -257,16 +257,16 @@ pub async fn convert_file_encoding(
     };
 
     if !full_path.exists() {
-        return Err(LeviathanError::InvalidPath(
+        return Err(GitnadoError::InvalidPath(
             full_path.to_string_lossy().to_string(),
         ));
     }
 
     let data = fs::read(&full_path)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read file: {}", e)))?;
 
     if is_binary_data(&data) {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot convert encoding of binary file".to_string(),
         ));
     }
@@ -332,7 +332,7 @@ pub async fn convert_file_encoding(
             (bytes, "UTF-16BE".to_string())
         }
         "utf-32" | "utf32" | "utf-32le" | "utf32le" | "utf-32be" | "utf32be" => {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "UTF-32 encoding is not supported. Please choose UTF-8, UTF-16LE, or UTF-16BE."
                     .to_string(),
             ));
@@ -340,7 +340,7 @@ pub async fn convert_file_encoding(
         _ => {
             let target_enc =
                 encoding_rs::Encoding::for_label(target_norm.as_bytes()).ok_or_else(|| {
-                    LeviathanError::OperationFailed(format!(
+                    GitnadoError::OperationFailed(format!(
                         "Unsupported target encoding: {}",
                         targetEncoding
                     ))
@@ -375,7 +375,7 @@ pub async fn convert_file_encoding(
 
     // Write the file
     fs::write(&full_path, &output).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to write converted file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to write converted file: {}", e))
     })?;
 
     Ok(ConvertEncodingResult {

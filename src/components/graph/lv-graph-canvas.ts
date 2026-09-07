@@ -691,11 +691,11 @@ export class LvGraphCanvas extends LitElement {
   @state() private showColumnsMenu = false;
   @state() private showAuthorColumn = false;
   @state() private showDateColumn = false;
-  private readonly OPTIONAL_COLUMNS_KEY = 'leviathan-graph-optional-columns';
+  private readonly OPTIONAL_COLUMNS_KEY = 'gitnado-graph-optional-columns';
 
   // Minimap
   @state() private showMinimap = true;
-  private readonly MINIMAP_KEY = 'leviathan-graph-minimap';
+  private readonly MINIMAP_KEY = 'gitnado-graph-minimap';
   private readonly MINIMAP_WIDTH = 56;
   /** Offscreen layer with one dot per commit, rebuilt on layout changes */
   private minimapDots: HTMLCanvasElement | null = null;
@@ -727,8 +727,8 @@ export class LvGraphCanvas extends LitElement {
   @state() private resizing: 'refs' | 'stats' | null = null;
   private resizeStartX = 0;
   private resizeStartWidth = 0;
-  private readonly COLUMN_STORAGE_KEY = 'leviathan-graph-columns';
-  private readonly BRANCH_VISIBILITY_KEY = 'leviathan-hidden-branches';
+  private readonly COLUMN_STORAGE_KEY = 'gitnado-graph-columns';
+  private readonly BRANCH_VISIBILITY_KEY = 'gitnado-hidden-branches';
 
   @query('.canvas-container') private containerEl!: HTMLDivElement;
   @query('canvas[role="img"]') private canvasEl!: HTMLCanvasElement;
@@ -784,7 +784,7 @@ export class LvGraphCanvas extends LitElement {
   private static readonly BASE_NODE_RADIUS = 6;
   private static readonly MIN_ZOOM = 0.6;
   private static readonly MAX_ZOOM = 2;
-  private readonly ZOOM_STORAGE_KEY = 'leviathan-graph-zoom';
+  private readonly ZOOM_STORAGE_KEY = 'gitnado-graph-zoom';
   /** Density factor applied to row height / lane width / node radius */
   private zoomLevel = 1;
   // Wheel-zoom ticks accumulate here and apply once per animation frame

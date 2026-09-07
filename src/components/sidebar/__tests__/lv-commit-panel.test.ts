@@ -113,7 +113,7 @@ async function renderCommitPanel(stagedCount = 1): Promise<LvCommitPanel> {
 describe('lv-commit-panel', () => {
   beforeEach(() => {
     invokeHistory.length = 0;
-    localStorage.removeItem('leviathan-commit-history');
+    localStorage.removeItem('gitnado-commit-history');
     setupDefaultMocks();
     setupStore();
   });
@@ -390,7 +390,7 @@ describe('lv-commit-panel', () => {
   // ── Commit history ─────────────────────────────────────────────────────
   describe('commit history', () => {
     it('loads history from localStorage', async () => {
-      localStorage.setItem('leviathan-commit-history', JSON.stringify(['msg1', 'msg2']));
+      localStorage.setItem('gitnado-commit-history', JSON.stringify(['msg1', 'msg2']));
       const el = await renderCommitPanel();
 
       const internal = el as unknown as { commitHistory: string[] };
@@ -405,7 +405,7 @@ describe('lv-commit-panel', () => {
 
       saveToHistory('feat: new feature');
 
-      const stored = JSON.parse(localStorage.getItem('leviathan-commit-history')!);
+      const stored = JSON.parse(localStorage.getItem('gitnado-commit-history')!);
       expect(stored).to.include('feat: new feature');
     });
 
@@ -419,7 +419,7 @@ describe('lv-commit-panel', () => {
       saveToHistory('message B');
       saveToHistory('message A'); // duplicate
 
-      const stored = JSON.parse(localStorage.getItem('leviathan-commit-history')!);
+      const stored = JSON.parse(localStorage.getItem('gitnado-commit-history')!);
       const countA = stored.filter((m: string) => m === 'message A').length;
       expect(countA).to.equal(1);
       expect(stored[0]).to.equal('message A');
@@ -435,7 +435,7 @@ describe('lv-commit-panel', () => {
         saveToHistory(`commit ${i}`);
       }
 
-      const stored = JSON.parse(localStorage.getItem('leviathan-commit-history')!);
+      const stored = JSON.parse(localStorage.getItem('gitnado-commit-history')!);
       expect(stored.length).to.be.at.most(20);
     });
 
@@ -448,7 +448,7 @@ describe('lv-commit-panel', () => {
       saveToHistory('');
       saveToHistory('   ');
 
-      const stored = localStorage.getItem('leviathan-commit-history');
+      const stored = localStorage.getItem('gitnado-commit-history');
       expect(stored).to.be.null;
     });
 
@@ -466,7 +466,7 @@ describe('lv-commit-panel', () => {
     });
 
     it('clears history', async () => {
-      localStorage.setItem('leviathan-commit-history', JSON.stringify(['msg1']));
+      localStorage.setItem('gitnado-commit-history', JSON.stringify(['msg1']));
       const el = await renderCommitPanel();
 
       const handleClearHistory = (el as unknown as {
@@ -477,7 +477,7 @@ describe('lv-commit-panel', () => {
 
       const internal = el as unknown as { commitHistory: string[] };
       expect(internal.commitHistory).to.deep.equal([]);
-      expect(localStorage.getItem('leviathan-commit-history')).to.be.null;
+      expect(localStorage.getItem('gitnado-commit-history')).to.be.null;
     });
   });
 

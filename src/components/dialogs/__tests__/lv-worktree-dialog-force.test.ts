@@ -3,7 +3,7 @@
  *
  * git refuses and tells the user to pass --force. The dialog never exposed that
  * flag, so the flow dead-ended on a raw CLI error with no way to finish from
- * inside Leviathan. It must offer the same force escalation the branch-delete
+ * inside Gitnado. It must offer the same force escalation the branch-delete
  * paths do, and the confirm must name the work at stake.
  */
 

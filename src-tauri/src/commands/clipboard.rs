@@ -6,7 +6,7 @@ use tauri::command;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Result of a copy operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,10 +81,10 @@ pub async fn get_commit_info_for_copy(
 ) -> Result<CopyResult> {
     let repo = git2::Repository::open(Path::new(&path))?;
     let commit_oid =
-        git2::Oid::from_str(&oid).map_err(|_| LeviathanError::CommitNotFound(oid.clone()))?;
+        git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
     let commit = repo
         .find_commit(commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
 
     let format_enum = CommitInfoFormat::from(format);
 
@@ -198,7 +198,7 @@ pub async fn get_file_path_for_copy(
 ) -> Result<CopyResult> {
     let repo_path = Path::new(&path);
     if !repo_path.exists() {
-        return Err(LeviathanError::InvalidPath(path));
+        return Err(GitnadoError::InvalidPath(path));
     }
 
     let format_enum = FilePathFormat::from(format);

@@ -177,7 +177,7 @@ async function addBackgroundRepo(
 ): Promise<void> {
   await page.evaluate(
     ({ path, name }) => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         repositoryStore: {
           getState: () => {
             addRepository: (repo: unknown, options?: { activate?: boolean }) => void;
@@ -848,10 +848,10 @@ test.describe('Context Menus - Error Scenarios', () => {
       } catch (err) {
         // Add toast via uiStore (matches how production showToast() works)
         const stores = (window as unknown as {
-          __LEVIATHAN_STORES__: {
+          __GITNADO_STORES__: {
             uiStore: { getState: () => { addToast: (t: { type: string; message: string; duration: number }) => void } };
           };
-        }).__LEVIATHAN_STORES__;
+        }).__GITNADO_STORES__;
         stores.uiStore.getState().addToast({
           type: 'error',
           message: (err as Error).message,
@@ -901,7 +901,7 @@ test.describe('Context Menus - Error Scenarios', () => {
       }).__TAURI_INTERNALS__.invoke;
       await invoke('checkout', { path: '/tmp/test-repo', refName: 'feature/test' });
       // Trigger a store refresh to update the UI
-      const stores = (window as unknown as { __LEVIATHAN_STORES__: Record<string, unknown> }).__LEVIATHAN_STORES__;
+      const stores = (window as unknown as { __GITNADO_STORES__: Record<string, unknown> }).__GITNADO_STORES__;
       const repoStore = stores.repositoryStore as { getState: () => { setBranches: (b: unknown[]) => void; setCurrentBranch: (b: unknown) => void } };
       const branches = await invoke('get_branches', { path: '/tmp/test-repo' }) as unknown[];
       const currentBranch = await invoke('get_current_branch', { path: '/tmp/test-repo' });

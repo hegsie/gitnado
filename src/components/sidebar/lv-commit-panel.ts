@@ -709,7 +709,7 @@ export class LvCommitPanel extends LitElement {
 
   private readonly SUMMARY_LIMIT = 72;
 
-  private readonly HISTORY_STORAGE_KEY = 'leviathan-commit-history';
+  private readonly HISTORY_STORAGE_KEY = 'gitnado-commit-history';
   private readonly HISTORY_MAX_ENTRIES = 20;
 
   // Per-repo draft cache: preserves commit form state when switching repos

@@ -2,7 +2,7 @@
 //!
 //! Provides integration with Azure DevOps for pull requests, work items, and pipelines.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -15,7 +15,7 @@ const AZURE_DEVOPS_API_VERSION: &str = "7.1";
 fn resolve_ado_token(token: Option<String>) -> Result<String> {
     match token {
         Some(t) if !t.is_empty() => Ok(t),
-        _ => Err(LeviathanError::OperationFailed(
+        _ => Err(GitnadoError::OperationFailed(
             "Azure DevOps token not configured".to_string(),
         )),
     }
@@ -242,7 +242,7 @@ pub async fn check_ado_connection(
         .await
         .map_err(|e| {
             error!("HTTP request failed: {}", e);
-            LeviathanError::OperationFailed(format!("Failed to check connection: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to check connection: {}", e))
         })?;
 
     debug!("Response status: {}", response.status());
@@ -265,7 +265,7 @@ pub async fn check_ado_connection(
             status,
             if body.is_empty() { "<empty>" } else { &body }
         );
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps connection failed ({}): {}",
             status, error_msg
         )));
@@ -282,7 +282,7 @@ pub async fn check_ado_connection(
 
     let data: ProfileData = response.json().await.map_err(|e| {
         error!("Failed to parse profile data: {}", e);
-        LeviathanError::OperationFailed(format!("Failed to parse profile data: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse profile data: {}", e))
     })?;
 
     info!(
@@ -330,13 +330,12 @@ pub async fn detect_ado_repo(
     path: String,
     remote_name: Option<String>,
 ) -> Result<Option<DetectedAdoRepo>> {
-    let repo = git2::Repository::open(&path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to open repository: {}", e))
-    })?;
+    let repo = git2::Repository::open(&path)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
 
     let remotes = repo
         .remotes()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
 
     for candidate in remotes.iter().flatten().flatten() {
         if remote_name
@@ -390,13 +389,13 @@ pub async fn get_ado_pull_request(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch pull request: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch pull request: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -439,7 +438,7 @@ pub async fn get_ado_pull_request(
     }
 
     let pr: ApiPullRequest = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pull request: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pull request: {}", e))
     })?;
 
     Ok(AdoPullRequest {
@@ -556,13 +555,13 @@ pub async fn list_ado_pull_requests(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch pull requests: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch pull requests: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -610,7 +609,7 @@ pub async fn list_ado_pull_requests(
     }
 
     let data: ApiResponse = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pull requests: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pull requests: {}", e))
     })?;
 
     Ok(data
@@ -687,13 +686,13 @@ pub async fn create_ado_pull_request(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create pull request: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to create pull request: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -736,7 +735,7 @@ pub async fn create_ado_pull_request(
     }
 
     let pr: ApiPullRequest = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pull request: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pull request: {}", e))
     })?;
 
     Ok(AdoPullRequest {
@@ -800,14 +799,12 @@ pub async fn get_ado_work_items(
         .header("Content-Type", "application/json")
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch work items: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch work items: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -849,9 +846,10 @@ pub async fn get_ado_work_items(
         image_url: Option<String>,
     }
 
-    let data: ApiResponse = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse work items: {}", e))
-    })?;
+    let data: ApiResponse = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse work items: {}", e)))?;
 
     Ok(data
         .value
@@ -953,9 +951,7 @@ pub async fn query_ado_work_items(
         .json(&WiqlQuery { query: wiql })
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to query work items: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to query work items: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -963,9 +959,9 @@ pub async fn query_ado_work_items(
         // Azure DevOps caps a flat WIQL result at 20000 work items (VS402337).
         // Surface a clear, actionable message instead of the raw API JSON.
         if let Some(message) = map_wiql_error_body(&body) {
-            return Err(LeviathanError::OperationFailed(message));
+            return Err(GitnadoError::OperationFailed(message));
         }
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -983,7 +979,7 @@ pub async fn query_ado_work_items(
     }
 
     let data: WiqlResponse = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse WIQL response: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse WIQL response: {}", e))
     })?;
 
     // Fetch full details for at most the caller's page size of the user's
@@ -1071,14 +1067,12 @@ pub async fn create_azure_devops_work_item(
         .json(&patch)
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create work item: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create work item: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -1115,9 +1109,10 @@ pub async fn create_azure_devops_work_item(
         image_url: Option<String>,
     }
 
-    let wi: ApiWorkItem = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse work item: {}", e))
-    })?;
+    let wi: ApiWorkItem = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse work item: {}", e)))?;
 
     Ok(AdoWorkItem {
         id: wi.id,
@@ -1197,18 +1192,16 @@ async fn resolve_ado_repository_id(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(map_repository_lookup_error(repository, &e.to_string()))
+            GitnadoError::OperationFailed(map_repository_lookup_error(repository, &e.to_string()))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(
-            map_repository_lookup_error(
-                repository,
-                &format!("Azure DevOps API error {}: {}", status, body),
-            ),
-        ));
+        return Err(GitnadoError::OperationFailed(map_repository_lookup_error(
+            repository,
+            &format!("Azure DevOps API error {}: {}", status, body),
+        )));
     }
 
     #[derive(Deserialize)]
@@ -1217,7 +1210,7 @@ async fn resolve_ado_repository_id(
     }
 
     let repo: ApiRepositoryRef = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(map_repository_lookup_error(repository, &e.to_string()))
+        GitnadoError::OperationFailed(map_repository_lookup_error(repository, &e.to_string()))
     })?;
 
     Ok(repo.id)
@@ -1254,13 +1247,13 @@ pub async fn list_ado_pipeline_runs(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch pipeline runs: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch pipeline runs: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -1305,7 +1298,7 @@ pub async fn list_ado_pipeline_runs(
     }
 
     let data: ApiResponse = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pipeline runs: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pipeline runs: {}", e))
     })?;
 
     Ok(data
@@ -1351,13 +1344,13 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
         .await
         .map_err(|e| {
             error!("HTTP request failed: {}", e);
-            LeviathanError::OperationFailed(format!("Failed to fetch profile: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch profile: {}", e))
         })?;
 
     if !profile_response.status().is_success() {
         let status = profile_response.status();
         let body = profile_response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -1370,7 +1363,7 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
 
     let profile: ProfileData = profile_response.json().await.map_err(|e| {
         error!("Failed to parse profile data: {}", e);
-        LeviathanError::OperationFailed(format!("Failed to parse profile data: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse profile data: {}", e))
     })?;
 
     // Step 2: List accounts for the resolved member id.
@@ -1388,13 +1381,13 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
         .await
         .map_err(|e| {
             error!("HTTP request failed: {}", e);
-            LeviathanError::OperationFailed(format!("Failed to fetch accounts: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch accounts: {}", e))
         })?;
 
     if !accounts_response.status().is_success() {
         let status = accounts_response.status();
         let body = accounts_response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Azure DevOps API error {}: {}",
             status, body
         )));
@@ -1415,7 +1408,7 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
 
     let data: AccountsResponse = accounts_response.json().await.map_err(|e| {
         error!("Failed to parse accounts data: {}", e);
-        LeviathanError::OperationFailed(format!("Failed to parse accounts data: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse accounts data: {}", e))
     })?;
 
     Ok(data

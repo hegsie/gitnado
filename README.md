@@ -1,19 +1,21 @@
-# Leviathan
+# Gitnado
 
-[![Build & Release](https://github.com/hegsie/Leviathan/actions/workflows/build.yml/badge.svg)](https://github.com/hegsie/Leviathan/actions/workflows/build.yml)
-[![CI](https://github.com/hegsie/Leviathan/actions/workflows/ci.yml/badge.svg)](https://github.com/hegsie/Leviathan/actions/workflows/ci.yml)
+[![Build & Release](https://github.com/hegsie/gitnado/actions/workflows/build.yml/badge.svg)](https://github.com/hegsie/gitnado/actions/workflows/build.yml)
+[![CI](https://github.com/hegsie/gitnado/actions/workflows/ci.yml/badge.svg)](https://github.com/hegsie/gitnado/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/hegsie/Leviathan)](https://github.com/hegsie/Leviathan/releases)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/hegsie/Leviathan/releases)
+[![GitHub release](https://img.shields.io/github/v/release/hegsie/gitnado)](https://github.com/hegsie/gitnado/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/hegsie/gitnado/releases)
 
-A modern, cross-platform Git GUI client built with Tauri, Lit, and Rust.
+A modern, cross-platform Git GUI client built with Tauri, Lit, and Rust. **Website: [gitnado.dev](https://gitnado.dev)**
 
-Leviathan aims to be a fast, privacy-first alternative to existing Git clients like GitHub Desktop, GitKraken, and Sourcetree. It runs entirely offline with no telemetry, account requirements, or cloud dependencies.
+> **Formerly Leviathan.** The project was renamed to Gitnado in 0.9.0. Existing installs keep their settings, credentials and repository rules — see [Upgrading from Leviathan](docs/upgrading-from-leviathan.md).
+
+Gitnado aims to be a fast, privacy-first alternative to existing Git clients like GitHub Desktop, GitKraken, and Sourcetree. It runs entirely offline with no telemetry, account requirements, or cloud dependencies.
 
 ## Table of Contents
 
 - [Screenshots](#screenshots)
-- [Why Leviathan?](#why-leviathan)
+- [Why Gitnado?](#why-gitnado)
 - [Features](#features)
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
@@ -29,9 +31,9 @@ Leviathan aims to be a fast, privacy-first alternative to existing Git clients l
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
 
-## Why Leviathan?
+## Why Gitnado?
 
-Leviathan is built for developers who value **privacy, performance, and control**:
+Gitnado is built for developers who value **privacy, performance, and control**:
 
 - **🔒 Privacy-First**: No telemetry, no analytics, no cloud dependencies. Your code and workflow stay on your machine.
 - **⚡ Performance**: Built with Rust and native Git libraries for blazing-fast operations, even with large repositories (100k+ commits).
@@ -43,7 +45,7 @@ Leviathan is built for developers who value **privacy, performance, and control*
 
 ### How is it Different?
 
-| Feature | Leviathan | GitHub Desktop | GitKraken | Sourcetree |
+| Feature | Gitnado | GitHub Desktop | GitKraken | Sourcetree |
 |---------|-----------|----------------|-----------|------------|
 | Privacy (no telemetry) | ✅ | ❌ | ❌ | ❌ |
 | No account required | ✅ | ✅ | ❌ (free tier limit) | ❌ |
@@ -227,14 +229,14 @@ Leviathan is built for developers who value **privacy, performance, and control*
 
 ### Download
 
-Pre-built binaries are available from the [Releases](https://github.com/hegsie/Leviathan/releases) page:
+Pre-built binaries are available from the [Releases](https://github.com/hegsie/gitnado/releases) page:
 
 | Platform | Download |
 |----------|----------|
 | macOS (Apple Silicon) | `.dmg` |
 | Windows | `.msi` or `.exe` |
 | Linux | `.deb` or `.AppImage` |
-| Arch Linux | [AUR](https://aur.archlinux.org/packages/leviathan-bin) |
+| Arch Linux | [AUR](https://aur.archlinux.org/packages/leviathan-bin) (community, still under the old name) |
 
 ### Package Managers
 
@@ -244,24 +246,24 @@ New releases are published to package managers automatically (see
 #### Windows (winget)
 
 ```powershell
-winget install hegsie.Leviathan
+winget install hegsie.Gitnado
 ```
 
 #### Windows (Scoop)
 
 ```powershell
-scoop install https://raw.githubusercontent.com/hegsie/Leviathan/main/packaging/scoop/leviathan.json
+scoop install https://raw.githubusercontent.com/hegsie/gitnado/main/packaging/scoop/gitnado.json
 ```
 
 #### macOS (Homebrew, Apple Silicon)
 
 ```bash
-brew install --cask hegsie/leviathan/leviathan
+brew install --cask hegsie/gitnado/gitnado
 ```
 
 ### Arch Linux (AUR)
 
-Leviathan is available on the AUR as [`leviathan-bin`](https://aur.archlinux.org/packages/leviathan-bin), repackaged from the official `.deb` release:
+A community package is available on the AUR as [`leviathan-bin`](https://aur.archlinux.org/packages/leviathan-bin), repackaged from the official `.deb` release. It still carries the project's previous name (Leviathan) and will be renamed by its maintainer:
 
 ```bash
 # Using an AUR helper
@@ -273,7 +275,7 @@ cd leviathan-bin
 makepkg -si
 ```
 
-This package is community-maintained and is not an official Leviathan release channel.
+This package is community-maintained and is not an official Gitnado release channel.
 
 ### Build from Source
 
@@ -311,8 +313,8 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cp
 
 ```bash
 # Clone the repository
-git clone https://github.com/hegsie/Leviathan.git
-cd Leviathan
+git clone https://github.com/hegsie/gitnado.git
+cd Gitnado
 
 # Install dependencies
 npm install
@@ -330,7 +332,7 @@ Production builds are output to `src-tauri/target/release/bundle/`.
 
 ### First Time Setup
 
-1. **Download and Install**: Get the latest release for your platform from the [Releases](https://github.com/hegsie/Leviathan/releases) page.
+1. **Download and Install**: Get the latest release for your platform from the [Releases](https://github.com/hegsie/gitnado/releases) page.
 
 2. **Open a Repository**: 
    - Click **"Open Repository"** or press `Cmd/Ctrl+O`
@@ -406,7 +408,7 @@ Press `Cmd/Ctrl+P` to open the command palette and quickly access any feature wi
 ### Project Structure
 
 ```
-leviathan/
+gitnado/
 ├── src/                    # Frontend (TypeScript/Lit)
 │   ├── components/         # UI components
 │   │   ├── common/         # Shared components
@@ -437,7 +439,7 @@ leviathan/
 
 ### Architecture
 
-Leviathan uses a **multi-process architecture** powered by Tauri:
+Gitnado uses a **multi-process architecture** powered by Tauri:
 
 - **Frontend Process**: Web-based UI built with Lit web components, running in a WebView
 - **Backend Process**: Rust application handling Git operations via libgit2 and system Git
@@ -522,7 +524,7 @@ For detailed OAuth setup instructions (for integration features), see [docs/oaut
 
 ## Testing
 
-Leviathan has a comprehensive testing strategy covering unit tests, integration tests, and end-to-end tests.
+Gitnado has a comprehensive testing strategy covering unit tests, integration tests, and end-to-end tests.
 
 ### Running Tests
 
@@ -600,24 +602,24 @@ See [ROADMAP.md](ROADMAP.md) for planned features including:
 
 ### AI Commit Message Generation
 
-Leviathan supports multiple AI providers for commit message generation. By default, it uses an embedded LLM that runs locally on your machine. On first use, it downloads a ~2GB model file. You can also configure local providers (Ollama, LM Studio) or cloud providers (OpenAI, Anthropic, GitHub Copilot) in Settings > AI Providers.
+Gitnado supports multiple AI providers for commit message generation. By default, it uses an embedded LLM that runs locally on your machine. On first use, it downloads a ~2GB model file. You can also configure local providers (Ollama, LM Studio) or cloud providers (OpenAI, Anthropic, GitHub Copilot) in Settings > AI Providers.
 
 **macOS GPU Issues**: If the app crashes when generating commit messages, you may need to adjust GPU settings:
 
 ```bash
 # Run with CPU-only inference (slower but stable)
-LEVIATHAN_GPU_LAYERS=0 /Applications/Leviathan.app/Contents/MacOS/Leviathan
+GITNADO_GPU_LAYERS=0 /Applications/Gitnado.app/Contents/MacOS/Gitnado
 
 # Or reduce GPU layers (try 16, 8, etc.)
-LEVIATHAN_GPU_LAYERS=16 /Applications/Leviathan.app/Contents/MacOS/Leviathan
+GITNADO_GPU_LAYERS=16 /Applications/Gitnado.app/Contents/MacOS/Gitnado
 ```
 
 This is a known issue with Metal GPU buffer allocation on some macOS configurations. See [llama.cpp#16266](https://github.com/ggml-org/llama.cpp/issues/16266) for details.
 
 **Model Storage**: The AI model is stored in:
-- macOS: `~/Library/Application Support/io.github.hegsie.leviathan/models/`
-- Windows: `%APPDATA%\io.github.hegsie.leviathan\models\`
-- Linux: `~/.config/io.github.hegsie.leviathan/models/`
+- macOS: `~/Library/Application Support/io.github.hegsie.gitnado/models/`
+- Windows: `%APPDATA%\io.github.hegsie.gitnado\models\`
+- Linux: `~/.config/io.github.hegsie.gitnado/models/`
 
 You can delete the model folder to re-download or free up space.
 
@@ -625,42 +627,42 @@ You can delete the model folder to re-download or free up space.
 
 ### General Questions
 
-**Q: Is Leviathan really free?**  
-A: Yes! Leviathan is open source under the MIT license. There are no subscription fees, account requirements, or feature paywalls.
+**Q: Is Gitnado really free?**  
+A: Yes! Gitnado is open source under the MIT license. There are no subscription fees, account requirements, or feature paywalls.
 
-**Q: Does Leviathan send any data to external servers?**  
-A: No. Leviathan has zero telemetry and no analytics. The only network requests are Git operations (push/pull/fetch) and optional integrations (GitHub, GitLab, etc.) that you explicitly configure.
+**Q: Does Gitnado send any data to external servers?**  
+A: No. Gitnado has zero telemetry and no analytics. The only network requests are Git operations (push/pull/fetch) and optional integrations (GitHub, GitLab, etc.) that you explicitly configure.
 
-**Q: Can I use Leviathan offline?**  
-A: Absolutely. Leviathan works perfectly offline. All features work locally, including AI commit message generation (after initial model download).
+**Q: Can I use Gitnado offline?**  
+A: Absolutely. Gitnado works perfectly offline. All features work locally, including AI commit message generation (after initial model download).
 
-**Q: How does Leviathan compare to other Git clients?**  
-A: See the [comparison table](#why-leviathan) above. Leviathan focuses on privacy, performance, and being fully open source.
+**Q: How does Gitnado compare to other Git clients?**  
+A: See the [comparison table](#why-gitnado) above. Gitnado focuses on privacy, performance, and being fully open source.
 
 ### Technical Questions
 
 **Q: Which Git operations use libgit2 vs system Git?**  
-A: Leviathan uses libgit2 for most operations (staging, commits, branches, status, diffs) for speed and portability. Complex operations like interactive rebase and submodules use system Git for compatibility.
+A: Gitnado uses libgit2 for most operations (staging, commits, branches, status, diffs) for speed and portability. Complex operations like interactive rebase and submodules use system Git for compatibility.
 
-**Q: Does Leviathan support Git LFS?**  
-A: Yes! Leviathan has built-in support for Git LFS including tracking patterns, pull/fetch/prune operations.
+**Q: Does Gitnado support Git LFS?**  
+A: Yes! Gitnado has built-in support for Git LFS including tracking patterns, pull/fetch/prune operations.
 
-**Q: Can I use Leviathan with large repositories (monorepos)?**  
-A: Yes. Leviathan is optimized for large repositories with features like virtual scrolling, lazy loading, and background indexing. It's been tested with repositories containing 100,000+ commits.
+**Q: Can I use Gitnado with large repositories (monorepos)?**  
+A: Yes. Gitnado is optimized for large repositories with features like virtual scrolling, lazy loading, and background indexing. It's been tested with repositories containing 100,000+ commits.
 
-**Q: Does Leviathan work with my Git hosting provider?**  
-A: Leviathan works with any Git remote (GitHub, GitLab, Bitbucket, Azure DevOps, self-hosted, etc.). It also has native integrations for viewing PRs, issues, and CI/CD status for major platforms.
+**Q: Does Gitnado work with my Git hosting provider?**  
+A: Gitnado works with any Git remote (GitHub, GitLab, Bitbucket, Azure DevOps, self-hosted, etc.). It also has native integrations for viewing PRs, issues, and CI/CD status for major platforms.
 
 ### AI Features
 
 **Q: How does the AI commit message generation work?**  
-A: Leviathan supports multiple AI providers. By default, it uses an embedded local LLM ([Tavernari/git-commit-message](https://huggingface.co/Tavernari/git-commit-message)) that runs entirely on your machine. You can also configure local providers (Ollama, LM Studio) or cloud providers (OpenAI, Anthropic, GitHub Copilot). The AI analyzes your staged changes and generates [conventional commit messages](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`). The embedded model (~2GB) downloads once on first use.
+A: Gitnado supports multiple AI providers. By default, it uses an embedded local LLM ([Tavernari/git-commit-message](https://huggingface.co/Tavernari/git-commit-message)) that runs entirely on your machine. You can also configure local providers (Ollama, LM Studio) or cloud providers (OpenAI, Anthropic, GitHub Copilot). The AI analyzes your staged changes and generates [conventional commit messages](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`). The embedded model (~2GB) downloads once on first use.
 
 **Q: Do I need an internet connection for AI features?**  
 A: It depends on which AI provider you use. The embedded model and local providers (Ollama, LM Studio) work completely offline after the initial model download (~2GB for embedded model). Cloud-based providers (OpenAI, Anthropic, GitHub Copilot) require an active internet connection.
 
 **Q: Can I use my own AI backend (Ollama, LM Studio)?**  
-A: Yes! Leviathan supports multiple AI providers including local providers (Ollama, LM Studio) and cloud-based providers (OpenAI, Anthropic, GitHub Copilot). The application auto-detects local providers and allows you to configure them in settings.
+A: Yes! Gitnado supports multiple AI providers including local providers (Ollama, LM Studio) and cloud-based providers (OpenAI, Anthropic, GitHub Copilot). The application auto-detects local providers and allows you to configure them in settings.
 
 **Q: Why does AI generation crash on my Mac?**  
 A: This is a known issue with Metal GPU buffer allocation on some macOS configurations. See [Troubleshooting](#troubleshooting) for workarounds (CPU-only mode or reduced GPU layers).
@@ -673,36 +675,36 @@ A: All data is stored locally on your machine:
 - App settings: Platform-specific config directories (see [Troubleshooting](#troubleshooting))
 - AI models: Local app data directory (~2GB)
 
-**Q: Is Leviathan audited for security?**  
-A: Leviathan is open source, so the code is publicly auditable. We use Rust for memory safety and follow security best practices. If you find security issues, please report them via GitHub Security Advisories.
+**Q: Is Gitnado audited for security?**  
+A: Gitnado is open source, so the code is publicly auditable. We use Rust for memory safety and follow security best practices. If you find security issues, please report them via GitHub Security Advisories.
 
-**Q: Does Leviathan support GPG commit signing?**  
-A: Yes! Leviathan has full support for GPG signing of commits and tags, including key management, signature verification, and trust levels.
+**Q: Does Gitnado support GPG commit signing?**  
+A: Yes! Gitnado has full support for GPG signing of commits and tags, including key management, signature verification, and trust levels.
 
 ### Platform-Specific
 
 **Q: Why isn't there an installer for my Linux distribution?**  
-A: Leviathan provides `.deb` packages (Debian/Ubuntu) and `.AppImage` (universal). Additional formats (Flatpak, Snap, RPM) are on the roadmap.
+A: Gitnado provides `.deb` packages (Debian/Ubuntu) and `.AppImage` (universal). Additional formats (Flatpak, Snap, RPM) are on the roadmap.
 
-**Q: Does Leviathan work on Apple Silicon (M1/M2/M3)?**  
-A: Yes! Leviathan builds are Apple Silicon (ARM64) only — Metal GPU acceleration for AI features works out of the box. There is no Intel or universal build, and none is planned: Apple is winding down Intel support across macOS.
+**Q: Does Gitnado work on Apple Silicon (M1/M2/M3)?**  
+A: Yes! Gitnado builds are Apple Silicon (ARM64) only — Metal GPU acceleration for AI features works out of the box. There is no Intel or universal build, and none is planned: Apple is winding down Intel support across macOS.
 
-**Q: Can I install Leviathan on Windows ARM?**  
-A: Not currently. Leviathan only supports x64 Windows. ARM64 Windows support may be added in the future.
+**Q: Can I install Gitnado on Windows ARM?**  
+A: Not currently. Gitnado only supports x64 Windows. ARM64 Windows support may be added in the future.
 
 ## Community & Support
 
 ### Getting Help
 
-- **GitHub Issues**: Report bugs or request features at [github.com/hegsie/Leviathan/issues](https://github.com/hegsie/Leviathan/issues)
-- **GitHub Discussions**: Ask questions, share tips, or discuss the project at [github.com/hegsie/Leviathan/discussions](https://github.com/hegsie/Leviathan/discussions)
+- **GitHub Issues**: Report bugs or request features at [github.com/hegsie/gitnado/issues](https://github.com/hegsie/gitnado/issues)
+- **GitHub Discussions**: Ask questions, share tips, or discuss the project at [github.com/hegsie/gitnado/discussions](https://github.com/hegsie/gitnado/discussions)
 - **Documentation**: Check the [docs/](docs/) folder for guides and technical documentation
 
 ### Reporting Issues
 
 When reporting bugs, please include:
 
-1. **Version**: Your Leviathan version (from Help → About)
+1. **Version**: Your Gitnado version (from Help → About)
 2. **Platform**: OS version (e.g., "macOS 14.2", "Windows 11", "Ubuntu 22.04")
 3. **Steps to reproduce**: Clear steps to trigger the issue
 4. **Expected vs actual behavior**: What you expected vs what happened
@@ -720,12 +722,12 @@ Have an idea for a new feature? Check the [ROADMAP.md](ROADMAP.md) first to see 
 ### Stay Updated
 
 - **Watch the Repository**: Click "Watch" on GitHub to get notified of releases
-- **Releases**: Check the [Releases](https://github.com/hegsie/Leviathan/releases) page for new versions
+- **Releases**: Check the [Releases](https://github.com/hegsie/gitnado/releases) page for new versions
 - **Changelog**: See release notes for detailed changes in each version
 
 ## Contributing
 
-Contributions are welcome! Leviathan is built by the community, for the community.
+Contributions are welcome! Gitnado is built by the community, for the community.
 
 ### Ways to Contribute
 
@@ -733,7 +735,7 @@ Contributions are welcome! Leviathan is built by the community, for the communit
 - **Documentation**: Improve README, docs, or code comments
 - **Testing**: Report bugs, test pre-releases, or add test coverage
 - **Design**: Suggest UI/UX improvements or create mockups
-- **Translations**: Help translate Leviathan (i18n coming soon)
+- **Translations**: Help translate Gitnado (i18n coming soon)
 - **Community**: Help others in Discussions or answer issues
 
 ### Development Setup
@@ -741,8 +743,8 @@ Contributions are welcome! Leviathan is built by the community, for the communit
 1. **Fork the repository**
 2. **Clone your fork**:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/Leviathan.git
-   cd Leviathan
+   git clone https://github.com/YOUR_USERNAME/Gitnado.git
+   cd Gitnado
    ```
 3. **Install dependencies**:
    ```bash
@@ -788,7 +790,7 @@ Contributions are welcome! Leviathan is built by the community, for the communit
    ```
 
 6. **Open a Pull Request**:
-   - Go to the [Leviathan repository](https://github.com/hegsie/Leviathan)
+   - Go to the [Gitnado repository](https://github.com/hegsie/gitnado)
    - Click "Pull Requests" → "New Pull Request"
    - Select your fork and branch
    - Fill in the PR template with details
@@ -817,7 +819,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-Leviathan stands on the shoulders of giants. We're grateful to these projects and communities:
+Gitnado stands on the shoulders of giants. We're grateful to these projects and communities:
 
 - **[libgit2](https://libgit2.org/)** - The Git library powering core operations
 - **[Tauri](https://tauri.app/)** - For making cross-platform desktop apps accessible with Rust and web technologies
@@ -827,10 +829,10 @@ Leviathan stands on the shoulders of giants. We're grateful to these projects an
 - **[Rust](https://www.rust-lang.org/)** & **[TypeScript](https://www.typescriptlang.org/)** - Languages that make this project possible
 - The **open source community** for inspiration, feedback, and contributions
 
-Special thanks to all contributors who have helped make Leviathan better!
+Special thanks to all contributors who have helped make Gitnado better!
 
 ---
 
-**Made with ❤️ by the Leviathan community**
+**Made with ❤️ by the Gitnado community**
 
-*Leviathan: A privacy-first Git GUI for the modern developer*
+*Gitnado: A privacy-first Git GUI for the modern developer*

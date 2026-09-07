@@ -32,7 +32,7 @@ pub async fn get_cleanable_files(
 ) -> Result<Vec<CleanEntry>> {
     let repo = git2::Repository::open(Path::new(&path))?;
     let workdir = repo.workdir().ok_or_else(|| {
-        crate::error::LeviathanError::OperationFailed("Repository has no working directory".into())
+        crate::error::GitnadoError::OperationFailed("Repository has no working directory".into())
     })?;
 
     let include_ignored = include_ignored.unwrap_or(false);
@@ -152,7 +152,7 @@ pub async fn clean_files(
 ) -> Result<u32> {
     let repo = git2::Repository::open(Path::new(&path))?;
     let workdir = repo.workdir().ok_or_else(|| {
-        crate::error::LeviathanError::OperationFailed("Repository has no working directory".into())
+        crate::error::GitnadoError::OperationFailed("Repository has no working directory".into())
     })?;
 
     let force_nested = force_nested.unwrap_or(false);

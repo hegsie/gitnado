@@ -125,18 +125,35 @@ export async function initOAuthListener(): Promise<void> {
 }
 
 /**
+ * OAuth callback deep-link prefixes. `leviathan://` is the scheme from before
+ * the 0.9.0 rename; it stays registered (see `deep-link.desktop.schemes` in
+ * tauri.conf.json) so a callback configured against the old name still lands.
+ */
+export const OAUTH_DEEP_LINK_PREFIXES = ['gitnado://oauth/', 'leviathan://oauth/'] as const;
+
+/**
+ * The provider segment of an OAuth callback deep link
+ * (`<scheme>://oauth/{provider}/callback?…`), or `null` for any other URL.
+ */
+export function oauthDeepLinkProvider(url: string): OAuthProvider | null {
+  const prefix = OAUTH_DEEP_LINK_PREFIXES.find((p) => url.startsWith(p));
+  if (!prefix) return null;
+  const segment = url.slice(prefix.length).split(/[/?#]/)[0];
+  return segment ? (segment as OAuthProvider) : null;
+}
+
+/**
  * Handle incoming deep link
  */
 async function handleDeepLink(url: string): Promise<void> {
-  if (!url.startsWith('leviathan://oauth/')) {
+  const providerSegment = oauthDeepLinkProvider(url);
+  if (providerSegment === null) {
     // Don't log the raw URL — it may carry sensitive query params (code/state).
     log.debug('Ignoring non-OAuth deep link');
     return;
   }
   log.debug('Received OAuth deep link');
 
-  // Extract provider from URL path: leviathan://oauth/{provider}/callback?...
-  const providerSegment = url.slice('leviathan://oauth/'.length).split('/')[0] as OAuthProvider;
   const pending = pendingAuthByProvider.get(providerSegment);
 
   if (!pending) {
@@ -145,7 +162,7 @@ async function handleDeepLink(url: string): Promise<void> {
   }
 
   try {
-    // Parse the URL: leviathan://oauth/{provider}/callback?code=xxx&state=yyy
+    // Parse the URL: gitnado://oauth/{provider}/callback?code=xxx&state=yyy
     const parsed = new URL(url);
     const code = parsed.searchParams.get('code');
     const state = parsed.searchParams.get('state');

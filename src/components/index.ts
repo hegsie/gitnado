@@ -1,6 +1,6 @@
 /**
  * Component exports
- * All Leviathan web components are registered here
+ * All Gitnado web components are registered here
  */
 
 // Common components

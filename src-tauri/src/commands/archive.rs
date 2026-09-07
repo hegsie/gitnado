@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::reject_flag_like;
 
 /// Map a user-supplied format string to the value understood by
@@ -15,7 +15,7 @@ fn resolve_format(format: Option<&str>) -> Result<&'static str> {
         "zip" => Ok("zip"),
         "tar" => Ok("tar"),
         "tar.gz" | "tgz" => Ok("tar.gz"),
-        other => Err(LeviathanError::OperationFailed(format!(
+        other => Err(GitnadoError::OperationFailed(format!(
             "Unsupported archive format: {}",
             other
         ))),
@@ -44,7 +44,7 @@ pub async fn create_archive(
     let ref_str = tree_ref.as_deref().unwrap_or("HEAD");
     let obj = repo.revparse_single(ref_str)?;
     obj.peel_to_tree().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
+        GitnadoError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
     })?;
 
     let format_arg = resolve_format(format.as_deref())?;
@@ -71,12 +71,12 @@ pub async fn create_archive(
     cmd.arg("--").arg(ref_str);
 
     let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git archive: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to execute git archive: {}", e))
     })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git archive failed: {}",
             stderr.trim()
         )));
@@ -98,7 +98,7 @@ pub async fn get_archive_files(path: String, tree_ref: Option<String>) -> Result
     let ref_str = tree_ref.as_deref().unwrap_or("HEAD");
     let obj = repo.revparse_single(ref_str)?;
     obj.peel_to_tree().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
+        GitnadoError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
     })?;
 
     reject_flag_like(ref_str, "Reference")?;
@@ -111,12 +111,12 @@ pub async fn get_archive_files(path: String, tree_ref: Option<String>) -> Result
         .arg(ref_str)
         .output()
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to execute git archive: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to execute git archive: {}", e))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git archive failed: {}",
             stderr.trim()
         )));
@@ -126,10 +126,10 @@ pub async fn get_archive_files(path: String, tree_ref: Option<String>) -> Result
     let mut archive = tar::Archive::new(output.stdout.as_slice());
     for entry in archive
         .entries()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read archive: {}", e)))?
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read archive: {}", e)))?
     {
         let entry = entry.map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to read archive entry: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to read archive entry: {}", e))
         })?;
         // Skip directory entries; report only files and symlinks.
         if entry.header().entry_type().is_dir() {
@@ -137,7 +137,7 @@ pub async fn get_archive_files(path: String, tree_ref: Option<String>) -> Result
         }
         let entry_path = entry
             .path()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Invalid archive path: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Invalid archive path: {}", e)))?;
         files.push(entry_path.to_string_lossy().to_string());
     }
 

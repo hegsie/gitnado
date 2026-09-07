@@ -1209,7 +1209,7 @@ export class LvSettingsDialog extends LitElement {
     return JSON.stringify(
       {
         mcpServers: {
-          leviathan: {
+          gitnado: {
             url: `http://127.0.0.1:${this.mcpPort}`,
             headers: { Authorization: `Bearer ${token}` },
           },
@@ -2060,7 +2060,7 @@ export class LvSettingsDialog extends LitElement {
             <div class="setting-label">
               <span class="setting-name">MCP Client Configuration</span>
               <span class="setting-description">
-                Paste this into your MCP client. A client set up before Leviathan required a token
+                Paste this into your MCP client. A client set up before Gitnado required a token
                 must add the Authorization header, or its requests are refused with 401.
               </span>
             </div>

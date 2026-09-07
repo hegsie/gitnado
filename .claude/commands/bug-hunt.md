@@ -5,7 +5,7 @@ argument-hint: "[feature area, path, or 'recent' — e.g. 'stash', 'src/componen
 
 # Bug Hunt: $ARGUMENTS
 
-You are hunting for **real defects a user would actually hit** in Leviathan. This is not a diff review — you are auditing a *feature area as it exists today*, including code nobody has touched in months.
+You are hunting for **real defects a user would actually hit** in Gitnado. This is not a diff review — you are auditing a *feature area as it exists today*, including code nobody has touched in months.
 
 Three classes of defect are in scope, weighted equally:
 
@@ -29,7 +29,7 @@ Establish the surface before reading line by line.
 - If `$ARGUMENTS` is `recent`, use `git log --since="3 weeks ago" --name-only --pretty=format:` to rank files by churn and hunt the top ~15.
 - If `$ARGUMENTS` is empty, ask which area — do not audit 76 Rust command files at once.
 
-Write a short inventory: every **user-reachable entry point** into this area. Leviathan exposes the same operation from many places — toolbar buttons, context menus, the command palette (`lv-command-palette.ts`), keyboard shortcuts (`keyboard.service.ts`), dialogs, and drag-and-drop. Enumerate them all; divergence between them is one of the richest defect sources here.
+Write a short inventory: every **user-reachable entry point** into this area. Gitnado exposes the same operation from many places — toolbar buttons, context menus, the command palette (`lv-command-palette.ts`), keyboard shortcuts (`keyboard.service.ts`), dialogs, and drag-and-drop. Enumerate them all; divergence between them is one of the richest defect sources here.
 
 ## Phase 1 — Trace each flow end to end
 

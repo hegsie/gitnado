@@ -2,7 +2,7 @@
 //!
 //! Provides commands for managing AI providers and generating commit messages.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::services::ai::{
     AiProviderInfo, AiProviderType, AiState, AiUnavailable, AnalysisFinding, CommitSplitSuggestion,
     ConflictExplanation, ConflictResolutionSuggestion, FindingCategory, GeneratedChangelog,
@@ -36,7 +36,7 @@ pub async fn set_ai_provider(
     let mut service = state.write().await;
     service
         .set_active_provider(provider_type)
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 /// Set API key for a provider
@@ -49,7 +49,7 @@ pub async fn set_ai_api_key(
     let mut service = state.write().await;
     service
         .set_api_key(provider_type, api_key)
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 /// Set the model for a provider
@@ -62,7 +62,7 @@ pub async fn set_ai_model(
     let mut service = state.write().await;
     service
         .set_model(provider_type, model)
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 /// Test if a provider is available
@@ -75,7 +75,7 @@ pub async fn test_ai_provider(
     service
         .test_provider(provider_type)
         .await
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 /// Auto-detect available local AI providers (Ollama, LM Studio)
@@ -95,7 +95,7 @@ pub async fn generate_commit_message(
     let diff = get_staged_diff(&repo_path)?;
 
     if diff.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No staged changes to generate commit message for".to_string(),
         ));
     }
@@ -105,7 +105,7 @@ pub async fn generate_commit_message(
     service
         .generate_commit_message(diff)
         .await
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 /// Check if AI is available (a provider is configured and reachable, or a
@@ -202,7 +202,7 @@ pub async fn suggest_conflict_resolution(
     let response = service
         .generate_text(CONFLICT_RESOLUTION_PROMPT, &user_prompt, None)
         .await
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     // Try to parse as JSON
     parse_conflict_suggestion(&response)
@@ -223,7 +223,7 @@ pub async fn generate_changelog(
     let commits_text = get_commits_between_refs(&repo_path, &base_ref, &compare_ref, max_commits)?;
 
     if commits_text.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No commits found between the specified refs".to_string(),
         ));
     }
@@ -235,7 +235,7 @@ pub async fn generate_changelog(
     let response = service
         .generate_text(CHANGELOG_PROMPT, truncated, Some(2000))
         .await
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     Ok(GeneratedChangelog {
         content: response.trim().to_string(),
@@ -292,7 +292,7 @@ pub async fn explain_conflict(
     let response = service
         .generate_text(CONFLICT_EXPLAIN_PROMPT, &user_prompt, Some(500))
         .await
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     parse_conflict_explanation(&response)
 }
@@ -312,10 +312,10 @@ pub async fn find_reflog_entry(
         .arg("--format=%H %gd %gs %ci")
         .arg("-50")
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get reflog: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get reflog: {}", e)))?;
 
     if !output.status.success() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Failed to get reflog".to_string(),
         ));
     }
@@ -323,9 +323,7 @@ pub async fn find_reflog_entry(
     let reflog_text = String::from_utf8_lossy(&output.stdout).to_string();
 
     if reflog_text.trim().is_empty() {
-        return Err(LeviathanError::OperationFailed(
-            "Reflog is empty".to_string(),
-        ));
+        return Err(GitnadoError::OperationFailed("Reflog is empty".to_string()));
     }
 
     let system_prompt = REFLOG_MATCH_PROMPT.replace("{query}", &query);
@@ -334,7 +332,7 @@ pub async fn find_reflog_entry(
     let response = service
         .generate_text(&system_prompt, &reflog_text, Some(300))
         .await
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     parse_reflog_match(&response)
 }
@@ -345,7 +343,7 @@ fn parse_conflict_explanation(response: &str) -> Result<ConflictExplanation> {
     serde_json::from_str::<ConflictExplanation>(json_str)
         .map_err(|_| {
             // Fallback: treat entire response as explanation
-            LeviathanError::Custom("Failed to parse explanation".to_string())
+            GitnadoError::Custom("Failed to parse explanation".to_string())
         })
         .or_else(|_| {
             Ok(ConflictExplanation {
@@ -359,9 +357,8 @@ fn parse_conflict_explanation(response: &str) -> Result<ConflictExplanation> {
 /// Parse reflog match JSON response
 fn parse_reflog_match(response: &str) -> Result<ReflogMatch> {
     let json_str = strip_code_fences(response.trim());
-    serde_json::from_str::<ReflogMatch>(json_str).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse reflog match: {}", e))
-    })
+    serde_json::from_str::<ReflogMatch>(json_str)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse reflog match: {}", e)))
 }
 
 /// Get commit messages between two refs as a formatted text block
@@ -385,11 +382,11 @@ fn get_commits_between_refs(
         .arg(format!("-{}", max_commits))
         .arg(format!("{}..{}", base_ref, compare_ref))
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git log: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git log: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git log failed: {}",
             stderr.trim()
         )));
@@ -502,7 +499,7 @@ pub async fn generate_pr_description(
     let commits_text = get_commits_between_refs(&repo_path, &base_ref, &head_ref, 100)?;
 
     if commits_text.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No commits found between the specified refs".to_string(),
         ));
     }
@@ -520,7 +517,7 @@ pub async fn generate_pr_description(
     let response = service
         .generate_text(&system_prompt, truncated, Some(1500))
         .await
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     Ok(GeneratedPrDescription {
         body: response.trim().to_string(),
@@ -559,7 +556,7 @@ pub async fn suggest_commit_splits(
     let response = service
         .generate_text(COMMIT_SPLIT_PROMPT, truncated, Some(1500))
         .await
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     parse_split_suggestion(&response)
 }
@@ -575,7 +572,7 @@ fn get_diff_stats(repo_path: &str, base_ref: &str, compare_ref: &str) -> Result<
         .arg("--stat")
         .arg(format!("{}..{}", base_ref, compare_ref))
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git diff: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git diff: {}", e)))?;
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -646,7 +643,7 @@ fn parse_vibe_check_response(response: &str) -> Result<StagedAnalysis> {
     let json_str = strip_code_fences(trimmed);
 
     serde_json::from_str::<StagedAnalysis>(json_str).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse vibe check response: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse vibe check response: {}", e))
     })
 }
 
@@ -658,7 +655,7 @@ fn parse_split_suggestion(response: &str) -> Result<CommitSplitSuggestion> {
     serde_json::from_str::<CommitSplitSuggestion>(json_str).map_err(|e| {
         // Fallback: no split needed
         tracing::warn!("Failed to parse split suggestion: {}", e);
-        LeviathanError::OperationFailed(format!("Failed to parse split suggestion: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse split suggestion: {}", e))
     })
 }
 
@@ -721,9 +718,8 @@ fn parse_conflict_suggestion(response: &str) -> Result<ConflictResolutionSuggest
 
 /// Get the staged diff as a string
 fn get_staged_diff(repo_path: &str) -> Result<String> {
-    let repo = git2::Repository::open(repo_path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to open repository: {}", e))
-    })?;
+    let repo = git2::Repository::open(repo_path)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
 
     // Get HEAD tree (for comparing staged changes)
     let head = repo.head().ok();
@@ -732,12 +728,12 @@ fn get_staged_diff(repo_path: &str) -> Result<String> {
     // Get the index
     let index = repo
         .index()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get index: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get index: {}", e)))?;
 
     // Get diff between HEAD and index (staged changes)
     let diff = repo
         .diff_tree_to_index(head_tree.as_ref(), Some(&index), None)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get diff: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get diff: {}", e)))?;
 
     // Convert diff to string
     let mut diff_str = String::new();
@@ -758,7 +754,7 @@ fn get_staged_diff(repo_path: &str) -> Result<String> {
         }
         true
     })
-    .map_err(|e| LeviathanError::OperationFailed(format!("Failed to print diff: {}", e)))?;
+    .map_err(|e| GitnadoError::OperationFailed(format!("Failed to print diff: {}", e)))?;
 
     Ok(diff_str)
 }

@@ -3,7 +3,7 @@
 //! Provides commands for system capability detection, model registry browsing,
 //! model downloading/deletion, and model status queries.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::services::ai::local::{ModelEntry, ModelManager, ModelRegistry, SystemCapabilities};
 use crate::services::ai::providers::{LoadedModelMeta, LocalModelStatus};
 use crate::services::ai::AiState;
@@ -46,7 +46,7 @@ pub async fn get_downloaded_models(
     state
         .model_manager
         .list_downloaded()
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 #[command]
@@ -61,7 +61,7 @@ pub async fn download_model(
         .registry
         .get_by_id(&model_id)
         .ok_or_else(|| {
-            LeviathanError::OperationFailed(format!("Model '{}' not found in registry", model_id))
+            GitnadoError::OperationFailed(format!("Model '{}' not found in registry", model_id))
         })?
         .clone();
     let manager = local.model_manager.clone();
@@ -143,7 +143,7 @@ pub async fn cancel_model_download(
         .model_manager
         .cancel_download(&model_id)
         .await
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 #[command]
@@ -152,7 +152,7 @@ pub async fn delete_model(state: State<'_, SharedLocalAiState>, model_id: String
     state
         .model_manager
         .delete_model(&model_id)
-        .map_err(LeviathanError::OperationFailed)
+        .map_err(GitnadoError::OperationFailed)
 }
 
 #[command]
@@ -180,7 +180,7 @@ pub async fn load_model(
 
     // Verify the model is downloaded
     if !local.model_manager.is_downloaded(&model_id) {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Model '{}' is not downloaded",
             model_id
         )));
@@ -190,7 +190,7 @@ pub async fn load_model(
         .registry
         .get_by_id(&model_id)
         .ok_or_else(|| {
-            LeviathanError::OperationFailed(format!("Model '{}' not found in registry", model_id))
+            GitnadoError::OperationFailed(format!("Model '{}' not found in registry", model_id))
         })?
         .clone();
 
@@ -208,7 +208,7 @@ pub async fn load_model(
         service
             .load_local_model(&model_path, entry.display_name, meta)
             .await
-            .map_err(LeviathanError::OperationFailed)?;
+            .map_err(GitnadoError::OperationFailed)?;
     }
 
     // Auto-select LocalInference as active provider if none is set

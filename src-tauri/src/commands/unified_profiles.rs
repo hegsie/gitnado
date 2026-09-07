@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{
     CachedUser, IntegrationAccount, IntegrationAccountsConfig, IntegrationType,
     ProfileIntegrationAccount, ProfilesConfig, UnifiedProfile, UnifiedProfilesConfig,
@@ -21,38 +21,17 @@ use crate::utils::create_command;
 
 /// Get the path to the unified profiles config file
 fn get_unified_profiles_path() -> Result<std::path::PathBuf> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        LeviathanError::OperationFailed("Could not find config directory".to_string())
-    })?;
-
-    let app_config_dir = config_dir.join("leviathan");
-
-    // Create directory if it doesn't exist
-    if !app_config_dir.exists() {
-        fs::create_dir_all(&app_config_dir).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create config directory: {}", e))
-        })?;
-    }
-
-    Ok(app_config_dir.join("unified_profiles.json"))
+    Ok(crate::utils::app_paths::config_dir()?.join("unified_profiles.json"))
 }
 
 /// Get the path to the legacy profiles config file
 fn get_legacy_profiles_path() -> Result<std::path::PathBuf> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        LeviathanError::OperationFailed("Could not find config directory".to_string())
-    })?;
-    Ok(config_dir.join("leviathan").join("profiles.json"))
+    Ok(crate::utils::app_paths::config_dir()?.join("profiles.json"))
 }
 
 /// Get the path to the legacy integration accounts config file
 fn get_legacy_accounts_path() -> Result<std::path::PathBuf> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        LeviathanError::OperationFailed("Could not find config directory".to_string())
-    })?;
-    Ok(config_dir
-        .join("leviathan")
-        .join("integration_accounts.json"))
+    Ok(crate::utils::app_paths::config_dir()?.join("integration_accounts.json"))
 }
 
 // =============================================================================
@@ -68,11 +47,11 @@ fn load_unified_profiles_config() -> Result<UnifiedProfilesConfig> {
     }
 
     let content = fs::read_to_string(&path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read unified profiles: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to read unified profiles: {}", e))
     })?;
 
     let config: UnifiedProfilesConfig = serde_json::from_str(&content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse unified profiles: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse unified profiles: {}", e))
     })?;
 
     Ok(config)
@@ -83,11 +62,11 @@ fn save_unified_profiles_config(config: &UnifiedProfilesConfig) -> Result<()> {
     let path = get_unified_profiles_path()?;
 
     let content = serde_json::to_string_pretty(config).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to serialize unified profiles: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to serialize unified profiles: {}", e))
     })?;
 
     fs::write(&path, content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to write unified profiles: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to write unified profiles: {}", e))
     })?;
 
     // M8: Restrict config file to owner-only (0600) so token secrets are not
@@ -98,7 +77,7 @@ fn save_unified_profiles_config(config: &UnifiedProfilesConfig) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         fs::set_permissions(&path, perms).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to set config file permissions: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to set config file permissions: {}", e))
         })?;
     }
 
@@ -114,10 +93,10 @@ fn load_legacy_profiles_config() -> Result<ProfilesConfig> {
     }
 
     let content = fs::read_to_string(&path)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read profiles: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read profiles: {}", e)))?;
 
     let config: ProfilesConfig = serde_json::from_str(&content)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse profiles: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse profiles: {}", e)))?;
 
     Ok(config)
 }
@@ -131,11 +110,11 @@ fn load_legacy_accounts_config() -> Result<IntegrationAccountsConfig> {
     }
 
     let content = fs::read_to_string(&path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read integration accounts: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to read integration accounts: {}", e))
     })?;
 
     let config: IntegrationAccountsConfig = serde_json::from_str(&content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse integration accounts: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse integration accounts: {}", e))
     })?;
 
     Ok(config)
@@ -158,7 +137,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -168,7 +147,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
     } else if output.status.code() == Some(1) && stderr.is_empty() && stdout.is_empty() {
         Ok(String::new())
     } else {
-        Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+        Err(GitnadoError::OperationFailed(if stderr.is_empty() {
             stdout
         } else {
             stderr
@@ -352,7 +331,7 @@ pub async fn set_profile_default_account(
 
     let profile = config
         .get_profile_mut(&profile_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Profile not found".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Profile not found".to_string()))?;
 
     profile.set_default_account(integration_type, account_id);
     save_unified_profiles_config(&config)?;
@@ -369,7 +348,7 @@ pub async fn remove_profile_default_account(
 
     let profile = config
         .get_profile_mut(&profile_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Profile not found".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Profile not found".to_string()))?;
 
     profile.remove_default_account(&integration_type);
     save_unified_profiles_config(&config)?;
@@ -383,7 +362,7 @@ pub async fn update_global_account_cached_user(account_id: String, user: CachedU
 
     let account = config
         .get_account_mut(&account_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Account not found".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Account not found".to_string()))?;
 
     account.update_cached_user(user);
     save_unified_profiles_config(&config)?;
@@ -494,7 +473,7 @@ pub async fn set_default_account_in_profile(profile_id: String, account_id: Stri
     let integration_type = config
         .get_account(&account_id)
         .map(|a| a.integration_type.clone())
-        .ok_or_else(|| LeviathanError::OperationFailed("Account not found".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Account not found".to_string()))?;
 
     // Set as profile's preferred account
     if let Some(profile) = config.get_profile_mut(&profile_id) {
@@ -517,7 +496,7 @@ pub async fn update_profile_account_cached_user(
 
     let account = config
         .get_account_mut(&account_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Account not found".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Account not found".to_string()))?;
 
     account.update_cached_user(user);
     save_unified_profiles_config(&config)?;
@@ -583,7 +562,7 @@ fn assign_and_apply(
 ) -> Result<()> {
     let profile = config
         .get_profile(&profile_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Profile not found".to_string()))?
+        .ok_or_else(|| GitnadoError::OperationFailed("Profile not found".to_string()))?
         .clone();
 
     // Applied BEFORE the assignment is recorded: if git config cannot be
@@ -746,7 +725,7 @@ pub async fn apply_unified_profile(path: String, profile_id: String) -> Result<(
 
     let profile = config
         .get_profile(&profile_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Profile not found".to_string()))?
+        .ok_or_else(|| GitnadoError::OperationFailed("Profile not found".to_string()))?
         .clone();
 
     let repo_path = Path::new(&path);
@@ -1114,14 +1093,14 @@ fn backup_legacy_configs() -> Result<()> {
     if profiles_path.exists() {
         let backup_path = profiles_path.with_extension("json.bak");
         fs::copy(&profiles_path, &backup_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to backup profiles: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to backup profiles: {}", e))
         })?;
     }
 
     if accounts_path.exists() {
         let backup_path = accounts_path.with_extension("json.bak");
         fs::copy(&accounts_path, &backup_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to backup integration accounts: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to backup integration accounts: {}", e))
         })?;
     }
 
@@ -1221,7 +1200,7 @@ pub async fn restore_migration_backup() -> Result<MigrationBackupInfo> {
 
     // Check if backups exist
     if !profiles_backup_path.exists() && !accounts_backup_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No migration backup found to restore".to_string(),
         ));
     }
@@ -1229,19 +1208,19 @@ pub async fn restore_migration_backup() -> Result<MigrationBackupInfo> {
     // Restore profiles backup
     let profiles_count = if profiles_backup_path.exists() {
         let content = fs::read_to_string(&profiles_backup_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to read profiles backup: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to read profiles backup: {}", e))
         })?;
 
         // Validate it's valid JSON
         let config: ProfilesConfig = serde_json::from_str(&content).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Invalid profiles backup format: {}", e))
+            GitnadoError::OperationFailed(format!("Invalid profiles backup format: {}", e))
         })?;
 
         let count = config.profiles.len();
 
         // Restore the backup
         fs::copy(&profiles_backup_path, &profiles_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to restore profiles: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to restore profiles: {}", e))
         })?;
 
         Some(count)
@@ -1252,19 +1231,19 @@ pub async fn restore_migration_backup() -> Result<MigrationBackupInfo> {
     // Restore accounts backup
     let accounts_count = if accounts_backup_path.exists() {
         let content = fs::read_to_string(&accounts_backup_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to read accounts backup: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to read accounts backup: {}", e))
         })?;
 
         // Validate it's valid JSON
         let config: IntegrationAccountsConfig = serde_json::from_str(&content).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Invalid accounts backup format: {}", e))
+            GitnadoError::OperationFailed(format!("Invalid accounts backup format: {}", e))
         })?;
 
         let count = config.accounts.len();
 
         // Restore the backup
         fs::copy(&accounts_backup_path, &accounts_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to restore accounts: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to restore accounts: {}", e))
         })?;
 
         Some(count)
@@ -1275,7 +1254,7 @@ pub async fn restore_migration_backup() -> Result<MigrationBackupInfo> {
     // Remove the unified profiles config so migration will be needed again
     if unified_path.exists() {
         fs::remove_file(&unified_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!(
+            GitnadoError::OperationFailed(format!(
                 "Failed to remove unified profiles config: {}",
                 e
             ))
@@ -1298,13 +1277,13 @@ pub async fn delete_migration_backup() -> Result<()> {
 
     if profiles_backup_path.exists() {
         fs::remove_file(&profiles_backup_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to delete profiles backup: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to delete profiles backup: {}", e))
         })?;
     }
 
     if accounts_backup_path.exists() {
         fs::remove_file(&accounts_backup_path).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to delete accounts backup: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to delete accounts backup: {}", e))
         })?;
     }
 

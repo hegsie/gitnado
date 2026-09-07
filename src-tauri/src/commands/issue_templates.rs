@@ -3,7 +3,7 @@
 //! Detects issue templates in GitHub and GitLab repositories by searching
 //! well-known template locations.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ pub async fn get_issue_templates(path: String) -> Result<Vec<IssueTemplate>> {
     let repo_path = PathBuf::from(&path);
 
     if !repo_path.exists() || !repo_path.is_dir() {
-        return Err(LeviathanError::InvalidPath(format!(
+        return Err(GitnadoError::InvalidPath(format!(
             "Repository path does not exist: {}",
             path
         )));
@@ -137,7 +137,7 @@ pub async fn get_issue_template_content(path: String, template_path: String) -> 
     let repo_path = PathBuf::from(&path);
 
     if !repo_path.exists() || !repo_path.is_dir() {
-        return Err(LeviathanError::InvalidPath(format!(
+        return Err(GitnadoError::InvalidPath(format!(
             "Repository path does not exist: {}",
             path
         )));
@@ -146,7 +146,7 @@ pub async fn get_issue_template_content(path: String, template_path: String) -> 
     // Sanitize the template path to prevent directory traversal
     let template_rel = Path::new(&template_path);
     if template_rel.is_absolute() || template_path.contains("..") {
-        return Err(LeviathanError::InvalidPath(
+        return Err(GitnadoError::InvalidPath(
             "Template path must be relative and cannot contain '..'".to_string(),
         ));
     }
@@ -155,21 +155,20 @@ pub async fn get_issue_template_content(path: String, template_path: String) -> 
 
     // Verify the resolved path is still within the repo
     let canonical_repo = repo_path.canonicalize().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to resolve repo path: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to resolve repo path: {}", e))
     })?;
     let canonical_template = full_path.canonicalize().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Template not found: {}", template_path))
+        GitnadoError::OperationFailed(format!("Template not found: {}", template_path))
     })?;
 
     if !canonical_template.starts_with(&canonical_repo) {
-        return Err(LeviathanError::InvalidPath(
+        return Err(GitnadoError::InvalidPath(
             "Template path is outside the repository".to_string(),
         ));
     }
 
-    fs::read_to_string(&full_path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read template file: {}", e))
-    })
+    fs::read_to_string(&full_path)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read template file: {}", e)))
 }
 
 /// Derive a display name from a template filename (in a directory).

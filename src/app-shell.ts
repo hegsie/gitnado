@@ -3240,7 +3240,7 @@ export class AppShell extends LitElement {
 
   /**
    * "Force Push Tag" from a rejected tag-push suggestion toast. The previous
-   * suggestion said to delete the remote tag first, which Leviathan cannot do.
+   * suggestion said to delete the remote tag first, which Gitnado cannot do.
    */
   private handleForcePushTag = (e: Event): void => {
     const detail = (e as CustomEvent<{ tagName?: string; repoPath?: string; remote?: string }>)

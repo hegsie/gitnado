@@ -130,7 +130,7 @@ const defaultSettings = {
   showNativeNotifications: true,
 };
 
-const LEGACY_DIFF_WORD_WRAP_KEY = 'leviathan-diff-word-wrap';
+const LEGACY_DIFF_WORD_WRAP_KEY = 'gitnado-diff-word-wrap';
 
 /**
  * The diff view used to keep word wrap in its own localStorage key, and its
@@ -273,7 +273,7 @@ export const settingsStore = createStore<SettingsState>()(
       },
     }),
     {
-      name: 'leviathan-settings',
+      name: 'gitnado-settings',
       version: 4,
       // Changing a default only affects installs with no persisted state.
       // zustand's default merge is a shallow `{...defaults, ...persisted}`, and

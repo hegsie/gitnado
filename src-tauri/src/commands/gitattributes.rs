@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// A single attribute entry (e.g., `text`, `-diff`, `merge=union`, `!export-ignore`)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -120,7 +120,7 @@ fn format_pattern(pattern: &str) -> String {
 /// the UI. There is also nothing such a pattern could usefully match.
 fn ensure_pattern_usable(pattern: &str) -> Result<()> {
     if pattern.trim().is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "A .gitattributes pattern cannot be empty.".to_string(),
         ));
     }
@@ -268,7 +268,7 @@ pub async fn remove_gitattribute(path: String, line_number: u32) -> Result<Vec<G
     let attrs_path = Path::new(&path).join(".gitattributes");
 
     if !attrs_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             ".gitattributes file does not exist".to_string(),
         ));
     }
@@ -277,7 +277,7 @@ pub async fn remove_gitattribute(path: String, line_number: u32) -> Result<Vec<G
     let lines: Vec<&str> = content.lines().collect();
 
     if line_number == 0 || line_number as usize > lines.len() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Invalid line number: {}",
             line_number
         )));
@@ -312,7 +312,7 @@ pub async fn update_gitattribute(
     let attrs_path = Path::new(&path).join(".gitattributes");
 
     if !attrs_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             ".gitattributes file does not exist".to_string(),
         ));
     }
@@ -321,7 +321,7 @@ pub async fn update_gitattribute(
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
     if line_number == 0 || line_number as usize > lines.len() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Invalid line number: {}",
             line_number
         )));

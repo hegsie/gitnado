@@ -1,4 +1,4 @@
-# Leviathan Code Review
+# Gitnado Code Review
 
 Comprehensive code review covering broken/incomplete features, UX issues, event wiring problems, architectural inconsistencies, and test coverage gaps.
 
@@ -631,7 +631,7 @@ repo.set_head(reference.name().unwrap())?;  // Panics on non-UTF-8
 repo.set_head(branch.get().name().unwrap())?;  // Panics on non-UTF-8
 ```
 
-**Fix:** Use `.ok_or_else(|| LeviathanError::OperationFailed("Invalid reference name encoding".to_string()))?`
+**Fix:** Use `.ok_or_else(|| GitnadoError::OperationFailed("Invalid reference name encoding".to_string()))?`
 
 ### 6.6 Potential Panic on `strip_prefix` in Branch Upstream Handling (Rust)
 
@@ -647,7 +647,7 @@ repo.set_head(branch.get().name().unwrap())?;  // Panics on non-UTF-8
 
 Multiple `.lock().unwrap()` calls on mutexes in `src-tauri/src/commands/watcher.rs` (lines 47, 48, 67, 75, 117-118) will panic if any thread panics while holding the lock. The spawned background thread (line 63) uses these locks in a loop, and any panic in event handling poisons the mutex permanently.
 
-**Fix:** Use `.lock().map_err(|_| LeviathanError::OperationFailed("Lock poisoned".to_string()))?` pattern.
+**Fix:** Use `.lock().map_err(|_| GitnadoError::OperationFailed("Lock poisoned".to_string()))?` pattern.
 
 ---
 

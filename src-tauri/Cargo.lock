@@ -2129,6 +2129,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitnado"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.23.1",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "chardetng",
+ "chrono",
+ "dirs",
+ "encoding_rs",
+ "flate2",
+ "futures-util",
+ "git2",
+ "glob",
+ "hf-hub",
+ "jsonwebtoken",
+ "keyring",
+ "llama-cpp-2",
+ "notify",
+ "once_cell",
+ "pem 4.0.0",
+ "rand 0.8.6",
+ "regex",
+ "reqwest 0.13.4",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlite-vec",
+ "sysinfo",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-notification",
+ "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokenizers 0.23.2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2971,64 +3029,6 @@ name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
-
-[[package]]
-name = "leviathan"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aws-lc-rs",
- "base64 0.23.1",
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "chardetng",
- "chrono",
- "dirs",
- "encoding_rs",
- "flate2",
- "futures-util",
- "git2",
- "glob",
- "hf-hub",
- "jsonwebtoken",
- "keyring",
- "llama-cpp-2",
- "notify",
- "once_cell",
- "pem 4.0.0",
- "rand 0.8.6",
- "regex",
- "reqwest 0.13.4",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlite-vec",
- "sysinfo",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-deep-link",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-notification",
- "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tempfile",
- "thiserror 2.0.20",
- "tokenizers 0.23.2",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "uuid",
- "zip 8.6.0",
-]
 
 [[package]]
 name = "libappindicator"

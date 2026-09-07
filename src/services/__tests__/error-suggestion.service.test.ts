@@ -71,7 +71,7 @@ describe('error-suggestion.service', () => {
     });
 
     // A repository that already has a remote operation in flight. The backend
-    // refuses with LeviathanError::RemoteOperationInFlight; its message is
+    // refuses with GitnadoError::RemoteOperationInFlight; its message is
     // already user-facing and explains that a timed-out operation can still be
     // running, so the suggestion service must pass it through UNCHANGED rather
     // than let a later rule rewrite it.
@@ -376,7 +376,7 @@ describe('error-suggestion.service', () => {
 
     it('a tag already on the remote offers Force Push Tag', () => {
       // The old copy said to delete the remote tag first — an operation
-      // Leviathan implements nowhere, so the advice dead-ended.
+      // Gitnado implements nowhere, so the advice dead-ended.
       const result = getErrorSuggestion('cannot push non-fastforwardable reference', {
         operation: 'push-tag',
         branchName: 'v1.2.0',

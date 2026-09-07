@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::reject_flag_like;
 
 /// Reference in a bundle
@@ -44,7 +44,7 @@ pub async fn bundle_create(
 ) -> Result<BundleCreateResult> {
     let repo_path = Path::new(&path);
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     reject_flag_like(&bundle_path, "Bundle path")?;
@@ -60,7 +60,7 @@ pub async fn bundle_create(
     cmd.current_dir(repo_path).arg("bundle").arg("create");
 
     if !all && refs.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Either refs must be provided or 'all' must be true".to_string(),
         ));
     }
@@ -76,12 +76,12 @@ pub async fn bundle_create(
     }
 
     let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git bundle create: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to execute git bundle create: {}", e))
     })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git bundle create failed: {}",
             stderr
         )));
@@ -141,13 +141,13 @@ pub async fn bundle_create(
 pub async fn bundle_verify(path: String, bundle_path: String) -> Result<BundleVerifyResult> {
     let repo_path = Path::new(&path);
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     reject_flag_like(&bundle_path, "Bundle path")?;
     let bundle_file = Path::new(&bundle_path);
     if !bundle_file.exists() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bundle file not found: {}",
             bundle_path
         )));
@@ -163,7 +163,7 @@ pub async fn bundle_verify(path: String, bundle_path: String) -> Result<BundleVe
         .arg(&bundle_path)
         .output()
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to execute git bundle verify: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to execute git bundle verify: {}", e))
         })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -252,7 +252,7 @@ pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
     reject_flag_like(&bundle_path, "Bundle path")?;
     let bundle_file = Path::new(&bundle_path);
     if !bundle_file.exists() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bundle file not found: {}",
             bundle_path
         )));
@@ -266,15 +266,12 @@ pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
         .arg(&bundle_path)
         .output()
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!(
-                "Failed to execute git bundle list-heads: {}",
-                e
-            ))
+            GitnadoError::OperationFailed(format!("Failed to execute git bundle list-heads: {}", e))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git bundle list-heads failed: {}",
             stderr
         )));
@@ -302,13 +299,13 @@ pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
 pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<BundleRef>> {
     let repo_path = Path::new(&path);
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     reject_flag_like(&bundle_path, "Bundle path")?;
     let bundle_file = Path::new(&bundle_path);
     if !bundle_file.exists() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bundle file not found: {}",
             bundle_path
         )));
@@ -322,11 +319,11 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
         .arg("--")
         .arg(&bundle_path)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to verify bundle: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to verify bundle: {}", e)))?;
 
     if !verify_output.status.success() {
         let stderr = String::from_utf8_lossy(&verify_output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bundle verification failed: {}. The repository may be missing prerequisite commits.",
             stderr
         )));
@@ -344,7 +341,7 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to unbundle: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to unbundle: {}", e)))?;
 
     // git fetch from bundle may fail with "*:*" on some versions, try alternative approach
     if !output.status.success() {
@@ -356,12 +353,12 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
             .arg(&bundle_path)
             .output()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to list bundle heads: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to list bundle heads: {}", e))
             })?;
 
         if !list_output.status.success() {
             let stderr = String::from_utf8_lossy(&list_output.stderr);
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Failed to list bundle heads: {}",
                 stderr
             )));
@@ -438,14 +435,14 @@ pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<Bu
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Some refs from the bundle could not be updated: {}. This usually means the branch is currently checked out or the update was not a fast-forward.",
                 detail
             )));
         }
 
         if fetched_refs.is_empty() {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Failed to fetch any refs from bundle".to_string(),
             ));
         }

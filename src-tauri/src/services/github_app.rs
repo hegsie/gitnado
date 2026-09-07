@@ -148,7 +148,7 @@ pub async fn get_installation_token(
         .post(&url)
         .header("Authorization", format!("Bearer {}", jwt))
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
@@ -188,7 +188,7 @@ pub async fn list_installations(jwt: &str) -> Result<Vec<AppInstallation>, Strin
         .get("https://api.github.com/app/installations")
         .header("Authorization", format!("Bearer {}", jwt))
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await

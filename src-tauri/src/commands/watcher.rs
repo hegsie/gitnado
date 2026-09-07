@@ -53,7 +53,7 @@ pub async fn start_watching(
 ) -> Result<()> {
     {
         let mut service = state.service.lock().map_err(|_| {
-            crate::error::LeviathanError::OperationFailed("Watcher lock poisoned".to_string())
+            crate::error::GitnadoError::OperationFailed("Watcher lock poisoned".to_string())
         })?;
         service.watch(Path::new(&path))?;
     }
@@ -135,7 +135,7 @@ pub async fn start_watching(
 #[command]
 pub async fn stop_watching(state: State<'_, WatcherState>, path: Option<String>) -> Result<()> {
     let mut service = state.service.lock().map_err(|_| {
-        crate::error::LeviathanError::OperationFailed("Watcher lock poisoned".to_string())
+        crate::error::GitnadoError::OperationFailed("Watcher lock poisoned".to_string())
     })?;
 
     match path {

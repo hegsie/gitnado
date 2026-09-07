@@ -345,12 +345,12 @@ test.describe('Settings Dialog - Theme Change', () => {
 
     // Verify the settings store was updated (persisted via zustand/persist to localStorage)
     await page.waitForFunction(() => {
-      const stores = (window as any).__LEVIATHAN_STORES__;
+      const stores = (window as any).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.theme === 'light';
     });
 
     const theme = await page.evaluate(() => {
-      return (window as any).__LEVIATHAN_STORES__?.settingsStore?.getState()?.theme;
+      return (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.theme;
     });
     expect(theme).toBe('light');
   });
@@ -372,7 +372,7 @@ test.describe('Settings Dialog - Toggle Settings', () => {
 
     // Get the initial value of the first toggle (showAvatars)
     const initialValue = await page.evaluate(() => {
-      return (window as any).__LEVIATHAN_STORES__?.settingsStore?.getState()?.showAvatars;
+      return (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.showAvatars;
     });
 
     // Toggle the first setting switch
@@ -380,12 +380,12 @@ test.describe('Settings Dialog - Toggle Settings', () => {
 
     // Verify the settings store was updated with the toggled value
     await page.waitForFunction((initial) => {
-      const stores = (window as any).__LEVIATHAN_STORES__;
+      const stores = (window as any).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.showAvatars !== initial;
     }, initialValue);
 
     const newValue = await page.evaluate(() => {
-      return (window as any).__LEVIATHAN_STORES__?.settingsStore?.getState()?.showAvatars;
+      return (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.showAvatars;
     });
     expect(newValue).toBe(!initialValue);
   });
@@ -470,14 +470,14 @@ test.describe('Keyboard Shortcuts Dialog - Details', () => {
 
     // Vim mode settings are persisted to localStorage by the keyboard service
     await page.waitForFunction(() => {
-      const stored = localStorage.getItem('leviathan-keyboard-settings');
+      const stored = localStorage.getItem('gitnado-keyboard-settings');
       if (!stored) return false;
       const settings = JSON.parse(stored);
       return settings.vimMode === true;
     });
 
     const vimMode = await page.evaluate(() => {
-      const stored = localStorage.getItem('leviathan-keyboard-settings');
+      const stored = localStorage.getItem('gitnado-keyboard-settings');
       return stored ? JSON.parse(stored).vimMode : null;
     });
     expect(vimMode).toBe(true);
@@ -507,13 +507,13 @@ test.describe('Dialogs - Error Scenarios', () => {
 
     // Verify the settings store was updated
     await page.waitForFunction(() => {
-      return (window as unknown as { __LEVIATHAN_STORES__: { settingsStore: { getState: () => { theme: string } } } })
-        .__LEVIATHAN_STORES__?.settingsStore?.getState()?.theme === 'light';
+      return (window as unknown as { __GITNADO_STORES__: { settingsStore: { getState: () => { theme: string } } } })
+        .__GITNADO_STORES__?.settingsStore?.getState()?.theme === 'light';
     });
 
     const theme = await page.evaluate(() => {
-      return (window as unknown as { __LEVIATHAN_STORES__: { settingsStore: { getState: () => { theme: string } } } })
-        .__LEVIATHAN_STORES__?.settingsStore?.getState()?.theme;
+      return (window as unknown as { __GITNADO_STORES__: { settingsStore: { getState: () => { theme: string } } } })
+        .__GITNADO_STORES__?.settingsStore?.getState()?.theme;
     });
     expect(theme).toBe('light');
   });
@@ -558,7 +558,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
     // Move a setting off its default so the reset is observable.
     await dialogs.settings.setTheme('light');
     await page.waitForFunction(() => {
-      const stores = (window as any).__LEVIATHAN_STORES__;
+      const stores = (window as any).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.theme === 'light';
     });
 
@@ -566,7 +566,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
 
     // The store goes back to the default theme...
     await page.waitForFunction(() => {
-      const stores = (window as any).__LEVIATHAN_STORES__;
+      const stores = (window as any).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.theme === 'dark';
     });
     // ...the dialog repaints from the store...
@@ -585,7 +585,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
 
     await dialogs.settings.setTheme('light');
     await page.waitForFunction(() => {
-      const stores = (window as any).__LEVIATHAN_STORES__;
+      const stores = (window as any).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.theme === 'light';
     });
 
@@ -602,7 +602,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
 
     await expect(dialogs.settings.themeSelect).toHaveValue('light');
     const theme = await page.evaluate(
-      () => (window as any).__LEVIATHAN_STORES__?.settingsStore?.getState()?.theme
+      () => (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.theme
     );
     expect(theme).toBe('light');
     await expect(page.locator('lv-toast-container .toast')).toHaveCount(0);

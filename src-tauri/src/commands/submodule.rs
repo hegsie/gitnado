@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::cli_safety::reject_flag_like;
 use crate::utils::{apply_token_credential_helper, create_command};
 
@@ -101,7 +101,7 @@ fn run_git_command_with_token(
 ) -> Result<String> {
     let output = submodule_command(repo_path, args, token, token_remote)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -109,7 +109,7 @@ fn run_git_command_with_token(
     if output.status.success() {
         Ok(stdout.trim().to_string())
     } else {
-        Err(LeviathanError::OperationFailed(
+        Err(GitnadoError::OperationFailed(
             if stderr.is_empty() { stdout } else { stderr }
                 .trim()
                 .to_string(),
@@ -830,7 +830,7 @@ mod tests {
         let out_dir = tempfile::tempdir().unwrap();
         let seen = out_dir.path().join("token-seen.txt");
         let update_cmd = format!(
-            "!sh -c 'printf \"%s\" \"$LEVIATHAN_GIT_TOKEN\" > \"{}\"'",
+            "!sh -c 'printf \"%s\" \"$GITNADO_GIT_TOKEN\" > \"{}\"'",
             seen.display()
         );
         git_in(
@@ -1117,7 +1117,7 @@ mod tests {
             "a token with no remote to scope it to must not be injected under a guessed host"
         );
         assert!(
-            !keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"),
+            !keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"),
             "a token with no remote to scope it to must not be exported"
         );
     }
@@ -1142,7 +1142,7 @@ mod tests {
             .collect();
 
         assert!(
-            !keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"),
+            !keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"),
             "an unresolvable remote must not fall back to another remote's host"
         );
     }
@@ -1165,7 +1165,7 @@ mod tests {
             "a tokenless update must not clobber GIT_CONFIG_COUNT or shadow the user's credential helper"
         );
         assert!(
-            !keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"),
+            !keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"),
             "a tokenless update must not export an empty token"
         );
     }

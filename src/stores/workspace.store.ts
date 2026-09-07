@@ -65,7 +65,7 @@ export const workspaceStore = createStore<WorkspaceState>()(
       reset: () => set(defaultState),
     }),
     {
-      name: 'leviathan-workspaces',
+      name: 'gitnado-workspaces',
       version: 1,
       partialize: (state) => ({ activeWorkspaceId: state.activeWorkspaceId }),
     }

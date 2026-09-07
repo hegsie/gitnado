@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Leviathan",
-  "version": "0.8.0",
-  "identifier": "io.github.hegsie.leviathan",
+  "productName": "Gitnado",
+  "version": "0.9.0",
+  "identifier": "io.github.hegsie.gitnado",
   "build": {
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Leviathan",
+        "title": "Gitnado",
         "width": 1280,
         "height": 800,
         "minWidth": 800,
@@ -31,8 +31,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "publisher": "Leviathan Contributors",
-    "copyright": "Copyright © 2024 Leviathan Contributors",
+    "publisher": "Gitnado Contributors",
+    "homepage": "https://gitnado.dev",
+    "copyright": "Copyright © 2024 Gitnado Contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -49,7 +50,9 @@
       "entitlements": "Entitlements.plist"
     },
     "windows": {
-      "wix": null,
+      "wix": {
+        "upgradeCode": "84c95aff-09d5-5959-be4d-927b1cc7fc1b"
+      },
       "nsis": {
         "displayLanguageSelector": false,
         "installMode": "currentUser"
@@ -67,13 +70,13 @@
     },
     "updater": {
       "endpoints": [
-        "https://github.com/hegsie/Leviathan/releases/latest/download/latest.json"
+        "https://github.com/hegsie/gitnado/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI3MTNGRTQ2NTVGRUI5QzMKUldURHVmNVZSdjRUSnlkZHlCRWRtR0lxRVdMeFByU3JHRFlXNlQ4VmY2RUx2OUhGUFBmWW1ReUYK"
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["leviathan"]
+        "schemes": ["gitnado", "leviathan"]
       }
     }
   }

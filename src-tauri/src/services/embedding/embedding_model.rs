@@ -141,7 +141,7 @@ async fn download_hf_file(
     let client = reqwest::Client::new();
     let response = client
         .get(&url)
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .send()
         .await
         .map_err(|e| format!("Failed to download {}: {}", display_name, e))?;

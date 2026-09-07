@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Events emitted by the watcher
 #[derive(Debug, Clone)]
@@ -59,16 +59,16 @@ impl WatcherService {
         let mut watcher = RecommendedWatcher::new(
             move |result: std::result::Result<Event, notify::Error>| {
                 let event = result
-                    .map_err(|e| LeviathanError::OperationFailed(format!("Watch error: {}", e)));
+                    .map_err(|e| GitnadoError::OperationFailed(format!("Watch error: {}", e)));
                 let _ = tx.send((event_key.clone(), event));
             },
             config,
         )
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to create watcher: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create watcher: {}", e)))?;
 
         watcher
             .watch(repo_path, RecursiveMode::Recursive)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to watch: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to watch: {}", e)))?;
 
         self.watchers.insert(key, watcher);
         Ok(())

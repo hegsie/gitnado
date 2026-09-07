@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::{apply_token_credential_helper, create_command};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ pub async fn run_garbage_collection(
 
     // Verify the repository exists
     if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Get objects count before GC
@@ -212,7 +212,7 @@ pub async fn run_garbage_collection(
     // Execute the command
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to execute git gc: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git gc: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -313,7 +313,7 @@ pub async fn prune_remote_tracking_branches(
 
     // Verify the repository exists
     if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     let mut all_pruned_branches = Vec::new();
@@ -325,9 +325,7 @@ pub async fn prune_remote_tracking_branches(
         // First, do a dry-run to see what would be pruned
         let dry_run_output = prune_command(&path, &remote_name, remote_url.as_deref(), token, true)
             .output()
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to prune remote: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to prune remote: {}", e)))?;
 
         // Parse dry-run output to get branch names
         let dry_run_text = String::from_utf8_lossy(&dry_run_output.stdout);
@@ -353,13 +351,11 @@ pub async fn prune_remote_tracking_branches(
         // Actually perform the prune
         let output = prune_command(&path, &remote_name, remote_url.as_deref(), token, false)
             .output()
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to prune remote: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to prune remote: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Failed to prune remote {}: {}",
                 remote_name,
                 stderr.trim()
@@ -382,7 +378,7 @@ pub async fn verify_repository(path: String, full: bool) -> Result<FsckResult> {
 
     // Verify the repository exists
     if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Build the git fsck command
@@ -395,9 +391,9 @@ pub async fn verify_repository(path: String, full: bool) -> Result<FsckResult> {
     }
 
     // Execute the command
-    let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git fsck: {}", e))
-    })?;
+    let output = cmd
+        .output()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git fsck: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -456,7 +452,7 @@ pub async fn get_repo_size_info(path: String) -> Result<RepoSizeInfo> {
 
     // Verify the repository exists
     if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     let git_dir = if repo_path.join(".git").exists() {
@@ -503,7 +499,7 @@ pub async fn run_gc(
     let repo_path = Path::new(&path);
 
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Verify it's a git repository
@@ -533,7 +529,7 @@ pub async fn run_gc(
     // Run the command
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::Custom(format!("Failed to run git gc: {}", e)))?;
+        .map_err(|e| GitnadoError::Custom(format!("Failed to run git gc: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -550,7 +546,7 @@ pub async fn run_gc(
             message,
         })
     } else {
-        Err(LeviathanError::Custom(format!(
+        Err(GitnadoError::Custom(format!(
             "Garbage collection failed: {}",
             stderr
         )))
@@ -565,7 +561,7 @@ pub async fn run_fsck(path: String, full: Option<bool>) -> Result<MaintenanceRes
     let repo_path = Path::new(&path);
 
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Verify it's a git repository
@@ -583,7 +579,7 @@ pub async fn run_fsck(path: String, full: Option<bool>) -> Result<MaintenanceRes
     // Run the command
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::Custom(format!("Failed to run git fsck: {}", e)))?;
+        .map_err(|e| GitnadoError::Custom(format!("Failed to run git fsck: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -603,7 +599,7 @@ pub async fn run_fsck(path: String, full: Option<bool>) -> Result<MaintenanceRes
             message,
         })
     } else {
-        Err(LeviathanError::Custom(format!(
+        Err(GitnadoError::Custom(format!(
             "Repository check failed: {}",
             combined_output
         )))
@@ -616,7 +612,7 @@ pub async fn run_prune(path: String, dry_run: Option<bool>) -> Result<Maintenanc
     let repo_path = Path::new(&path);
 
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Verify it's a git repository
@@ -634,7 +630,7 @@ pub async fn run_prune(path: String, dry_run: Option<bool>) -> Result<Maintenanc
     // Run the command
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::Custom(format!("Failed to run git prune: {}", e)))?;
+        .map_err(|e| GitnadoError::Custom(format!("Failed to run git prune: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -651,7 +647,7 @@ pub async fn run_prune(path: String, dry_run: Option<bool>) -> Result<Maintenanc
             message,
         })
     } else {
-        Err(LeviathanError::Custom(format!("Prune failed: {}", stderr)))
+        Err(GitnadoError::Custom(format!("Prune failed: {}", stderr)))
     }
 }
 
@@ -661,7 +657,7 @@ pub async fn get_repository_stats(path: String) -> Result<RepositoryStats> {
     let repo_path = Path::new(&path);
 
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Verify it's a git repository
@@ -748,7 +744,7 @@ pub async fn get_pack_info(path: String) -> Result<PackInfo> {
     let repo_path = Path::new(&path);
 
     if !repo_path.exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Open the repository
@@ -975,12 +971,12 @@ mod tests {
         };
 
         assert!(
-            !envs_for("origin").contains_key("LEVIATHAN_GIT_TOKEN"),
+            !envs_for("origin").contains_key("GITNADO_GIT_TOKEN"),
             "origin has no token in the map and must be offered none"
         );
         assert_eq!(
             envs_for("upstream")
-                .get("LEVIATHAN_GIT_TOKEN")
+                .get("GITNADO_GIT_TOKEN")
                 .map(String::as_str),
             Some("ghp_secret")
         );
@@ -1036,7 +1032,7 @@ mod tests {
                 dry_run
             );
             assert_eq!(
-                envs.get("LEVIATHAN_GIT_TOKEN").map(String::as_str),
+                envs.get("GITNADO_GIT_TOKEN").map(String::as_str),
                 Some("ghp_secret"),
                 "dry_run={}",
                 dry_run
@@ -1061,7 +1057,7 @@ mod tests {
             .collect();
 
         assert!(!keys.iter().any(|k| k == "GIT_CONFIG_COUNT"));
-        assert!(!keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"));
+        assert!(!keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"));
     }
 
     #[tokio::test]

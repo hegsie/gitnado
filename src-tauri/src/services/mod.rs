@@ -1,4 +1,4 @@
-//! Service layer for Leviathan
+//! Service layer for Gitnado
 //!
 //! This module contains services that provide higher-level abstractions
 //! over the raw git operations.

@@ -1,6 +1,6 @@
 //! Auto-fetch commands
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::services::autofetch_service::{AutoFetchState, RemoteStatus};
 use tauri::{command, AppHandle, State};
 
@@ -16,7 +16,7 @@ pub async fn start_auto_fetch(
     token: Option<String>,
 ) -> Result<()> {
     if interval_minutes == 0 {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Interval must be greater than 0".to_string(),
         ));
     }
@@ -32,7 +32,7 @@ pub async fn trigger_auto_fetch(state: State<'_, AutoFetchState>, path: String) 
     if service.trigger(&path) {
         Ok(())
     } else {
-        Err(LeviathanError::OperationFailed(
+        Err(GitnadoError::OperationFailed(
             "Auto-fetch is not running for this repository".to_string(),
         ))
     }
@@ -58,11 +58,11 @@ pub async fn is_auto_fetch_running(state: State<'_, AutoFetchState>, path: Strin
 pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
     tokio::task::spawn_blocking(move || {
         let repo = git2::Repository::open(&path)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to open repo: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repo: {}", e)))?;
 
         let head = repo
             .head()
-            .map_err(|e| LeviathanError::OperationFailed(format!("No HEAD: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("No HEAD: {}", e)))?;
 
         // Detached HEAD has no branch, so there is no upstream to compare
         // against — report "no upstream" rather than failing. shorthand()
@@ -79,12 +79,12 @@ pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
 
         let branch_name = head
             .shorthand()
-            .map_err(|_| LeviathanError::OperationFailed("Invalid branch name".to_string()))?;
+            .map_err(|_| GitnadoError::OperationFailed("Invalid branch name".to_string()))?;
 
         // Try to find upstream
         let local_branch = repo
             .find_branch(branch_name, git2::BranchType::Local)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Branch not found: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Branch not found: {}", e)))?;
 
         let upstream = match local_branch.upstream() {
             Ok(upstream) => upstream,
@@ -102,16 +102,16 @@ pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
 
         let local_oid = head
             .target()
-            .ok_or_else(|| LeviathanError::OperationFailed("No local target".to_string()))?;
+            .ok_or_else(|| GitnadoError::OperationFailed("No local target".to_string()))?;
 
         let upstream_oid = upstream
             .get()
             .target()
-            .ok_or_else(|| LeviathanError::OperationFailed("No upstream target".to_string()))?;
+            .ok_or_else(|| GitnadoError::OperationFailed("No upstream target".to_string()))?;
 
         let (ahead, behind) = repo
             .graph_ahead_behind(local_oid, upstream_oid)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to compare: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to compare: {}", e)))?;
 
         Ok(RemoteStatus {
             ahead,
@@ -121,7 +121,7 @@ pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
         })
     })
     .await
-    .map_err(|e| LeviathanError::OperationFailed(format!("Task failed: {}", e)))?
+    .map_err(|e| GitnadoError::OperationFailed(format!("Task failed: {}", e)))?
 }
 
 #[cfg(test)]

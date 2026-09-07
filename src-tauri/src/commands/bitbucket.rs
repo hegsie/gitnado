@@ -4,7 +4,7 @@
 //! Credential storage is handled by the frontend credential service (OS keyring).
 //! All API functions accept optional credentials from the frontend.
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -209,7 +209,7 @@ fn get_auth_header_with_token(
     // Fall back to username/password
     match (username, app_password) {
         (Some(u), Some(p)) if !u.is_empty() && !p.is_empty() => Ok(get_auth_header(u, p)),
-        _ => Err(LeviathanError::OperationFailed(
+        _ => Err(GitnadoError::OperationFailed(
             "Bitbucket credentials not configured".to_string(),
         )),
     }
@@ -249,9 +249,7 @@ pub async fn check_bitbucket_connection(
         )
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to check connection: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to check connection: {}", e)))?;
 
     if !response.status().is_success() {
         return Ok(BitbucketConnectionStatus {
@@ -278,9 +276,10 @@ pub async fn check_bitbucket_connection(
         href: String,
     }
 
-    let api_user: ApiUser = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse user data: {}", e))
-    })?;
+    let api_user: ApiUser = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse user data: {}", e)))?;
 
     Ok(BitbucketConnectionStatus {
         connected: true,
@@ -315,9 +314,7 @@ pub async fn check_bitbucket_connection_with_token(
         .header("Authorization", build_token_auth_header(&token))
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to check connection: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to check connection: {}", e)))?;
 
     if !response.status().is_success() {
         return Ok(BitbucketConnectionStatus {
@@ -344,9 +341,10 @@ pub async fn check_bitbucket_connection_with_token(
         href: String,
     }
 
-    let api_user: ApiUser = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse user data: {}", e))
-    })?;
+    let api_user: ApiUser = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse user data: {}", e)))?;
 
     Ok(BitbucketConnectionStatus {
         connected: true,
@@ -362,13 +360,12 @@ pub async fn check_bitbucket_connection_with_token(
 /// Detect Bitbucket repository from git remotes
 #[command]
 pub async fn detect_bitbucket_repo(path: String) -> Result<Option<DetectedBitbucketRepo>> {
-    let repo = git2::Repository::open(&path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to open repository: {}", e))
-    })?;
+    let repo = git2::Repository::open(&path)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
 
     let remotes = repo
         .remotes()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
 
     for remote_name in remotes.iter().flatten().flatten() {
         if let Ok(remote) = repo.find_remote(remote_name) {
@@ -471,13 +468,13 @@ pub async fn list_bitbucket_pull_requests(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch pull requests: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch pull requests: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bitbucket API error {}: {}",
             status, body
         )));
@@ -535,7 +532,7 @@ pub async fn list_bitbucket_pull_requests(
     }
 
     let data: ApiResponse = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pull requests: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pull requests: {}", e))
     })?;
 
     Ok(data
@@ -588,13 +585,13 @@ pub async fn get_bitbucket_pull_request(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch pull request: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch pull request: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bitbucket API error {}: {}",
             status, body
         )));
@@ -647,7 +644,7 @@ pub async fn get_bitbucket_pull_request(
     }
 
     let pr: ApiPullRequest = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pull request: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pull request: {}", e))
     })?;
 
     Ok(BitbucketPullRequest {
@@ -735,13 +732,13 @@ pub async fn create_bitbucket_pull_request(
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create pull request: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to create pull request: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bitbucket API error {}: {}",
             status, body
         )));
@@ -794,7 +791,7 @@ pub async fn create_bitbucket_pull_request(
     }
 
     let pr: ApiPullRequest = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse pull request: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse pull request: {}", e))
     })?;
 
     Ok(BitbucketPullRequest {
@@ -854,7 +851,7 @@ pub async fn list_bitbucket_issues(
         .header("Authorization", auth_header)
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch issues: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch issues: {}", e)))?;
 
     if !response.status().is_success() {
         // A 404 means the issue tracker is not enabled for this repo — treat as empty.
@@ -865,7 +862,7 @@ pub async fn list_bitbucket_issues(
         }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bitbucket API error {}: {}",
             status, body
         )));
@@ -982,12 +979,12 @@ pub async fn create_bitbucket_issue(
         .json(&body)
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to create issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create issue: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bitbucket API error {}: {}",
             status, body
         )));
@@ -1038,7 +1035,7 @@ pub async fn create_bitbucket_issue(
     let issue: ApiIssue = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
 
     Ok(BitbucketIssue {
         id: issue.id,
@@ -1131,9 +1128,7 @@ pub async fn list_bitbucket_pipelines(
         .header("Authorization", auth_header)
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch pipelines: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch pipelines: {}", e)))?;
 
     if !response.status().is_success() {
         // A 404 means Pipelines is not enabled for this repo — treat as empty.
@@ -1144,7 +1139,7 @@ pub async fn list_bitbucket_pipelines(
         }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bitbucket API error {}: {}",
             status, body
         )));
