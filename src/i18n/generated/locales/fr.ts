@@ -140,7 +140,7 @@
 's98ff3c7e401ddb31': `Outils externes`,
 's9b47d0bf224a3f2a': `Ignorer les espaces en fin de ligne`,
 's9bfd080addc297ac': `URL de connexion`,
-'s695a812de0056a85': `Gitnado - Dragon enroulé autour d'une tour`,
+'s4f035d0ef56d6721': `Gitnado - une tornade de branches git`,
 's9d76c914b7104de3': `Auto (contraste élevé)`,
 's9d8b8aa2b404c2c8': `Paramètres`,
 's9df212d89cab196d': `Masquer`,

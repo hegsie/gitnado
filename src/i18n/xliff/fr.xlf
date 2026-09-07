@@ -14,9 +14,9 @@
 <trans-unit id="s112e91e220154a7a">
   <source>Could not open workspace: <x id="0" equiv-text="${workspace.name}"/> — no repository could be opened</source>
   <target>Impossible d'ouvrir l'espace de travail : <x id="0" equiv-text="${workspace.name}"/> — aucun dépôt n'a pu être ouvert</target></trans-unit>
-<trans-unit id="s695a812de0056a85">
-  <source>Gitnado - Dragon wrapped around a tower</source>
-  <target>Gitnado - Dragon enroulé autour d'une tour</target></trans-unit>
+<trans-unit id="s4f035d0ef56d6721">
+  <source>Gitnado - a tornado of git branches</source>
+  <target>Gitnado - une tornade de branches git</target></trans-unit>
 <trans-unit id="sc4e51f82f9e539e5">
   <source>A powerful, open-source Git client</source>
   <target>Un client Git puissant et open source</target></trans-unit>
