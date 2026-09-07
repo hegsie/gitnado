@@ -1,7 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
 import { setupTauriMocks, initializeRepositoryStore } from '../fixtures/tauri-mock';
 import { DialogsPage } from '../pages/dialogs.page';
-import { findCommand, startCommandCaptureWithMocks, waitForCommand } from '../fixtures/test-helpers';
+import {
+  findCommand,
+  injectCommandMock,
+  startCommandCaptureWithMocks,
+  waitForCommand,
+} from '../fixtures/test-helpers';
 
 /**
  * E2E for the sidebar's Pull Requests section and the branch context menu's
@@ -128,6 +133,49 @@ test.describe('Pull Requests sidebar section', () => {
 
     await connect.click();
     await expect(new DialogsPage(page).github.dialog).toBeVisible();
+  });
+
+  test('picks up a sign-in finished in the dialog, from the notice and on re-expand', async ({
+    page,
+  }) => {
+    // The connect dialog never reports back to this section, so "Not
+    // connected" must not be a dead end once the user has actually connected.
+    await openWithGitHub(page);
+
+    await prSectionHeader(page).click();
+    await expect(prList(page)).toContainText('Not connected to GitHub');
+
+    // The sign-in lands: the credential now exists for the same account.
+    await injectCommandMock(page, {
+      get_keyring_token: 'gh-token',
+      list_pull_requests: [PR_FIXTURE],
+    });
+
+    await prList(page).locator('button', { hasText: 'Try again' }).click();
+    await waitForCommand(page, 'list_pull_requests');
+    await expect(prList(page).locator('.pr-item')).toHaveCount(1);
+  });
+
+  test('re-checks the credential when a "not connected" section is re-expanded', async ({
+    page,
+  }) => {
+    await openWithGitHub(page);
+
+    await prSectionHeader(page).click();
+    await expect(prList(page)).toContainText('Not connected to GitHub');
+
+    await injectCommandMock(page, {
+      get_keyring_token: 'gh-token',
+      list_pull_requests: [PR_FIXTURE],
+    });
+
+    // Collapse and re-open: "Not connected" is not a cached result, so this
+    // re-checks rather than replaying the stale answer.
+    await prSectionHeader(page).click();
+    await prSectionHeader(page).click();
+
+    await waitForCommand(page, 'list_pull_requests');
+    await expect(prList(page).locator('.pr-item')).toHaveCount(1);
   });
 
   test('explains a failed load and recovers on retry', async ({ page }) => {

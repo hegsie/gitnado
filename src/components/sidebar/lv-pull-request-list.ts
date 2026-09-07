@@ -223,8 +223,13 @@ export class LvPullRequestList extends LitElement {
    */
   private loadSeq = new Map<string, number>();
 
-  /** Ids of the connected integration accounts, as last seen. */
+  /** What the profile store last said about this section's answer. */
   private accountSignature = '';
+  /**
+   * Accounts seen verified at least once in this app run — sticky on purpose,
+   * see readAccountSignature.
+   */
+  private verifiedAccountIds = new Set<string>();
   private unsubscribeAccounts?: () => void;
 
   connectedCallback(): void {
@@ -234,8 +239,8 @@ export class LvPullRequestList extends LitElement {
     // Connecting an account from the "Connect to ..." button opens a dialog
     // that this element never hears back from. Without this subscription the
     // section kept saying "Not connected" after a successful sign-in, which is
-    // a dead end: the one action it offers appears to do nothing. The account
-    // set is the signal the sign-in actually landed (and that a disconnect
+    // a dead end: the one action it offers appears to do nothing. The profile
+    // store is the signal the sign-in actually landed (and that a disconnect
     // happened, which must put the Connect button back).
     this.accountSignature = this.readAccountSignature();
     this.unsubscribeAccounts = unifiedProfileStore.subscribe(() => {
@@ -255,11 +260,37 @@ export class LvPullRequestList extends LitElement {
     this.unsubscribeAccounts = undefined;
   }
 
+  /**
+   * Everything the profile store can cheaply show that changes when this
+   * section's answer could change:
+   *
+   * - which accounts exist (one was added or removed);
+   * - which profile is active (it decides which account a provider resolves
+   *   to, so switching profiles can connect or disconnect this section with
+   *   an identical account id list);
+   * - which accounts have been verified — the id list alone cannot see a
+   *   credential arriving on an account that already existed, which is
+   *   exactly what reconnecting an account whose stored token went missing
+   *   does.
+   *
+   * The verified set is STICKY (it only ever grows) because periodic token
+   * validation flips every account connected -> checking -> connected every
+   * few minutes; reacting to that would turn a deliberately non-live,
+   * rate-limited section into a poller. Only the first verification of an
+   * account is new information here. A credential going bad the other way is
+   * covered by the states that are not cached (`error`, `unauthenticated`)
+   * and by the section's own refresh.
+   */
   private readAccountSignature(): string {
-    return unifiedProfileStore
-      .getState()
-      .accounts.map((a) => a.id)
-      .join(',');
+    const state = unifiedProfileStore.getState();
+    for (const [id, entry] of Object.entries(state.accountConnectionStatus)) {
+      if (entry?.status === 'connected') this.verifiedAccountIds.add(id);
+    }
+    return [
+      state.activeProfile?.id ?? '',
+      state.accounts.map((a) => a.id).join(','),
+      [...this.verifiedAccountIds].sort().join(','),
+    ].join('|');
   }
 
   /**
@@ -359,11 +390,14 @@ export class LvPullRequestList extends LitElement {
       if (!isFresh()) return;
       // A failure is not a result, so it is NOT cached: re-opening the section
       // is a natural "try again", and it cannot loop because collapsing and
-      // re-expanding is a deliberate gesture. Every other state is cached and
-      // has its own way out - Try again for offline and allowlist, the account
-      // subscription above for "not connected", and a repository-refresh or
-      // the section's refresh button for all of them.
-      if (entry.state !== 'error') {
+      // re-expanding is a deliberate gesture. "Not connected" is not cached
+      // for the same reason and at no cost: reaching it makes no provider API
+      // call at all (detection has its own cache and the token is a local
+      // lookup), so re-opening the section must be able to see a credential
+      // added since. Every other state is cached and has its own way out -
+      // Try again for offline and allowlist, and a repository-refresh or the
+      // section's refresh button for all of them.
+      if (entry.state !== 'error' && entry.state !== 'unauthenticated') {
         this.cache.set(loadedPath, entry);
       }
       this.applyState(entry);
@@ -530,6 +564,11 @@ export class LvPullRequestList extends LitElement {
             <button class="btn btn-primary btn-sm" @click=${this.handleConnect}>
               Connect to ${this.target?.providerName ?? 'provider'}
             </button>
+            <!-- The sign-in happens in a dialog this element never hears back
+                 from, so the user always keeps a way to say "I have connected
+                 now" — the store subscription covers the cases it can see,
+                 this covers the rest. -->
+            ${this.renderRetry('Try again')}
           </div>
         `;
 

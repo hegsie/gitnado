@@ -1920,15 +1920,23 @@ export class LvFileStatus extends LitElement {
    *
    * Silent when no filter is active, and silent when the filter happens to
    * show everything: there is then nothing surprising to explain.
+   *
+   * The gate is what the FILTER withheld (`visible` vs `total`), not what was
+   * acted on (`acted`): the staging path also drops conflicted files, and
+   * those already have their own warning. Gating on the acted count made this
+   * toast blame the filter for a conflict it never hid — two toasts at once,
+   * one of them false. `acted` still supplies the number in the message so it
+   * keeps agreeing with that warning.
    */
   private reportFilteredScope(
     verb: 'Staged' | 'Unstaged',
-    shown: number,
+    acted: number,
+    visible: number,
     total: number,
   ): void {
-    if (!this.isFiltering || shown >= total) return;
+    if (!this.isFiltering || visible >= total) return;
     showToast(
-      `${verb} ${shown} of ${total} file${total === 1 ? '' : 's'} — the filter "${this.filterQuery.trim()}" is hiding the rest`,
+      `${verb} ${acted} of ${total} file${total === 1 ? '' : 's'} — the filter "${this.filterQuery.trim()}" is hiding the rest`,
       'info',
     );
   }
@@ -1963,8 +1971,9 @@ export class LvFileStatus extends LitElement {
       // `paths` — not `files` — is what was actually staged: stageablePaths has
       // already dropped conflicted entries, and counting them here would have
       // the toast claim files the separate "conflicted file skipped" warning
-      // says were left alone.
-      this.reportFilteredScope('Staged', paths.length, total);
+      // says were left alone. `files` is what the filter left visible, which is
+      // the only thing that can decide whether the filter hid anything at all.
+      this.reportFilteredScope('Staged', paths.length, files.length, total);
       await this.loadStatus();
     } else {
       showToast(result.error?.message ?? 'Failed to stage files', 'error');
@@ -1983,9 +1992,10 @@ export class LvFileStatus extends LitElement {
       paths,
     });
     if (result.success) {
-      // `paths` is the set actually sent, so the count cannot drift from what
-      // was unstaged (as it did for the staging path above).
-      this.reportFilteredScope('Unstaged', paths.length, total);
+      // `paths` is the set actually sent AND the whole visible set — nothing
+      // is dropped on this path — so neither count can drift from what was
+      // unstaged (as they did for the staging path above).
+      this.reportFilteredScope('Unstaged', paths.length, files.length, total);
       await this.loadStatus();
     } else {
       showToast(result.error?.message ?? 'Failed to unstage files', 'error');

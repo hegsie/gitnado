@@ -538,15 +538,49 @@ describe('lv-clone-dialog', () => {
     }
 
     it('offers both sources and starts on the URL one', async () => {
-      expect(el.shadowRoot!.querySelector('#source-url')!.getAttribute('aria-selected')).to.equal(
+      expect(el.shadowRoot!.querySelector('#source-url')!.getAttribute('aria-pressed')).to.equal(
         'true',
       );
       expect(
-        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-selected'),
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-pressed'),
       ).to.equal('false');
       // The picker is not even mounted, so opening the dialog cannot call a
       // provider API.
       expect(picker()).to.equal(null);
+    });
+
+    it('keeps the source switcher operable from the keyboard', async () => {
+      // It used to declare the ARIA tab pattern (role="tablist"/"tab" +
+      // aria-selected) and implement none of it: no aria-controls, no
+      // tabpanel, no arrow-key handler, no roving tabindex. A screen reader
+      // announced "tab, 1 of 2" and Left/Right did nothing. These are plain
+      // toggle buttons — the pattern the picker's own repository rows use —
+      // so Tab reaches them and Enter/Space activate them natively.
+      const group = el.shadowRoot!.querySelector('.source-tabs')!;
+      expect(group.getAttribute('role')).to.equal('group');
+      expect(group.getAttribute('aria-label')).to.equal('Repository source');
+
+      const controls = Array.from(
+        el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.source-tab'),
+      );
+      expect(controls.length).to.equal(2);
+      for (const control of controls) {
+        expect(control.tagName).to.equal('BUTTON');
+        expect(control.type).to.equal('button');
+        expect(control.disabled).to.be.false;
+        expect(control.hasAttribute('tabindex'), 'no roving tabindex to trap Tab').to.be.false;
+        // Half a tab pattern is worse than none: nothing may claim tab roles
+        // without the keyboard behaviour that goes with them.
+        expect(control.getAttribute('role')).to.equal(null);
+        // Default tab order: no roving tabindex to take one of them out of it.
+        expect(control.tabIndex).to.equal(0);
+      }
+
+      // And each states its own on/off, so the switch is announced.
+      expect(controls.map((c) => c.getAttribute('aria-pressed'))).to.deep.equal([
+        'true',
+        'false',
+      ]);
     });
 
     it('shows the account picker once the account source is chosen', async () => {
@@ -555,7 +589,7 @@ describe('lv-clone-dialog', () => {
 
       expect(picker()).to.exist;
       expect(
-        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-selected'),
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-pressed'),
       ).to.equal('true');
     });
 
@@ -718,7 +752,7 @@ describe('lv-clone-dialog', () => {
 
       expect(modal.open, 'the user is returned to the clone they started').to.be.true;
       expect(
-        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-selected'),
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-pressed'),
         'still on the account source',
       ).to.equal('true');
       expect(picker(), 'the picker is mounted again').to.exist;

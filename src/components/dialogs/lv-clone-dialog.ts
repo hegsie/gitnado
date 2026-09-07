@@ -216,7 +216,7 @@ export class LvCloneDialog extends LitElement {
         color: var(--color-text-primary);
       }
 
-      .source-tab[aria-selected='true'] {
+      .source-tab[aria-pressed='true'] {
         border-color: var(--color-primary);
         background: var(--color-bg-primary);
         color: var(--color-text-primary);
@@ -823,13 +823,23 @@ export class LvCloneDialog extends LitElement {
       >
         <div class="form">
           <!-- Source selection. Deliberately a self-contained block above the
-               URL/options rows rather than edits woven through them. -->
-          <div class="source-tabs" role="tablist" aria-label="Repository source">
+               URL/options rows rather than edits woven through them.
+
+               Toggle buttons, not the ARIA tab pattern: these two swap one
+               inline row of the same form, and the tab pattern owes the user
+               arrow-key navigation, a roving tabindex and a labelled
+               tabpanel. Claiming the roles without that behaviour is worse
+               than not claiming them — a screen reader announces "tab, 1 of
+               2" and Left/Right then do nothing. Plain buttons stating
+               aria-pressed are reached with Tab and activated with
+               Enter/Space by the browser itself, and match the pattern the
+               account picker's own repository rows already use. -->
+          <div class="source-tabs" role="group" aria-label="Repository source">
             <button
               class="source-tab"
-              role="tab"
+              type="button"
               id="source-url"
-              aria-selected=${this.source === 'url'}
+              aria-pressed=${this.source === 'url'}
               @click=${() => this.handleSourceChange('url')}
               ?disabled=${this.isCloning}
             >
@@ -837,9 +847,9 @@ export class LvCloneDialog extends LitElement {
             </button>
             <button
               class="source-tab"
-              role="tab"
+              type="button"
               id="source-account"
-              aria-selected=${this.source === 'account'}
+              aria-pressed=${this.source === 'account'}
               @click=${() => this.handleSourceChange('account')}
               ?disabled=${this.isCloning}
             >

@@ -68,7 +68,7 @@ async function openAccountSource(page: Page, dialogs: DialogsPage): Promise<void
   const app = new AppPage(page);
   await app.cloneButton.click();
   await dialogs.clone.waitForOpen();
-  await page.getByRole('tab', { name: 'From account' }).click();
+  await page.getByRole('button', { name: 'From account' }).click();
 }
 
 const repoItems = (page: Page) => page.locator('lv-account-repo-picker .repo-item');
@@ -187,6 +187,28 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(first).toContainText('Private');
       await expect(first).toContainText('A git client');
       await expect(first).toContainText('Updated');
+    });
+
+    test('the source switcher can be operated from the keyboard', async ({ page }) => {
+      // The switcher used to claim the ARIA tab pattern without implementing
+      // any of its keyboard behaviour. As toggle buttons, the browser gives
+      // Enter and Space for free — and both states are announced.
+      await new AppPage(page).cloneButton.click();
+      await dialogs.clone.waitForOpen();
+
+      const fromUrl = page.getByRole('button', { name: 'From URL' });
+      const fromAccount = page.getByRole('button', { name: 'From account' });
+      await expect(fromUrl).toHaveAttribute('aria-pressed', 'true');
+      await expect(fromAccount).toHaveAttribute('aria-pressed', 'false');
+
+      await fromAccount.press('Enter');
+      await expect(fromAccount).toHaveAttribute('aria-pressed', 'true');
+      await expect(fromUrl).toHaveAttribute('aria-pressed', 'false');
+      await expect(repoItems(page)).toHaveCount(2);
+
+      await fromUrl.press(' ');
+      await expect(fromUrl).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('lv-account-repo-picker')).toHaveCount(0);
     });
 
     test('filters the listed repositories', async ({ page }) => {
@@ -415,8 +437,8 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(dialogs.github.dialog).toBeHidden();
       await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
       await expect(dialogs.clone.dialog).toBeVisible();
-      await expect(page.getByRole('tab', { name: 'From account' })).toHaveAttribute(
-        'aria-selected',
+      await expect(page.getByRole('button', { name: 'From account' })).toHaveAttribute(
+        'aria-pressed',
         'true',
       );
       await expect(repoItems(page)).toHaveCount(2);
@@ -658,8 +680,8 @@ test.describe('Clone Dialog - from a connected account', () => {
 
     // Back on the account source, now listing the account that was just
     // connected — so the clone can carry on where it left off.
-    await expect(page.getByRole('tab', { name: 'From account' })).toHaveAttribute(
-      'aria-selected',
+    await expect(page.getByRole('button', { name: 'From account' })).toHaveAttribute(
+      'aria-pressed',
       'true',
     );
     await expect(repoItems(page)).toHaveCount(1);
