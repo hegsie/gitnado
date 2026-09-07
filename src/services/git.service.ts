@@ -33,7 +33,12 @@ export type NetworkBlockReason = 'offline' | 'allowlist' | 'declined';
  * relative submodule url, deepen/unshallow.
  */
 async function resolveRemoteUrl(repoPath: string, remote?: string): Promise<string | null> {
-  if (remote && /^([a-z][a-z0-9+.-]*:\/\/|git@|ssh:\/\/)/i.test(remote)) {
+  // Same "is this already a URL?" test as `resolveRemotePushUrl` below. The
+  // two used to disagree: this one recognised only a literal `git@`, so an
+  // ordinary scp-form remote with another login (`deploy@host:path`) was
+  // treated as a remote NAME, matched nothing, and fell through to the first
+  // remote in the list — judging a host the caller never named.
+  if (remote && /^([a-z][a-z0-9+.-]*:\/\/|[^@/]+@[^:/]+:|ssh:\/\/)/i.test(remote)) {
     return remote;
   }
   let wanted = remote;
@@ -4001,7 +4006,13 @@ export async function testCredentials(
   path: string,
   remoteUrl: string,
 ): Promise<CommandResult<CredentialTestResult>> {
-  if (!await checkNetworkPermission('test credentials', path, remoteUrl)) {
+  // The URL goes in the RESOLVED slot, not the name slot: it IS the
+  // destination, and routing it through the name lookup sent an scp-form
+  // remote whose login is not `git` (`deploy@host:team/app.git`) down the
+  // "not a URL" path, where it matched no remote name and fell back to the
+  // first remote in the list — refusing the test with a toast naming a host
+  // the operation would never have contacted.
+  if (!await checkNetworkPermission('test credentials', path, remoteUrl, remoteUrl)) {
     return blockedResult();
   }
   return invokeCommand<CredentialTestResult>("test_credentials", {

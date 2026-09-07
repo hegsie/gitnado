@@ -42,6 +42,7 @@ import {
   fetchInBackground,
   checkoutWithAutoStash,
   testSshConnection,
+  testCredentials,
 } from '../git.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 
@@ -293,6 +294,54 @@ describe('network security gate', () => {
 
       expect(result.success, 'the host is evil.test; github.com is only the user').to.equal(false);
       expect(invokeHistory.some((c) => c.command === 'test_ssh_connection')).to.equal(false);
+    });
+
+    // The Credentials dialog hands the gate the remote's URL. It used to go in
+    // the NAME slot, and the "is this a URL?" test there recognised only a
+    // literal `git@` — so an ordinary corporate remote with another login was
+    // treated as a remote name, matched none, and fell back to the FIRST
+    // remote in the list. The user was refused with a toast naming a host the
+    // test would never have contacted, and could not test the remote they had
+    // selected.
+    it('judges a scp-form remote on its own host, not the first remote in the list', async () => {
+      mockInvoke = (command: string) => {
+        if (command === 'get_remotes') {
+          return Promise.resolve([
+            {
+              name: 'origin',
+              url: 'https://github.com/me/app.git',
+              fetchUrl: 'https://github.com/me/app.git',
+              pushUrl: 'https://github.com/me/app.git',
+            },
+            {
+              name: 'corp',
+              url: 'deploy@git.example.com:team/app.git',
+              fetchUrl: 'deploy@git.example.com:team/app.git',
+              pushUrl: 'deploy@git.example.com:team/app.git',
+            },
+          ]);
+        }
+        return Promise.resolve(null);
+      };
+      settingsStore.setState({ remoteAllowlist: ['git.example.com'] });
+
+      const result = await testCredentials('/repo', 'deploy@git.example.com:team/app.git');
+
+      expect(
+        result.success,
+        'git.example.com is allowlisted; origin\'s github.com is irrelevant here',
+      ).to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'test_credentials')).to.equal(true);
+    });
+
+    it('still refuses a scp-form remote whose own host is off the allowlist', async () => {
+      mockRemotes('https://github.com/me/app.git');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await testCredentials('/repo', 'deploy@evil.test:team/app.git');
+
+      expect(result.success, 'the host tested is evil.test, whatever origin says').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'test_credentials')).to.equal(false);
     });
 
     it('leaves everything alone when no allowlist is configured', async () => {
