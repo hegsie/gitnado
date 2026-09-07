@@ -1038,8 +1038,9 @@ fn remove_keyring_token(service: &str, key: &str) -> Result<()> {
 }
 
 /// Read `key` under `service`, falling back to `legacy_service`. A legacy hit is
-/// re-stored under `service` and the old entry removed, so the fallback is taken
-/// once per key. The backend is passed in so the logic is unit-tested.
+/// re-stored under `service` and, once that write succeeded, removed from
+/// `legacy_service` — so the fallback is taken once per key. The backend is
+/// passed in so the logic is unit-tested.
 fn read_with_legacy_fallback(
     service: &str,
     legacy_service: &str,
@@ -1054,7 +1055,22 @@ fn read_with_legacy_fallback(
     let Some(value) = read(legacy_service, key)? else {
         return Ok(None);
     };
-    write(service, key, &value)?;
+    // A failed re-store is not a reason to throw away the token that WAS read.
+    // `?` here meant an upgrading user whose keyring accepts reads but refuses
+    // writes — a keychain that re-locks after a read, an entry-count limit, a
+    // re-locked SecretService collection — got an error instead of the
+    // credential sitting right there, and a working connected account read as
+    // broken. The legacy entry stays put, so the next launch adopts it
+    // properly. `credentials_service::get_with_legacy_fallback` does the same.
+    if let Err(e) = write(service, key, &value) {
+        tracing::warn!(
+            "Found a legacy keyring token for {} but could not re-store it under {}: {}",
+            key,
+            service,
+            e
+        );
+        return Ok(Some(value));
+    }
     if let Err(e) = remove(legacy_service, key) {
         tracing::warn!(
             "Adopted legacy keyring token for {} but could not remove the old entry: {}",
@@ -2147,17 +2163,36 @@ mod tests {
         );
     }
 
+    /// A failed re-store must not throw away the token that WAS read.
+    ///
+    /// `?` on the write propagated the failure, so an upgrading user whose
+    /// keyring accepts reads but refuses writes — a keychain that re-locks
+    /// after a read, an entry-count limit, a re-locked SecretService
+    /// collection — got an error from `get_keyring_token` instead of the token
+    /// sitting right there under the old service name, and a perfectly good
+    /// connected account read as broken. The sibling adopter
+    /// `credentials_service::get_with_legacy_fallback` warns and returns the
+    /// value; these two are written for the same situation and must agree.
+    ///
+    /// The legacy entry stays put, so the next launch adopts it properly.
     #[test]
-    fn token_fallback_propagates_write_failure_and_keeps_legacy() {
+    fn token_fallback_returns_the_adopted_token_when_the_re_store_fails() {
         let store: FakeKeyring = Default::default();
         store.borrow_mut().insert(
             ("leviathan-integrations".into(), "jira".into()),
             "tok".into(),
         );
-        assert!(read_fallback(&store, "jira", true).is_err());
-        assert!(store
-            .borrow()
-            .contains_key(&("leviathan-integrations".into(), "jira".into())));
+        assert_eq!(
+            read_fallback(&store, "jira", true).unwrap().as_deref(),
+            Some("tok"),
+            "the token was read; a failed re-store is no reason to lose it"
+        );
+        assert!(
+            store
+                .borrow()
+                .contains_key(&("leviathan-integrations".into(), "jira".into())),
+            "the only copy must not be removed after a failed write"
+        );
     }
 
     #[test]
