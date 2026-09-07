@@ -11,11 +11,16 @@ import {
  * The remote allowlist, applied to the hosts `git submodule update` really
  * contacts.
  *
- * The gate used to check the SUPERPROJECT's remote and stop there, but
- * `.gitmodules` is repository content: a superproject on an allowlisted host
+ * The gate used to check the SUPERPROJECT's remote and stop there, but a
+ * submodule url is repository content: a superproject on an allowlisted host
  * can name submodules anywhere, and `git submodule update` clones or fetches
  * every one of them. So an allowlist of `github.com` passed, and the app went
  * to gitlab.com.
+ *
+ * The url in each row is the one git will really use — `submodule.<name>.url`
+ * from the repository config, falling back to `.gitmodules` when nothing is
+ * registered — which is what `get_submodules` reports and what both halves of
+ * the gate judge.
  *
  * The backend enforces the same rule (`src-tauri/src/commands/submodule.rs`);
  * only this half can answer the click with a toast that names the host.
@@ -114,11 +119,12 @@ test.describe('Submodule Dialog — the allowlist covers the submodule hosts', (
   });
 
   test('a refusal only the backend could make is still shown to the user', async ({ page }) => {
-    // The frontend gate reads `.gitmodules`; the backend gate reads the
-    // `submodule.<name>.url` git really clones from and a cloned submodule's
-    // own origin, which can point elsewhere after an upstream rename or a
-    // `remote set-url`. When only the backend refuses, the user must still be
-    // told why — the dialog itself treats BLOCKED as "already explained".
+    // Both halves judge the url `get_submodules` reports, but the backend
+    // also guards a cloned submodule's own `remote.origin.url` — which a
+    // `remote set-url` inside the submodule moves on its own — and an entry
+    // registered in the config that the listing calls uninitialised. When
+    // only the backend refuses, the user must still be told why: the dialog
+    // itself treats BLOCKED as "already explained".
     await startCommandCaptureWithMocks(page, {
       get_remotes: SUPERPROJECT_ON_GITHUB,
       get_submodules: submoduleRows([

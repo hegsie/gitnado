@@ -324,8 +324,9 @@ export function isNetworkGateRefusal(error?: { code?: string }): boolean {
  * operation through.
  *
  * The two gates judge the same thing from different vantage points, and the
- * backend can see what the frontend cannot: the `submodule.<name>.url` git
- * really clones from, a cloned submodule's own origin, an LFS endpoint. Every
+ * backend can see what the frontend cannot: a cloned submodule's own
+ * `remote.origin.url`, a submodule registered in the config but not yet
+ * cloned, an LFS endpoint. Every
  * dialog treats a `BLOCKED` result as "the gate already explained itself" and
  * shows nothing — right when the frontend gate refused and toasted, wrong when
  * only the backend did. So a `BLOCKED` reaching here is one the user has not
@@ -756,17 +757,37 @@ export async function getCloneFilterInfo(
   return invokeCommand<CloneFilterInfo>("get_clone_filter_info", { path });
 }
 
+/**
+ * `git fetch --deepen` is a fetch: it contacts the remote for the history the
+ * shallow clone left behind. It named no remote and had no frontend gate at
+ * all, so offline mode let it go straight out; the backend `guard_remote` was
+ * the only thing standing in front of it, and a backend-only refusal is one
+ * the user is never shown a reason for. Neither names a remote, so the gate
+ * resolves the one git itself would fetch from.
+ */
 export async function deepenRepository(
   path: string,
   depth: number,
 ): Promise<CommandResult<void>> {
-  return invokeCommand<void>("deepen_repository", { path, depth });
+  if (!await checkNetworkPermission('deepen', path)) {
+    return blockedResult();
+  }
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("deepen_repository", { path, depth }),
+  );
 }
 
+/** `git fetch --unshallow`, the whole history in one request. Gated exactly
+ * like {@link deepenRepository}. */
 export async function unshallowRepository(
   path: string,
 ): Promise<CommandResult<void>> {
-  return invokeCommand<void>("unshallow_repository", { path });
+  if (!await checkNetworkPermission('unshallow', path)) {
+    return blockedResult();
+  }
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("unshallow_repository", { path }),
+  );
 }
 
 export async function listTrackedFiles(
@@ -3074,13 +3095,22 @@ function selectSubmodules(all: Submodule[], submodulePaths?: string[]): Submodul
 /**
  * Check every host `git submodule update` is actually going to contact.
  *
- * The superproject's remote is NOT the answer on its own: `.gitmodules` is
+ * The superproject's remote is NOT the answer on its own: a submodule url is
  * repository content and can name any host it likes, and `git submodule
- * update` clones or fetches every url in it. Checking only the superproject —
- * which is all this used to do — let an allowlist of `github.com` sit there
+ * update` clones or fetches every one of them. Checking only the superproject
+ * — which is all this used to do — let an allowlist of `github.com` sit there
  * while the app went to gitlab.com. The backend enforces the same rule
  * (`commands/submodule.rs`); this half is the one that can say so in a toast
  * before any work starts.
+ *
+ * `submodule.url` from `get_submodules` is the url git will really use —
+ * `submodule.<name>.url` from the repository config, falling back to
+ * `.gitmodules` when nothing is registered — which is what the backend judges
+ * too. It used to be the `.gitmodules` snapshot alone, so the two halves
+ * judged different urls: with upstream having moved a submodule, the config
+ * url on the allowlist and the `.gitmodules` url off it, git and the backend
+ * both allowed the update and this half refused it, naming a host the
+ * operation never contacts.
  *
  * Offline mode refuses outright, before anything is listed. Under an allowlist
  * the superproject's own remote is deliberately not checked: it is only where
@@ -3103,9 +3133,7 @@ async function checkSubmoduleHostsAllowed(
   submodulePaths?: string[],
   /** Whether the update carries `--init`. Without it git skips a submodule
    * that was never registered — verified: exit 0, nothing contacted — so its
-   * host is not one this update will reach and must not refuse it. The
-   * backend gate, which can see the config url git really clones from, is
-   * the authority; this only spares the user a refusal for nothing. */
+   * host is not one this update will reach and must not refuse it. */
   init = false,
 ): Promise<boolean> {
   if (!isNetworkPolicyActive()) return true;
@@ -3119,6 +3147,12 @@ async function checkSubmoduleHostsAllowed(
   }
 
   for (const submodule of selectSubmodules(listed.data, submodulePaths)) {
+    // Deliberately still `initialized` and not "has no config url", which is
+    // the backend's own drop rule: an entry registered in the config but not
+    // cloned is skipped here and judged there. That direction only ever
+    // UNDER-refuses, and `surfaceBackendRefusal` toasts the backend's reason
+    // when it does, so nothing goes unexplained. The opposite direction —
+    // refusing what git would happily do — is the one this gate must not take.
     if (!submodule.initialized && !init) continue;
     if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) {
       // Resolves against the superproject's remote, so that remote is the
@@ -3955,10 +3989,21 @@ export async function getAvailableHelpers(): Promise<
   return invokeCommand<AvailableHelper[]>("get_available_helpers", {});
 }
 
+/**
+ * Testing an SSH remote's credentials runs `ssh -T git@host`, which opens a
+ * real connection to that host — the same handshake `test_ssh_connection`
+ * already gates. This one had no gate on either side, so offline mode let it
+ * out. The remote's own URL is the destination, so it is what the allowlist
+ * judges; the HTTPS branch only reads a credential helper, and refusing that
+ * under a configured policy is the fail-closed side to err on.
+ */
 export async function testCredentials(
   path: string,
   remoteUrl: string,
 ): Promise<CommandResult<CredentialTestResult>> {
+  if (!await checkNetworkPermission('test credentials', path, remoteUrl)) {
+    return blockedResult();
+  }
   return invokeCommand<CredentialTestResult>("test_credentials", {
     path,
     remoteUrl,

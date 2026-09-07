@@ -138,10 +138,26 @@ fn run_git_command_in(
 }
 
 /// Get list of submodules in the repository
+///
+/// `url` is the one `git submodule update` will really clone or fetch from:
+/// `submodule.<name>.url` from the repository config, falling back to the
+/// `.gitmodules` url when nothing is registered yet (which is exactly what
+/// `--init` would copy into the config). libgit2's `Submodule::url()` reads
+/// the `.gitmodules` snapshot alone, and the two diverge whenever upstream
+/// moves a submodule — the state `git submodule sync` exists to repair.
+///
+/// This listing feeds the FRONTEND half of the submodule host gate
+/// (`checkSubmoduleHostsAllowed` in `git.service.ts`), which judged the
+/// `.gitmodules` url while [`list_submodule_targets`] here judged the config
+/// one. The two halves then refused different updates: with `.gitmodules`
+/// naming a host off the allowlist and the config url naming one on it, git
+/// and the backend both allowed the update and the frontend refused it,
+/// naming a host the operation never contacts.
 #[command]
 pub async fn get_submodules(path: String) -> Result<Vec<Submodule>> {
     let repo_path = Path::new(&path);
     let repo = git2::Repository::open(repo_path)?;
+    let config = repo.config().ok();
 
     let mut submodules = Vec::new();
 
@@ -149,7 +165,11 @@ pub async fn get_submodules(path: String) -> Result<Vec<Submodule>> {
     for submodule in repo.submodules()? {
         let name = submodule.name().ok().unwrap_or("").to_string();
         let sm_path = submodule.path().to_string_lossy().to_string();
-        let url = submodule.url().ok().flatten().map(|s| s.to_string());
+        let url = config
+            .as_ref()
+            .and_then(|cfg| cfg.get_string(&format!("submodule.{}.url", name)).ok())
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| submodule.url().ok().flatten().map(|s| s.to_string()));
         let branch = submodule.branch().ok().flatten().map(|s| s.to_string());
 
         // Determine status
@@ -1759,6 +1779,65 @@ mod tests {
 
         let result = update_submodules(repo.path_str(), None, None, None, None, None, None).await;
         assert_not_blocked(&result, "a submodule whose config url is allowlisted");
+    }
+
+    /// `get_submodules` is what the FRONTEND half of the gate judges, and it
+    /// reported libgit2's `.gitmodules` snapshot while the backend judged the
+    /// `submodule.<name>.url` git really clones from. Upstream moving a
+    /// submodule leaves exactly that divergence — the state `git submodule
+    /// sync` exists to repair — and the frontend then refused an update git
+    /// would have made from an allowlisted host, naming a host the operation
+    /// never contacts. The listing reports the url git will use.
+    ///
+    /// The submodule's NAME here is deliberately not its PATH: the config key
+    /// is keyed by name, and reading `submodule.<path>.url` would find
+    /// nothing and silently fall back to `.gitmodules`.
+    #[tokio::test]
+    async fn get_submodules_reports_the_config_url_when_it_diverges_from_gitmodules() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/me/super.git");
+        repo.create_commit(
+            "Add .gitmodules",
+            &[(
+                ".gitmodules",
+                "[submodule \"dep\"]\n\tpath = vendor/dep\n\turl = https://newhost.example/x/dep.git\n",
+            )],
+        );
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("submodule.dep.url", "https://github.com/x/dep.git")
+            .unwrap();
+
+        let listed = get_submodules(repo.path_str()).await.unwrap();
+        let dep = listed
+            .iter()
+            .find(|s| s.path == "vendor/dep")
+            .expect("the submodule is listed");
+        assert_eq!(dep.name, "dep", "the config key is keyed by NAME");
+        assert_eq!(
+            dep.url.as_deref(),
+            Some("https://github.com/x/dep.git"),
+            "the listing must report the url git clones from, not the .gitmodules one",
+        );
+    }
+
+    /// With nothing registered in the config there is no config url to report,
+    /// and `.gitmodules` is what `update --init` would copy into it — so that
+    /// is the honest answer, and the one the gate has to judge.
+    #[tokio::test]
+    async fn get_submodules_falls_back_to_the_gitmodules_url_when_nothing_is_registered() {
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[("vendor/dep", "https://gitlab.com/x/dep.git")],
+        );
+
+        let listed = get_submodules(repo.path_str()).await.unwrap();
+        let dep = listed
+            .iter()
+            .find(|s| s.path == "vendor/dep")
+            .expect("the submodule is listed");
+        assert_eq!(dep.url.as_deref(), Some("https://gitlab.com/x/dep.git"));
     }
 
     #[tokio::test]
