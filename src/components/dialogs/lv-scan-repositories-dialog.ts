@@ -529,6 +529,22 @@ export class LvScanRepositoriesDialog extends LitElement {
     return this.phase === 'results' ? (this.result?.root ?? this.scanPath) : this.scanPath;
   }
 
+  /**
+   * Whether the dialog is still ASKING about `scanPath`, rather than showing
+   * work the user did.
+   *
+   * The offer step and the empty-results screen both end in "Initialize a
+   * repository here", and both stop making sense the moment the folder becomes
+   * a repository — that is what the shell closes this dialog on. A LIST of
+   * results is not one of them: the walk and the ticks on it are the user's
+   * work, and a scan still running is something they are waiting for. Neither
+   * can be got back except by scanning the whole folder again.
+   */
+  public get isOfferingInitialize(): boolean {
+    if (this.phase === 'offer') return true;
+    return this.phase === 'results' && (this.result?.repositories.length ?? 0) === 0;
+  }
+
   private handleScanFromOffer(): void {
     void this.startScan();
   }
