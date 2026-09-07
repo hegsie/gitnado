@@ -12,6 +12,7 @@ import { onOpenUrl, getCurrent } from '@tauri-apps/plugin-deep-link';
 import { open } from '@tauri-apps/plugin-shell';
 import { listen } from '@tauri-apps/api/event';
 import { invokeCommand } from './tauri-api.ts';
+import { checkOutboundHostAllowed } from './git.service.ts';
 import { loggers } from '../utils/logger.ts';
 import type {
   OAuthProvider,
@@ -65,6 +66,62 @@ const OAUTH_CLIENT_SECRETS: Partial<Record<OAuthProvider, string>> = {
 };
 
 const log = loggers.oauth;
+
+/**
+ * The host a provider's OAuth endpoints live on, so the remote allowlist has a
+ * domain to match. Mirrors `OAuthConfig::{github,gitlab,azure,bitbucket}` in
+ * `src-tauri/src/services/oauth.rs`, where the authorize and token URLs are
+ * built; for GitLab and OIDC the instance/issuer the caller names IS the host.
+ *
+ * `null` means "unknown destination", and the gate fails closed on it exactly
+ * as it does for a remote whose URL it cannot resolve.
+ */
+function oauthHost(provider: OAuthProvider, instanceUrl?: string): string | null {
+  switch (provider) {
+    case 'github':
+      return 'https://github.com';
+    case 'gitlab':
+      return instanceUrl?.trim() || 'https://gitlab.com';
+    case 'azure':
+      return 'https://login.microsoftonline.com';
+    case 'bitbucket':
+      return 'https://bitbucket.org';
+    case 'oidc':
+      // An Enterprise SSO issuer is whatever the user configured; without one
+      // there is no destination to judge.
+      return instanceUrl?.trim() || null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Refuse an OAuth step that offline mode or the allowlist forbids, and say why.
+ *
+ * This service had NO gate at all, and the backend's own guards sit on the
+ * token exchange and OIDC discovery — the LAST steps of the flow. So with
+ * offline mode on, "Sign in with GitHub" opened the system browser, the user
+ * authorised the app against their real account, the callback came back, and
+ * only then did the exchange refuse: account access granted to an app that
+ * then said it was offline. The refusal has to happen before the browser is
+ * ever opened.
+ *
+ * Returns null when the step may proceed, or the message to report.
+ */
+async function oauthBlockedReason(
+  provider: OAuthProvider,
+  instanceUrl?: string,
+): Promise<string | null> {
+  const host = oauthHost(provider, instanceUrl);
+  const reason = await checkOutboundHostAllowed(host);
+  if (!reason) return null;
+  const where = host ?? 'the sign-in provider';
+  return reason === 'allowlist'
+    ? `Signing in needs ${where}, which is not in your remote allowlist. ` +
+        'Add it in Settings > Security.'
+    : `Signing in needs ${where}, and offline mode is enabled. ` +
+        'Turn it off in Settings > Security.';
+}
 
 /** Currently pending OAuth authentications, keyed by provider to prevent race conditions */
 const pendingAuthByProvider = new Map<OAuthProvider, PendingOAuth>();
@@ -245,6 +302,16 @@ export async function startOAuth(
   clientId: string,
   instanceUrl?: string
 ): Promise<void> {
+  // Before anything else, and in particular before the browser is opened: an
+  // authorisation the user cannot then complete is worse than a refusal, since
+  // they have already granted a real account access to the app.
+  const blocked = await oauthBlockedReason(provider, instanceUrl);
+  if (blocked) {
+    log.warn('OAuth sign-in refused by the security gate');
+    notifyStateChange({ status: 'error', error: blocked, provider });
+    return;
+  }
+
   try {
     notifyStateChange({ status: 'pending', provider });
 
@@ -413,6 +480,14 @@ export async function exchangeCode(
   state: string,
   code: string
 ): Promise<OAuthTokenResponse> {
+  // The instance/issuer for this flow is held with the pending entry — the
+  // caller only carries `state` and `code`.
+  const blocked = await oauthBlockedReason(
+    provider,
+    pendingAuthByProvider.get(provider)?.instanceUrl,
+  );
+  if (blocked) throw new Error(blocked);
+
   // Get client ID and secret from config
   const clientId = getClientId(provider);
   const clientSecret = getClientSecret(provider);
@@ -454,6 +529,9 @@ export async function refreshToken(
   refreshTokenValue: string,
   instanceUrl?: string
 ): Promise<OAuthTokenResponse> {
+  const blocked = await oauthBlockedReason(provider, instanceUrl);
+  if (blocked) throw new Error(blocked);
+
   const clientId = getClientId(provider);
   // Bitbucket (like GitHub) authenticates the refresh grant with the client
   // secret, same as the code exchange; PKCE public clients (GitLab, Entra) have
@@ -590,6 +668,12 @@ export interface OidcUserInfo {
  * Discover OIDC provider configuration from an issuer URL
  */
 export async function discoverOidcProvider(issuerUrl: string): Promise<OidcDiscovery> {
+  // The issuer's `.well-known/openid-configuration` is a real outbound
+  // request. The backend guards it too; refusing here keeps the message the
+  // same as every other step of the flow.
+  const blocked = await oauthBlockedReason('oidc', issuerUrl);
+  if (blocked) throw new Error(blocked);
+
   const result = await invokeCommand<OidcDiscovery>('discover_oidc_provider', { issuerUrl });
   if (!result.success || !result.data) {
     throw new Error(result.error?.message ?? 'Failed to discover OIDC provider');

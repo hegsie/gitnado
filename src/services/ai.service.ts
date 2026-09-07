@@ -76,9 +76,29 @@ const CLOUD_PROVIDERS: ReadonlySet<AiProviderType> = new Set<AiProviderType>([
   'google_gemini',
 ]);
 
+/**
+ * Providers whose requests never leave this machine, named EXPLICITLY.
+ *
+ * The gate used to read this as "not in CLOUD_PROVIDERS", which makes any
+ * provider this build has never heard of local — a new Rust variant against an
+ * older frontend, say — and waves its requests through while offline mode is
+ * on. Every other unknown destination in this gate fails closed; this one
+ * failed open.
+ */
+const LOCAL_PROVIDERS: ReadonlySet<AiProviderType> = new Set<AiProviderType>([
+  'ollama',
+  'lm_studio',
+  'local_inference',
+]);
+
 /** True when a provider's requests leave this machine. */
 export function isCloudAiProvider(providerType: AiProviderType): boolean {
   return CLOUD_PROVIDERS.has(providerType);
+}
+
+/** True when a provider is known to run on this machine. */
+export function isLocalAiProvider(providerType: AiProviderType): boolean {
+  return LOCAL_PROVIDERS.has(providerType);
 }
 
 /**
@@ -159,8 +179,10 @@ async function checkAiNetworkAllowed<T>(
     provider = active.success ? (active.data ?? null) : null;
   }
 
-  // Local providers never leave the machine, so no policy applies to them.
-  if (provider && !isCloudAiProvider(provider)) return null;
+  // Local providers never leave the machine, so no policy applies to them. A
+  // provider this build does not RECOGNISE is not one of them, and falls
+  // through to the fail-closed branch below.
+  if (provider && isLocalAiProvider(provider)) return null;
 
   // With nothing selected the backend falls back to whatever provider is
   // reachable, cloud providers included (`resolve_provider` in
