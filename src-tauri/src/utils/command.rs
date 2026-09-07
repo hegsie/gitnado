@@ -35,21 +35,23 @@
 //! allowlist. `test_a_bare_git_command_site_can_never_reach_the_panel` checks
 //! that for every site rather than trusting this paragraph.
 //!
-//! `merge.rs` is a real exception, not a read. `preview_rebase` spawns four
-//! bare commands, and they are of two kinds. It OBTAINS its throwaway checkout
-//! with `git worktree add --detach` and gives it back with `git worktree
-//! remove --force`, both `-C <the user's repository>` — two writes to
-//! `<repo>/.git/worktrees/` in the PRIMARY repository. It then runs the ghost
-//! `git rebase` and, on failure, `git rebase --abort`, both `-C <the temp
-//! checkout>`, so those two mutate only the throwaway tree; the abort parses
-//! nothing (`let _ = …output()`).
+//! `merge.rs` is a real exception, not a read. `preview_rebase` spawns SIX bare
+//! commands. Two are writes to the PRIMARY repository: it OBTAINS its throwaway
+//! checkout with `git worktree add --detach` and gives it back with `git
+//! worktree remove --force`, both `-C <the user's repository>`, so both touch
+//! `<repo>/.git/worktrees/`. Two mutate only the throwaway tree: the ghost
+//! `git rebase` and, on failure, `git rebase --abort` (which parses nothing —
+//! `let _ = …output()`), both `-C <the temp checkout>`. The remaining two are
+//! reads of that same temp tree, `git diff --name-only --diff-filter=U -z` and
+//! `git log --oneline`, and neither subcommand is in [`LOGGED_SUBCOMMANDS`].
 //!
-//! All four belong on [`create_command`]. They are still bare only because the
-//! command has no caller today — `previewRebase` in `git.service.ts` is
-//! unwired — and because moving them while `add_worktree`/`remove_worktree`
-//! name `worktree` as their claimable subcommand would let a ghost worktree's
-//! row replace a real worktree operation's in the panel. Wiring
-//! `preview_rebase` up means moving them first.
+//! The four that write belong on [`create_command`]. They are still bare only
+//! because the command has no caller today — `previewRebase` in
+//! `git.service.ts` is unwired — and because moving them while
+//! `add_worktree`/`remove_worktree` name `worktree` as their claimable
+//! subcommand would let a ghost worktree's row replace a real worktree
+//! operation's in the panel. Wiring `preview_rebase` up means moving them
+//! first.
 //!
 //! Reads that DO come through here (because they share a helper with a write)
 //! are filtered out by [`is_read_only_form`] instead, so a `git worktree list`
@@ -797,9 +799,6 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    /// The bare-`Command` sites this module's header enumerates must be the
-    /// ones that actually exist. That header is the document an author
-    /// consults to decide whether a new bare `Command` is acceptable, so a
     /// One production site that spawns `git` outside [`create_command`].
     struct BareSite {
         /// Path relative to `src/`, e.g. `commands/merge.rs`.
@@ -865,31 +864,72 @@ mod tests {
                     continue;
                 }
 
-                // Collect the builder chain's literals. Two shapes occur: a
-                // chained `let x = Command::new("git").arg(..).output()`, and a
-                // `let mut cmd = Command::new("git");` followed by `cmd.arg(..)`
-                // statements. Stopping correctly matters — an earlier version
-                // knew only the first shape, so for the second it read on past
-                // the end of the function and swallowed unrelated literals from
-                // whatever followed (in one file, strings from `mod tests`).
+                // Collect the builder's literals. Two shapes occur, and both
+                // have caught this scanner out. A chained
+                // `let x = Command::new("git").arg(..).output()` ends at the
+                // terminator. A `let mut cmd = Command::new("git");` followed by
+                // separate `cmd.arg(..)` statements does not: reading to a fixed
+                // line count swallowed unrelated literals from whatever followed
+                // (once, strings from `mod tests`), and breaking at the first
+                // `;` stopped before the subcommand — `describe.rs`'s
+                // `cmd.current_dir(&path);` sits between the spawn and its
+                // `cmd.arg("describe")`, so the site was read as taking no
+                // arguments at all and waved through unchecked.
+                //
+                // So: follow the BINDING. Lines that mention it contribute their
+                // literals; anything else is skipped, and the terminator ends it.
+                // Which shape this is: a spawn line that ends the statement is
+                // the `let mut cmd = …;` form and the arguments arrive later
+                // through the binding; anything else is a chain whose own
+                // continuation lines carry them.
+                let binding = line
+                    .trim_end()
+                    .ends_with(';')
+                    .then(|| {
+                        line.split_once("let ")
+                            .map(|(_, rest)| rest.trim_start_matches("mut "))
+                            .and_then(|rest| rest.split_once('='))
+                            .map(|(name, _)| name.trim().to_string())
+                            .filter(|name| {
+                                !name.is_empty()
+                                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                            })
+                    })
+                    .flatten();
+
                 let mut argv: Vec<String> = Vec::new();
-                for (offset, text) in lines.iter().skip(index).take(60).enumerate() {
+                for (offset, text) in lines.iter().skip(index).take(80).enumerate() {
+                    // Comments quote argv words too (one file's comment names
+                    // `"push"`), and reading them would fail this check for a
+                    // command that never runs.
+                    let code = match text.split_once("//") {
+                        Some((before, _)) if before.matches('"').count() % 2 == 0 => before,
+                        _ => text,
+                    };
                     let terminator = [".output()", ".status()", ".spawn("]
                         .iter()
-                        .filter_map(|needle| text.find(needle))
+                        .filter_map(|needle| code.find(needle))
                         .min();
-                    let scanned = &text[..terminator.unwrap_or(text.len())];
-                    argv.extend(
-                        scanned
-                            .split('"')
-                            .skip(1)
-                            .step_by(2)
-                            .filter(|token| *token != "git")
-                            .map(str::to_string),
-                    );
-                    // The spawn's own line ends in `;` for the second shape, so
-                    // it can never be the terminator; any later statement end is.
-                    if terminator.is_some() || (offset > 0 && text.trim_end().ends_with(';')) {
+                    let mentions_binding = binding
+                        .as_deref()
+                        .is_none_or(|name| offset == 0 || code.contains(name));
+                    if mentions_binding {
+                        let scanned = &code[..terminator.unwrap_or(code.len())];
+                        argv.extend(
+                            scanned
+                                .split('"')
+                                .skip(1)
+                                .step_by(2)
+                                .filter(|token| *token != "git")
+                                .map(str::to_string),
+                        );
+                    }
+                    if terminator.is_some() && mentions_binding {
+                        break;
+                    }
+                    // Without a binding there is nothing to follow, so the
+                    // chained shape ends at its own statement.
+                    if binding.is_none() && offset > 0 && code.trim_end().ends_with(';') {
                         break;
                     }
                 }
@@ -989,6 +1029,10 @@ mod tests {
         let exception = header
             .split("`merge.rs` is a real exception")
             .nth(1)
+            // ONE paragraph, not the rest of the header: reading on meant an
+            // innocent edit to a later paragraph could add a form here and
+            // silently widen the exemption.
+            .and_then(|rest| rest.split("\n//!\n").next())
             .map(|paragraph| {
                 let forms: Vec<String> = paragraph
                     .split('`')
@@ -1009,6 +1053,19 @@ mod tests {
         );
 
         for site in &sites {
+            // A site whose arguments the scanner could not read is not a site
+            // that passes — it is a site nobody checked. `describe.rs` sat in
+            // exactly that state: the window stopped at the `current_dir` line
+            // before the `arg("describe")`, so it was read as taking no
+            // arguments and waved through by the "nothing logged here" branch.
+            assert!(
+                !site.argv.is_empty(),
+                "{}:{}: the scanner read no arguments for this spawn, so it cannot judge it. \
+                 Widen the window rather than trusting the pass.",
+                site.file,
+                site.line
+            );
+
             let Some(position) = site
                 .argv
                 .iter()
