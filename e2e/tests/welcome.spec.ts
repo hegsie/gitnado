@@ -749,9 +749,9 @@ test.describe('Session restore', () => {
   async function seedSession(page: Page, openLastRepository: boolean): Promise<void> {
     await page.addInitScript(
       ({ openLastRepository, path }) => {
-        if (!localStorage.getItem('leviathan-repositories')) {
+        if (!localStorage.getItem('gitnado-repositories')) {
           localStorage.setItem(
-            'leviathan-repositories',
+            'gitnado-repositories',
             JSON.stringify({
               state: {
                 recentRepositories: [],
@@ -763,9 +763,9 @@ test.describe('Session restore', () => {
             })
           );
         }
-        if (!localStorage.getItem('leviathan-settings')) {
+        if (!localStorage.getItem('gitnado-settings')) {
           localStorage.setItem(
-            'leviathan-settings',
+            'gitnado-settings',
             JSON.stringify({ state: { openLastRepository }, version: 7 })
           );
         }
@@ -776,7 +776,7 @@ test.describe('Session restore', () => {
 
   async function persistedPaths(page: Page): Promise<string[]> {
     return page.evaluate(() => {
-      const raw = localStorage.getItem('leviathan-repositories');
+      const raw = localStorage.getItem('gitnado-repositories');
       if (!raw) return [];
       const parsed = JSON.parse(raw) as { state?: { persistedOpenRepos?: { path: string }[] } };
       return (parsed.state?.persistedOpenRepos ?? []).map((r) => r.path);
@@ -1363,7 +1363,7 @@ test.describe('Language setting with an unsupported persisted locale', () => {
     // language that was dropped.
     await page.addInitScript(() => {
       localStorage.setItem(
-        'leviathan-settings',
+        'gitnado-settings',
         JSON.stringify({ state: { language: 'xx-YY' }, version: 7 })
       );
     });
@@ -1473,7 +1473,7 @@ test.describe('Language on a French-locale machine', () => {
     // `language` key at all, and that install has only ever rendered English.
     await page.addInitScript(() => {
       localStorage.setItem(
-        'leviathan-settings',
+        'gitnado-settings',
         JSON.stringify({ state: { theme: 'dark' }, version: 7 })
       );
     });

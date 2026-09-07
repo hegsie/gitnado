@@ -21,7 +21,7 @@ import {
 const IPV6_REMOTE = 'git@[2001:db8::1]:team/app.git';
 
 interface SettingsStoreWindow {
-  __LEVIATHAN_STORES__?: {
+  __GITNADO_STORES__?: {
     settingsStore?: {
       getState: () => {
         setOfflineMode: (on: boolean) => void;
@@ -35,12 +35,12 @@ interface SettingsStoreWindow {
 async function setAllowlist(page: Page, allowlist: string[]): Promise<void> {
   await page.waitForFunction(
     () =>
-      typeof (window as unknown as SettingsStoreWindow).__LEVIATHAN_STORES__?.settingsStore !==
+      typeof (window as unknown as SettingsStoreWindow).__GITNADO_STORES__?.settingsStore !==
       'undefined',
   );
   await page.evaluate((list) => {
     (window as unknown as SettingsStoreWindow)
-      .__LEVIATHAN_STORES__!.settingsStore!.getState()
+      .__GITNADO_STORES__!.settingsStore!.getState()
       .setRemoteAllowlist(list);
   }, allowlist);
 }
