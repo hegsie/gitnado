@@ -3446,11 +3446,18 @@ export class AppShell extends LitElement {
    * goes. It is closed rather than re-pointed: the drop already produced the
    * answer the dialog was asking about — a repository tab, plus its
    * "Opened <name>" toast — and there is nothing left to ask.
+   *
+   * ONLY those screens, which is what `isOfferingInitialize` names. Closing
+   * unconditionally also threw away a list of results and the ticks made on it,
+   * recoverable only by scanning the whole folder again, and aborted a walk the
+   * user was still waiting on.
    */
   private handleRepositoryScanResolved = (e: Event): void => {
     const path = (e as CustomEvent<{ path?: string }>).detail?.path;
     if (!path || path !== this.repositoryScanPath) return;
     if (!dialogs.isOpen('repositoryScan')) return;
+    const dialog = this.shadowRoot?.querySelector('lv-scan-repositories-dialog');
+    if (dialog && !dialog.isOfferingInitialize) return;
     dialogs.close('repositoryScan');
   };
 

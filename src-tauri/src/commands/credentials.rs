@@ -544,9 +544,12 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
         display_host: host,
         ssh_destination,
         port,
+        resolved,
     } = target;
 
-    if protocol == "ssh" {
+    // `resolved` guards the probe: an unresolved target's "destination" is the
+    // remote string itself, which is not a host to connect to.
+    if protocol == "ssh" && resolved {
         // For SSH, test the connection
         let mut command = create_command("ssh");
         command.args(ssh_probe_args());
@@ -659,6 +662,12 @@ struct CredentialTarget {
     ssh_destination: String,
     /// The port for `ssh -p`, when the URL named one.
     port: Option<u16>,
+    /// Whether `parse_target` recognised the remote at all.
+    ///
+    /// When it did not, `ssh_destination` is the whole remote string standing
+    /// in for a host it has none of, so an `ssh`-schemed one must never reach
+    /// the ssh probe: `ssh -T ssh://` has nothing to connect to.
+    resolved: bool,
 }
 
 /// The request written to `git credential fill`'s stdin for a target.
@@ -682,14 +691,26 @@ fn credential_query(protocol: &str, host: &str) -> String {
 
 fn credential_target(remote_url: &str) -> CredentialTarget {
     let Some(target) = crate::services::security::parse_target(remote_url) else {
-        // Nothing a URL parser recognises — a filesystem remote, say. Report it
-        // as typed rather than invent a host for it.
+        // Nothing a URL parser recognises as `[user@]host` — `file://`, whose
+        // URLs carry no host at all. Report it as typed rather than invent a
+        // host for it, and keep the scheme the user wrote: substituting `https`
+        // reported a `file://` remote as "No credentials found ... Protocol:
+        // https" under a protocol it does not use, and the dialog reads the
+        // protocol reported here to decide whether a missing credential is a
+        // fault at all — so the one transport that stores nothing could never
+        // reach the branch that says so.
+        //
+        // The GATE is untouched by this: `parse_target` above is still the one
+        // parse the allowlist and the destination share, and a host-less remote
+        // still resolves to no host and is still refused wherever an allowlist
+        // is configured.
         let as_typed = remote_url.trim().to_string();
         return CredentialTarget {
-            protocol: "https".to_string(),
+            protocol: url_scheme(&as_typed).unwrap_or_else(|| "https".to_string()),
             ssh_destination: as_typed.clone(),
             display_host: as_typed,
             port: None,
+            resolved: false,
         };
     };
 
@@ -709,7 +730,25 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
         ssh_destination: format!("{}@{}", login, target.host),
         display_host,
         port: target.port,
+        resolved: true,
     }
+}
+
+/// The scheme a remote string carries, if it carries one at all.
+///
+/// Only the scheme grammar is accepted — a letter followed by letters, digits
+/// and `+-.` — so a remote that merely contains `://` somewhere is not read as
+/// naming a protocol.
+fn url_scheme(remote_url: &str) -> Option<String> {
+    let (scheme, _) = remote_url.split_once("://")?;
+    let mut chars = scheme.chars();
+    if !chars.next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+        return None;
+    }
+    Some(scheme.to_lowercase())
 }
 
 /// The `ssh -T` probe options.
@@ -1117,6 +1156,81 @@ mod tests {
         assert_eq!(
             credential_query(&target.protocol, &target.display_host),
             "protocol=http\nhost=git.internal.test\n\n"
+        );
+    }
+
+    /// A `file://` remote is not https.
+    ///
+    /// `parse_target` refuses a host-less URL — deliberately: the allowlist has
+    /// to keep refusing one — and this fallback then substituted `https`, so a
+    /// local remote was reported as "No credentials found ... Protocol: https"
+    /// under a protocol it does not use. The dialog picks the wording AND the
+    /// styling off the protocol reported here, so `file://` could never reach
+    /// the branch written for it.
+    #[test]
+    fn a_file_url_keeps_its_own_scheme() {
+        let target = credential_target("file:///srv/git/repo.git");
+        assert_eq!(target.protocol, "file");
+        // Reported as typed: there is no host to invent one from.
+        assert_eq!(target.display_host, "file:///srv/git/repo.git");
+    }
+
+    /// A bare local path does NOT come through the fallback below: the gate's
+    /// parse reads `/srv/git/repo.git` as the host `srv` (url's special-scheme
+    /// parse skips the leading slashes), and the dialog reports the host the
+    /// gate judged — the two must not disagree about where a remote points.
+    /// Pinned here so the change above is visibly confined to the URLs the
+    /// parse actually refuses.
+    #[test]
+    fn a_bare_local_path_still_follows_the_gates_parse() {
+        let target = credential_target("/srv/git/repo.git");
+        assert_eq!(
+            Some(target.display_host.as_str()),
+            crate::services::security::parse_target("/srv/git/repo.git")
+                .map(|t| t.host)
+                .as_deref(),
+            "the dialog and the gate must read one host"
+        );
+    }
+
+    /// Keeping the scheme must not move the GATE.
+    ///
+    /// `parse_target` stays the single source of truth for both the allowlist
+    /// and the destination: a host-less URL still resolves to no host, so a
+    /// configured allowlist still refuses it — this change is about what the
+    /// DIALOG reports, not about what the gate permits.
+    #[test]
+    fn a_host_less_remote_is_still_refused_by_a_configured_allowlist() {
+        // The verdict below is computed from the settings passed in, but the
+        // gate is reached all the same, and the policy lock is what keeps that
+        // from racing a test that switches a policy on.
+        let _policy = crate::services::security::test_support::no_policy();
+        let settings = crate::services::security::SecuritySettings {
+            offline_mode: false,
+            remote_allowlist: vec!["github.com".to_string()],
+        };
+        for url in ["file:///srv/git/repo.git", "ssh://"] {
+            assert!(
+                crate::services::security::parse_target(url).is_none(),
+                "{url} must still resolve to no target"
+            );
+            assert!(
+                crate::services::security::check(&settings, Some(url)).is_err(),
+                "{url} must still be refused"
+            );
+        }
+    }
+
+    /// A scheme-carrying URL with no host must not be handed to the ssh probe:
+    /// what stands in for the destination there is the whole unparsed string,
+    /// not a host, so there is nothing to connect to.
+    #[test]
+    fn a_host_less_ssh_url_is_not_probed_over_ssh() {
+        let target = credential_target("ssh://");
+        assert_eq!(target.protocol, "ssh");
+        assert!(
+            !target.resolved,
+            "an unresolved target must not reach the ssh probe"
         );
     }
 
