@@ -207,6 +207,7 @@ import { emit, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   startRepositoryDropListener,
   REPOSITORY_SCAN_OFFER_EVENT,
+  REPOSITORY_SCAN_RESOLVED_EVENT,
 } from './services/window-drop.service.ts';
 
 /**
@@ -1929,6 +1930,7 @@ export class AppShell extends LitElement {
     this.addEventListener('show-commit', this.handleShowCommitEvent);
     window.addEventListener('settings-changed', this.handleSettingsChanged);
     window.addEventListener(REPOSITORY_SCAN_OFFER_EVENT, this.handleRepositoryScanOffer);
+    window.addEventListener(REPOSITORY_SCAN_RESOLVED_EVENT, this.handleRepositoryScanResolved);
     // OS folder drops open repositories from anywhere in the app, not just
     // the welcome screen.
     void this.setupWindowDropListener();
@@ -2104,6 +2106,7 @@ export class AppShell extends LitElement {
     this.removeEventListener('show-commit', this.handleShowCommitEvent);
     window.removeEventListener('settings-changed', this.handleSettingsChanged);
     window.removeEventListener(REPOSITORY_SCAN_OFFER_EVENT, this.handleRepositoryScanOffer);
+    window.removeEventListener(REPOSITORY_SCAN_RESOLVED_EVENT, this.handleRepositoryScanResolved);
     this.dropUnlisten?.();
     this.dropUnlisten = undefined;
     gitService.cleanupRemoteOperationListeners();
@@ -3431,6 +3434,24 @@ export class AppShell extends LitElement {
     this.repositoryScanMode = 'offer';
     this.repositoryScanRequest += 1;
     dialogs.open('repositoryScan');
+  };
+
+  /**
+   * A folder the scan dialog is currently offering to scan or initialize has
+   * just been opened as a repository — the user created or cloned one in it and
+   * dropped it again, which is exactly the flow the re-drop exists for.
+   *
+   * The offer is now false ("This folder is not a Git repository") and its
+   * Initialize action would hand a real repository to `init`, so the dialog
+   * goes. It is closed rather than re-pointed: the drop already produced the
+   * answer the dialog was asking about — a repository tab, plus its
+   * "Opened <name>" toast — and there is nothing left to ask.
+   */
+  private handleRepositoryScanResolved = (e: Event): void => {
+    const path = (e as CustomEvent<{ path?: string }>).detail?.path;
+    if (!path || path !== this.repositoryScanPath) return;
+    if (!dialogs.isOpen('repositoryScan')) return;
+    dialogs.close('repositoryScan');
   };
 
   /**

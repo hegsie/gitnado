@@ -31,6 +31,7 @@ import {
   handleDroppedPaths,
   offerDirectoryScan,
   REPOSITORY_SCAN_OFFER_EVENT,
+  REPOSITORY_SCAN_RESOLVED_EVENT,
 } from '../window-drop.service.ts';
 import { repositoryStore, uiStore } from '../../stores/index.ts';
 
@@ -82,6 +83,14 @@ function toastMessages(): string[] {
   return uiStore.getState().toasts.map((t) => t.message);
 }
 
+/** Collect the paths announced as "this dropped folder IS a repository". */
+function captureResolved(): { paths: string[]; stop: () => void } {
+  const paths: string[] = [];
+  const listener = (e: Event) => paths.push((e as CustomEvent<{ path: string }>).detail.path);
+  window.addEventListener(REPOSITORY_SCAN_RESOLVED_EVENT, listener);
+  return { paths, stop: () => window.removeEventListener(REPOSITORY_SCAN_RESOLVED_EVENT, listener) };
+}
+
 describe('window drop handler', () => {
   beforeEach(() => {
     invokeCallArgs.length = 0;
@@ -127,6 +136,51 @@ describe('window drop handler', () => {
     expect(repositoryStore.getState().openRepositories.length).to.equal(0);
     // The offer dialog IS the feedback; a toast on top of it would be noise.
     expect(uiStore.getState().toasts.length).to.equal(0);
+  });
+
+  it('announces a dropped folder that turned out to be a repository', async () => {
+    // The scan offer for this folder may still be on screen saying it is NOT a
+    // repository — the user was told to create one and did. Nothing else in the
+    // drop tells the shell that the answer to that question has changed.
+    mockClassifications({});
+    const resolved = captureResolved();
+    try {
+      await handleDroppedPaths(['/repos/alpha']);
+    } finally {
+      resolved.stop();
+    }
+
+    expect(resolved.paths).to.deep.equal(['/repos/alpha']);
+  });
+
+  it('announces a re-dropped repository whose tab was merely focused', async () => {
+    // "Already open" is just as much an answer to "is this a repository?" as a
+    // fresh tab is, so the stale offer must go in that case too.
+    mockClassifications({});
+    await handleDroppedPaths(['/repos/alpha']);
+    const resolved = captureResolved();
+    try {
+      const outcome = await handleDroppedPaths(['/repos/alpha']);
+      expect(outcome.alreadyOpen).to.deep.equal(['/repos/alpha']);
+    } finally {
+      resolved.stop();
+    }
+
+    expect(resolved.paths).to.deep.equal(['/repos/alpha']);
+  });
+
+  it('announces nothing for a folder that is still not a repository', async () => {
+    mockClassifications({
+      '/projects': classification('/projects', { isRepository: false }),
+    });
+    const resolved = captureResolved();
+    try {
+      await handleDroppedPaths(['/projects']);
+    } finally {
+      resolved.stop();
+    }
+
+    expect(resolved.paths).to.deep.equal([]);
   });
 
   it('focuses the existing tab instead of opening a repository twice', async () => {

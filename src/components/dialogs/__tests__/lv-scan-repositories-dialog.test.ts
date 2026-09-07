@@ -905,6 +905,39 @@ describe('lv-scan-repositories-dialog', () => {
     );
   });
 
+  it('refuses to initialize a folder the app has since opened as a repository', async () => {
+    // The offer can sit on screen while the folder BECOMES a repository: the
+    // user inits or clones into it and drops it again, and the drop opens it as
+    // a tab. The shell closes this dialog when that happens; initialising must
+    // be refused here too, so the action can never hand a real repository to
+    // `init_repository` in the frame before the close lands.
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    const initPaths: string[] = [];
+    el.addEventListener('initialize-repository', (e) => {
+      initPaths.push((e as CustomEvent<{ path: string }>).detail.path);
+    });
+
+    await openDialog(el, 'offer', '/projects');
+    expect(text(el, '.explanation')).to.contain('not a Git repository');
+
+    repositoryStore.getState().addRepository(mockRepoPayload('/projects') as any);
+    uiStore.setState({ toasts: [] });
+
+    buttonWithText(el, 'Initialize a repository here').click();
+    await el.updateComplete;
+
+    expect(initPaths, 'init must not be asked for a repository that already exists').to.deep.equal(
+      [],
+    );
+    expect(el.open, 'the stale offer closes itself').to.equal(false);
+    expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain(
+      'projects is already a Git repository',
+    );
+  });
+
   it('restates the offer when a folder that is not a repository is dropped again', async () => {
     mockResponses['scan_for_repositories'] = () => scanResult();
     const el = await fixture<LvScanRepositoriesDialog>(

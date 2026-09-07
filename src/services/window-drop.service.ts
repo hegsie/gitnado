@@ -28,6 +28,18 @@ const log = loggers.ui;
  */
 export const REPOSITORY_SCAN_OFFER_EVENT = 'repository-scan-offer';
 
+/**
+ * Window event announcing that a dropped folder IS a repository and has been
+ * opened (or its tab focused). Listened to by `app-shell`.
+ *
+ * The scan offer for that same folder can still be on screen: the offer is the
+ * reason the user went and created or cloned a repository in it, and dropping
+ * it again is how they come back. Without this the app would open the tab
+ * behind a modal that still says "This folder is not a Git repository" and
+ * still offers to initialize one there.
+ */
+export const REPOSITORY_SCAN_RESOLVED_EVENT = 'repository-scan-resolved';
+
 export interface DroppedPathsOutcome {
   /** Repositories opened as new tabs. */
   opened: string[];
@@ -63,6 +75,13 @@ function baseName(path: string): string {
 export function offerDirectoryScan(path: string): void {
   window.dispatchEvent(
     new CustomEvent<{ path: string }>(REPOSITORY_SCAN_OFFER_EVENT, { detail: { path } }),
+  );
+}
+
+/** Tell the shell that `path` resolved to a repository after all. */
+function reportResolvedRepository(path: string): void {
+  window.dispatchEvent(
+    new CustomEvent<{ path: string }>(REPOSITORY_SCAN_RESOLVED_EVENT, { detail: { path } }),
   );
 }
 
@@ -135,8 +154,12 @@ async function classifyAndOpen(
     const result = await openRepositoryPath(path);
     if (result.status === 'opened') {
       outcome.opened.push(path);
+      reportResolvedRepository(path);
     } else if (result.status === 'already-open') {
+      // Focusing an existing tab answers "is this a repository?" just as much
+      // as opening a new one does, so a stale offer for it must go too.
       outcome.alreadyOpen.push(path);
+      reportResolvedRepository(path);
     } else {
       outcome.failures.push({ path, message: result.message ?? 'Failed to open repository' });
     }

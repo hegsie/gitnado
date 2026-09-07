@@ -534,13 +534,28 @@ export class LvScanRepositoriesDialog extends LitElement {
   }
 
   private handleInitialize(): void {
+    const path = this.displayedPath;
+    // The folder can become a repository while this offer sits on screen: that
+    // is what the offer asks for, and dropping it again opens it as a tab. The
+    // shell closes this dialog when that happens; refusing here as well means
+    // the action can never hand a real repository to `init` — not even in the
+    // frame between the drop resolving and the close landing.
+    const alreadyOpen = repositoryStore
+      .getState()
+      .openRepositories.some((repo) => repo.repository.path === path);
+    if (alreadyOpen) {
+      showToast(`${folderName(path)} is already a Git repository`, 'info');
+      this.close();
+      return;
+    }
+
     // The init dialog lives in the shell (or on the welcome screen); it owns
     // the branch-name settings and the error handling for init.
     this.dispatchEvent(
       new CustomEvent<{ path: string }>('initialize-repository', {
         // The empty-results screen names `result.root`, so initialise THAT and
         // never a path the user cannot see.
-        detail: { path: this.displayedPath },
+        detail: { path },
         bubbles: true,
         composed: true,
       }),
