@@ -149,6 +149,30 @@ describe('the submodule hosts the gate has to check', () => {
     ).to.equal(true);
   });
 
+  it('does not refuse an update the backend and git both allow', async () => {
+    // The mirror of the case above, and the one that made the two halves of
+    // this gate judge different urls. `get_submodules` reports the url git
+    // will really use — `submodule.<name>.url` from the repository config,
+    // falling back to `.gitmodules` when nothing is registered — which is what
+    // the backend guards too. It used to report the `.gitmodules` snapshot
+    // alone, so with upstream having moved a submodule (`.gitmodules` on
+    // newhost.example, the config still on github.com — exactly what `git
+    // submodule sync` exists to repair) git cloned from github.com, the
+    // backend allowed it, and this half refused it with a red toast naming a
+    // host the operation never contacts and no way to proceed.
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: 'https://github.com/x/dep.git' }]);
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success, 'git would clone from the allowlisted config url').to.not.equal(false);
+    expect(reachedUpdate(), 'the update must reach the backend').to.equal(true);
+    expect(
+      uiStore.getState().toasts.filter((t) => t.type === 'error'),
+      'nothing to refuse, so nothing to toast',
+    ).to.deep.equal([]);
+  });
+
   it('allows an update whose submodules are all on the allowlist', async () => {
     mockRepo([{ name: 'dep', path: 'vendor/dep', url: 'https://github.com/x/y.git' }]);
     settingsStore.setState({ remoteAllowlist: ['github.com'] });
