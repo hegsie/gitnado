@@ -488,7 +488,14 @@ describe('lv-scan-repositories-dialog', () => {
     );
   });
 
-  it('initializes the folder it is showing after being re-targeted', async () => {
+  /**
+   * This pins the RE-TARGET, not the choice `displayedPath` makes: the backend
+   * echoes the root it was given, and a change of `scanPath` clears `result`,
+   * so `result.root` and `scanPath` cannot disagree — nothing here could tell
+   * `displayedPath` apart from a bare `this.scanPath`. What it does catch is
+   * init acting on the folder the user has moved on from.
+   */
+  it('initializes the folder that replaced the one it was showing', async () => {
     mockResponses['scan_for_repositories'] = (args) =>
       scanResult({ root: args.path as string, repositories: [], scannedDirectories: 3 });
     const el = await fixture<LvScanRepositoriesDialog>(

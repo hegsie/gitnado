@@ -487,7 +487,15 @@ export class LvScanRepositoriesDialog extends LitElement {
     }
   }
 
-  /** The folder the dialog currently names on screen. */
+  /**
+   * The folder the dialog currently names on screen.
+   *
+   * Defensive rather than load-bearing today: the backend echoes back the root
+   * it was given and a change of `scanPath` clears `result`, so the two cannot
+   * disagree. It stays because the screen reads `result.root`, and a backend
+   * that ever normalised the path (a symlink, a trailing slash) would make them
+   * differ — and init must act on what the user can see.
+   */
   private get displayedPath(): string {
     return this.phase === 'results' ? (this.result?.root ?? this.scanPath) : this.scanPath;
   }
