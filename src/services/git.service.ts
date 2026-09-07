@@ -4027,10 +4027,18 @@ export async function testCredentials(
   if (!await checkNetworkPermission('test credentials', path, remoteUrl, remoteUrl)) {
     return blockedResult();
   }
-  return invokeCommand<CredentialTestResult>("test_credentials", {
-    path,
-    remoteUrl,
-  });
+  // The backend guards this one too, and the two allowlists can disagree —
+  // `security-sync.service.ts` warns about exactly that state. Without this
+  // the backend's `NetworkBlocked` reached the dialog as a bare `BLOCKED`,
+  // which every dialog suppresses on the understanding that the gate has
+  // already explained itself: the button flipped to "Testing...", flipped
+  // back, and the user was told nothing at all. Its siblings all wrap.
+  return surfaceBackendRefusal(
+    await invokeCommand<CredentialTestResult>("test_credentials", {
+      path,
+      remoteUrl,
+    }),
+  );
 }
 
 export async function eraseCredentials(

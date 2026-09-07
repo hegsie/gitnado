@@ -23,6 +23,12 @@ let mockHelpers: CredentialHelper[] = [];
 let unsetFailure: { message: string } | null = null;
 let mockRemotes: Remote[] = [];
 let mockTestResult: CredentialTestResult | null = null;
+/**
+ * When set, `test_credentials` rejects with it — the shape a Rust
+ * `GitnadoError` arrives in. A `NetworkBlocked` from the BACKEND gate comes
+ * through as `code: 'BLOCKED'` with nothing having toasted it.
+ */
+let testCredentialsFailure: { code: string; message: string } | null = null;
 
 /** Does this `unset_credential_helper` call target `mockHelpers[0]`'s file? */
 function aimedAtHelperFile(args: unknown): boolean {
@@ -43,6 +49,7 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
     case 'get_remotes':
       return mockRemotes;
     case 'test_credentials':
+      if (testCredentialsFailure) throw testCredentialsFailure;
       return mockTestResult;
     case 'erase_credentials':
       return null;
@@ -68,6 +75,8 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
 // Import the component AFTER setting up the mock
 import '../lv-credentials-dialog.ts';
 import type { LvCredentialsDialog } from '../lv-credentials-dialog.ts';
+import { uiStore } from '../../../stores/ui.store.ts';
+import { settingsStore } from '../../../stores/settings.store.ts';
 
 function urlHelper(configScope: string): CredentialHelper {
   return {
@@ -231,6 +240,14 @@ describe('lv-credentials-dialog credential test result', () => {
     mockHelpers = [];
     mockRemotes = [remote('deploy@git.example.test:team/app.git')];
     mockTestResult = null;
+    testCredentialsFailure = null;
+    uiStore.setState({ toasts: [] });
+  });
+
+  afterEach(() => {
+    testCredentialsFailure = null;
+    uiStore.setState({ toasts: [] });
+    settingsStore.setState({ offlineMode: false });
   });
 
   it('offers to erase the credential an HTTPS remote actually stores', async () => {
@@ -390,6 +407,51 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
     expect(el.shadowRoot!.querySelector('.test-result-header')!.className).to.match(/\berror\b/);
     expect(offersErase(el), 'nothing to erase when nothing was found').to.be.false;
+  });
+
+  it('tells the user when the BACKEND gate refuses the test', async () => {
+    // `test_credentials` guards on the Rust side too — deliberately, because
+    // `git credential fill` is not reliably local. When the two allowlists
+    // diverge (security-sync.service warns about exactly that state) the
+    // frontend gate lets the test through and the backend refuses it: the
+    // button flipped to "Testing...", flipped back, and NOTHING appeared. Its
+    // siblings — deepen, unshallow, push tag, LFS — all surface that refusal.
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    testCredentialsFailure = {
+      code: 'BLOCKED',
+      message: 'Remote "https://git.example.test/team/app.git" is not in your allowlist',
+    };
+    const el = await openTestTab();
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.form-actions .btn-primary')!.click();
+    await waitFor(() => uiStore.getState().toasts.length > 0);
+    await el.updateComplete;
+
+    const toasts = uiStore.getState().toasts;
+    expect(toasts.some((t) => t.message.includes('not in your allowlist'))).to.be.true;
+    expect(toasts.some((t) => t.type === 'error')).to.be.true;
+    // Exactly ONE explanation: the dialog stays quiet on a BLOCKED result
+    // because the gate accounts for it, so an inline banner here would say the
+    // same thing twice.
+    expect(el.shadowRoot!.querySelector('.error-banner'), 'said once, not twice').to.equal(null);
+    expect(el.shadowRoot!.querySelector('.test-result'), 'no result to show').to.equal(null);
+  });
+
+  it('explains a FRONTEND refusal exactly once', async () => {
+    // The other half of the same seam: the frontend gate toasts its own reason
+    // and the dialog stays quiet on the `BLOCKED` it returns. Surfacing the
+    // backend's refusal must not turn that into two toasts, or a toast plus an
+    // inline banner saying the same thing.
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    settingsStore.setState({ offlineMode: true });
+    const el = await openTestTab();
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.form-actions .btn-primary')!.click();
+    await waitFor(() => uiStore.getState().toasts.length > 0);
+    await el.updateComplete;
+
+    expect(uiStore.getState().toasts.length, 'said once, not twice').to.equal(1);
+    expect(uiStore.getState().toasts[0].message).to.include('Offline mode');
+    expect(el.shadowRoot!.querySelector('.error-banner')).to.equal(null);
+    expect(invokeCalls.some((c) => c.command === 'test_credentials')).to.be.false;
   });
 
   it('says the password is missing when the username was found', async () => {

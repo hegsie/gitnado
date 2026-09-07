@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
 import {
   findCommand,
+  injectCommandError,
   injectCommandMock,
   openViaCommandPalette,
   startCommandCaptureWithMocks,
@@ -126,6 +127,13 @@ test.describe('Credentials Dialog - testing a remote', () => {
   test.beforeEach(async ({ page }) => {
     await setupOpenRepository(page);
   });
+
+  /** Open the tab and select the remote, without pressing Test. */
+  async function openTestTabAndSelect(page: import('@playwright/test').Page): Promise<void> {
+    await openCredentialsDialog(page);
+    await page.locator('lv-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
+    await expect(page.locator('lv-credentials-dialog .remote-item')).toHaveCount(1);
+  }
 
   async function openTestTab(page: import('@playwright/test').Page): Promise<void> {
     await openCredentialsDialog(page);
@@ -323,6 +331,35 @@ test.describe('Credentials Dialog - testing a remote', () => {
     const result = page.locator('lv-credentials-dialog .test-result');
     await expect(result).toContainText('No Credentials Found');
     await expect(result).toHaveClass(/\berror\b/);
+  });
+
+  test('a backend-only refusal is not swallowed in silence', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'https://git.example.test/team/app.git', pushUrl: null },
+      ],
+    });
+    // The backend guards `test_credentials` too, and the two allowlists can
+    // diverge. With nothing surfacing that refusal the button flipped to
+    // "Testing...", flipped back, and NOTHING appeared — no panel, no inline
+    // error, no toast — while Fetch and Deepen both toast under the same state.
+    await injectCommandError(
+      page,
+      'test_credentials',
+      'Remote "https://git.example.test/team/app.git" is not in your allowlist',
+      'BLOCKED'
+    );
+    await openTestTabAndSelect(page);
+    await page.locator('lv-credentials-dialog .form-actions .btn-primary').click();
+
+    await expect(page.locator('.toast.error').first()).toContainText('not in your allowlist');
+    // Said once: the dialog stays quiet on a BLOCKED result precisely because
+    // the gate accounts for it, so an inline banner would repeat the toast.
+    await expect(page.locator('lv-credentials-dialog .error-banner')).toHaveCount(0);
+    await expect(page.locator('lv-credentials-dialog .test-result')).toHaveCount(0);
   });
 
   test('a username with no password is not reported as no credentials at all', async ({ page }) => {
