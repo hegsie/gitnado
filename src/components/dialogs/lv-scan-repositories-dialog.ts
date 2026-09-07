@@ -249,6 +249,16 @@ export class LvScanRepositoriesDialog extends LitElement {
    */
   @property({ type: String }) mode: 'scan' | 'offer' = 'scan';
 
+  /**
+   * Bumped by the shell for every request to show this dialog.
+   *
+   * Dropping the SAME folder again while the dialog is open changes neither
+   * `scanPath` nor `mode`, and `open` is already true, so nothing else here can
+   * tell that the drop happened — and the drop said nothing at all, the one
+   * drop outcome in the app that was silent.
+   */
+  @property({ type: Number }) requestId = 0;
+
   @state() private phase: ScanPhase = 'offer';
   @state() private progress: RepositoryScanProgress | null = null;
   @state() private result: RepositoryScanResult | null = null;
@@ -276,6 +286,13 @@ export class LvScanRepositoriesDialog extends LitElement {
   private cancelRequested = false;
   /** True once the scan command has actually been sent to the backend. */
   private scanIssued = false;
+  /**
+   * What the last `activate()` pointed the dialog at, so a re-drop of the same
+   * folder can be told apart from a drop of a different one and reported for
+   * what it is.
+   */
+  private activatedPath: string | null = null;
+  private activatedMode: 'scan' | 'offer' | null = null;
 
   updated(changed: PropertyValues): void {
     // An OS folder drop is not blocked by an in-page modal, so a second folder
@@ -285,7 +302,9 @@ export class LvScanRepositoriesDialog extends LitElement {
     // `open` would leave the user looking at the FIRST folder while every
     // action here (Initialize, the re-scan) silently used the second one.
     const retargeted =
-      this.open && !changed.has('open') && (changed.has('scanPath') || changed.has('mode'));
+      this.open &&
+      !changed.has('open') &&
+      (changed.has('scanPath') || changed.has('mode') || changed.has('requestId'));
     if (!changed.has('open') && !retargeted) return;
 
     if (this.open) {
@@ -313,6 +332,17 @@ export class LvScanRepositoriesDialog extends LitElement {
   /** Point the dialog at `scanPath`, whether it just opened or was re-targeted. */
   private async activate(retargeted: boolean): Promise<void> {
     const cancelInFlight = retargeted && this.phase === 'scanning' && this.scanIssued;
+    // The same folder dropped a second time. Re-scanning it is what the user is
+    // asking for — they have just created, cloned or moved something in it, and
+    // a re-drop is the only way to refresh results from inside the dialog. The
+    // untouched offer step is the exception: it is a question the user has not
+    // answered yet, so re-asking it (and saying why) beats scanning behind their
+    // back.
+    const sameFolder =
+      retargeted && this.scanPath === this.activatedPath && this.mode === this.activatedMode;
+    const rescanSameFolder = sameFolder && this.phase !== 'offer';
+    this.activatedPath = this.scanPath;
+    this.activatedMode = this.mode;
     this.abortScan();
     const token = this.scanToken;
 
@@ -322,14 +352,9 @@ export class LvScanRepositoriesDialog extends LitElement {
       .openRepositories.map((repo) => repo.repository.path);
 
     if (retargeted) {
-      // The dialog was already on screen showing another folder: say what just
-      // replaced it, or the drop looks like it did nothing.
-      showToast(
-        this.mode === 'scan'
-          ? `Now scanning ${folderName(this.scanPath)}`
-          : `Now showing ${folderName(this.scanPath)}`,
-        'info',
-      );
+      // The dialog was already on screen: say what the drop just did, or it
+      // looks like it did nothing.
+      showToast(this.retargetMessage(sameFolder, rescanSameFolder), 'info');
     }
 
     if (cancelInFlight) {
@@ -341,9 +366,19 @@ export class LvScanRepositoriesDialog extends LitElement {
       if (token !== this.scanToken) return;
     }
 
-    if (this.mode === 'scan' && this.scanPath) {
+    if ((this.mode === 'scan' || rescanSameFolder) && this.scanPath) {
       void this.startScan();
     }
+  }
+
+  /** What a drop onto the already-open dialog just did. */
+  private retargetMessage(sameFolder: boolean, rescanSameFolder: boolean): string {
+    const name = folderName(this.scanPath);
+    if (rescanSameFolder) return `Rescanning ${name}`;
+    // Re-dropped onto its own unanswered offer: nothing changed, so say why the
+    // same question is still on screen rather than leaving the drop unexplained.
+    if (sameFolder) return `${name} is still not a Git repository`;
+    return this.mode === 'scan' ? `Now scanning ${name}` : `Now showing ${name}`;
   }
 
   disconnectedCallback(): void {

@@ -599,6 +599,105 @@ describe('lv-scan-repositories-dialog', () => {
     await waitUntil(() => closed === 1, 'the dialog closes once the open finishes');
   });
 
+  /**
+   * Dropping the SAME folder again changes neither `scanPath` nor `mode`, and
+   * the dialog is already open, so the only thing that says the drop happened
+   * is the shell's request counter. Without it the drop was completely silent —
+   * the one drop outcome in the app that said nothing at all.
+   */
+  it('rescans and says so when the same folder is dropped again', async () => {
+    mockResponses['scan_for_repositories'] = (args) => scanResult({ root: args.path as string });
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the first results list');
+    uiStore.setState({ toasts: [] });
+
+    el.requestId = 1;
+    await el.updateComplete;
+
+    await waitUntil(
+      () => invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').length === 2,
+      'the folder to be scanned again',
+    );
+    expect(
+      invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').map((c) => c.args.path),
+    ).to.deep.equal(['/code', '/code']);
+    expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain(
+      'Rescanning code',
+    );
+  });
+
+  it('restates the offer when a folder that is not a repository is dropped again', async () => {
+    mockResponses['scan_for_repositories'] = () => scanResult();
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    await openDialog(el, 'offer', '/projects');
+    expect(text(el, '.explanation')).to.contain('not a Git repository');
+    uiStore.setState({ toasts: [] });
+
+    el.requestId = 1;
+    await el.updateComplete;
+    await aTimeout(0);
+
+    // Nothing was scanned: the offer is what the user has to answer.
+    expect(invokeCallArgs.some((c) => c.command === 'scan_for_repositories')).to.equal(false);
+    expect(query(el, '.offer-actions'), 'still on the offer').to.not.equal(null);
+    expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain(
+      'projects is still not a Git repository',
+    );
+  });
+
+  it('rescans a dropped folder that has already been scanned once', async () => {
+    mockResponses['scan_for_repositories'] = (args) => scanResult({ root: args.path as string });
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    await openDialog(el, 'offer', '/projects');
+    buttonWithText(el, 'Scan it for repositories').click();
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the first results list');
+    uiStore.setState({ toasts: [] });
+
+    // Re-dropping a folder whose results are on screen means "look again" —
+    // the user has just created (or cloned) something in it.
+    el.requestId = 1;
+    await el.updateComplete;
+
+    await waitUntil(
+      () => invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').length === 2,
+      'the folder to be scanned again',
+    );
+    expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain(
+      'Rescanning projects',
+    );
+  });
+
+  it('recovers from a failed scan when the folder is dropped again', async () => {
+    let attempts = 0;
+    mockResponses['scan_for_repositories'] = (args) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('/code no longer exists');
+      return scanResult({ root: args.path as string });
+    };
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => query(el, '.error-message') !== null, 'the scan error');
+
+    el.requestId = 1;
+    await el.updateComplete;
+
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the retry results');
+    expect(query(el, '.error-message'), 'the error is cleared').to.equal(null);
+  });
+
   it('asks the backend to stop a scan the user closed', async () => {
     mockResponses['scan_for_repositories'] = () => new Promise(() => {});
     mockResponses['cancel_repository_scan'] = () => null;

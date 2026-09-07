@@ -842,6 +842,12 @@ export class AppShell extends LitElement {
   /** Folder the scan dialog was opened for, and which of its two modes. */
   @state() private repositoryScanPath = '';
   @state() private repositoryScanMode: 'scan' | 'offer' = 'scan';
+  /**
+   * Bumped for every request to show the scan dialog. Dropping the SAME folder
+   * onto an open dialog changes neither of the two properties above, so without
+   * this the dialog could not tell the drop happened and said nothing at all.
+   */
+  @state() private repositoryScanRequest = 0;
   /** True while an OS drag is over the window, so whichever screen is up —
    *  the welcome screen or an open repository — can show its drop
    *  affordance. The drop is accepted in both states. */
@@ -3409,6 +3415,7 @@ export class AppShell extends LitElement {
     if (!detail?.path) return;
     this.repositoryScanPath = detail.path;
     this.repositoryScanMode = detail.mode ?? 'scan';
+    this.repositoryScanRequest += 1;
     dialogs.open('repositoryScan');
   };
 
@@ -3422,6 +3429,7 @@ export class AppShell extends LitElement {
     if (!detail?.path) return;
     this.repositoryScanPath = detail.path;
     this.repositoryScanMode = 'offer';
+    this.repositoryScanRequest += 1;
     dialogs.open('repositoryScan');
   };
 
@@ -6581,6 +6589,7 @@ export class AppShell extends LitElement {
         ?open=${dialogs.isOpen('repositoryScan')}
         .scanPath=${this.repositoryScanPath}
         .mode=${this.repositoryScanMode}
+        .requestId=${this.repositoryScanRequest}
         @close=${() => { dialogs.close('repositoryScan'); }}
         @initialize-repository=${this.handleInitializeRepositoryRequest}
       ></lv-scan-repositories-dialog>

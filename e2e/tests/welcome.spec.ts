@@ -1068,6 +1068,37 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     );
   });
 
+  test('rescans and says so when the same folder is dropped again', async ({ page }) => {
+    await startCommandCaptureWithMocks(page, {
+      classify_repository_path: {
+        path: '/projects',
+        name: 'projects',
+        exists: true,
+        isDirectory: true,
+        isRepository: false,
+        isBare: false,
+      },
+      scan_for_repositories: scanResultPayload({ root: '/projects' }),
+    });
+
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
+    const dialog = page.locator('lv-scan-repositories-dialog');
+    await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
+    await dialog.getByRole('button', { name: 'Scan it for repositories' }).click();
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+
+    // The SAME folder again: the path, the mode and the open state are all
+    // unchanged, so this drop used to reach a dialog that could not tell it had
+    // happened — no toast, no rescan, nothing.
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
+
+    await expect(page.locator('.toast')).toContainText('Rescanning projects');
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+    await expect
+      .poll(async () => (await findCommand(page, 'scan_for_repositories')).length)
+      .toBe(2);
+  });
+
   test('offers to initialize a dropped folder that is not a repository', async ({ page }) => {
     await injectCommandMock(page, {
       classify_repository_path: {
