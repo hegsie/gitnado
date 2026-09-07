@@ -756,17 +756,37 @@ export async function getCloneFilterInfo(
   return invokeCommand<CloneFilterInfo>("get_clone_filter_info", { path });
 }
 
+/**
+ * `git fetch --deepen` is a fetch: it contacts the remote for the history the
+ * shallow clone left behind. It named no remote and had no frontend gate at
+ * all, so offline mode let it go straight out; the backend `guard_remote` was
+ * the only thing standing in front of it, and a backend-only refusal is one
+ * the user is never shown a reason for. Neither names a remote, so the gate
+ * resolves the one git itself would fetch from.
+ */
 export async function deepenRepository(
   path: string,
   depth: number,
 ): Promise<CommandResult<void>> {
-  return invokeCommand<void>("deepen_repository", { path, depth });
+  if (!await checkNetworkPermission('deepen', path)) {
+    return blockedResult();
+  }
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("deepen_repository", { path, depth }),
+  );
 }
 
+/** `git fetch --unshallow`, the whole history in one request. Gated exactly
+ * like {@link deepenRepository}. */
 export async function unshallowRepository(
   path: string,
 ): Promise<CommandResult<void>> {
-  return invokeCommand<void>("unshallow_repository", { path });
+  if (!await checkNetworkPermission('unshallow', path)) {
+    return blockedResult();
+  }
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("unshallow_repository", { path }),
+  );
 }
 
 export async function listTrackedFiles(
@@ -3955,10 +3975,21 @@ export async function getAvailableHelpers(): Promise<
   return invokeCommand<AvailableHelper[]>("get_available_helpers", {});
 }
 
+/**
+ * Testing an SSH remote's credentials runs `ssh -T git@host`, which opens a
+ * real connection to that host — the same handshake `test_ssh_connection`
+ * already gates. This one had no gate on either side, so offline mode let it
+ * out. The remote's own URL is the destination, so it is what the allowlist
+ * judges; the HTTPS branch only reads a credential helper, and refusing that
+ * under a configured policy is the fail-closed side to err on.
+ */
 export async function testCredentials(
   path: string,
   remoteUrl: string,
 ): Promise<CommandResult<CredentialTestResult>> {
+  if (!await checkNetworkPermission('test credentials', path, remoteUrl)) {
+    return blockedResult();
+  }
   return invokeCommand<CredentialTestResult>("test_credentials", {
     path,
     remoteUrl,

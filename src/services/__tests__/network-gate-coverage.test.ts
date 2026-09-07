@@ -74,6 +74,12 @@ const NETWORK_COMMANDS = new Set([
   'push_to_multiple_remotes', 'fetch_all_remotes', 'add_submodule',
   'update_submodules', 'lfs_pull', 'lfs_fetch',
   'prune_remote_tracking_branches', 'start_auto_fetch',
+  // `deepen_repository` and `unshallow_repository` both shell out to
+  // `git fetch` (`--deepen` / `--unshallow`); `test_credentials` opens an
+  // `ssh -T` session to the remote's host when the remote is an SSH one. All
+  // three were absent from this list, so the sweep called them, they invoked,
+  // and it stayed green - this file's own documented failure mode.
+  'deepen_repository', 'unshallow_repository', 'test_credentials',
   // hosting-provider APIs
   'check_ado_connection', 'check_github_connection', 'check_gitlab_connection',
   'create_ado_pull_request', 'create_azure_devops_work_item',
@@ -467,6 +473,11 @@ describe('network gate coverage', () => {
       'list_github_app_installations',
       'check_for_update',
       'download_and_install_update',
+      // The shallow-clone fetches and the SSH credential test, ungated on the
+      // frontend until they were classified above.
+      'deepen_repository',
+      'unshallow_repository',
+      'test_credentials',
     ]) {
       expect(reached.has(command), `the sweep reaches ${command} when nothing blocks it`).to.equal(
         true,

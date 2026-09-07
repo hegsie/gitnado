@@ -572,7 +572,9 @@ export class LvCredentialsDialog extends LitElement {
 
       if (result.success && result.data) {
         this.testResult = result.data;
-      } else {
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        // A gate refusal has already been toasted with its own reason;
+        // repeating it inline would say the same thing twice.
         this.error = result.error?.message || 'Failed to test credentials';
       }
     } catch (e) {
