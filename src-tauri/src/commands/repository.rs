@@ -1154,28 +1154,22 @@ mod tests {
     ///
     /// The sink is process-wide and installed once, so this captures the runs
     /// of every test in the binary; a test picks its own out by destination.
-    fn captured_git_runs() -> &'static std::sync::Mutex<Vec<crate::utils::GitCommandLog>> {
-        static CAPTURED: std::sync::Mutex<Vec<crate::utils::GitCommandLog>> =
-            std::sync::Mutex::new(Vec::new());
-        static INSTALL: std::sync::Once = std::sync::Once::new();
-        INSTALL.call_once(|| {
-            crate::utils::set_git_command_log_sink(|entry| {
-                CAPTURED
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(entry);
-            });
-        });
-        &CAPTURED
+    /// The reporting sink is a process-wide `OnceLock`, so a test module that
+    /// installs its OWN recorder races every other module that does: whichever
+    /// installs first owns the sink and the losers observe nothing. That is not
+    /// hypothetical — a positive test here silently recorded zero runs while a
+    /// negative test elsewhere passed for the wrong reason. Both sides now
+    /// share the one recorder in `utils::command::test_sink`.
+    fn captured_git_runs() {
+        crate::utils::test_sink::install();
     }
 
+    /// The runs whose command line names `needle` — a per-test temp path, so
+    /// concurrent tests sharing the recorder do not see each other's runs.
     fn runs_naming(needle: &str) -> Vec<crate::utils::GitCommandLog> {
-        captured_git_runs()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
+        crate::utils::test_sink::recorded()
+            .into_iter()
             .filter(|entry| entry.command.contains(needle))
-            .cloned()
             .collect()
     }
 
