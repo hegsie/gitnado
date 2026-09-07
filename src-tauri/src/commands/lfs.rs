@@ -362,8 +362,31 @@ fn build_lfs_command(
     args: &[&str],
     token: Option<&str>,
 ) -> crate::utils::GitCommand {
+    build_lfs_command_in(repo_path, None, args, token)
+}
+
+/// [`build_lfs_command`] for a run that must happen in a subdirectory of the
+/// repository.
+///
+/// `subdir` becomes `git -C <subdir>` rather than the process's working
+/// directory, because the working directory is what the Output panel files the
+/// row under: a run made from `<repo>/<subdir>` is attributed to a path no
+/// panel renders (`lv-output-panel` keeps only rows whose repository is the
+/// open one), so the user is left with the generic IPC row and never sees the
+/// invocation. `-C` is a global option applied before git reads anything, so
+/// the run itself is unchanged and the rendered line stays honest.
+fn build_lfs_command_in(
+    repo_path: &Path,
+    subdir: Option<&str>,
+    args: &[&str],
+    token: Option<&str>,
+) -> crate::utils::GitCommand {
     let mut cmd = create_command("git");
-    cmd.current_dir(repo_path).arg("lfs").args(args);
+    cmd.current_dir(repo_path);
+    if let Some(subdir) = subdir.filter(|value| !value.is_empty()) {
+        cmd.arg("-C").arg(subdir);
+    }
+    cmd.arg("lfs").args(args);
 
     if let Some(token_value) = token {
         if let Some(remote_url) = lfs_remote_url(repo_path) {
@@ -379,13 +402,23 @@ fn run_lfs_command(repo_path: &Path, args: &[&str]) -> Result<String> {
     run_lfs_command_with_token(repo_path, args, None)
 }
 
+/// [`run_lfs_command`] for a run that belongs in a subdirectory. See
+/// [`build_lfs_command_in`] for why this is `-C` and not a working directory.
+fn run_lfs_command_in(repo_path: &Path, subdir: &str, args: &[&str]) -> Result<String> {
+    finish_lfs_command(build_lfs_command_in(repo_path, Some(subdir), args, None))
+}
+
 /// Helper to run git-lfs commands against an authenticated remote
 fn run_lfs_command_with_token(
     repo_path: &Path,
     args: &[&str],
     token: Option<&str>,
 ) -> Result<String> {
-    let output = build_lfs_command(repo_path, args, token)
+    finish_lfs_command(build_lfs_command(repo_path, args, token))
+}
+
+fn finish_lfs_command(mut command: crate::utils::GitCommand) -> Result<String> {
+    let output = command
         .output()
         .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git-lfs: {}", e)))?;
 
@@ -698,13 +731,9 @@ pub async fn lfs_untrack(path: String, pattern: String) -> Result<()> {
         .and_then(|output| resolve_untrack_target(&output, &pattern))
         .unwrap_or_else(|| (String::new(), pattern.clone()));
 
-    let work_dir = if dir.is_empty() {
-        repo_path.to_path_buf()
-    } else {
-        repo_path.join(&dir)
-    };
-
-    run_lfs_command(&work_dir, &["untrack", &raw])?;
+    // `-C <dir>`, not a working directory below the repository: the row has to
+    // be filed under the repository the user has open or the panel drops it.
+    run_lfs_command_in(repo_path, &dir, &["untrack", &raw])?;
 
     // `git lfs untrack` rewrites the attributes file in its working directory
     // and exits 0 even when it matched nothing, so a success here is not proof
@@ -1780,6 +1809,65 @@ mod tests {
                 .any(|entry| entry.command == "git lfs track *.psd"),
             "the write was not reported: {:?}",
             reported
+        );
+    }
+
+    #[test]
+    fn a_nested_untrack_is_reported_against_the_repository_the_user_has_open() {
+        // The rule lives in `assets/.gitattributes`, so the removal has to
+        // happen there. Running it FROM that directory filed the row under
+        // `<repo>/assets`, and `lv-output-panel` renders only rows whose
+        // repository is the open one — so the invocation that rewrote the
+        // user's `.gitattributes` appeared in no panel at all, and the pending
+        // operation could not claim it either (the repository axis is compared
+        // before the subcommand). Same defect as the nested submodule update.
+        //
+        // This drives the helper rather than `lfs_untrack`, on purpose: git-lfs
+        // is not installed in CI, so `git lfs track` fails there, the target
+        // resolves to the repository root, and a test that went through the
+        // command would never reach the nested path at all — it would pass
+        // whether or not the defect was fixed.
+        crate::utils::test_sink::install();
+        let repo = TestRepo::with_initial_commit();
+
+        let _ = run_lfs_command_in(&repo.path, "assets", &["untrack", "*.psd"]);
+
+        let root = repo.path_str();
+        let nested = format!("{root}/assets");
+        let recorded = crate::utils::test_sink::recorded();
+        assert!(
+            !recorded
+                .iter()
+                .any(|entry| entry.repo_path.as_deref() == Some(nested.as_str())),
+            "no row may be filed under the subdirectory: {recorded:?}"
+        );
+        let ours: Vec<_> = crate::utils::test_sink::recorded_for(&root)
+            .into_iter()
+            .filter(|entry| entry.command.contains("untrack"))
+            .collect();
+        assert_eq!(
+            ours.len(),
+            1,
+            "the untrack must be reported once, against the open repository: {ours:?}"
+        );
+        assert!(
+            ours[0].command.contains("-C assets"),
+            "the rendered line must still say which directory it rewrote: {}",
+            ours[0].command
+        );
+    }
+
+    #[test]
+    fn a_pattern_declared_in_a_subdirectory_resolves_to_that_subdirectory() {
+        // The other half of the same behaviour: the dispatch that decides a
+        // nested untrack is nested at all.
+        assert_eq!(
+            resolve_untrack_target("    *.psd (assets/.gitattributes)", "*.psd"),
+            Some(("assets".to_string(), "*.psd".to_string()))
+        );
+        assert_eq!(
+            resolve_untrack_target("    *.psd (.gitattributes)", "*.psd"),
+            Some((String::new(), "*.psd".to_string()))
         );
     }
 
