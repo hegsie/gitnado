@@ -28,6 +28,7 @@ const mockListen = (): Promise<() => void> => {
 };
 
 import { progressService, withProgress } from '../progress.service.ts';
+import { clearLogEntries, getLogEntries } from '../output-log.service.ts';
 
 describe('progress.service', () => {
   beforeEach(() => {
@@ -85,6 +86,19 @@ describe('progress.service', () => {
   });
 
   describe('cancelOperation', () => {
+    it('a Cancel click adds no row to the output panel', () => {
+      // The fetch/pull/push being cancelled already has its row; the cancel
+      // itself carries no repo path, so before it was skipped every click
+      // left a bare `cancel_operation` row in EVERY repository's panel.
+      clearLogEntries();
+      const id = progressService.startOperation('fetch', 'Fetching...', { cancellable: true });
+
+      progressService.cancelOperation(id);
+
+      expect(invokeCallArgs.some((c) => c.command === 'cancel_operation')).to.be.true;
+      expect(getLogEntries().length).to.equal(0);
+    });
+
     it('should invoke cancel_operation via invokeCommand', () => {
       const id = progressService.startOperation('fetch', 'Fetching...', { cancellable: true });
 

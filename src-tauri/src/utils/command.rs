@@ -3,12 +3,24 @@
 //! This module provides helpers to create commands that don't show
 //! console windows on Windows.
 //!
-//! Every `git` subprocess in the app goes through [`create_command`], which
-//! hands back a [`GitCommand`] rather than a bare [`Command`]. That wrapper is
-//! what lets the Output panel show the real `git` invocation together with its
-//! stdout/stderr: it times the run and reports it to the sink `lib.rs`
-//! installs. Because the wrapper owns `output()`/`status()`, a NEW shell-out is
-//! reported automatically — nothing has to be added to a hand-kept list.
+//! Every `git` subprocess that performs a USER OPERATION goes through
+//! [`create_command`], which hands back a [`GitCommand`] rather than a bare
+//! [`Command`]. That wrapper is what lets the Output panel show the real `git`
+//! invocation together with its stdout/stderr: it times the run and reports it
+//! to the sink `lib.rs` installs. Because the wrapper owns
+//! `output()`/`status()`, a NEW shell-out is reported automatically — nothing
+//! has to be added to a hand-kept list.
+//!
+//! The invariant is deliberately narrower than "every git subprocess". A
+//! handful of pure READS still spawn a bare `Command` — `git describe`, the
+//! `git log`/`git grep` behind the search panes, `git ls-files`, the AI
+//! helpers' `git reflog`/`git log`/`git diff --stat`, and the throwaway
+//! worktree `preview_rebase` builds in a temp directory. None of them changes
+//! the repository, none has any business in the Output panel, and every one of
+//! them parses its stdout rather than showing it. Reads that DO come through
+//! here (because they share a helper with a write) are filtered out by
+//! [`is_read_only_form`] instead, so a `git worktree list` never masquerades
+//! as an executed operation.
 
 use std::ffi::OsStr;
 use std::io;
@@ -110,6 +122,51 @@ const LOGGED_SUBCOMMANDS: &[&str] = &[
     "worktree",
 ];
 
+/// Whether this invocation of a reported subcommand is one of its READ-ONLY
+/// forms — a listing or a probe that shares a subcommand (and usually a helper
+/// function) with the writes the panel exists to show.
+///
+/// The allowlist above is keyed by subcommand, and `lfs`, `worktree`,
+/// `submodule`, `bisect` and `bundle` each carry both kinds: `git worktree
+/// list --porcelain` runs every time the Worktrees dialog opens, `git lfs
+/// version` twice per LFS-dialog open — and with no working directory, so it
+/// landed in EVERY repository's panel. Worse than noise: such a run has no
+/// pending IPC operation, so on the frontend it took the late-claim path and
+/// could replace a real operation's row. `rest` is everything after the
+/// subcommand.
+fn is_read_only_form(subcommand: &str, rest: &[String]) -> bool {
+    let positional: Vec<&str> = rest
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+    let first = positional.first().copied();
+    match subcommand {
+        // `git lfs track` with no pattern lists the tracked patterns; with one
+        // it rewrites .gitattributes.
+        "lfs" => {
+            matches!(
+                first,
+                Some("version" | "env" | "ls-files" | "status" | "locks")
+            ) || (first == Some("track") && positional.len() == 1)
+        }
+        "worktree" => first == Some("list"),
+        "submodule" => matches!(first, Some("status" | "summary")),
+        "bisect" => matches!(first, Some("log" | "visualize" | "view")),
+        "bundle" => first == Some("list-heads"),
+        "sparse-checkout" => first == Some("list"),
+        "stash" => matches!(first, Some("list" | "show")),
+        "remote" => first.is_none() || matches!(first, Some("show" | "get-url")),
+        "reflog" => first.is_none() || first == Some("show"),
+        // `git archive` with no output file streams the archive to stdout —
+        // the way the archive dialog lists what an export would contain.
+        "archive" => !rest
+            .iter()
+            .any(|a| a == "-o" || a == "--output" || a.starts_with("--output=")),
+        _ => false,
+    }
+}
+
 /// git's own options that take a SEPARATE value argument, so the subcommand
 /// scan skips two slots rather than mistaking the value for the subcommand.
 const GLOBAL_OPTS_WITH_VALUE: &[&str] = &[
@@ -123,8 +180,8 @@ const GLOBAL_OPTS_WITH_VALUE: &[&str] = &[
 ];
 
 /// The subcommand of a `git` invocation — the first argument that is neither a
-/// global option nor a global option's value.
-fn git_subcommand(args: &[String]) -> Option<&str> {
+/// global option nor a global option's value — and its position in `args`.
+fn git_subcommand_at(args: &[String]) -> Option<(usize, &str)> {
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -133,10 +190,15 @@ fn git_subcommand(args: &[String]) -> Option<&str> {
         } else if arg.starts_with('-') {
             i += 1;
         } else {
-            return Some(arg);
+            return Some((i, arg));
         }
     }
     None
+}
+
+/// The subcommand of a `git` invocation, see [`git_subcommand_at`].
+fn git_subcommand(args: &[String]) -> Option<&str> {
+    git_subcommand_at(args).map(|(_, subcommand)| subcommand)
 }
 
 /// The repository a `git` invocation targets: its working directory, or the
@@ -355,8 +417,11 @@ impl GitCommand {
             .get_args()
             .map(|a| a.to_string_lossy().to_string())
             .collect();
-        let subcommand = git_subcommand(&args)?;
+        let (at, subcommand) = git_subcommand_at(&args)?;
         if !LOGGED_SUBCOMMANDS.contains(&subcommand) {
+            return None;
+        }
+        if is_read_only_form(subcommand, &args[at + 1..]) {
             return None;
         }
         let program = self.inner.get_program().to_string_lossy().to_string();
@@ -649,6 +714,45 @@ pub fn apply_token_credential_helper(cmd: &mut Command, token: &str, remote_url:
     );
 }
 
+/// Test-only view of what the Output panel would have been told.
+///
+/// The sink is a process-wide `OnceLock`, so a test cannot install its own;
+/// instead the first test that asks installs ONE recorder and every later one
+/// shares it. Tests therefore filter the recording by their own repository
+/// path (unique per `TestRepo`), or assert the absence of a line that no test
+/// may produce once the fix under test is in place.
+#[cfg(test)]
+pub(crate) mod test_sink {
+    use super::{set_git_command_log_sink, GitCommandLog};
+    use std::sync::Mutex;
+
+    static RECORDED: Mutex<Vec<GitCommandLog>> = Mutex::new(Vec::new());
+
+    /// Install the recorder. Idempotent, and a no-op once any sink is set —
+    /// so it must be called BEFORE the invocation a test wants to observe.
+    pub(crate) fn install() {
+        set_git_command_log_sink(|entry| {
+            RECORDED
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(entry);
+        });
+    }
+
+    /// Every reported invocation so far, across all tests in the binary.
+    pub(crate) fn recorded() -> Vec<GitCommandLog> {
+        RECORDED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The reported invocations attributed to `repo_path`.
+    pub(crate) fn recorded_for(repo_path: &str) -> Vec<GitCommandLog> {
+        recorded()
+            .into_iter()
+            .filter(|entry| entry.repo_path.as_deref() == Some(repo_path))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,6 +860,109 @@ mod tests {
         let mut cmd = create_command("git");
         cmd.args(["rev-parse", "HEAD"]);
         assert!(cmd.loggable_command_line().is_none());
+    }
+
+    /// A listing that shares its subcommand with a write is still a read, and
+    /// a read must not appear in the panel as an executed operation — nor,
+    /// with no pending IPC operation of its own, be free to take over a real
+    /// operation's row on the frontend's late-claim path.
+    #[test]
+    fn test_read_only_forms_of_reported_subcommands_are_not_reported() {
+        for read in [
+            vec!["lfs", "version"],
+            vec!["lfs", "env"],
+            vec!["lfs", "ls-files", "-s"],
+            vec!["lfs", "ls-files", "-l"],
+            vec!["lfs", "track"],
+            vec!["worktree", "list", "--porcelain"],
+            vec!["submodule", "status", "--", "vendor/dep"],
+            vec!["bisect", "log"],
+            vec!["bisect", "visualize"],
+            vec!["bundle", "list-heads", "--", "/tmp/x.bundle"],
+            vec!["sparse-checkout", "list"],
+            vec!["stash", "list"],
+            vec!["remote", "-v"],
+            vec!["remote", "get-url", "origin"],
+            vec!["reflog"],
+            vec!["archive", "--format=tar", "--", "HEAD"],
+        ] {
+            let mut cmd = create_command("git");
+            cmd.current_dir("/work/repo").args(&read);
+            assert!(
+                cmd.loggable_command_line().is_none(),
+                "git {} is a read and must not be reported",
+                read.join(" ")
+            );
+        }
+    }
+
+    /// The writes next to those reads keep being reported — the exclusion is
+    /// by FORM, not by subcommand, or the LFS and worktree operations users
+    /// most want to see would vanish along with the listings.
+    #[test]
+    fn test_mutating_forms_of_the_same_subcommands_are_still_reported() {
+        for write in [
+            vec!["lfs", "track", "*.psd"],
+            vec!["lfs", "pull"],
+            vec!["lfs", "fetch", "main"],
+            vec!["lfs", "prune"],
+            vec!["worktree", "add", "-b", "feat", "/tmp/wt"],
+            vec!["worktree", "remove", "/tmp/wt"],
+            vec!["submodule", "update", "--init"],
+            vec!["bisect", "start"],
+            vec!["bundle", "create", "--", "/tmp/x.bundle", "--all"],
+            vec!["bundle", "verify", "--", "/tmp/x.bundle"],
+            vec!["sparse-checkout", "set", "src"],
+            vec!["stash", "push", "-m", "x"],
+            vec!["remote", "prune", "origin"],
+            vec!["reflog", "expire", "--all"],
+            vec![
+                "archive",
+                "--format=zip",
+                "--output=/tmp/x.zip",
+                "--",
+                "HEAD",
+            ],
+        ] {
+            let mut cmd = create_command("git");
+            cmd.current_dir("/work/repo").args(&write);
+            assert!(
+                cmd.loggable_command_line().is_some(),
+                "git {} is a write and must be reported",
+                write.join(" ")
+            );
+        }
+    }
+
+    /// End to end through the sink: a read run to completion reaches the panel
+    /// exactly never, a write exactly once.
+    #[test]
+    fn test_sink_receives_writes_but_not_read_only_forms() {
+        test_sink::install();
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        let path = repo.path_str();
+
+        // `git stash list` is a read of a reported subcommand.
+        let _ = create_command("git")
+            .current_dir(&repo.path)
+            .args(["stash", "list"])
+            .output()
+            .expect("git must run");
+        assert!(
+            test_sink::recorded_for(&path).is_empty(),
+            "git stash list must not be reported: {:?}",
+            test_sink::recorded_for(&path)
+        );
+
+        // `git reflog expire` is a write of one.
+        let _ = create_command("git")
+            .current_dir(&repo.path)
+            .args(["reflog", "expire", "--expire=now", "--all"])
+            .output()
+            .expect("git must run");
+        let reported = test_sink::recorded_for(&path);
+        assert_eq!(reported.len(), 1, "got {:?}", reported);
+        assert_eq!(reported[0].command, "git reflog expire --expire=now --all");
     }
 
     // ---- Output panel: redaction ---------------------------------------

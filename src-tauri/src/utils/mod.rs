@@ -7,6 +7,8 @@ mod editor_command;
 
 pub use blocking::blocking_git;
 pub use cli_safety::reject_flag_like;
+#[cfg(test)]
+pub(crate) use command::test_sink;
 pub use command::{
     apply_token_credential_helper, create_command, redact_secrets, set_git_command_log_sink,
     GitCommand, GitCommandLog,

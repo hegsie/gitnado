@@ -675,6 +675,83 @@ test.describe('Output Panel - In-app integration', () => {
     }
   });
 
+  test('a late read from the backend never replaces a settled operation\'s row', async ({
+    page,
+  }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    // "Set upstream" has no git line, so its operation knows no subcommand
+    // and matched ANY real run. Then a read the backend happened to report —
+    // `git worktree list --porcelain` when the Worktrees dialog opened within
+    // the late-claim window — took the settled operation's row and replaced
+    // it with a command the user never ran.
+    await page.evaluate(async () => {
+      // @ts-expect-error - dynamic import resolved by Vite at runtime
+      const mod = await import('/src/services/tauri-api.ts');
+      const invokeCommand = mod.invokeCommand as (
+        command: string,
+        args?: unknown
+      ) => Promise<unknown>;
+      await invokeCommand('set_upstream_branch', {
+        path: '/tmp/test-repo',
+        branch: 'main',
+        upstream: 'origin/main',
+      });
+      (
+        window as unknown as {
+          __EMIT_TAURI_EVENT__: (event: string, payload: unknown) => void;
+        }
+      ).__EMIT_TAURI_EVENT__('git-command-executed', {
+        command: 'git worktree list --porcelain',
+        output: 'worktree /tmp/test-repo',
+        success: true,
+        durationMs: 8,
+        repoPath: '/tmp/test-repo',
+      });
+    });
+
+    // The operation the user ran is still there...
+    await expect(appPanel.locator('.entry-command', { hasText: 'set_upstream_branch' })).toHaveCount(
+      1
+    );
+    // ...and the real run, if reported at all, stands on a row of its own.
+    await expect(appPanel.locator('.entry')).toHaveCount(2);
+  });
+
+  test('cancelling a running fetch adds no row of its own', async ({ page }) => {
+    const { startCommandCapture, injectCommandHang, waitForCommand } = await import(
+      '../fixtures/test-helpers'
+    );
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await startCommandCapture(page);
+    await injectCommandHang(page, 'fetch');
+    await page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i }).click();
+    await waitForCommand(page, 'fetch');
+
+    await page.locator('lv-progress-indicator .cancel-btn').click();
+    await waitForCommand(page, 'cancel_operation');
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+
+    // The cancel itself is not a git operation and carries no repository, so
+    // it must not leave a bare `cancel_operation` row in every panel.
+    await expect(appPanel.locator('.entry-command', { hasText: 'cancel_operation' })).toHaveCount(
+      0
+    );
+  });
+
   test('a failing operation shows its git line and its error output', async ({ page }) => {
     const { injectCommandError } = await import('../fixtures/test-helpers');
     const { AppPage } = await import('../pages/app.page');

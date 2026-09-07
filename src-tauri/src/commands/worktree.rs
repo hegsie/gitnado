@@ -378,6 +378,51 @@ mod tests {
         }
     }
 
+    // ---- the Output panel sees writes, never the listing ----
+
+    #[tokio::test]
+    async fn test_get_worktrees_reports_nothing_to_the_output_panel() {
+        // `git worktree list --porcelain` ran on every open of the Worktrees
+        // dialog and, having no pending IPC operation, could take over a real
+        // operation's row on the frontend's late-claim path.
+        crate::utils::test_sink::install();
+        let repo = TestRepo::with_initial_commit();
+
+        get_worktrees(repo.path_str()).await.unwrap();
+
+        let reported = crate::utils::test_sink::recorded_for(&repo.path_str());
+        assert!(reported.is_empty(), "a read was reported: {:?}", reported);
+    }
+
+    #[tokio::test]
+    async fn test_add_worktree_is_still_reported_to_the_output_panel() {
+        crate::utils::test_sink::install();
+        let repo = TestRepo::with_initial_commit();
+        let dir = TempDir::new().unwrap();
+        let wt_path = dir.path().join("feat-wt").to_string_lossy().to_string();
+
+        add_worktree(
+            repo.path_str(),
+            wt_path.clone(),
+            None,
+            Some("feat".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let reported = crate::utils::test_sink::recorded_for(&repo.path_str());
+        assert!(
+            reported
+                .iter()
+                .any(|entry| entry.command.starts_with("git worktree add") && entry.success),
+            "the write must be reported: {:?}",
+            reported
+        );
+    }
+
     #[tokio::test]
     async fn test_get_worktrees_single_main() {
         let repo = TestRepo::with_initial_commit();
