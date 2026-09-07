@@ -9,20 +9,29 @@ trade for a desktop app with a language picker.
 
 ## What is localised today
 
-Localisation is being adopted incrementally. As of the first slice:
+Localisation is being adopted incrementally, so this list is partial — but it is
+not hand-kept: `scripts/i18n-coverage.test.mjs` fails if a file gains or loses a
+`msg()` call and this list does not follow. Every file with at least one `msg()`
+call site is here, and nothing else in `src/` has one.
 
-- `src/components/welcome/lv-welcome.ts` — the whole component, including its
-  toast messages and accessible labels.
+- `src/app-shell.ts` — the Settings modal's title.
 - `src/components/dialogs/lv-settings-dialog.ts` — everything the dialog
   renders (section titles, setting names and descriptions, options, buttons,
   status text) plus the language picker's own error toast.
-- `getGraphColorSchemes()` in `src/stores/settings.store.ts` — the palette names
-  shown by the Settings dialog.
+- `src/components/welcome/lv-welcome.ts` — the whole component, including its
+  toast messages and accessible labels.
+- `src/services/local-ai.service.ts` — the model tier labels the Settings
+  dialog shows next to each local model.
+- `src/stores/settings.store.ts` — the whitespace-mode menu and the graph
+  palette names (`getGraphColorSchemes()`), both built where the setting lives
+  rather than frozen into a module-level constant at the startup locale.
+- `src/utils/avatar-policy.ts` — why the avatar setting is unavailable when a
+  security setting has turned it off.
 
-Everything else in the app is still hard-coded English, including the imperative
-toast/error strings inside the Settings dialog's handlers (most of them wrap a
-message that comes back from the Rust backend in English anyway). Migrating a
-component is now a mechanical change; see below.
+Everything else in the app is still hard-coded English, including most of the
+imperative toast/error strings inside the handlers of the files above (many of
+them wrap a message that comes back from the Rust backend in English anyway).
+Migrating a component is a mechanical change; see below.
 
 ## Locales we ship
 

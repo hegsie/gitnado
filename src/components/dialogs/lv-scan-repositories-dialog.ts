@@ -249,6 +249,16 @@ export class LvScanRepositoriesDialog extends LitElement {
    */
   @property({ type: String }) mode: 'scan' | 'offer' = 'scan';
 
+  /**
+   * Bumped by the shell for every request to show this dialog.
+   *
+   * Dropping the SAME folder again while the dialog is open changes neither
+   * `scanPath` nor `mode`, and `open` is already true, so nothing else here can
+   * tell that the drop happened — and the drop said nothing at all, the one
+   * drop outcome in the app that was silent.
+   */
+  @property({ type: Number }) requestId = 0;
+
   @state() private phase: ScanPhase = 'offer';
   @state() private progress: RepositoryScanProgress | null = null;
   @state() private result: RepositoryScanResult | null = null;
@@ -276,6 +286,13 @@ export class LvScanRepositoriesDialog extends LitElement {
   private cancelRequested = false;
   /** True once the scan command has actually been sent to the backend. */
   private scanIssued = false;
+  /**
+   * What the last `activate()` pointed the dialog at, so a re-drop of the same
+   * folder can be told apart from a drop of a different one and reported for
+   * what it is.
+   */
+  private activatedPath: string | null = null;
+  private activatedMode: 'scan' | 'offer' | null = null;
 
   updated(changed: PropertyValues): void {
     // An OS folder drop is not blocked by an in-page modal, so a second folder
@@ -285,35 +302,58 @@ export class LvScanRepositoriesDialog extends LitElement {
     // `open` would leave the user looking at the FIRST folder while every
     // action here (Initialize, the re-scan) silently used the second one.
     const retargeted =
-      this.open && !changed.has('open') && (changed.has('scanPath') || changed.has('mode'));
+      this.open &&
+      !changed.has('open') &&
+      (changed.has('scanPath') || changed.has('mode') || changed.has('requestId'));
     if (!changed.has('open') && !retargeted) return;
 
     if (this.open) {
       void this.activate(retargeted);
     } else {
-      this.abortScan();
+      void this.abortScan();
     }
   }
 
   /**
    * Stop any running scan and make sure neither its results nor its progress
    * events can land on whatever the dialog shows next.
+   *
+   * Returns the cancellation it fired, if any, so a caller that has to wait for
+   * the backend to acknowledge one waits for THAT cancel rather than issuing a
+   * second: the backend clears its cancellation flag when a scan STARTS, so a
+   * cancel still in flight can land after the next scan has begun and abort it.
    */
-  private abortScan(): void {
+  private abortScan(): Promise<unknown> | undefined {
     // Closing (or re-pointing) mid-scan must stop the backend walk, not leave
     // it running against a dialog nobody can see.
+    let cancelling: Promise<unknown> | undefined;
     if (this.phase === 'scanning') {
       this.cancelRequested = true;
-      if (this.scanIssued) void cancelRepositoryScan();
+      if (this.scanIssued) {
+        cancelling = cancelRepositoryScan();
+        // That walk is cancelled; nothing may ask for it to be cancelled twice.
+        this.scanIssued = false;
+      }
     }
     this.scanToken++;
     this.detachProgress();
+    return cancelling;
   }
 
   /** Point the dialog at `scanPath`, whether it just opened or was re-targeted. */
   private async activate(retargeted: boolean): Promise<void> {
-    const cancelInFlight = retargeted && this.phase === 'scanning' && this.scanIssued;
-    this.abortScan();
+    // The same folder dropped a second time. Re-scanning it is what the user is
+    // asking for — they have just created, cloned or moved something in it, and
+    // a re-drop is the only way to refresh results from inside the dialog. The
+    // untouched offer step is the exception: it is a question the user has not
+    // answered yet, so re-asking it (and saying why) beats scanning behind their
+    // back.
+    const sameFolder =
+      retargeted && this.scanPath === this.activatedPath && this.mode === this.activatedMode;
+    const rescanSameFolder = sameFolder && this.phase !== 'offer';
+    this.activatedPath = this.scanPath;
+    this.activatedMode = this.mode;
+    const cancelling = this.abortScan();
     const token = this.scanToken;
 
     this.reset();
@@ -322,28 +362,34 @@ export class LvScanRepositoriesDialog extends LitElement {
       .openRepositories.map((repo) => repo.repository.path);
 
     if (retargeted) {
-      // The dialog was already on screen showing another folder: say what just
-      // replaced it, or the drop looks like it did nothing.
-      showToast(
-        this.mode === 'scan'
-          ? `Now scanning ${folderName(this.scanPath)}`
-          : `Now showing ${folderName(this.scanPath)}`,
-        'info',
-      );
+      // The dialog was already on screen: say what the drop just did, or it
+      // looks like it did nothing.
+      showToast(this.retargetMessage(sameFolder, rescanSameFolder), 'info');
     }
 
-    if (cancelInFlight) {
-      // Wait for the backend to acknowledge the cancellation before asking for
-      // the next scan: the backend clears its cancellation flag when a scan
-      // STARTS, so a cancel still in flight could otherwise stop the new scan.
-      await cancelRepositoryScan();
+    if (cancelling) {
+      // Wait for the backend to acknowledge the cancellation abortScan just
+      // fired before asking for the next scan: the backend clears its
+      // cancellation flag when a scan STARTS, so a cancel still in flight could
+      // otherwise stop the new scan.
+      await cancelling;
       // Re-targeted again while we waited; that pass owns the dialog now.
       if (token !== this.scanToken) return;
     }
 
-    if (this.mode === 'scan' && this.scanPath) {
+    if ((this.mode === 'scan' || rescanSameFolder) && this.scanPath) {
       void this.startScan();
     }
+  }
+
+  /** What a drop onto the already-open dialog just did. */
+  private retargetMessage(sameFolder: boolean, rescanSameFolder: boolean): string {
+    const name = folderName(this.scanPath);
+    if (rescanSameFolder) return `Rescanning ${name}`;
+    // Re-dropped onto its own unanswered offer: nothing changed, so say why the
+    // same question is still on screen rather than leaving the drop unexplained.
+    if (sameFolder) return `${name} is still not a Git repository`;
+    return this.mode === 'scan' ? `Now scanning ${name}` : `Now showing ${name}`;
   }
 
   disconnectedCallback(): void {
@@ -441,7 +487,15 @@ export class LvScanRepositoriesDialog extends LitElement {
     }
   }
 
-  /** The folder the dialog currently names on screen. */
+  /**
+   * The folder the dialog currently names on screen.
+   *
+   * Defensive rather than load-bearing today: the backend echoes back the root
+   * it was given and a change of `scanPath` clears `result`, so the two cannot
+   * disagree. It stays because the screen reads `result.root`, and a backend
+   * that ever normalised the path (a symlink, a trailing slash) would make them
+   * differ — and init must act on what the user can see.
+   */
   private get displayedPath(): string {
     return this.phase === 'results' ? (this.result?.root ?? this.scanPath) : this.scanPath;
   }
@@ -489,6 +543,11 @@ export class LvScanRepositoriesDialog extends LitElement {
       .filter((path) => this.selected.has(path));
     if (paths.length === 0) return;
 
+    // Opening a repository takes seconds, and an OS folder drop is not blocked
+    // by the modal: the dialog can be closed or re-pointed at another folder
+    // while this loop is still running. The same token that keeps a stale scan
+    // off the screen keeps this loop's outcome off it too.
+    const token = this.scanToken;
     this.isOpening = true;
     let opened = 0;
     let alreadyOpen = 0;
@@ -502,7 +561,15 @@ export class LvScanRepositoriesDialog extends LitElement {
         else failures.push(`${outcome.path}: ${outcome.message ?? 'failed to open'}`);
       }
     } finally {
-      this.isOpening = false;
+      // `reset()` already cleared this for the folder that replaced ours; only
+      // release the guard if this loop still owns the dialog, or Escape would
+      // be let through for a pass that never armed it.
+      if (token === this.scanToken) this.isOpening = false;
+    }
+
+    if (token !== this.scanToken) {
+      this.reportAbandonedOpen(opened, failures);
+      return;
     }
 
     if (failures.length > 0) {
@@ -538,6 +605,32 @@ export class LvScanRepositoriesDialog extends LitElement {
       );
     }
     this.close();
+  }
+
+  /**
+   * Report an open loop that finished after the dialog was closed or re-pointed
+   * at another folder.
+   *
+   * The repositories really did open, so saying nothing would lose the outcome
+   * of an action the user asked for. It is reported as toasts only: the screen
+   * now belongs to another folder (or to nothing), so writing an error message
+   * into it, or closing it, would take away the drop the user just made.
+   */
+  private reportAbandonedOpen(opened: number, failures: string[]): void {
+    if (opened > 0) {
+      showToast(
+        opened === 1 ? 'Opened 1 repository' : `Opened ${opened} repositories`,
+        'success',
+      );
+    }
+    for (const failure of failures) {
+      showToast(`Could not open ${failure}`, 'error');
+    }
+    // Anything that did open belongs in the "already open" badges of whatever
+    // the dialog is showing now.
+    this.openPaths = repositoryStore
+      .getState()
+      .openRepositories.map((repo) => repo.repository.path);
   }
 
   public close(): void {
@@ -701,6 +794,17 @@ export class LvScanRepositoriesDialog extends LitElement {
         >
           ${this.isOpening ? 'Opening…' : `Open selected (${this.selected.size})`}
         </button>
+      `;
+    }
+
+    // A failed scan used to offer nothing but Close: the folder was gone from
+    // the dialog, so recovering meant Close, the welcome screen, Scan and
+    // picking the same folder again in an OS picker. Retrying needs a folder to
+    // retry against, so the empty-path failure keeps Close alone.
+    if (this.phase === 'error' && this.scanPath) {
+      return html`
+        <button class="btn btn-secondary" @click=${this.close}>Close</button>
+        <button class="btn btn-primary" @click=${this.handleScanFromOffer}>Try again</button>
       `;
     }
 

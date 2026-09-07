@@ -929,7 +929,7 @@ test.describe('Welcome Screen - scan for repositories', () => {
     await expect(dialog.locator('.result-item')).toHaveCount(0);
   });
 
-  test('surfaces a scan failure', async ({ page }) => {
+  test('surfaces a scan failure and offers a retry', async ({ page }) => {
     await injectCommandMock(page, { 'plugin:dialog|open': '/code' });
     await injectCommandError(page, 'scan_for_repositories', '/code no longer exists');
 
@@ -937,6 +937,15 @@ test.describe('Welcome Screen - scan for repositories', () => {
 
     const dialog = page.locator('lv-scan-repositories-dialog');
     await expect(dialog.locator('.error-message')).toContainText('no longer exists');
+
+    // A failed scan used to be a dead end: Close was the only way out, and the
+    // folder went with it. The folder is often only briefly unreachable (a
+    // network volume, a rename), so retrying it is the recovery.
+    await injectCommandMock(page, { scan_for_repositories: scanResultPayload() });
+    await dialog.getByRole('button', { name: 'Try again' }).click();
+
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+    await expect(dialog.locator('.error-message')).toHaveCount(0);
   });
 
   test('does not open the scan dialog when the folder picker is cancelled', async ({ page }) => {
@@ -1066,6 +1075,37 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     await expect(page.getByRole('textbox', { name: /Repository Location/i })).toHaveValue(
       '/elsewhere'
     );
+  });
+
+  test('rescans and says so when the same folder is dropped again', async ({ page }) => {
+    await startCommandCaptureWithMocks(page, {
+      classify_repository_path: {
+        path: '/projects',
+        name: 'projects',
+        exists: true,
+        isDirectory: true,
+        isRepository: false,
+        isBare: false,
+      },
+      scan_for_repositories: scanResultPayload({ root: '/projects' }),
+    });
+
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
+    const dialog = page.locator('lv-scan-repositories-dialog');
+    await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
+    await dialog.getByRole('button', { name: 'Scan it for repositories' }).click();
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+
+    // The SAME folder again: the path, the mode and the open state are all
+    // unchanged, so this drop used to reach a dialog that could not tell it had
+    // happened — no toast, no rescan, nothing.
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
+
+    await expect(page.locator('.toast')).toContainText('Rescanning projects');
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+    await expect
+      .poll(async () => (await findCommand(page, 'scan_for_repositories')).length)
+      .toBe(2);
   });
 
   test('offers to initialize a dropped folder that is not a repository', async ({ page }) => {
