@@ -71,12 +71,14 @@ fn token_remote_url(repo_path: &Path, remote_name: &str) -> Option<String> {
 /// for each submodule's url from .gitmodules, which may point anywhere, and
 /// the token belongs to one provider only.
 ///
-/// `cwd` and `token_repo` differ for a nested level: `git submodule update
-/// --recursive` hands its nested clones the credential helper it was itself
-/// given, and the Rust recursion that replaces `--recursive` under a policy
-/// (see [`update_submodules`]) has to hand them the same thing. Looking
-/// `token_remote` up in the nested repository would find that repository's
-/// own `origin` — the submodule's url — or nothing.
+/// They are separate parameters because the scoping must not follow the
+/// directory: `git submodule update --recursive` hands its nested clones the
+/// credential helper it was itself given, and the Rust recursion that replaces
+/// `--recursive` under a policy (see [`update_submodules`]) has to hand them
+/// the same thing. Looking `token_remote` up in the repository a nested level
+/// targets would find that repository's own `origin` — the submodule's url —
+/// or nothing. The nested levels therefore reach their submodule with `-C`
+/// while still running from, and scoping against, the superproject.
 fn submodule_command_in(
     cwd: &Path,
     token_repo: &Path,
@@ -472,7 +474,30 @@ fn update_nested_submodules(
         if nested.is_empty() {
             continue;
         }
-        run_git_command_in(&sub_path, superproject, args, token, token_remote)?;
+        // Run FROM the superproject and let `-C` do the chdir. `-C` is a
+        // global option git applies before it reads anything, so .gitmodules
+        // resolution and the token scoping are exactly what running inside the
+        // submodule gave — but the Output panel attributes a run to its
+        // working directory, and `lv-output-panel` renders only rows whose
+        // repository is the open one. Reported against the SUBMODULE's
+        // directory, a nested update appeared in no panel at all: when one
+        // failed the user got error text and no invocation to go with it, and
+        // only when an allowlist was configured, because with no policy in
+        // force git's own `--recursive` runs from the superproject and its row
+        // is visible. The rendered line stays honest — `git -C <sub>
+        // submodule update --init` is what ran.
+        let sub_path_arg = sub_path.to_string_lossy();
+        let mut nested_args: Vec<&str> = Vec::with_capacity(args.len() + 2);
+        nested_args.push("-C");
+        nested_args.push(&sub_path_arg);
+        nested_args.extend_from_slice(args);
+        run_git_command_in(
+            superproject,
+            superproject,
+            &nested_args,
+            token,
+            token_remote,
+        )?;
         update_nested_submodules(
             superproject,
             &sub_path,
@@ -1302,6 +1327,54 @@ mod tests {
         );
     }
 
+    /// The Output panel renders only rows whose repo path is the OPEN
+    /// repository (`lv-output-panel.ts`), so a nested update reported against
+    /// the submodule's own directory appeared in no panel at all: a nested
+    /// `git submodule update` that failed showed the user error text and no
+    /// invocation to go with it — and only under an allowlist, because with no
+    /// policy in force git's own `--recursive` runs from the superproject.
+    #[tokio::test]
+    async fn a_nested_update_is_reported_against_the_superproject() {
+        crate::utils::test_sink::install();
+        let (superproject, _mid, _leaf) = nested_submodule_tree();
+        let _guard = test_support::allowlist(&["dep.test", "nested.test"]);
+        let nested = superproject.path.join("vendor/mid");
+
+        let result = update_submodules(
+            superproject.path_str(),
+            None,
+            Some(true),
+            Some(true),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "update_submodules failed: {:?}",
+            result.err()
+        );
+
+        let reported = crate::utils::test_sink::recorded_for(&superproject.path_str());
+        let nested_display = nested.to_string_lossy().to_string();
+        assert!(
+            reported.iter().any(|entry| entry.command.contains("-C")
+                && entry.command.contains(&nested_display)
+                && entry.command.contains("submodule update")),
+            "the nested update must be attributed to the superproject, got: {:?}",
+            reported.iter().map(|e| &e.command).collect::<Vec<_>>()
+        );
+        // The fixture's own `submodule deinit` legitimately ran inside
+        // vendor/mid, so only the update is asserted on.
+        assert!(
+            !crate::utils::test_sink::recorded_for(&nested_display)
+                .iter()
+                .any(|entry| entry.command.contains("submodule update")),
+            "no nested update may be filed under the submodule's directory — no panel shows it"
+        );
+    }
+
     #[tokio::test]
     async fn a_nested_tree_narrowed_to_a_path_only_recurses_into_that_path() {
         let (superproject, _mid, _leaf) = nested_submodule_tree();
@@ -1378,10 +1451,11 @@ mod tests {
         assert!(!superproject.path.join("vendor/mid/README.md").exists());
     }
 
-    /// The nested levels are run inside the submodule but the token stays
-    /// scoped to the SUPERPROJECT's remote — the host it was resolved for —
-    /// exactly as git's `--recursive` children inherit it. Looking the remote
-    /// up in the nested repository would find that repository's own `origin`.
+    /// A run aimed at a submodule keeps its token scoped to the SUPERPROJECT's
+    /// remote — the host it was resolved for — exactly as git's `--recursive`
+    /// children inherit it. Looking the remote up in the submodule would find
+    /// that repository's own `origin`. Pinned through `cwd` here because that
+    /// is the axis the scoping must NOT follow.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_nested_level_scopes_the_token_to_the_superproject_remote() {
