@@ -509,11 +509,23 @@ export async function openRepository(
  * Matching on the host — not on a substring of the whole URL, as this used to —
  * keeps a stored token off a look-alike host (`github.com.example.net`) and off
  * a repo whose PATH merely names a provider.
+ *
+ * The scp branch reads a bracketed IPv6 literal whole. `[^:/]+` stopped at the
+ * first colon INSIDE the literal, so `git@[2001:db8::1]:team/app.git` — how a
+ * self-hosted box with no DNS is reached — resolved to `[2001`, a host no
+ * allowlist entry can name, while the backend gate (`security.rs`,
+ * `scp_like_host`) read the whole `[2001:db8::1]` and allowed it. Every fetch,
+ * pull and push to that remote was refused HERE, with a message naming a
+ * remote the allowlist did name, and no entry could fix it.
  */
 function cloneUrlHost(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed.includes("://")) {
-    const scpLike = /^[^@/]+@([^:/]+):/.exec(trimmed);
+    // `[...]` first: only a colon AFTER the closing bracket separates host
+    // from path. The unbracketed alternative refuses a leading `[` so a
+    // half-written literal falls through to the caller's `https://` fallback
+    // rather than being read as a host that is not one.
+    const scpLike = /^[^@/]+@(\[[^\]/]+\]|[^:/[][^:/]*):/.exec(trimmed);
     return scpLike ? scpLike[1].toLowerCase() : null;
   }
   try {
