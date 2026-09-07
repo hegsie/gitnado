@@ -6,7 +6,7 @@ use std::path::Path;
 use tauri::command;
 
 use super::path_utils::validate_path_within_repo;
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Result of viewing a file at a specific commit
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -25,10 +25,10 @@ fn resolve_commit<'repo>(
     commit_ish: &str,
 ) -> Result<git2::Commit<'repo>> {
     let obj = repo.revparse_single(commit_ish).map_err(|_| {
-        LeviathanError::CommitNotFound(format!("Cannot resolve reference: {}", commit_ish))
+        GitnadoError::CommitNotFound(format!("Cannot resolve reference: {}", commit_ish))
     })?;
     obj.peel_to_commit().map_err(|_| {
-        LeviathanError::CommitNotFound(format!("Reference is not a commit: {}", commit_ish))
+        GitnadoError::CommitNotFound(format!("Reference is not a commit: {}", commit_ish))
     })
 }
 
@@ -48,15 +48,15 @@ fn find_blob_in_commit<'repo>(
     commit: &git2::Commit,
     file_path: &str,
 ) -> Result<(git2::Blob<'repo>, i32)> {
-    let tree = commit.tree().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to get commit tree: {}", e))
-    })?;
+    let tree = commit
+        .tree()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get commit tree: {}", e)))?;
 
     // Normalize path separators to forward slashes for git
     let normalized_path = file_path.replace('\\', "/");
 
     let entry = tree.get_path(Path::new(&normalized_path)).map_err(|_| {
-        LeviathanError::OperationFailed(format!(
+        GitnadoError::OperationFailed(format!(
             "File '{}' not found in commit {}",
             file_path,
             commit.id()
@@ -65,12 +65,12 @@ fn find_blob_in_commit<'repo>(
 
     let filemode = entry.filemode();
 
-    let object = entry.to_object(repo).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to get file object: {}", e))
-    })?;
+    let object = entry
+        .to_object(repo)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get file object: {}", e)))?;
 
     let blob = object.into_blob().map_err(|_| {
-        LeviathanError::OperationFailed(format!(
+        GitnadoError::OperationFailed(format!(
             "'{}' is not a file (might be a directory)",
             file_path
         ))
@@ -97,7 +97,7 @@ fn restore_blob_to_worktree(
     let abs_path = validate_path_within_repo(Path::new(repo_path), file_path)?;
     if let Some(parent) = abs_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create parent directories: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to create parent directories: {}", e))
         })?;
     }
 
@@ -111,7 +111,7 @@ fn restore_blob_to_worktree(
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Failed to replace existing file: {}",
                     e
                 )))
@@ -127,18 +127,18 @@ fn restore_blob_to_worktree(
             // A symlink entry's blob content IS the link target.
             let target = String::from_utf8_lossy(content).to_string();
             std::os::unix::fs::symlink(&target, &abs_path).map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to create symlink: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to create symlink: {}", e))
             })?;
         } else {
             std::fs::write(&abs_path, content).map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to write file: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to write file: {}", e))
             })?;
             // Both directions: an executable version must come back executable,
             // and a non-executable one restored over an executable working copy
             // must drop the bit, exactly as git checkout does.
             let mut perms = std::fs::metadata(&abs_path)
                 .map_err(|e| {
-                    LeviathanError::OperationFailed(format!("Failed to read file mode: {}", e))
+                    GitnadoError::OperationFailed(format!("Failed to read file mode: {}", e))
                 })?
                 .permissions();
             let mode = perms.mode();
@@ -150,7 +150,7 @@ fn restore_blob_to_worktree(
             if wanted != mode {
                 perms.set_mode(wanted);
                 std::fs::set_permissions(&abs_path, perms).map_err(|e| {
-                    LeviathanError::OperationFailed(format!("Failed to set file mode: {}", e))
+                    GitnadoError::OperationFailed(format!("Failed to set file mode: {}", e))
                 })?;
             }
         }
@@ -160,7 +160,7 @@ fn restore_blob_to_worktree(
         // Windows has no execute bit and no symlinks without a privilege; git
         // writes the link target as a plain file there, so do the same.
         std::fs::write(&abs_path, content)
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to write file: {}", e)))?;
     }
 
     // Stage the mode from the TREE rather than letting index.add_path stat the
@@ -168,7 +168,7 @@ fn restore_blob_to_worktree(
     // Windows), so a stat there silently downgrades 100755/120000 to 100644.
     let mut index = repo
         .index()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to get index: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get index: {}", e)))?;
     let normalized_path = file_path.replace('\\', "/");
     let entry = git2::IndexEntry {
         ctime: git2::IndexTime::new(0, 0),
@@ -186,10 +186,10 @@ fn restore_blob_to_worktree(
     };
     index
         .add(&entry)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to update index: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to update index: {}", e)))?;
     index
         .write()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to write index: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to write index: {}", e)))?;
 
     Ok(())
 }
@@ -255,10 +255,10 @@ pub async fn checkout_file_from_branch(
     let branch_ref = repo
         .find_branch(&branch, git2::BranchType::Local)
         .or_else(|_| repo.find_branch(&branch, git2::BranchType::Remote))
-        .map_err(|_| LeviathanError::BranchNotFound(branch.clone()))?;
+        .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
     let commit = branch_ref.get().peel_to_commit().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to resolve branch to commit: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to resolve branch to commit: {}", e))
     })?;
 
     let (blob, filemode) = find_blob_in_commit(&repo, &commit, &filePath)?;

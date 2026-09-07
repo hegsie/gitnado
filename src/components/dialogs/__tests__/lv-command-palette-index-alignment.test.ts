@@ -76,7 +76,7 @@ function pressKey(el: LvCommandPalette, key: string): void {
 describe('lv-command-palette index alignment', () => {
   beforeEach(() => {
     executed.length = 0;
-    localStorage.removeItem('leviathan-recent-commands');
+    localStorage.removeItem('gitnado-recent-commands');
   });
 
   it('runs the command shown on the highlighted row past a category boundary', async () => {

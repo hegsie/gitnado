@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{Commit, FileHistoryEntry};
 
 /// Cached full revwalk (OIDs only) per repository for the all-branches graph
@@ -128,7 +128,7 @@ fn cached_walk_page(
 /// - "2024-01-15T10:30:00+05:00"
 /// - "2024-01-15T10:30:00-03:00"
 /// - Unix timestamp as string (e.g., "1705312200")
-fn parse_iso8601_to_git_time(date_str: &str) -> std::result::Result<git2::Time, LeviathanError> {
+fn parse_iso8601_to_git_time(date_str: &str) -> std::result::Result<git2::Time, GitnadoError> {
     // Try parsing as unix timestamp first
     if let Ok(ts) = date_str.parse::<i64>() {
         return Ok(git2::Time::new(ts, 0));
@@ -144,10 +144,10 @@ fn parse_iso8601_to_git_time(date_str: &str) -> std::result::Result<git2::Time, 
         if (last6.starts_with('+') || last6.starts_with('-')) && last6.chars().nth(3) == Some(':') {
             let sign = if last6.starts_with('+') { 1 } else { -1 };
             let hours: i32 = last6[1..3].parse().map_err(|_| {
-                LeviathanError::OperationFailed(format!("Invalid timezone offset in: {}", date_str))
+                GitnadoError::OperationFailed(format!("Invalid timezone offset in: {}", date_str))
             })?;
             let mins: i32 = last6[4..6].parse().map_err(|_| {
-                LeviathanError::OperationFailed(format!("Invalid timezone offset in: {}", date_str))
+                GitnadoError::OperationFailed(format!("Invalid timezone offset in: {}", date_str))
             })?;
             (&date_str[..date_str.len() - 6], sign * (hours * 60 + mins))
         } else {
@@ -160,7 +160,7 @@ fn parse_iso8601_to_git_time(date_str: &str) -> std::result::Result<git2::Time, 
     // Parse datetime: YYYY-MM-DDTHH:MM:SS
     let parts: Vec<&str> = datetime_str.split('T').collect();
     if parts.len() != 2 {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Invalid ISO 8601 date format: {}. Expected YYYY-MM-DDTHH:MM:SS[Z|+HH:MM]",
             date_str
         )));
@@ -170,32 +170,32 @@ fn parse_iso8601_to_git_time(date_str: &str) -> std::result::Result<git2::Time, 
     let time_parts: Vec<&str> = parts[1].split(':').collect();
 
     if date_parts.len() != 3 || time_parts.len() < 2 {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Invalid ISO 8601 date format: {}. Expected YYYY-MM-DDTHH:MM:SS[Z|+HH:MM]",
             date_str
         )));
     }
 
     let year: i32 = date_parts[0].parse().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Invalid year in date: {}", date_str))
+        GitnadoError::OperationFailed(format!("Invalid year in date: {}", date_str))
     })?;
     let month: u32 = date_parts[1].parse().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Invalid month in date: {}", date_str))
+        GitnadoError::OperationFailed(format!("Invalid month in date: {}", date_str))
     })?;
-    let day: u32 = date_parts[2].parse().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Invalid day in date: {}", date_str))
-    })?;
+    let day: u32 = date_parts[2]
+        .parse()
+        .map_err(|_| GitnadoError::OperationFailed(format!("Invalid day in date: {}", date_str)))?;
     let hour: u32 = time_parts[0].parse().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Invalid hour in date: {}", date_str))
+        GitnadoError::OperationFailed(format!("Invalid hour in date: {}", date_str))
     })?;
     let minute: u32 = time_parts[1].parse().map_err(|_| {
-        LeviathanError::OperationFailed(format!("Invalid minute in date: {}", date_str))
+        GitnadoError::OperationFailed(format!("Invalid minute in date: {}", date_str))
     })?;
     let second: u32 = if time_parts.len() >= 3 {
         // Handle fractional seconds by taking only the integer part
         let sec_str = time_parts[2].split('.').next().unwrap_or("0");
         sec_str.parse().map_err(|_| {
-            LeviathanError::OperationFailed(format!("Invalid second in date: {}", date_str))
+            GitnadoError::OperationFailed(format!("Invalid second in date: {}", date_str))
         })?
     } else {
         0
@@ -237,7 +237,7 @@ fn signature_with_date<'a>(
     name: &str,
     email: &str,
     date_str: Option<&str>,
-) -> std::result::Result<git2::Signature<'a>, LeviathanError> {
+) -> std::result::Result<git2::Signature<'a>, GitnadoError> {
     match date_str {
         Some(ds) => {
             let time = parse_iso8601_to_git_time(ds)?;
@@ -283,7 +283,7 @@ pub async fn get_commit_history(
             let start = repo
                 .head()?
                 .target()
-                .ok_or(LeviathanError::RepositoryNotOpen)?;
+                .ok_or(GitnadoError::RepositoryNotOpen)?;
             revwalk.push(start)?;
         }
 
@@ -323,7 +323,7 @@ pub async fn get_commit(path: String, oid: String) -> Result<Commit> {
         let oid = git2::Oid::from_str(&oid)?;
         let commit = repo
             .find_commit(oid)
-            .map_err(|_| LeviathanError::CommitNotFound(oid.to_string()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
 
         Ok(Commit::from_git2(&commit))
     })
@@ -364,7 +364,7 @@ pub async fn create_commit(
     if amend.unwrap_or(false) {
         let state = git2::Repository::open(Path::new(&path))?.state();
         if let Some(what) = crate::commands::branch::in_progress_operation(state) {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Cannot amend while a {} is in progress. Finish or abort it first.",
                 what
             )));
@@ -479,7 +479,7 @@ pub async fn create_commit(
                     .unwrap_or(false),
             };
             if nothing_staged {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "No staged changes to commit".to_string(),
                 ));
             }
@@ -611,11 +611,11 @@ async fn create_commit_with_git_cli(
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git commit: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git commit: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Git commit failed: {}",
             stderr
         )));
@@ -642,14 +642,14 @@ pub async fn amend_commit_message(path: String, message: String) -> Result<Commi
                 .args(["commit", "--amend", "-S", "-m", &message])
                 .output()
                 .map_err(|e| {
-                    LeviathanError::OperationFailed(format!(
+                    GitnadoError::OperationFailed(format!(
                         "Failed to run git commit --amend: {}",
                         e
                     ))
                 })?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Git commit --amend failed: {}",
                     stderr.trim()
                 )));
@@ -669,7 +669,7 @@ pub async fn amend_commit_message(path: String, message: String) -> Result<Commi
         let head_commit = repo
             .head()?
             .peel_to_commit()
-            .map_err(|_| LeviathanError::CommitNotFound("HEAD".to_string()))?;
+            .map_err(|_| GitnadoError::CommitNotFound("HEAD".to_string()))?;
 
         let tree = head_commit.tree()?;
         let signature = repo.signature()?;
@@ -742,7 +742,7 @@ pub async fn amend_commit(
         let head_commit = repo
             .head()?
             .peel_to_commit()
-            .map_err(|_| LeviathanError::CommitNotFound("HEAD".to_string()))?;
+            .map_err(|_| GitnadoError::CommitNotFound("HEAD".to_string()))?;
 
         let old_oid = head_commit.id().to_string();
         let tree = head_commit.tree()?;
@@ -784,7 +784,7 @@ pub async fn amend_commit(
         if head_ref.is_branch() {
             let branch_name = head_ref
                 .name()
-                .map_err(|_| LeviathanError::OperationFailed("Invalid HEAD ref".to_string()))?;
+                .map_err(|_| GitnadoError::OperationFailed("Invalid HEAD ref".to_string()))?;
             repo.reference(
                 branch_name,
                 new_oid,
@@ -845,12 +845,12 @@ async fn amend_commit_with_git_cli(
         .args(&args)
         .output()
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to run git commit --amend: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to run git commit --amend: {}", e))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Git commit --amend failed: {}",
             stderr
         )));
@@ -929,7 +929,7 @@ pub async fn get_commit_message(path: String, oid: String) -> Result<String> {
         let oid = git2::Oid::from_str(&oid)?;
         let commit = repo
             .find_commit(oid)
-            .map_err(|_| LeviathanError::CommitNotFound(oid.to_string()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
 
         Ok(commit.message().ok().unwrap_or("").to_string())
     })
@@ -959,7 +959,7 @@ pub async fn edit_commit_date(
     committer_date: Option<String>,
 ) -> Result<AmendResult> {
     if author_date.is_none() && committer_date.is_none() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "At least one of author_date or committer_date must be provided".to_string(),
         ));
     }
@@ -975,23 +975,23 @@ pub async fn edit_commit_date(
         parent_ids: Vec<git2::Oid>,
     }
 
-    let info: std::result::Result<CommitDateInfo, LeviathanError> = {
+    let info: std::result::Result<CommitDateInfo, GitnadoError> = {
         let path = path.clone();
         let oid = oid.clone();
         crate::utils::blocking_git(move || {
             let repo = git2::Repository::open(Path::new(&path))?;
 
-            let target_oid = git2::Oid::from_str(&oid)
-                .map_err(|_| LeviathanError::CommitNotFound(oid.clone()))?;
+            let target_oid =
+                git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
             let target_commit = repo
                 .find_commit(target_oid)
-                .map_err(|_| LeviathanError::CommitNotFound(oid.clone()))?;
+                .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
 
             let head_oid = repo.head()?.peel_to_commit()?.id();
             let is_head = head_oid == target_oid;
 
             if repo.state() != git2::RepositoryState::Clean {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "Another operation is in progress".to_string(),
                 ));
             }
@@ -1093,7 +1093,7 @@ pub async fn edit_commit_date(
                 // HEAD points to a branch - update the branch target
                 let branch_name = head_ref
                     .name()
-                    .map_err(|_| LeviathanError::OperationFailed("Invalid HEAD ref".to_string()))?;
+                    .map_err(|_| GitnadoError::OperationFailed("Invalid HEAD ref".to_string()))?;
                 repo.reference(
                     branch_name,
                     new_oid,
@@ -1137,14 +1137,14 @@ async fn edit_commit_date_with_rebase(
     // operation in the repository may have left pointing somewhere else.
     let (parent_oid_str, pre_rebase_head) = {
         let repo = git2::Repository::open(Path::new(path))?;
-        let target_oid = git2::Oid::from_str(oid)
-            .map_err(|_| LeviathanError::CommitNotFound(oid.to_string()))?;
+        let target_oid =
+            git2::Oid::from_str(oid).map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
         let target_commit = repo
             .find_commit(target_oid)
-            .map_err(|_| LeviathanError::CommitNotFound(oid.to_string()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
 
         let parent = target_commit.parent(0).map_err(|_| {
-            LeviathanError::OperationFailed("Cannot edit date of root commit".to_string())
+            GitnadoError::OperationFailed("Cannot edit date of root commit".to_string())
         })?;
         let head = repo.head()?.peel_to_commit()?.id().to_string();
         (parent.id().to_string(), head)
@@ -1179,7 +1179,7 @@ async fn edit_commit_date_with_rebase(
         .args(["-c", "rebase.autostash=false"])
         .args(["rebase", "-i", &parent_oid_str])
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to start rebase: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to start rebase: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1202,7 +1202,7 @@ async fn edit_commit_date_with_rebase(
                 .args(["rebase", "--abort"])
                 .output();
         }
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Rebase failed: {}",
             stderr
         )));
@@ -1235,7 +1235,7 @@ async fn edit_commit_date_with_rebase(
             .output()
             .map(|out| out.status.success())
             .unwrap_or(false);
-        return Err(LeviathanError::OperationFailed(if restored {
+        return Err(GitnadoError::OperationFailed(if restored {
             "Rebase did not stop at the target commit — is it a merge commit? Nothing was changed."
                 .to_string()
         } else {
@@ -1259,7 +1259,7 @@ async fn edit_commit_date_with_rebase(
     }
 
     let amend_output = amend_cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to amend commit date: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to amend commit date: {}", e))
     })?;
 
     if !amend_output.status.success() {
@@ -1269,7 +1269,7 @@ async fn edit_commit_date_with_rebase(
             .current_dir(path)
             .args(["rebase", "--abort"])
             .output();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Failed to amend commit date: {}",
             stderr
         )));
@@ -1292,14 +1292,12 @@ async fn edit_commit_date_with_rebase(
         .current_dir(path)
         .args(["rebase", "--continue"])
         .output()
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to continue rebase: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to continue rebase: {}", e)))?;
 
     if !continue_output.status.success() {
         let stderr = String::from_utf8_lossy(&continue_output.stderr);
         if stderr.contains("CONFLICT") || stderr.contains("conflict") {
-            return Err(LeviathanError::RebaseConflict);
+            return Err(GitnadoError::RebaseConflict);
         }
         // Sometimes rebase --continue fails because there's nothing to continue
         // (single commit case) - check if we're in a clean state
@@ -1309,7 +1307,7 @@ async fn edit_commit_date_with_rebase(
                 .current_dir(path)
                 .args(["rebase", "--abort"])
                 .output();
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Rebase continue failed: {}",
                 stderr
             )));
@@ -1337,18 +1335,18 @@ async fn edit_commit_date_with_rebase(
 pub async fn reword_commit(path: String, oid: String, message: String) -> Result<AmendResult> {
     // Run the inspection on the blocking pool, and inside one closure: git2
     // types are not Send, so no handle may cross the await that follows.
-    let result: std::result::Result<(bool, Option<git2::Oid>), LeviathanError> = {
+    let result: std::result::Result<(bool, Option<git2::Oid>), GitnadoError> = {
         let path = path.clone();
         let oid = oid.clone();
         crate::utils::blocking_git(move || {
             let repo = git2::Repository::open(Path::new(&path))?;
 
             // Verify the commit exists
-            let target_oid = git2::Oid::from_str(&oid)
-                .map_err(|_| LeviathanError::CommitNotFound(oid.clone()))?;
+            let target_oid =
+                git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
             let target_commit = repo
                 .find_commit(target_oid)
-                .map_err(|_| LeviathanError::CommitNotFound(oid.clone()))?;
+                .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
 
             // Check if this is the HEAD commit - if so, use amend instead
             let head_oid = repo.head()?.peel_to_commit()?.id();
@@ -1356,7 +1354,7 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
 
             // Check for existing operations in progress
             if repo.state() != git2::RepositoryState::Clean {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "Another operation is in progress".to_string(),
                 ));
             }
@@ -1376,7 +1374,7 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
                 // `isMergeCommit`. (The `is_head` path amends in place and keeps
                 // every parent, so it stays allowed.)
                 if target_commit.parent_count() > 1 {
-                    return Err(LeviathanError::OperationFailed(
+                    return Err(GitnadoError::OperationFailed(
                         "Cannot reword a merge commit".to_string(),
                     ));
                 }
@@ -1384,7 +1382,7 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
                     target_commit
                         .parent(0)
                         .map_err(|_| {
-                            LeviathanError::OperationFailed("Cannot reword root commit".to_string())
+                            GitnadoError::OperationFailed("Cannot reword root commit".to_string())
                         })?
                         .id(),
                 )
@@ -1431,7 +1429,7 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
             .args(crate::utils::TODO_FORMAT_ARGS)
             .args(["rebase", "-i", &parent_oid.to_string()])
             .output()
-            .map_err(|e| LeviathanError::OperationFailed(e.to_string()))?;
+            .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
 
         // Clean up temporary files
         let _ = std::fs::remove_file(&msg_file);
@@ -1439,9 +1437,9 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("CONFLICT") || stderr.contains("conflict") {
-                return Err(LeviathanError::RebaseConflict);
+                return Err(GitnadoError::RebaseConflict);
             }
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Rebase failed: {}",
                 stderr
             )));
@@ -1505,7 +1503,7 @@ pub async fn search_commits(
             // Push only the specified branch/ref
             let reference = repo
                 .resolve_reference_from_short_name(branch_name)
-                .map_err(|_| crate::error::LeviathanError::BranchNotFound(branch_name.clone()))?;
+                .map_err(|_| crate::error::GitnadoError::BranchNotFound(branch_name.clone()))?;
             if let Some(oid) = reference.target() {
                 revwalk.push(oid)?;
             }
@@ -1635,7 +1633,7 @@ pub async fn get_file_history(
         let head = repo
             .head()?
             .target()
-            .ok_or(LeviathanError::RepositoryNotOpen)?;
+            .ok_or(GitnadoError::RepositoryNotOpen)?;
         revwalk.push(head)?;
 
         let limit_count = limit.unwrap_or(500);

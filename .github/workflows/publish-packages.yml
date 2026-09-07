@@ -2,8 +2,8 @@ name: Publish Packages
 
 # Publishes each GitHub release to package managers:
 #   - winget   (Windows)  — opens a PR against microsoft/winget-pkgs
-#   - Homebrew (macOS)    — updates the cask in the hegsie/homebrew-leviathan tap
-#   - Scoop    (Windows)  — updates packaging/scoop/leviathan.json on main
+#   - Homebrew (macOS)    — updates the cask in the hegsie/homebrew-gitnado tap
+#   - Scoop    (Windows)  — updates packaging/scoop/gitnado.json on main
 #
 # One-time maintainer setup (secrets, tap repository, first winget submission)
 # is documented in docs/packaging.md. Jobs that are missing their secret are
@@ -59,9 +59,9 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}" \
             | jq -r '.assets[].name')
           for name in \
-            "Leviathan_${VERSION}_x64-setup.exe" \
-            "Leviathan_${VERSION}_x64_en-US.msi" \
-            "Leviathan_${VERSION}_aarch64.dmg"; do
+            "Gitnado_${VERSION}_x64-setup.exe" \
+            "Gitnado_${VERSION}_x64_en-US.msi" \
+            "Gitnado_${VERSION}_aarch64.dmg"; do
             if ! echo "$assets" | grep -qxF "$name"; then
               echo "::error::Release ${TAG} is missing asset ${name}"
               exit 1
@@ -84,15 +84,69 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.has-winget-token == 'true'
     runs-on: ubuntu-latest
+    env:
+      WINGET_ID: hegsie.Gitnado
+      TAG: ${{ needs.preflight.outputs.tag }}
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      - name: Publish to winget-pkgs
+      # winget-releaser can only update a package that already exists in
+      # winget-pkgs. Until the first Gitnado version is merged there, create
+      # the package from scratch with Komac instead (same tool the action
+      # uses); after that, every release goes through the update path.
+      - name: Check whether the package exists in winget-pkgs
+        id: exists
+        run: |
+          path="manifests/h/${WINGET_ID//./\/}"
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://api.github.com/repos/microsoft/winget-pkgs/contents/${path}")
+          echo "exists=$([ "$code" = "200" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "winget-pkgs/${path}: HTTP ${code}"
+
+      - name: Update existing package
+        if: steps.exists.outputs.exists == 'true'
         uses: vedantmgoyal9/winget-releaser@v2
         with:
-          identifier: hegsie.Leviathan
+          identifier: hegsie.Gitnado
           installers-regex: '\.(exe|msi)$'
           release-tag: ${{ needs.preflight.outputs.tag }}
           max-versions-to-keep: 5
           token: ${{ secrets.WINGET_TOKEN }}
+
+      - name: Install Komac
+        if: steps.exists.outputs.exists == 'false'
+        uses: cargo-bins/cargo-binstall@main
+
+      # Every field Komac would otherwise prompt for is passed explicitly so
+      # the run is non-interactive; --submit opens the PR on winget-pkgs.
+      - name: Create package (first submission)
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          cargo binstall komac -y
+          base="https://github.com/${{ github.repository }}"
+          komac new "$WINGET_ID" \
+            --version "$VERSION" \
+            --urls "${base}/releases/download/${TAG}/Gitnado_${VERSION}_x64-setup.exe" \
+                   "${base}/releases/download/${TAG}/Gitnado_${VERSION}_x64_en-US.msi" \
+            --package-locale en-US \
+            --publisher hegsie \
+            --publisher-url https://gitnado.dev \
+            --publisher-support-url "${base}/issues" \
+            --package-name Gitnado \
+            --package-url https://gitnado.dev \
+            --moniker gitnado \
+            --author "Gitnado Contributors" \
+            --license MIT \
+            --license-url "${base}/blob/main/LICENSE" \
+            --copyright "Copyright © 2024 Gitnado Contributors" \
+            --copyright-url "${base}/blob/main/LICENSE" \
+            --short-description "Fast, privacy-first Git GUI client" \
+            --description "A fully-featured, open-source, cross-platform Git GUI client. Interactive rebase, 3-way merge editor, worktrees, GitHub/GitLab/Azure DevOps/Bitbucket integrations and local AI commit messages, with no telemetry or account." \
+            --release-notes-url "${base}/releases/tag/${TAG}" \
+            --created-with "publish-packages workflow" \
+            --created-with-url "${base}/blob/main/.github/workflows/publish-packages.yml" \
+            --submit
 
   homebrew:
     name: Update Homebrew cask
@@ -109,29 +163,29 @@ jobs:
       - name: Compute DMG checksum
         id: dmg
         run: |
-          curl -fsSL -o leviathan.dmg \
-            "https://github.com/${{ github.repository }}/releases/download/${TAG}/Leviathan_${VERSION}_aarch64.dmg"
-          echo "sha256=$(sha256sum leviathan.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          rm leviathan.dmg
+          curl -fsSL -o gitnado.dmg \
+            "https://github.com/${{ github.repository }}/releases/download/${TAG}/Gitnado_${VERSION}_aarch64.dmg"
+          echo "sha256=$(sha256sum gitnado.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          rm gitnado.dmg
 
       - name: Push cask to tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           SHA256: ${{ steps.dmg.outputs.sha256 }}
         run: |
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${{ github.repository_owner }}/homebrew-leviathan.git" tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${{ github.repository_owner }}/homebrew-gitnado.git" tap
           mkdir -p tap/Casks
           sed -e "s/__VERSION__/${VERSION}/g" -e "s/__SHA256__/${SHA256}/g" \
-            packaging/homebrew/leviathan.rb.template > tap/Casks/leviathan.rb
+            packaging/homebrew/gitnado.rb.template > tap/Casks/gitnado.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/leviathan.rb
+          git add Casks/gitnado.rb
           if git diff --cached --quiet; then
             echo "Cask already up to date for ${VERSION}"
             exit 0
           fi
-          git commit -m "leviathan ${VERSION}"
+          git commit -m "gitnado ${VERSION}"
           git push
 
   scoop:
@@ -149,22 +203,22 @@ jobs:
 
       - name: Update manifest
         run: |
-          url="https://github.com/${{ github.repository }}/releases/download/${TAG}/Leviathan_${VERSION}_x64_en-US.msi"
-          curl -fsSL -o leviathan.msi "$url"
-          hash=$(sha256sum leviathan.msi | cut -d' ' -f1)
-          rm leviathan.msi
+          url="https://github.com/${{ github.repository }}/releases/download/${TAG}/Gitnado_${VERSION}_x64_en-US.msi"
+          curl -fsSL -o gitnado.msi "$url"
+          hash=$(sha256sum gitnado.msi | cut -d' ' -f1)
+          rm gitnado.msi
           jq --arg version "$VERSION" --arg url "$url" --arg hash "$hash" \
             '.version = $version
              | .architecture."64bit".url = $url
              | .architecture."64bit".hash = $hash' \
-            packaging/scoop/leviathan.json > leviathan.json.tmp
-          mv leviathan.json.tmp packaging/scoop/leviathan.json
+            packaging/scoop/gitnado.json > gitnado.json.tmp
+          mv gitnado.json.tmp packaging/scoop/gitnado.json
 
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packaging/scoop/leviathan.json
+          git add packaging/scoop/gitnado.json
           if git diff --cached --quiet; then
             echo "Scoop manifest already up to date for ${VERSION}"
             exit 0

@@ -4,7 +4,7 @@ import { keyboardService } from '../keyboard.service.ts';
 import { pushOverlay, removeOverlay, resetOverlayStack } from '../../utils/overlay-stack.ts';
 
 // Clear localStorage before tests
-const STORAGE_KEY = 'leviathan-keyboard-settings';
+const STORAGE_KEY = 'gitnado-keyboard-settings';
 
 describe('keyboard.service', () => {
   beforeEach(() => {
@@ -140,7 +140,7 @@ describe('keyboard.service', () => {
       keyboardService.setVimMode(true);
 
       // Check localStorage was updated
-      const stored = localStorage.getItem('leviathan-keyboard-settings');
+      const stored = localStorage.getItem('gitnado-keyboard-settings');
       expect(stored).to.exist;
       const settings = JSON.parse(stored!);
       expect(settings.vimMode).to.be.true;
@@ -445,7 +445,7 @@ describe('keyboard shortcuts must not hijack a <select>', () => {
 
 
 describe('shortcut customization has a single source of truth', () => {
-  const STORAGE_KEY = 'leviathan-keyboard-settings';
+  const STORAGE_KEY = 'gitnado-keyboard-settings';
 
   function storedSettings(): { vimMode?: boolean; customBindings?: Record<string, unknown> } {
     const raw = localStorage.getItem(STORAGE_KEY);

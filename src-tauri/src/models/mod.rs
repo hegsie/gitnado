@@ -1,4 +1,4 @@
-//! Data models for Leviathan
+//! Data models for Gitnado
 
 pub mod branch;
 pub mod commit;

@@ -1,7 +1,11 @@
 /**
- * Leviathan - Git GUI Client
+ * Gitnado - Git GUI Client
  * Application entry point
  */
+
+// Must come first: adopts pre-rename localStorage keys before any store
+// module reads storage.
+import './utils/legacy-storage-bootstrap.ts';
 
 // Import styles
 import './styles/tokens.css';
@@ -30,4 +34,4 @@ import { loggers } from './utils/logger.ts';
 // rendered, or Settings would keep naming a language the UI is not in.
 void applyPersistedLocale();
 
-loggers.app.info('Leviathan initialized');
+loggers.app.info('Gitnado initialized');

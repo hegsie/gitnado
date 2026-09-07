@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Result of a git describe operation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -115,7 +115,7 @@ pub async fn describe(
     // Verify the repository exists
     let repo_path = Path::new(&path);
     if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     // Build the git describe command
@@ -167,7 +167,7 @@ pub async fn describe(
 
     // Execute the command
     let output = cmd.output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git describe: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to execute git describe: {}", e))
     })?;
 
     if !output.status.success() {
@@ -177,11 +177,11 @@ pub async fn describe(
         // a repository nobody has tagged yet, so it is reported separately
         // from the failures that mean the request itself was wrong.
         if is_no_names_found(stderr) {
-            return Err(LeviathanError::NoTagsReachable(
+            return Err(GitnadoError::NoTagsReachable(
                 commitish.unwrap_or_else(|| "HEAD".to_string()),
             ));
         }
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git describe failed: {}",
             stderr
         )));
@@ -275,7 +275,7 @@ mod tests {
         // UI can show an empty state rather than a failure.
         assert!(matches!(
             result,
-            Err(LeviathanError::NoTagsReachable(ref target)) if target == "HEAD"
+            Err(GitnadoError::NoTagsReachable(ref target)) if target == "HEAD"
         ));
     }
 
@@ -300,7 +300,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(LeviathanError::NoTagsReachable(ref target)) if *target == oid
+            Err(GitnadoError::NoTagsReachable(ref target)) if *target == oid
         ));
     }
 
@@ -325,7 +325,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(LeviathanError::OperationFailed(_))));
+        assert!(matches!(result, Err(GitnadoError::OperationFailed(_))));
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::NoTagsReachable(_))));
+        assert!(matches!(result, Err(GitnadoError::NoTagsReachable(_))));
 
         // With --tags flag, lightweight tags are found
         let result = describe(

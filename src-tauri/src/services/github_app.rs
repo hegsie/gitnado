@@ -154,7 +154,7 @@ fn api_client() -> crate::error::Result<reqwest::Client> {
 ///
 /// Uses the JWT to authenticate and request a short-lived installation token.
 ///
-/// Returns a [`crate::error::LeviathanError`] rather than a `String` so a
+/// Returns a [`crate::error::GitnadoError`] rather than a `String` so a
 /// refusal from the network gate keeps its `NetworkBlocked` identity all the
 /// way to the frontend, where it reads as `BLOCKED` like every other refusal.
 pub async fn get_installation_token(
@@ -171,12 +171,12 @@ pub async fn get_installation_token(
         .post(&url)
         .header("Authorization", format!("Bearer {}", jwt))
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
         .map_err(|e| {
-            crate::error::LeviathanError::OperationFailed(format!(
+            crate::error::GitnadoError::OperationFailed(format!(
                 "Failed to request installation token: {}",
                 e
             ))
@@ -188,7 +188,7 @@ pub async fn get_installation_token(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(crate::error::LeviathanError::OperationFailed(format!(
+        return Err(crate::error::GitnadoError::OperationFailed(format!(
             "GitHub API error ({}): {}",
             status, body
         )));
@@ -201,7 +201,7 @@ pub async fn get_installation_token(
     }
 
     let token_response: TokenResponse = response.json().await.map_err(|e| {
-        crate::error::LeviathanError::OperationFailed(format!(
+        crate::error::GitnadoError::OperationFailed(format!(
             "Failed to parse token response: {}",
             e
         ))
@@ -216,7 +216,7 @@ pub async fn get_installation_token(
 /// List all installations for a GitHub App.
 ///
 /// See [`get_installation_token`] for why this returns a
-/// [`crate::error::LeviathanError`].
+/// [`crate::error::GitnadoError`].
 pub async fn list_installations(jwt: &str) -> crate::error::Result<Vec<AppInstallation>> {
     let client = api_client()?;
 
@@ -224,12 +224,12 @@ pub async fn list_installations(jwt: &str) -> crate::error::Result<Vec<AppInstal
         .get(format!("{}/app/installations", GITHUB_API_BASE))
         .header("Authorization", format!("Bearer {}", jwt))
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
         .map_err(|e| {
-            crate::error::LeviathanError::OperationFailed(format!(
+            crate::error::GitnadoError::OperationFailed(format!(
                 "Failed to list installations: {}",
                 e
             ))
@@ -241,17 +241,14 @@ pub async fn list_installations(jwt: &str) -> crate::error::Result<Vec<AppInstal
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(crate::error::LeviathanError::OperationFailed(format!(
+        return Err(crate::error::GitnadoError::OperationFailed(format!(
             "GitHub API error ({}): {}",
             status, body
         )));
     }
 
     response.json().await.map_err(|e| {
-        crate::error::LeviathanError::OperationFailed(format!(
-            "Failed to parse installations: {}",
-            e
-        ))
+        crate::error::GitnadoError::OperationFailed(format!("Failed to parse installations: {}", e))
     })
 }
 
@@ -270,7 +267,7 @@ pub async fn get_or_refresh_token(
 
     // Generate new token
     let jwt = generate_jwt(config.app_id, &config.private_key_pem)
-        .map_err(crate::error::LeviathanError::OperationFailed)?;
+        .map_err(crate::error::GitnadoError::OperationFailed)?;
     let token = get_installation_token(&jwt, config.installation_id).await?;
     let token_str = token.token.clone();
 

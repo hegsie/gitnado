@@ -610,7 +610,7 @@ export interface CredentialManagerStatus {
   gcmAvailable: boolean;
   gcmVersion: string | null;
   configuredHelper: string | null;
-  usingLeviathanFallback: boolean;
+  usingGitnadoFallback: boolean;
 }
 
 export async function detectCredentialManager(

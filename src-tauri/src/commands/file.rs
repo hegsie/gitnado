@@ -5,7 +5,7 @@ use std::path::Path;
 use tauri::command;
 
 use super::path_utils::validate_path_within_repo;
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// Escape cmd.exe metacharacters to prevent command injection (Windows only).
@@ -113,13 +113,13 @@ fn set_git_config_value(
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     if output.status.success() {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(LeviathanError::OperationFailed(format!(
+        Err(GitnadoError::OperationFailed(format!(
             "Failed to set config: {}",
             stderr
         )))
@@ -132,13 +132,13 @@ fn set_git_config_value(
 pub async fn reveal_in_file_manager(path: String) -> Result<OpenResult> {
     let target = Path::new(&path);
     if !target.exists() {
-        return Err(LeviathanError::InvalidPath(path));
+        return Err(GitnadoError::InvalidPath(path));
     }
 
     #[cfg(target_os = "windows")]
     {
         windows_reveal_command(target).spawn().map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to reveal in explorer: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to reveal in explorer: {}", e))
         })?;
     }
 
@@ -149,7 +149,7 @@ pub async fn reveal_in_file_manager(path: String) -> Result<OpenResult> {
             .args(["-R", &path])
             .spawn()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to reveal in Finder: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to reveal in Finder: {}", e))
             })?;
     }
 
@@ -164,7 +164,7 @@ pub async fn reveal_in_file_manager(path: String) -> Result<OpenResult> {
                 .arg(parent)
                 .spawn()
                 .map_err(|e| {
-                    LeviathanError::OperationFailed(format!(
+                    GitnadoError::OperationFailed(format!(
                         "Failed to reveal in file manager: {}",
                         e
                     ))
@@ -215,7 +215,7 @@ fn try_dbus_reveal(path: &Path) -> bool {
 pub async fn open_in_default_app(path: String) -> Result<OpenResult> {
     let target = Path::new(&path);
     if !target.exists() {
-        return Err(LeviathanError::InvalidPath(path));
+        return Err(GitnadoError::InvalidPath(path));
     }
 
     #[cfg(target_os = "windows")]
@@ -223,7 +223,7 @@ pub async fn open_in_default_app(path: String) -> Result<OpenResult> {
         std::process::Command::new("cmd")
             .args(["/c", "start", "", &escape_cmd_meta(&path)])
             .spawn()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open file: {}", e)))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -231,7 +231,7 @@ pub async fn open_in_default_app(path: String) -> Result<OpenResult> {
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open file: {}", e)))?;
     }
 
     #[cfg(target_os = "linux")]
@@ -239,7 +239,7 @@ pub async fn open_in_default_app(path: String) -> Result<OpenResult> {
         std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()
-            .map_err(|e| LeviathanError::OperationFailed(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open file: {}", e)))?;
     }
 
     Ok(OpenResult {
@@ -266,7 +266,7 @@ pub async fn open_in_configured_editor(
 
     let target = Path::new(&target_file);
     if !target.exists() {
-        return Err(LeviathanError::InvalidPath(target_file));
+        return Err(GitnadoError::InvalidPath(target_file));
     }
 
     // Get editor from git config (local first, then global)
@@ -286,7 +286,7 @@ pub async fn open_in_configured_editor(
                 .current_dir(repo_path)
                 .spawn()
                 .map_err(|e| {
-                    LeviathanError::OperationFailed(format!(
+                    GitnadoError::OperationFailed(format!(
                         "Failed to open editor '{}': {}",
                         editor_cmd, e
                     ))
@@ -476,7 +476,7 @@ pub async fn set_editor_config(path: String, editor: String, global: bool) -> Re
     let repo_path = Path::new(&path);
 
     if !global && !repo_path.join(".git").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     set_git_config_value(

@@ -51,7 +51,7 @@ async fn download_hf_to_file(repo: &str, filename: &str, dest: &Path) {
     let client = reqwest::Client::new();
     let response = client
         .get(&url)
-        .header("User-Agent", "Leviathan-Integration-Test")
+        .header("User-Agent", "Gitnado-Integration-Test")
         .send()
         .await
         .unwrap_or_else(|e| panic!("Failed to download {url}: {e}"));
@@ -114,7 +114,7 @@ async fn test_download_load_and_generate_text() {
     eprintln!("Loading model...");
     let mp = model_path.clone();
     let engine = tokio::task::spawn_blocking(move || {
-        leviathan_lib::services::ai::local::GgufEngine::load(&mp, "Llama-3.2-1B".to_string(), None)
+        gitnado_lib::services::ai::local::GgufEngine::load(&mp, "Llama-3.2-1B".to_string(), None)
     })
     .await
     .expect("spawn_blocking panicked")
@@ -126,7 +126,7 @@ async fn test_download_load_and_generate_text() {
 
     // Generate some text
     eprintln!("Generating text...");
-    use leviathan_lib::services::ai::providers::InferenceEngine;
+    use gitnado_lib::services::ai::providers::InferenceEngine;
     let output = engine
         .generate("Write a haiku about git:", 50)
         .await
@@ -147,7 +147,7 @@ async fn test_full_commit_message_generation() {
 
     // Create AiService the same way the app does
     let config_dir = TempDir::new().expect("Failed to create config dir");
-    let ai_state = leviathan_lib::services::ai::create_ai_state(config_dir.path().to_path_buf());
+    let ai_state = gitnado_lib::services::ai::create_ai_state(config_dir.path().to_path_buf());
 
     // Load the model through AiService (same path as the load_model Tauri command)
     {
@@ -162,7 +162,7 @@ async fn test_full_commit_message_generation() {
     {
         let mut service = ai_state.write().await;
         service
-            .set_active_provider(leviathan_lib::services::ai::AiProviderType::LocalInference)
+            .set_active_provider(gitnado_lib::services::ai::AiProviderType::LocalInference)
             .expect("set_active_provider failed");
     }
 
@@ -177,7 +177,7 @@ async fn test_full_commit_message_generation() {
         let (_, provider_type) = available.unwrap();
         assert_eq!(
             provider_type,
-            leviathan_lib::services::ai::AiProviderType::LocalInference
+            gitnado_lib::services::ai::AiProviderType::LocalInference
         );
     }
 
@@ -230,7 +230,7 @@ async fn test_load_unload_lifecycle() {
     let model_path = setup_test_model().await;
 
     let config_dir = TempDir::new().expect("Failed to create config dir");
-    let ai_state = leviathan_lib::services::ai::create_ai_state(config_dir.path().to_path_buf());
+    let ai_state = gitnado_lib::services::ai::create_ai_state(config_dir.path().to_path_buf());
 
     // Initially no provider available
     {
@@ -256,7 +256,7 @@ async fn test_load_unload_lifecycle() {
         let status = service.get_local_model_status().await;
         assert_eq!(
             status,
-            leviathan_lib::services::ai::providers::LocalModelStatus::Ready,
+            gitnado_lib::services::ai::providers::LocalModelStatus::Ready,
             "Model should be Ready after loading"
         );
     }
@@ -273,7 +273,7 @@ async fn test_load_unload_lifecycle() {
         let status = service.get_local_model_status().await;
         assert_eq!(
             status,
-            leviathan_lib::services::ai::providers::LocalModelStatus::Unloaded,
+            gitnado_lib::services::ai::providers::LocalModelStatus::Unloaded,
             "Model should be Unloaded after unloading"
         );
     }
@@ -286,7 +286,7 @@ async fn test_load_unload_lifecycle() {
 #[tokio::test]
 #[ignore]
 async fn test_all_registry_models_are_accessible() {
-    let registry = leviathan_lib::services::ai::local::ModelRegistry::default();
+    let registry = gitnado_lib::services::ai::local::ModelRegistry::default();
     let client = reqwest::Client::new();
 
     for model in registry.get_all() {
@@ -298,7 +298,7 @@ async fn test_all_registry_models_are_accessible() {
 
         let response = client
             .head(&url)
-            .header("User-Agent", "Leviathan-Integration-Test")
+            .header("User-Agent", "Gitnado-Integration-Test")
             .send()
             .await
             .unwrap_or_else(|e| panic!("Failed to reach {url}: {e}"));

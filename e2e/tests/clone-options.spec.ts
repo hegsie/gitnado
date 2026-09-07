@@ -169,7 +169,7 @@ test.describe('Clone Dialog - branch and submodule options', () => {
 
     // And the repository the user asked for is open regardless.
     const opened = await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as
         | {
             repositoryStore: {
               getState: () => { openRepositories: { repository: { path: string } }[] };

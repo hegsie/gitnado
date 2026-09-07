@@ -26,7 +26,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::{apply_token_credential_helper, create_command};
 
 /// LFS file tracking pattern
@@ -420,7 +420,7 @@ fn run_lfs_command_with_token(
 fn finish_lfs_command(mut command: crate::utils::GitCommand) -> Result<String> {
     let output = command
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git-lfs: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git-lfs: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -428,7 +428,7 @@ fn finish_lfs_command(mut command: crate::utils::GitCommand) -> Result<String> {
     if output.status.success() {
         Ok(stdout.trim().to_string())
     } else {
-        Err(LeviathanError::OperationFailed(
+        Err(GitnadoError::OperationFailed(
             if stderr.is_empty() { stdout } else { stderr }
                 .trim()
                 .to_string(),
@@ -700,7 +700,7 @@ pub async fn init_lfs(path: String) -> Result<()> {
     let repo_path = Path::new(&path);
 
     if !is_lfs_installed() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Git LFS is not installed. Please install it first.".to_string(),
         ));
     }
@@ -741,7 +741,7 @@ pub async fn lfs_untrack(path: String, pattern: String) -> Result<()> {
     // "No longer tracking ..." over a pattern that is still there.
     if let Ok(output) = run_lfs_command(repo_path, &["track"]) {
         if lists_pattern(&output, &pattern) {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "{} is still tracked. Remove it from the .gitattributes that defines it.",
                 pattern
             )));
@@ -1335,7 +1335,7 @@ mod tests {
              scoped to the remote's own host"
         );
         assert_eq!(
-            env_of(&cmd, "LEVIATHAN_GIT_TOKEN").as_deref(),
+            env_of(&cmd, "GITNADO_GIT_TOKEN").as_deref(),
             Some("s3cr3t"),
             "the helper reads the token from this env var"
         );
@@ -1343,7 +1343,7 @@ mod tests {
         // The token must reach git ONLY through the env var: argv is readable
         // by every other user on the machine.
         let helper = env_of(&cmd, "GIT_CONFIG_VALUE_1").expect("helper must be set");
-        assert!(helper.contains("LEVIATHAN_GIT_TOKEN"));
+        assert!(helper.contains("GITNADO_GIT_TOKEN"));
         assert!(!helper.contains("s3cr3t"));
         let args: Vec<String> = cmd
             .get_args()
@@ -1429,7 +1429,7 @@ mod tests {
         // would pass simply because nothing answered, proving nothing.
         let cmd = build_lfs_command(&repo.path, &["pull"], Some("s3cr3t"));
         assert_eq!(
-            env_of(&cmd, "LEVIATHAN_GIT_TOKEN").as_deref(),
+            env_of(&cmd, "GITNADO_GIT_TOKEN").as_deref(),
             Some("s3cr3t"),
             "the token IS installed here; what follows is about who git offers it to"
         );
@@ -1465,10 +1465,7 @@ mod tests {
             Some("credential.https://github.com.helper"),
             "an ssh remote must map to its provider's https host"
         );
-        assert_eq!(
-            env_of(&cmd, "LEVIATHAN_GIT_TOKEN").as_deref(),
-            Some("s3cr3t")
-        );
+        assert_eq!(env_of(&cmd, "GITNADO_GIT_TOKEN").as_deref(), Some("s3cr3t"));
     }
 
     #[test]
@@ -1478,7 +1475,7 @@ mod tests {
 
         let cmd = build_lfs_command(&repo.path, &["pull"], Some("s3cr3t"));
 
-        assert_eq!(env_of(&cmd, "LEVIATHAN_GIT_TOKEN"), None);
+        assert_eq!(env_of(&cmd, "GITNADO_GIT_TOKEN"), None);
         assert_eq!(env_of(&cmd, "GIT_CONFIG_KEY_0"), None);
     }
 
@@ -1512,7 +1509,7 @@ mod tests {
             "GIT_CONFIG_COUNT",
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
-            "LEVIATHAN_GIT_TOKEN",
+            "GITNADO_GIT_TOKEN",
         ] {
             assert_eq!(env_of(&cmd, key), None, "{} must not be set", key);
         }
@@ -1529,7 +1526,7 @@ mod tests {
             "GIT_CONFIG_COUNT",
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
-            "LEVIATHAN_GIT_TOKEN",
+            "GITNADO_GIT_TOKEN",
         ] {
             assert_eq!(env_of(&cmd, key), None, "{} must not be set", key);
         }
@@ -1573,14 +1570,14 @@ mod tests {
 
     fn blocked_message<T: std::fmt::Debug>(result: Result<T>) -> String {
         match result {
-            Err(LeviathanError::NetworkBlocked(message)) => message,
+            Err(GitnadoError::NetworkBlocked(message)) => message,
             other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
         }
     }
 
     fn assert_not_blocked<T: std::fmt::Debug>(result: &Result<T>, what: &str) {
         assert!(
-            !matches!(result, Err(LeviathanError::NetworkBlocked(_))),
+            !matches!(result, Err(GitnadoError::NetworkBlocked(_))),
             "{} must not be refused by the gate, got {:?}",
             what,
             result

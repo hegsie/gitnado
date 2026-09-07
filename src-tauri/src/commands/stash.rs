@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::Stash;
 
 /// Result of showing stash contents
@@ -100,7 +100,7 @@ pub async fn apply_stash(path: String, index: usize, drop_after: Option<bool>) -
     // conflicts. Surface the conflict so the UI opens the resolution flow, and
     // keep the stash regardless — `drop_after` is only honoured on a CLEAN apply.
     if repo.index()?.has_conflicts() {
-        return Err(LeviathanError::MergeConflict);
+        return Err(GitnadoError::MergeConflict);
     }
 
     if drop_after.unwrap_or(false) {
@@ -131,7 +131,7 @@ pub async fn pop_stash(path: String, index: usize) -> Result<()> {
     repo.stash_apply(index, None)?;
 
     if repo.index()?.has_conflicts() {
-        return Err(LeviathanError::MergeConflict);
+        return Err(GitnadoError::MergeConflict);
     }
 
     repo.stash_drop(index)?;
@@ -261,7 +261,7 @@ pub async fn stash_show(
     })?;
 
     let (message, stash_oid) = stash_info.ok_or_else(|| {
-        crate::error::LeviathanError::Git(git2::Error::from_str(&format!(
+        crate::error::GitnadoError::Git(git2::Error::from_str(&format!(
             "Stash entry {} not found",
             index
         )))
@@ -571,7 +571,7 @@ mod tests {
 
         let result = pop_stash(repo.path_str(), 0).await;
         assert!(
-            matches!(result, Err(LeviathanError::MergeConflict)),
+            matches!(result, Err(GitnadoError::MergeConflict)),
             "conflicted pop must return MergeConflict, got {:?}",
             result
         );
@@ -600,7 +600,7 @@ mod tests {
         // Even with drop_after=true, a conflicted apply must NOT drop the stash.
         let result = apply_stash(repo.path_str(), 0, Some(true)).await;
         assert!(
-            matches!(result, Err(LeviathanError::MergeConflict)),
+            matches!(result, Err(GitnadoError::MergeConflict)),
             "conflicted apply must return MergeConflict, got {:?}",
             result
         );

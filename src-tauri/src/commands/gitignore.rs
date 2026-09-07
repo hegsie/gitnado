@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// Entry in a .gitignore file
@@ -93,7 +93,7 @@ pub async fn remove_from_gitignore(
     let gitignore_path = Path::new(&path).join(".gitignore");
 
     if !gitignore_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             ".gitignore file does not exist".to_string(),
         ));
     }
@@ -105,13 +105,13 @@ pub async fn remove_from_gitignore(
         .checked_sub(1)
         .filter(|i| *i < lines.len())
         .ok_or_else(|| {
-            LeviathanError::OperationFailed(format!(
+            GitnadoError::OperationFailed(format!(
                 ".gitignore has no line {line_number} — reload and try again"
             ))
         })?;
 
     if lines[index].trim() != pattern.trim() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             ".gitignore line {line_number} no longer reads \"{}\" — reload and try again",
             pattern.trim()
         )));
@@ -241,18 +241,18 @@ pub async fn check_ignore_verbose(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to run git check-ignore: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to run git check-ignore: {}", e))
         })?;
 
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         stdin.write_all(&stdin_bytes).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to write to git check-ignore: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to write to git check-ignore: {}", e))
         })?;
     }
 
     let output = child.wait_with_output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to run git check-ignore: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to run git check-ignore: {}", e))
     })?;
 
     Ok(parse_check_ignore_z(&output.stdout))

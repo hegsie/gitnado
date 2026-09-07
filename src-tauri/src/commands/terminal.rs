@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Escape cmd.exe metacharacters to prevent command injection (Windows only).
 /// Characters like & | < > ^ ( ) % ! are prefixed with ^ to be treated literally.
@@ -26,7 +26,7 @@ fn escape_cmd_meta(s: &str) -> String {
 pub async fn open_terminal(path: String) -> Result<()> {
     let dir = Path::new(&path);
     if !dir.exists() {
-        return Err(LeviathanError::InvalidPath(path));
+        return Err(GitnadoError::InvalidPath(path));
     }
 
     #[cfg(target_os = "windows")]
@@ -36,7 +36,7 @@ pub async fn open_terminal(path: String) -> Result<()> {
             .current_dir(dir)
             .spawn()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open terminal: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to open terminal: {}", e))
             })?;
     }
 
@@ -46,7 +46,7 @@ pub async fn open_terminal(path: String) -> Result<()> {
             .args(["-a", "Terminal", dir.to_str().unwrap_or(".")])
             .spawn()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open terminal: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to open terminal: {}", e))
             })?;
     }
 
@@ -80,7 +80,7 @@ pub async fn open_terminal(path: String) -> Result<()> {
         }
 
         if !opened {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "No terminal emulator found".to_string(),
             ));
         }
@@ -94,7 +94,7 @@ pub async fn open_terminal(path: String) -> Result<()> {
 pub async fn open_file_manager(path: String) -> Result<()> {
     let dir = Path::new(&path);
     if !dir.exists() {
-        return Err(LeviathanError::InvalidPath(path));
+        return Err(GitnadoError::InvalidPath(path));
     }
 
     #[cfg(target_os = "windows")]
@@ -103,7 +103,7 @@ pub async fn open_file_manager(path: String) -> Result<()> {
             .arg(dir)
             .spawn()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open file manager: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to open file manager: {}", e))
             })?;
     }
 
@@ -113,7 +113,7 @@ pub async fn open_file_manager(path: String) -> Result<()> {
             .arg(dir)
             .spawn()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open file manager: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to open file manager: {}", e))
             })?;
     }
 
@@ -123,7 +123,7 @@ pub async fn open_file_manager(path: String) -> Result<()> {
             .arg(dir)
             .spawn()
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open file manager: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to open file manager: {}", e))
             })?;
     }
 
@@ -135,7 +135,7 @@ pub async fn open_file_manager(path: String) -> Result<()> {
 pub async fn open_in_editor(file_path: String) -> Result<()> {
     let path = Path::new(&file_path);
     if !path.exists() {
-        return Err(LeviathanError::InvalidPath(file_path));
+        return Err(GitnadoError::InvalidPath(file_path));
     }
 
     #[cfg(target_os = "windows")]
@@ -143,9 +143,7 @@ pub async fn open_in_editor(file_path: String) -> Result<()> {
         std::process::Command::new("cmd")
             .args(["/c", "start", "", &escape_cmd_meta(&file_path)])
             .spawn()
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open editor: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open editor: {}", e)))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -153,9 +151,7 @@ pub async fn open_in_editor(file_path: String) -> Result<()> {
         std::process::Command::new("open")
             .arg(&file_path)
             .spawn()
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open editor: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open editor: {}", e)))?;
     }
 
     #[cfg(target_os = "linux")]
@@ -163,9 +159,7 @@ pub async fn open_in_editor(file_path: String) -> Result<()> {
         std::process::Command::new("xdg-open")
             .arg(&file_path)
             .spawn()
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to open editor: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open editor: {}", e)))?;
     }
 
     Ok(())

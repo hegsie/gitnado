@@ -26,7 +26,7 @@ import { dialogStore as dStore } from './dialog.store.ts';
 
 // Expose stores on window for E2E testing (only in dev mode)
 if (import.meta.env?.DEV) {
-  (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ = {
+  (window as unknown as Record<string, unknown>).__GITNADO_STORES__ = {
     repositoryStore: repoStore,
     commitsStore: cStore,
     uiStore: uStore,

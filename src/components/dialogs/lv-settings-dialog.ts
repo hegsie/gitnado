@@ -1388,7 +1388,7 @@ export class LvSettingsDialog extends LitElement {
     return JSON.stringify(
       {
         mcpServers: {
-          leviathan: {
+          gitnado: {
             url: `http://127.0.0.1:${this.mcpPort}`,
             headers: { Authorization: `Bearer ${token}` },
           },
@@ -1945,7 +1945,7 @@ export class LvSettingsDialog extends LitElement {
           ${this.renderToggleRow(
             msg('Reopen Last Repositories'),
             msg(
-              'Reopen the repository tabs from your last session when Leviathan starts. Turn this off to start on the welcome screen — the tabs are remembered, so turning it back on restores them.'
+              'Reopen the repository tabs from your last session when Gitnado starts. Turn this off to start on the welcome screen — the tabs are remembered, so turning it back on restores them.'
             ),
             this.openLastRepository,
             'openLastRepository'
@@ -2362,7 +2362,7 @@ export class LvSettingsDialog extends LitElement {
             <div class="setting-label">
               <span class="setting-name">${msg('MCP Client Configuration')}</span>
               <span class="setting-description">
-                ${msg('Paste this into your MCP client. A client set up before Leviathan required a token must add the Authorization header, or its requests are refused with 401.')}
+                ${msg('Paste this into your MCP client. A client set up before Gitnado required a token must add the Authorization header, or its requests are refused with 401.')}
               </span>
             </div>
             <button

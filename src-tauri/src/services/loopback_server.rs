@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::error::LeviathanError;
+use crate::error::GitnadoError;
 
 /// The result of a successful OAuth callback: the authorization code together
 /// with the `state` parameter echoed back by the provider. The caller is
@@ -95,7 +95,7 @@ const PREFERRED_PORTS: &[u16] = &[8080, 8081];
 
 impl LoopbackServer {
     /// Create a new loopback server, preferring specific ports for OAuth compatibility
-    pub fn new() -> Result<Self, LeviathanError> {
+    pub fn new() -> Result<Self, GitnadoError> {
         // Try preferred ports first (these should match redirect URIs in OAuth apps)
         let listener = Self::bind_preferred_or_random()?;
         Self::from_listener(listener)
@@ -103,9 +103,9 @@ impl LoopbackServer {
 
     /// Create a loopback server on a specific required port
     /// Returns an error if the port is not available
-    pub fn new_with_port(port: u16) -> Result<Self, LeviathanError> {
+    pub fn new_with_port(port: u16) -> Result<Self, GitnadoError> {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-            .map_err(|e| LeviathanError::OAuth(format!(
+            .map_err(|e| GitnadoError::OAuth(format!(
                 "Port {} is not available for OAuth callback. Please close any application using this port and try again. Error: {}",
                 port, e
             )))?;
@@ -138,10 +138,10 @@ impl LoopbackServer {
 
     /// Create a loopback server from an existing IPv4 listener, also listening on
     /// the IPv6 loopback (same port) when available.
-    fn from_listener(listener: TcpListener) -> Result<Self, LeviathanError> {
+    fn from_listener(listener: TcpListener) -> Result<Self, GitnadoError> {
         let port = listener
             .local_addr()
-            .map_err(|e| LeviathanError::OAuth(format!("Failed to get local address: {}", e)))?
+            .map_err(|e| GitnadoError::OAuth(format!("Failed to get local address: {}", e)))?
             .port();
 
         let listener_v6 = Self::try_bind_ipv6_loopback(port);
@@ -154,10 +154,10 @@ impl LoopbackServer {
         // Set non-blocking mode so the accept loop can poll both listeners.
         listener
             .set_nonblocking(true)
-            .map_err(|e| LeviathanError::OAuth(format!("Failed to set non-blocking: {}", e)))?;
+            .map_err(|e| GitnadoError::OAuth(format!("Failed to set non-blocking: {}", e)))?;
         if let Some(ref v6) = listener_v6 {
             v6.set_nonblocking(true)
-                .map_err(|e| LeviathanError::OAuth(format!("Failed to set non-blocking: {}", e)))?;
+                .map_err(|e| GitnadoError::OAuth(format!("Failed to set non-blocking: {}", e)))?;
         }
 
         // Spawn server thread
@@ -174,7 +174,7 @@ impl LoopbackServer {
     }
 
     /// Try to bind to preferred ports first, fall back to random port
-    fn bind_preferred_or_random() -> Result<TcpListener, LeviathanError> {
+    fn bind_preferred_or_random() -> Result<TcpListener, GitnadoError> {
         // Try preferred ports first
         for &port in PREFERRED_PORTS {
             if let Ok(listener) = TcpListener::bind(format!("127.0.0.1:{}", port)) {
@@ -186,7 +186,7 @@ impl LoopbackServer {
         // Fall back to random port
         tracing::info!("Preferred ports unavailable, using random port");
         TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| LeviathanError::OAuth(format!("Failed to bind loopback server: {}", e)))
+            .map_err(|e| GitnadoError::OAuth(format!("Failed to bind loopback server: {}", e)))
     }
 
     /// Get the port the server is listening on
@@ -205,14 +205,11 @@ impl LoopbackServer {
     /// on success, or an error message on failure. The caller MUST validate the
     /// returned `state` against the value it issued.
     /// Times out after 5 minutes.
-    pub fn wait_for_callback(
-        mut self,
-        timeout: Duration,
-    ) -> Result<CallbackResult, LeviathanError> {
+    pub fn wait_for_callback(mut self, timeout: Duration) -> Result<CallbackResult, GitnadoError> {
         let code_rx = self
             .code_rx
             .take()
-            .ok_or_else(|| LeviathanError::OAuth("Server already consumed".to_string()))?;
+            .ok_or_else(|| GitnadoError::OAuth("Server already consumed".to_string()))?;
 
         // Wait for the code with timeout
         match code_rx.recv_timeout(timeout) {
@@ -227,17 +224,15 @@ impl LoopbackServer {
                 if let Some(tx) = self.shutdown_tx.take() {
                     let _ = tx.send(());
                 }
-                Err(LeviathanError::OAuth(error))
+                Err(GitnadoError::OAuth(error))
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(tx) = self.shutdown_tx.take() {
                     let _ = tx.send(());
                 }
-                Err(LeviathanError::OAuth(
-                    "OAuth callback timed out".to_string(),
-                ))
+                Err(GitnadoError::OAuth("OAuth callback timed out".to_string()))
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(LeviathanError::OAuth(
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(GitnadoError::OAuth(
                 "Server thread disconnected".to_string(),
             )),
         }
@@ -460,45 +455,84 @@ impl LoopbackServer {
         }
     }
 
-    /// Send a success response to the browser
-    fn send_success_response(stream: &mut TcpStream) {
-        let html = r#"<!DOCTYPE html>
-<html>
+    /// Background artwork for the post-sign-in page, embedded at compile time:
+    /// the loopback server answers exactly one request, so it cannot serve a
+    /// separate image file. Inlined as a data URI by `success_page_html`.
+    const OAUTH_BACKGROUND_JPEG: &[u8] = include_bytes!("../../assets/oauth-background.jpg");
+
+    /// The page shown in the browser after a successful sign-in.
+    ///
+    /// The artwork sits on the right, so the message card is anchored to the
+    /// left on wide viewports and centred on narrow ones. The page closes
+    /// itself after a few seconds; the copy says so in case the browser blocks
+    /// script-initiated closing.
+    fn success_page_html() -> String {
+        use base64::Engine as _;
+        let background =
+            base64::engine::general_purpose::STANDARD.encode(Self::OAUTH_BACKGROUND_JPEG);
+        format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
 <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Authorization Successful</title>
     <style>
-        body {
+        html, body {{ height: 100%; margin: 0; }}
+        body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             display: flex;
-            justify-content: center;
             align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .container {
-            text-align: center;
-            padding: 40px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 12px;
+            justify-content: center;
+            color: #e7edf7;
+            background: #0b1630 url("data:image/jpeg;base64,{background}") no-repeat right center / cover;
+        }}
+        .container {{
+            box-sizing: border-box;
+            max-width: 420px;
+            margin: 24px;
+            padding: 36px 40px;
+            background: rgba(11, 22, 48, 0.72);
+            border: 1px solid rgba(95, 211, 201, 0.35);
+            border-radius: 14px;
             backdrop-filter: blur(10px);
-        }
-        h1 { margin: 0 0 10px 0; }
-        p { margin: 0; opacity: 0.9; }
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+        }}
+        .check {{
+            width: 44px; height: 44px; border-radius: 50%;
+            background: rgba(95, 211, 201, 0.16); color: #5fd3c9;
+            display: inline-grid; place-items: center; margin-bottom: 16px;
+        }}
+        .check svg {{ width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }}
+        h1 {{ margin: 0 0 8px; font-size: 24px; letter-spacing: -0.01em; }}
+        p {{ margin: 0; color: #9fb0cc; line-height: 1.5; }}
+        p + p {{ margin-top: 10px; font-size: 13px; opacity: 0.8; }}
+        @media (min-width: 900px) {{
+            body {{ justify-content: flex-start; }}
+            .container {{ margin-left: 8vw; }}
+        }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Authorization Successful!</h1>
-        <p>You can close this window and return to Leviathan.</p>
+        <div class="check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+        <h1>Authorization Successful</h1>
+        <p>You can close this window and return to Gitnado.</p>
+        <p>This window closes by itself in a few seconds.</p>
     </div>
     <script>setTimeout(() => window.close(), 3000);</script>
 </body>
-</html>"#;
+</html>"#
+        )
+    }
+
+    /// Send a success response to the browser
+    fn send_success_response(stream: &mut TcpStream) {
+        let html = Self::success_page_html();
 
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             html.len(),
             html
         );
@@ -644,6 +678,67 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- post-sign-in page -------------------------------------------------
+
+    #[test]
+    fn success_page_embeds_background_artwork_as_data_uri() {
+        use base64::Engine as _;
+        let html = LoopbackServer::success_page_html();
+
+        let start = html
+            .find("data:image/jpeg;base64,")
+            .expect("background is inlined as a JPEG data URI");
+        let payload = &html[start + "data:image/jpeg;base64,".len()..];
+        let end = payload.find('"').expect("data URI is quoted");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&payload[..end])
+            .expect("payload is valid base64");
+
+        assert_eq!(bytes, LoopbackServer::OAUTH_BACKGROUND_JPEG);
+        assert_eq!(&bytes[..2], &[0xFF, 0xD8], "embedded asset is a JPEG");
+        assert!(
+            bytes.len() > 10_000,
+            "asset is the real artwork, not a stub"
+        );
+    }
+
+    #[test]
+    fn success_page_keeps_its_copy_and_self_close() {
+        let html = LoopbackServer::success_page_html();
+        assert!(html.contains("<title>Authorization Successful</title>"));
+        assert!(html.contains("Authorization Successful</h1>"));
+        assert!(html.contains("return to Gitnado"));
+        assert!(html.contains("window.close()"));
+        // format! braces must all have been consumed — no CSS left doubled.
+        assert!(!html.contains("{{") && !html.contains("}}"));
+    }
+
+    #[test]
+    fn success_response_is_a_complete_http_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            LoopbackServer::send_success_response(&mut stream);
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        let mut raw = String::new();
+        client.read_to_string(&mut raw).unwrap();
+        writer.join().unwrap();
+
+        let (head, body) = raw.split_once("\r\n\r\n").expect("headers then body");
+        assert!(head.starts_with("HTTP/1.1 200 OK"));
+        assert!(head.contains("Content-Type: text/html; charset=utf-8"));
+        let declared: usize = head
+            .lines()
+            .find_map(|l| l.strip_prefix("Content-Length: "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(declared, body.len(), "Content-Length matches the body");
+        assert_eq!(body, LoopbackServer::success_page_html());
+    }
 
     #[test]
     fn test_server_creation() {

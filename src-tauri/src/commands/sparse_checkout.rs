@@ -3,7 +3,7 @@
 
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// Sparse checkout configuration
@@ -26,13 +26,13 @@ fn run_git(path: &str, args: &[&str]) -> Result<String> {
         .arg(path)
         .args(args)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git: {}", e)))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(LeviathanError::OperationFailed(format!(
+        Err(GitnadoError::OperationFailed(format!(
             "git {} failed: {}",
             args.first().unwrap_or(&""),
             stderr
@@ -117,7 +117,7 @@ pub async fn set_sparse_checkout_patterns(
     patterns: Vec<String>,
 ) -> Result<SparseCheckoutConfig> {
     if patterns.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "At least one pattern is required".to_string(),
         ));
     }
@@ -137,7 +137,7 @@ pub async fn add_sparse_checkout_patterns(
     patterns: Vec<String>,
 ) -> Result<SparseCheckoutConfig> {
     if patterns.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "At least one pattern is required".to_string(),
         ));
     }

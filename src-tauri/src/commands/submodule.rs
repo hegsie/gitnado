@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::cli_safety::reject_flag_like;
 use crate::utils::{apply_token_credential_helper, create_command, GitCommand};
 
@@ -123,7 +123,7 @@ fn run_git_command_in(
 ) -> Result<String> {
     let output = submodule_command_in(cwd, token_repo, args, token, token_remote)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -131,7 +131,7 @@ fn run_git_command_in(
     if output.status.success() {
         Ok(stdout.trim().to_string())
     } else {
-        Err(LeviathanError::OperationFailed(
+        Err(GitnadoError::OperationFailed(
             if stderr.is_empty() { stdout } else { stderr }
                 .trim()
                 .to_string(),
@@ -473,7 +473,7 @@ fn update_nested_submodules(
     depth: usize,
 ) -> Result<()> {
     if depth > MAX_SUBMODULE_DEPTH {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Submodules nested more than {} levels deep under {}; not recursing further",
             MAX_SUBMODULE_DEPTH,
             parent.display()
@@ -841,14 +841,14 @@ mod tests {
 
     fn blocked_message<T: std::fmt::Debug>(result: Result<T>) -> String {
         match result {
-            Err(LeviathanError::NetworkBlocked(message)) => message,
+            Err(GitnadoError::NetworkBlocked(message)) => message,
             other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
         }
     }
 
     fn assert_not_blocked<T: std::fmt::Debug>(result: &Result<T>, what: &str) {
         assert!(
-            !matches!(result, Err(LeviathanError::NetworkBlocked(_))),
+            !matches!(result, Err(GitnadoError::NetworkBlocked(_))),
             "{} must not be refused by the gate, got {:?}",
             what,
             result
@@ -2139,7 +2139,7 @@ mod tests {
         let out_dir = tempfile::tempdir().unwrap();
         let seen = out_dir.path().join("token-seen.txt");
         let update_cmd = format!(
-            "!sh -c 'printf \"%s\" \"$LEVIATHAN_GIT_TOKEN\" > \"{}\"'",
+            "!sh -c 'printf \"%s\" \"$GITNADO_GIT_TOKEN\" > \"{}\"'",
             seen.display()
         );
         git_in(
@@ -2428,7 +2428,7 @@ mod tests {
             "a token with no remote to scope it to must not be injected under a guessed host"
         );
         assert!(
-            !keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"),
+            !keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"),
             "a token with no remote to scope it to must not be exported"
         );
     }
@@ -2454,7 +2454,7 @@ mod tests {
             .collect();
 
         assert!(
-            !keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"),
+            !keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"),
             "an unresolvable remote must not fall back to another remote's host"
         );
     }
@@ -2483,7 +2483,7 @@ mod tests {
             "a tokenless update must not clobber GIT_CONFIG_COUNT or shadow the user's credential helper"
         );
         assert!(
-            !keys.iter().any(|k| k == "LEVIATHAN_GIT_TOKEN"),
+            !keys.iter().any(|k| k == "GITNADO_GIT_TOKEN"),
             "a tokenless update must not export an empty token"
         );
     }

@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// A git note attached to a commit
 #[derive(Debug, Clone, serde::Serialize)]
@@ -26,7 +26,7 @@ pub async fn get_note(
     let notes_ref = notes_ref.as_deref().unwrap_or("refs/notes/commits");
 
     let oid = git2::Oid::from_str(&commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     let result = match repo.find_note(Some(notes_ref), oid) {
         Ok(note) => Some(GitNote {
@@ -86,7 +86,7 @@ pub async fn set_note(
     let force = force.unwrap_or(true);
 
     let oid = git2::Oid::from_str(&commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     let sig = repo.signature()?;
 
@@ -110,12 +110,12 @@ pub async fn remove_note(
     let notes_ref = notes_ref.as_deref().unwrap_or("refs/notes/commits");
 
     let oid = git2::Oid::from_str(&commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     let sig = repo.signature()?;
 
     repo.note_delete(oid, Some(notes_ref), &sig, &sig)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to remove note: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to remove note: {}", e)))?;
 
     Ok(())
 }

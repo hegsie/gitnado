@@ -77,7 +77,7 @@ describe('lv-command-palette', () => {
 
   beforeEach(async () => {
     // Clear localStorage between tests
-    localStorage.removeItem('leviathan-recent-commands');
+    localStorage.removeItem('gitnado-recent-commands');
 
     el = await fixture<LvCommandPalette>(html`
       <lv-command-palette
@@ -476,13 +476,13 @@ describe('lv-command-palette', () => {
       const input = el.shadowRoot!.querySelector('.search-input') as HTMLInputElement;
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
-      const stored = JSON.parse(localStorage.getItem('leviathan-recent-commands') || '[]');
+      const stored = JSON.parse(localStorage.getItem('gitnado-recent-commands') || '[]');
       expect(stored).to.include('fetch');
     });
 
     it('shows recent commands when query is empty', async () => {
       // Pre-populate recent commands
-      localStorage.setItem('leviathan-recent-commands', JSON.stringify(['fetch']));
+      localStorage.setItem('gitnado-recent-commands', JSON.stringify(['fetch']));
 
       el = await fixture<LvCommandPalette>(html`
         <lv-command-palette
@@ -502,7 +502,7 @@ describe('lv-command-palette', () => {
 
     it('limits recent commands to 5', async () => {
       // Pre-populate with 6 commands
-      localStorage.setItem('leviathan-recent-commands', JSON.stringify(['a', 'b', 'c', 'd', 'e', 'f']));
+      localStorage.setItem('gitnado-recent-commands', JSON.stringify(['a', 'b', 'c', 'd', 'e', 'f']));
 
       el = await fixture<LvCommandPalette>(html`
         <lv-command-palette
@@ -522,7 +522,7 @@ describe('lv-command-palette', () => {
       }).saveRecentCommand.bind(el);
 
       saveRecentCommand('new-cmd');
-      const stored = JSON.parse(localStorage.getItem('leviathan-recent-commands') || '[]');
+      const stored = JSON.parse(localStorage.getItem('gitnado-recent-commands') || '[]');
       expect(stored.length).to.be.at.most(5);
     });
 
@@ -535,7 +535,7 @@ describe('lv-command-palette', () => {
       saveRecentCommand('push');
       saveRecentCommand('fetch'); // duplicate
 
-      const stored = JSON.parse(localStorage.getItem('leviathan-recent-commands') || '[]');
+      const stored = JSON.parse(localStorage.getItem('gitnado-recent-commands') || '[]');
       const fetchCount = stored.filter((id: string) => id === 'fetch').length;
       expect(fetchCount).to.equal(1);
       // Most recent should be first

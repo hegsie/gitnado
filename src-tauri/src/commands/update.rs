@@ -38,7 +38,7 @@ pub async fn start_auto_update_check(
     interval_hours: u32,
 ) -> Result<()> {
     if interval_hours == 0 {
-        return Err(crate::error::LeviathanError::OperationFailed(
+        return Err(crate::error::GitnadoError::OperationFailed(
             "Interval must be greater than 0".to_string(),
         ));
     }

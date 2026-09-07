@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{command, AppHandle, Emitter};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// How deep below the chosen folder the scan looks, by default.
 ///
@@ -339,13 +339,13 @@ pub async fn classify_repository_path(path: String) -> Result<PathClassification
 /// "no repositories found" would be a lie for a path that never existed.
 fn validate_scan_root(root: &Path) -> Result<()> {
     if !root.exists() {
-        return Err(LeviathanError::InvalidPath(format!(
+        return Err(GitnadoError::InvalidPath(format!(
             "{} no longer exists",
             root.display()
         )));
     }
     if !root.is_dir() {
-        return Err(LeviathanError::InvalidPath(format!(
+        return Err(GitnadoError::InvalidPath(format!(
             "{} is not a folder",
             root.display()
         )));
@@ -382,7 +382,7 @@ pub async fn scan_for_repositories(
         })
     })
     .await
-    .map_err(|e| LeviathanError::OperationFailed(format!("Repository scan failed: {}", e)))
+    .map_err(|e| GitnadoError::OperationFailed(format!("Repository scan failed: {}", e)))
 }
 
 #[cfg(test)]

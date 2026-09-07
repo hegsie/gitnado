@@ -3,7 +3,7 @@
 use std::path::Path;
 use tauri::{command, AppHandle, Emitter, State};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{
     FetchAllResult, MultiPushResult, Remote, RemoteFetchResult, RemoteFetchStatus,
     RemoteOperationResult, RemotePushResult,
@@ -44,11 +44,11 @@ fn transfer_failure(
     abort: &TransferAbort,
     error: git2::Error,
     timeout_message: &str,
-) -> LeviathanError {
+) -> GitnadoError {
     if abort.cancelled() {
-        LeviathanError::OperationCancelled
+        GitnadoError::OperationCancelled
     } else if abort.timed_out() {
-        LeviathanError::OperationTimeout(timeout_message.to_string())
+        GitnadoError::OperationTimeout(timeout_message.to_string())
     } else {
         error.into()
     }
@@ -61,7 +61,7 @@ pub async fn add_remote(path: String, name: String, url: String) -> Result<Remot
 
     // Check if remote already exists
     if repo.find_remote(&name).is_ok() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Remote '{}' already exists",
             name
         )));
@@ -83,7 +83,7 @@ pub async fn remove_remote(path: String, name: String) -> Result<()> {
 
     // Check if remote exists
     repo.find_remote(&name)
-        .map_err(|_| LeviathanError::RemoteNotFound(name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(name.clone()))?;
 
     repo.remote_delete(&name)?;
 
@@ -98,14 +98,14 @@ pub async fn rename_remote(path: String, old_name: String, new_name: String) -> 
     // Check if old remote exists
     let old_remote = repo
         .find_remote(&old_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(old_name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(old_name.clone()))?;
 
     let url = old_remote.url().unwrap_or("").to_string();
     let push_url = old_remote.pushurl().ok().flatten().map(|s| s.to_string());
 
     // Check if new name already exists
     if repo.find_remote(&new_name).is_ok() {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Remote '{}' already exists",
             new_name
         )));
@@ -144,7 +144,7 @@ pub async fn set_remote_url(
 
     // Check if remote exists
     repo.find_remote(&name)
-        .map_err(|_| LeviathanError::RemoteNotFound(name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(name.clone()))?;
 
     let url = url.trim();
 
@@ -157,7 +157,7 @@ pub async fn set_remote_url(
         }
     } else {
         if url.is_empty() {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Remote URL cannot be empty".to_string(),
             ));
         }
@@ -281,7 +281,7 @@ pub async fn fetch(
     let repo = git2::Repository::open(Path::new(&path))?;
     let remote_name_owned = resolve_fetch_remote(&repo, remote);
     repo.find_remote(&remote_name_owned)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name_owned.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name_owned.clone()))?;
     drop(repo);
 
     let repo_path = path.clone();
@@ -384,7 +384,7 @@ pub async fn get_fetch_remote(path: String, remote: Option<String>) -> Result<St
     let repo = git2::Repository::open(Path::new(&path))?;
     let remote_name = resolve_fetch_remote(&repo, remote);
     repo.find_remote(&remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
     Ok(remote_name)
 }
 
@@ -393,7 +393,7 @@ pub async fn get_fetch_remote(path: String, remote: Option<String>) -> Result<St
 ///
 /// The code is what the frontend already switches on (MERGE_CONFLICT,
 /// REBASE_CONFLICT, ...); a late completion that carried only prose lost it.
-fn late_failure(prefix: &str, error: LeviathanError) -> (String, Option<String>) {
+fn late_failure(prefix: &str, error: GitnadoError) -> (String, Option<String>) {
     let message = format!("{}: {}", prefix, error);
     (message, Some(crate::error::ErrorResponse::from(error).code))
 }
@@ -442,12 +442,12 @@ fn ensure_pullable(repo_path: &Path) -> Result<()> {
     let repo = git2::Repository::open(repo_path)?;
     match repo.state() {
         git2::RepositoryState::Clean => Ok(()),
-        git2::RepositoryState::Merge => Err(LeviathanError::OperationFailed(
+        git2::RepositoryState::Merge => Err(GitnadoError::OperationFailed(
             "You have not concluded your merge (MERGE_HEAD exists). Resolve the \
              conflicts and commit, or abort the merge, before pulling."
                 .to_string(),
         )),
-        state => Err(LeviathanError::OperationFailed(format!(
+        state => Err(GitnadoError::OperationFailed(format!(
             "Cannot pull: another operation is in progress ({:?}). \
              Complete or abort it first.",
             state
@@ -494,7 +494,7 @@ async fn await_remote_task<T: Send + 'static>(
     let label_owned = label.to_string();
     let late_label = label.to_string();
     let join_failed = move |e: tokio::task::JoinError| {
-        LeviathanError::Custom(format!("{} task failed: {}", label_owned, e))
+        GitnadoError::Custom(format!("{} task failed: {}", label_owned, e))
     };
 
     let Some(timeout) = timeout else {
@@ -508,7 +508,7 @@ async fn await_remote_task<T: Send + 'static>(
         Err(_) => {
             tokio::spawn(async move {
                 match handle.await {
-                    Ok(Err(LeviathanError::OperationTimeout(_))) => {}
+                    Ok(Err(GitnadoError::OperationTimeout(_))) => {}
                     Ok(result) => on_late(result),
                     // A panic AFTER the task moved refs or rewrote the working
                     // tree is exactly the silent mutation this reporter exists
@@ -516,14 +516,14 @@ async fn await_remote_task<T: Send + 'static>(
                     // any other late failure so the frontend refreshes.
                     Err(e) => {
                         tracing::warn!("abandoned remote task failed to join: {}", e);
-                        on_late(Err(LeviathanError::Custom(format!(
+                        on_late(Err(GitnadoError::Custom(format!(
                             "{} task failed: {}",
                             late_label, e
                         ))));
                     }
                 }
             });
-            Err(LeviathanError::OperationTimeout(format!(
+            Err(GitnadoError::OperationTimeout(format!(
                 "{} operation timed out",
                 label
             )))
@@ -565,7 +565,7 @@ fn fast_forward_to(repo: &git2::Repository, refname: &str, target_oid: git2::Oid
         Ok(()) => {}
         Err(e) if e.code() == git2::ErrorCode::Conflict => {
             let files = conflict_paths.borrow().join(", ");
-            return Err(LeviathanError::OperationFailed(if files.is_empty() {
+            return Err(GitnadoError::OperationFailed(if files.is_empty() {
                 "Your local changes would be overwritten by merge. \
                  Commit or stash them before you pull."
                     .to_string()
@@ -643,7 +643,7 @@ pub(crate) fn resolve_pull_branch(
     }
     let head = repo.head()?;
     if !head.is_branch() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "You are not currently on a branch. Check out a branch before \
              pulling, or say which branch to pull."
                 .to_string(),
@@ -651,7 +651,7 @@ pub(crate) fn resolve_pull_branch(
     }
     let refname = head
         .name()
-        .map_err(|_| LeviathanError::InvalidReference)?
+        .map_err(|_| GitnadoError::InvalidReference)?
         .to_string();
     Ok((head.shorthand().unwrap_or("main").to_string(), refname))
 }
@@ -689,7 +689,7 @@ pub async fn get_pull_remote(
     let (_, head_refname) = resolve_pull_branch(&repo, branch.as_deref())?;
     let remote_name = resolve_pull_remote(&repo, remote, &head_refname);
     repo.find_remote(&remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
     Ok(remote_name)
 }
 
@@ -699,7 +699,7 @@ pub async fn get_push_remote(path: String, remote: Option<String>) -> Result<Str
     let repo = git2::Repository::open(Path::new(&path))?;
     let remote_name = resolve_push_remote(&repo, remote);
     repo.find_remote(&remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
     Ok(remote_name)
 }
 
@@ -817,7 +817,7 @@ pub(crate) fn merge_fetched_commit(
 
     let merge_commit_result = (|| -> Result<()> {
         if repo.index()?.has_conflicts() {
-            return Err(LeviathanError::MergeConflict);
+            return Err(GitnadoError::MergeConflict);
         }
         // The same two hooks merge() runs. `git pull` is fetch + merge, and
         // githooks(5) has git merge fire pre-merge-commit and commit-msg — so
@@ -927,8 +927,8 @@ pub(crate) fn pull_branch(
         monitor.with_message(format!("Pulling from {}", effective_remote)),
     )
     .map_err(|e| match e {
-        LeviathanError::OperationTimeout(_) => {
-            LeviathanError::OperationTimeout("Pull operation timed out".to_string())
+        GitnadoError::OperationTimeout(_) => {
+            GitnadoError::OperationTimeout("Pull operation timed out".to_string())
         }
         other => other,
     })?;
@@ -938,7 +938,7 @@ pub(crate) fn pull_branch(
     // Reported as a plain cancellation, not a "cancelled after change": the
     // repository is in exactly the state a fetch would have left it in.
     if monitor.is_cancelled() {
-        return Err(LeviathanError::OperationCancelled);
+        return Err(GitnadoError::OperationCancelled);
     }
 
     // Do NOT start the merge or rebase once the caller has already been told
@@ -953,7 +953,7 @@ pub(crate) fn pull_branch(
     // OperationTimeout as an outcome the caller was already told about, which
     // would leave those writes with no late event and no refresh anywhere.
     if crate::utils::deadline_passed(deadline) {
-        return Err(LeviathanError::OperationTimeoutAfterChange(
+        return Err(GitnadoError::OperationTimeoutAfterChange(
             "Pull operation timed out".to_string(),
         ));
     }
@@ -982,7 +982,7 @@ pub(crate) fn pull_branch(
             while let Some(op) = rebase_obj.next() {
                 let op = op?;
                 if repo.index()?.has_conflicts() {
-                    return Err(LeviathanError::RebaseConflict);
+                    return Err(GitnadoError::RebaseConflict);
                 }
                 let signature = repo.signature()?;
                 if crate::commands::merge::commit_or_skip_empty(
@@ -1003,13 +1003,13 @@ pub(crate) fn pull_branch(
             Ok(())
         })();
         match rebase_result {
-            Err(LeviathanError::RebaseConflict) => {
+            Err(GitnadoError::RebaseConflict) => {
                 // Paused, not finished: this call reports a conflict, never a
                 // count, so the commits already dropped here would go
                 // unreported. Hand them to the continue_rebase that finishes
                 // this rebase, which adds its own and reports the total.
                 crate::commands::merge::append_skipped(&repo, skipped_count);
-                return Err(LeviathanError::RebaseConflict);
+                return Err(GitnadoError::RebaseConflict);
             }
             Err(e) => {
                 let _ = rebase_obj.abort();
@@ -1187,14 +1187,14 @@ pub(crate) fn fetch_internal(
     // The in-transfer check lives in the git2 callback, which is the only
     // abort point libgit2 offers.
     if monitor.is_cancelled() {
-        return Err(LeviathanError::OperationCancelled);
+        return Err(GitnadoError::OperationCancelled);
     }
 
     let repo = git2::Repository::open(Path::new(path))?;
 
     let mut git_remote = repo
         .find_remote(remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.to_string()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.to_string()))?;
 
     let (mut fetch_opts, abort) = credentials_service::get_fetch_options_with_monitor(
         token, deadline,
@@ -1281,7 +1281,7 @@ pub(crate) fn push_branch(
     // git2 path, `push_negotiation` — see `get_push_options_with_monitor` for
     // why that is the last one git2 offers.
     if monitor.is_cancelled() {
-        return Err(LeviathanError::OperationCancelled);
+        return Err(GitnadoError::OperationCancelled);
     }
 
     let repo = git2::Repository::open(Path::new(path_for_task))?;
@@ -1295,7 +1295,7 @@ pub(crate) fn push_branch(
     let remote_for_task = resolve_push_remote(&repo, requested_remote.clone());
 
     repo.find_remote(&remote_for_task)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_for_task.clone()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_for_task.clone()))?;
 
     let branch_name = if let Some(ref b) = branch_for_task {
         b.clone()
@@ -1316,7 +1316,7 @@ pub(crate) fn push_branch(
     if force_val || use_force_with_lease {
         let rules = crate::commands::branch_rules::load_rules(Path::new(&path_for_task))?;
         if crate::commands::branch_rules::is_force_push_prevented(&rules, &branch_name) {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Branch \"{}\" is protected by a branch rule and cannot be \
                          force-pushed. Remove the rule first.",
                 branch_name
@@ -1368,12 +1368,12 @@ pub(crate) fn push_branch(
         // The pre-push hook can take a while (test suites are a common one),
         // so re-check before opening a connection.
         if monitor.is_cancelled() {
-            return Err(LeviathanError::OperationCancelled);
+            return Err(GitnadoError::OperationCancelled);
         }
 
         let mut git_remote = repo
             .find_remote(&remote_for_task)
-            .map_err(|_| LeviathanError::RemoteNotFound(remote_for_task.clone()))?;
+            .map_err(|_| GitnadoError::RemoteNotFound(remote_for_task.clone()))?;
 
         let (mut push_opts, abort) =
             credentials_service::get_push_options_with_monitor(token, monitor);
@@ -1664,7 +1664,7 @@ fn run_push_command(
     monitor: &TransferMonitor,
 ) -> Result<std::process::Output> {
     if monitor.is_cancelled() {
-        return Err(LeviathanError::OperationCancelled);
+        return Err(GitnadoError::OperationCancelled);
     }
 
     // The child is driven by hand below so a cancellation can kill it, which
@@ -1675,9 +1675,9 @@ fn run_push_command(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to execute git push: {}", e))
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git push: {}", e)))?;
 
     let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
         std::thread::spawn(move || {
@@ -1717,9 +1717,9 @@ fn run_push_command(
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(match abnormal {
-                PushOutcome::Cancelled => LeviathanError::OperationCancelled,
+                PushOutcome::Cancelled => GitnadoError::OperationCancelled,
                 PushOutcome::WaitFailed(e) => {
-                    LeviathanError::OperationFailed(format!("Failed to wait for git push: {}", e))
+                    GitnadoError::OperationFailed(format!("Failed to wait for git push: {}", e))
                 }
                 PushOutcome::Finished(_) => unreachable!("handled above"),
             });
@@ -1820,12 +1820,12 @@ fn push_via_cli(
         // without it, so silently dropping it would trade a clear error for a
         // force push that can discard a colleague's commits.
         if force_with_lease && stderr.contains("force-if-includes") {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Force push needs git 2.30 or newer for its safety check (--force-if-includes). Please update git."
                     .to_string(),
             ));
         }
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "git push failed: {}",
             stderr.trim()
         )));
@@ -1947,7 +1947,7 @@ pub async fn push_to_multiple_remotes(
             // Validate that all remotes exist before starting
             for remote_name in &remotes_for_task {
                 repo.find_remote(remote_name)
-                    .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
+                    .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
             }
 
             let mut results: Vec<RemotePushResult> = Vec::new();
@@ -1999,7 +1999,7 @@ pub async fn push_to_multiple_remotes(
             Ok((results, total_success, total_failed))
         })
         .await
-        .map_err(|e| LeviathanError::Custom(format!("Push task failed: {}", e)))??;
+        .map_err(|e| GitnadoError::Custom(format!("Push task failed: {}", e)))??;
 
     let overall_success = total_failed == 0;
 
@@ -2091,7 +2091,7 @@ pub async fn fetch_all_remotes(
             Ok((results, total_fetched, total_failed))
         })
         .await
-        .map_err(|e| LeviathanError::Custom(format!("Fetch task failed: {}", e)))??;
+        .map_err(|e| GitnadoError::Custom(format!("Fetch task failed: {}", e)))??;
 
     let overall_success = total_failed == 0;
 
@@ -2132,7 +2132,7 @@ fn fetch_single_remote(
 
     let mut git_remote = repo
         .find_remote(remote_name)
-        .map_err(|_| LeviathanError::RemoteNotFound(remote_name.to_string()))?;
+        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.to_string()))?;
 
     // Collect refspecs
     let mut refspecs: Vec<String> = git_remote
@@ -2265,7 +2265,7 @@ mod tests {
 
     fn blocked_host(result: Result<()>) -> String {
         match result {
-            Err(LeviathanError::NetworkBlocked(message)) => message,
+            Err(GitnadoError::NetworkBlocked(message)) => message,
             other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
         }
     }
@@ -2403,7 +2403,7 @@ mod tests {
         let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
 
         match result {
-            Err(LeviathanError::OperationTimeout(m)) => {
+            Err(GitnadoError::OperationTimeout(m)) => {
                 assert_eq!(m, "Pull operation timed out");
             }
             other => panic!("expected a Pull timeout, got {:?}", other.map(|_| ())),
@@ -2444,7 +2444,7 @@ mod tests {
 
         let result = await_remote_task(ELAPSES_FIRST, "Push", handle, on_late).await;
         match result {
-            Err(LeviathanError::OperationTimeout(m)) => assert_eq!(m, "Push operation timed out"),
+            Err(GitnadoError::OperationTimeout(m)) => assert_eq!(m, "Push operation timed out"),
             other => panic!("expected a Push timeout, got {:?}", other.map(|_| ())),
         }
 
@@ -2521,13 +2521,13 @@ mod tests {
         let mark_ended = Arc::clone(&ended);
         let (release, handle) = gated_task(move || {
             mark_ended.store(true, std::sync::atomic::Ordering::SeqCst);
-            Err(LeviathanError::OperationTimeout(
+            Err(GitnadoError::OperationTimeout(
                 "Pull operation timed out".to_string(),
             ))
         });
 
         let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
-        assert!(matches!(result, Err(LeviathanError::OperationTimeout(_))));
+        assert!(matches!(result, Err(GitnadoError::OperationTimeout(_))));
 
         // Let the abandoned task end, and give the reporter its turn to
         // decide what to do with the outcome.
@@ -2550,17 +2550,17 @@ mod tests {
     async fn test_a_timeout_after_the_repository_changed_is_still_reported() {
         let (seen, on_late) = late_slot::<()>();
         let (release, handle) = gated_task(|| {
-            Err(LeviathanError::OperationTimeoutAfterChange(
+            Err(GitnadoError::OperationTimeoutAfterChange(
                 "Pull operation timed out".to_string(),
             ))
         });
 
         let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
-        assert!(matches!(result, Err(LeviathanError::OperationTimeout(_))));
+        assert!(matches!(result, Err(GitnadoError::OperationTimeout(_))));
 
         release.send(()).unwrap();
         match late_outcome(&seen).await {
-            Some(Err(LeviathanError::OperationTimeoutAfterChange(_))) => {}
+            Some(Err(GitnadoError::OperationTimeoutAfterChange(_))) => {}
             Some(other) => panic!("unexpected late outcome: {:?}", other.err()),
             None => panic!("a timeout that had already changed the repo went unreported"),
         }
@@ -2571,7 +2571,7 @@ mod tests {
     #[test]
     fn test_a_post_fetch_timeout_reports_the_ordinary_timeout_code() {
         let response = crate::error::ErrorResponse::from(
-            LeviathanError::OperationTimeoutAfterChange("Pull operation timed out".to_string()),
+            GitnadoError::OperationTimeoutAfterChange("Pull operation timed out".to_string()),
         );
         assert_eq!(response.code, "OPERATION_TIMEOUT");
     }
@@ -2585,11 +2585,11 @@ mod tests {
         let (release, handle) = gated_task(|| -> Result<()> { unwind("boom") });
 
         let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
-        assert!(matches!(result, Err(LeviathanError::OperationTimeout(_))));
+        assert!(matches!(result, Err(GitnadoError::OperationTimeout(_))));
 
         release.send(()).unwrap();
         match late_outcome(&seen).await {
-            Some(Err(LeviathanError::Custom(m))) => assert!(
+            Some(Err(GitnadoError::Custom(m))) => assert!(
                 m.starts_with("Pull task failed:"),
                 "unexpected late join failure: {}",
                 m
@@ -2610,7 +2610,7 @@ mod tests {
         );
         assert!(fetch_late_event(
             true,
-            Err(LeviathanError::OperationFailed("boom".to_string())),
+            Err(GitnadoError::OperationFailed("boom".to_string())),
             "origin".to_string(),
             "/repos/a".to_string(),
         )
@@ -2632,7 +2632,7 @@ mod tests {
 
         let failed = fetch_late_event(
             false,
-            Err(LeviathanError::OperationFailed("boom".to_string())),
+            Err(GitnadoError::OperationFailed("boom".to_string())),
             "origin".to_string(),
             "/repos/a".to_string(),
         )
@@ -2666,7 +2666,7 @@ mod tests {
         .expect_err("fetching a remote that does not exist must fail");
 
         assert!(
-            !matches!(err, LeviathanError::OperationTimeout(_)),
+            !matches!(err, GitnadoError::OperationTimeout(_)),
             "a connection failure must not be relabelled as a timeout: {}",
             err
         );
@@ -2685,7 +2685,7 @@ mod tests {
         let result = await_remote_task(Some(Duration::from_secs(5)), "Push", handle, on_late).await;
 
         match result {
-            Err(LeviathanError::Custom(m)) => assert!(
+            Err(GitnadoError::Custom(m)) => assert!(
                 m.starts_with("Push task failed:"),
                 "unexpected join error: {}",
                 m
@@ -2769,7 +2769,7 @@ mod tests {
         );
 
         match result {
-            Err(LeviathanError::OperationTimeout(m)) => {
+            Err(GitnadoError::OperationTimeout(m)) => {
                 assert_eq!(m, "Pull operation timed out");
             }
             other => panic!("expected a Pull timeout, got {:?}", other.map(|_| ())),
@@ -2810,7 +2810,7 @@ mod tests {
         // remote-tracking refs, so this outcome must still reach the late
         // reporter (await_remote_task suppresses a plain OperationTimeout).
         match result {
-            Err(LeviathanError::OperationTimeoutAfterChange(m)) => {
+            Err(GitnadoError::OperationTimeoutAfterChange(m)) => {
                 assert_eq!(m, "Pull operation timed out");
             }
             other => panic!("expected a Pull timeout, got {:?}", other.map(|_| ())),
@@ -2948,7 +2948,7 @@ mod tests {
         local.create_commit("local edits contested", &[("contested.txt", "ours\n")]);
 
         let err = pull_rebase(&local, &branch).expect_err("the pull must stop on the conflict");
-        assert!(matches!(err, LeviathanError::RebaseConflict), "{:?}", err);
+        assert!(matches!(err, GitnadoError::RebaseConflict), "{:?}", err);
 
         crate::commands::merge::resolve_conflict(
             local.path_str(),
@@ -3026,7 +3026,7 @@ mod tests {
             .expect_err("a conflicting rebase pull must report the conflict");
 
         assert!(
-            matches!(err, LeviathanError::RebaseConflict),
+            matches!(err, GitnadoError::RebaseConflict),
             "unexpected error: {}",
             err
         );
@@ -3481,7 +3481,7 @@ mod tests {
             .expect_err("a repo with no remotes has no push destination");
 
         assert!(
-            matches!(err, LeviathanError::RemoteNotFound(ref name) if name == "origin"),
+            matches!(err, GitnadoError::RemoteNotFound(ref name) if name == "origin"),
             "the missing destination is named: {err:?}"
         );
     }
@@ -3505,7 +3505,7 @@ mod tests {
             .expect_err("a pushDefault naming a missing remote must not resolve");
 
         assert!(
-            matches!(err, LeviathanError::RemoteNotFound(ref name) if name == "nope"),
+            matches!(err, GitnadoError::RemoteNotFound(ref name) if name == "nope"),
             "the missing destination is named: {err:?}"
         );
     }
@@ -3666,7 +3666,7 @@ mod tests {
         let err = get_pull_remote(repo_dir.path.to_string_lossy().to_string(), None, None)
             .await
             .unwrap_err();
-        assert!(matches!(err, LeviathanError::RemoteNotFound(name) if name == "deleted"));
+        assert!(matches!(err, GitnadoError::RemoteNotFound(name) if name == "deleted"));
     }
 
     /// Detached HEAD: `pull_branch` refuses outright, so this must too rather
@@ -3721,7 +3721,7 @@ mod tests {
         let err = get_push_remote(repo_dir.path.to_string_lossy().to_string(), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, LeviathanError::RemoteNotFound(name) if name == "gone"));
+        assert!(matches!(err, GitnadoError::RemoteNotFound(name) if name == "gone"));
     }
 
     // ---- pull's normal-merge arm (merge_fetched_commit) ----
@@ -3947,7 +3947,7 @@ mod tests {
         let head_before = test_repo.head_oid();
 
         let err = merge_origin(&test_repo, &branch).expect_err("the merge must conflict");
-        assert!(matches!(err, LeviathanError::MergeConflict));
+        assert!(matches!(err, GitnadoError::MergeConflict));
         assert_eq!(
             test_repo.head_oid(),
             head_before,
@@ -4155,7 +4155,7 @@ mod tests {
             Some("credential.https://push-host.test.helper")
         );
         assert_eq!(
-            envs.get("LEVIATHAN_GIT_TOKEN").map(String::as_str),
+            envs.get("GITNADO_GIT_TOKEN").map(String::as_str),
             Some("ghp_secret")
         );
     }
@@ -5019,13 +5019,13 @@ mod tests {
 
         // Neither flag: the real error survives untouched.
         let plain = transfer_failure(&abort, raw(), "Fetch operation timed out");
-        assert!(matches!(plain, LeviathanError::Git(_)));
+        assert!(matches!(plain, GitnadoError::Git(_)));
 
         abort
             .timed_out
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let timed_out = transfer_failure(&abort, raw(), "Fetch operation timed out");
-        assert!(matches!(timed_out, LeviathanError::OperationTimeout(_)));
+        assert!(matches!(timed_out, GitnadoError::OperationTimeout(_)));
 
         // Cancellation wins over a deadline that also expired: the user is
         // told what they did, not what the clock did.
@@ -5033,7 +5033,7 @@ mod tests {
             .cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let cancelled = transfer_failure(&abort, raw(), "Fetch operation timed out");
-        assert!(matches!(cancelled, LeviathanError::OperationCancelled));
+        assert!(matches!(cancelled, GitnadoError::OperationCancelled));
         assert_eq!(
             crate::error::ErrorResponse::from(cancelled).code,
             "OPERATION_CANCELLED",
@@ -5055,7 +5055,7 @@ mod tests {
         let err = fetch_internal(&local.path_str(), "origin", false, None, None, monitor)
             .expect_err("a cancelled fetch must not succeed");
 
-        assert!(matches!(err, LeviathanError::OperationCancelled));
+        assert!(matches!(err, GitnadoError::OperationCancelled));
         assert!(
             events.lock().unwrap().is_empty(),
             "nothing transferred, so nothing to report"
@@ -5084,7 +5084,7 @@ mod tests {
         )
         .expect_err("a cancelled push must not succeed");
 
-        assert!(matches!(err, LeviathanError::OperationCancelled));
+        assert!(matches!(err, GitnadoError::OperationCancelled));
     }
 
     /// And for the git-CLI push path force push uses — there the child process
@@ -5110,7 +5110,7 @@ mod tests {
         )
         .expect_err("a cancelled force push must not succeed");
 
-        assert!(matches!(err, LeviathanError::OperationCancelled));
+        assert!(matches!(err, GitnadoError::OperationCancelled));
     }
 
     // ---- the push poll: reap first, cancel only what is still running ----
@@ -5128,7 +5128,7 @@ mod tests {
             .arg(repo.path_str())
             .arg("rev-parse")
             .arg("--verify")
-            .arg("refs/heads/leviathan-no-such-branch")
+            .arg("refs/heads/gitnado-no-such-branch")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -5268,7 +5268,7 @@ mod tests {
             .arg(repo.path_str())
             .arg("rev-parse")
             .arg("--verify")
-            .arg("refs/heads/leviathan-no-such-branch");
+            .arg("refs/heads/gitnado-no-such-branch");
 
         let output = run_push_command(cmd, &TransferMonitor::disabled())
             .expect("a completed command must be returned, not an error");
@@ -5295,7 +5295,7 @@ mod tests {
         let err = pull_with_monitor(&local, &branch, None, monitor)
             .expect_err("a cancelled pull must not succeed");
 
-        assert!(matches!(err, LeviathanError::OperationCancelled));
+        assert!(matches!(err, GitnadoError::OperationCancelled));
         assert_eq!(local.head_oid(), before, "HEAD must not have moved");
         assert!(
             !local.path.join("b.txt").exists(),
@@ -5374,11 +5374,11 @@ pub async fn deepen_repository(path: String, depth: u32) -> Result<()> {
         .arg("fetch")
         .arg(format!("--deepen={}", depth))
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to deepen: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to deepen: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Deepen failed: {}",
             stderr.trim()
         )));
@@ -5397,11 +5397,11 @@ pub async fn unshallow_repository(path: String) -> Result<()> {
         .arg("fetch")
         .arg("--unshallow")
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to unshallow: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to unshallow: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Unshallow failed: {}",
             stderr.trim()
         )));

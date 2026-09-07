@@ -15,7 +15,7 @@
 //! and every interval thereafter, which is why the scheduled loop treats a
 //! refusal differently from a failure: see [`classify_tick`].
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Emitter;
@@ -135,7 +135,7 @@ fn gated_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater
     guard_update_network(app)?;
     app.updater_builder().build().map_err(|e| {
         tracing::error!("Failed to build updater: {}", e);
-        LeviathanError::OperationFailed(format!("Failed to build updater: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to build updater: {}", e))
     })
 }
 
@@ -171,7 +171,7 @@ pub(crate) enum TickReport {
 pub(crate) fn classify_tick(result: Result<()>) -> TickReport {
     match result {
         Ok(()) => TickReport::Silent,
-        Err(LeviathanError::NetworkBlocked(reason)) => TickReport::Skipped(reason),
+        Err(GitnadoError::NetworkBlocked(reason)) => TickReport::Skipped(reason),
         Err(e) => TickReport::Failed(e.to_string()),
     }
 }
@@ -250,7 +250,7 @@ impl UpdateService {
 
 /// Check for updates and install if available (fully automatic).
 ///
-/// Returns [`crate::error::LeviathanError`] rather than a `String` so a refusal
+/// Returns [`crate::error::GitnadoError`] rather than a `String` so a refusal
 /// from the network gate keeps its `NetworkBlocked` identity all the way to the
 /// frontend, where it reads as `BLOCKED` like every other refusal — and so the
 /// scheduled loop can tell a refusal apart from a failure.
@@ -342,7 +342,7 @@ async fn check_and_install_update(app: &tauri::AppHandle) -> Result<()> {
                 )
                 .await
                 .map_err(|e| {
-                    LeviathanError::OperationFailed(format!(
+                    GitnadoError::OperationFailed(format!(
                         "Failed to download/install update: {}",
                         e
                     ))
@@ -373,7 +373,7 @@ async fn check_and_install_update(app: &tauri::AppHandle) -> Result<()> {
                 "check_and_install_update: Update check failed with error: {}",
                 e
             );
-            Err(LeviathanError::OperationFailed(format!(
+            Err(GitnadoError::OperationFailed(format!(
                 "Update check failed: {}",
                 e
             )))
@@ -413,7 +413,7 @@ pub async fn check_for_update_manual(app: &tauri::AppHandle) -> Result<UpdateChe
             latest_version: None,
             release_notes: None,
         }),
-        Err(e) => Err(LeviathanError::OperationFailed(format!(
+        Err(e) => Err(GitnadoError::OperationFailed(format!(
             "Update check failed: {}",
             e
         ))),
@@ -673,14 +673,14 @@ mod tests {
         // `Skipped` is what keeps the 24-hour timer alive and the toast away:
         // the loop emits `update-error` only for `Failed`.
         assert_eq!(
-            classify_tick(Err(LeviathanError::NetworkBlocked("offline".to_string()))),
+            classify_tick(Err(GitnadoError::NetworkBlocked("offline".to_string()))),
             TickReport::Skipped("offline".to_string())
         );
     }
 
     #[test]
     fn a_real_failure_is_still_reported() {
-        match classify_tick(Err(LeviathanError::OperationFailed("boom".to_string()))) {
+        match classify_tick(Err(GitnadoError::OperationFailed("boom".to_string()))) {
             TickReport::Failed(message) => assert!(message.contains("boom")),
             other => panic!("a real failure must still reach the user, got {:?}", other),
         }

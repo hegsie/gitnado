@@ -31,7 +31,7 @@ const SUPERPROJECT_ON_GITHUB = [
 ];
 
 interface SettingsStoreWindow {
-  __LEVIATHAN_STORES__?: {
+  __GITNADO_STORES__?: {
     settingsStore?: {
       getState: () => {
         setOfflineMode: (on: boolean) => void;
@@ -48,13 +48,13 @@ async function setSecurity(
 ): Promise<void> {
   await page.waitForFunction(
     () =>
-      typeof (window as unknown as SettingsStoreWindow).__LEVIATHAN_STORES__?.settingsStore !==
+      typeof (window as unknown as SettingsStoreWindow).__GITNADO_STORES__?.settingsStore !==
       'undefined',
   );
   await page.evaluate((s) => {
     const store = (
       window as unknown as SettingsStoreWindow
-    ).__LEVIATHAN_STORES__!.settingsStore!.getState();
+    ).__GITNADO_STORES__!.settingsStore!.getState();
     if (s.offlineMode !== undefined) store.setOfflineMode(s.offlineMode);
     if (s.remoteAllowlist !== undefined) store.setRemoteAllowlist(s.remoteAllowlist);
   }, security);

@@ -504,7 +504,7 @@ test.describe('Merge Editor - Live diff transitions', () => {
     // An external merge conflicts the file — the status refresh must flip the
     // open diff to the merge-editor redirect instead of rendering marker text.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         repositoryStore: { getState: () => { setStatus: (s: unknown[]) => void } };
       };
       stores.repositoryStore.getState().setStatus([
@@ -520,7 +520,7 @@ test.describe('Merge Editor - Live diff transitions', () => {
     // status entirely. The stale interstitial must close, not claim conflicts
     // forever.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         repositoryStore: { getState: () => { setStatus: (s: unknown[]) => void } };
       };
       stores.repositoryStore.getState().setStatus([]);

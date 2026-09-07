@@ -5,26 +5,13 @@ use std::fs;
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{GitProfile, ProfilesConfig};
 use crate::utils::create_command;
 
 /// Get the path to the profiles config file
 fn get_profiles_path() -> Result<std::path::PathBuf> {
-    let config_dir = dirs::config_dir().ok_or_else(|| {
-        LeviathanError::OperationFailed("Could not find config directory".to_string())
-    })?;
-
-    let app_config_dir = config_dir.join("leviathan");
-
-    // Create directory if it doesn't exist
-    if !app_config_dir.exists() {
-        fs::create_dir_all(&app_config_dir).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to create config directory: {}", e))
-        })?;
-    }
-
-    Ok(app_config_dir.join("profiles.json"))
+    Ok(crate::utils::app_paths::config_dir()?.join("profiles.json"))
 }
 
 /// Load profiles config from disk
@@ -36,10 +23,10 @@ fn load_profiles_config() -> Result<ProfilesConfig> {
     }
 
     let content = fs::read_to_string(&path)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to read profiles: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read profiles: {}", e)))?;
 
     let config: ProfilesConfig = serde_json::from_str(&content)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse profiles: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse profiles: {}", e)))?;
 
     Ok(config)
 }
@@ -49,11 +36,11 @@ fn save_profiles_config(config: &ProfilesConfig) -> Result<()> {
     let path = get_profiles_path()?;
 
     let content = serde_json::to_string_pretty(config).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to serialize profiles: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to serialize profiles: {}", e))
     })?;
 
     fs::write(&path, content)
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to write profiles: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to write profiles: {}", e)))?;
 
     Ok(())
 }
@@ -71,7 +58,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git config: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git config: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -81,7 +68,7 @@ fn run_git_config(repo_path: Option<&Path>, args: &[&str]) -> Result<String> {
     } else if output.status.code() == Some(1) && stderr.is_empty() && stdout.is_empty() {
         Ok(String::new())
     } else {
-        Err(LeviathanError::OperationFailed(if stderr.is_empty() {
+        Err(GitnadoError::OperationFailed(if stderr.is_empty() {
             stdout
         } else {
             stderr
@@ -151,7 +138,7 @@ pub async fn apply_profile(path: String, profile_id: String) -> Result<()> {
         .profiles
         .iter()
         .find(|p| p.id == profile_id)
-        .ok_or_else(|| LeviathanError::OperationFailed("Profile not found".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Profile not found".to_string()))?;
 
     let repo_path = Path::new(&path);
 

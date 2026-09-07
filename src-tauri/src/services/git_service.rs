@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Service for managing git repository state
 pub struct GitService {
@@ -23,7 +23,7 @@ impl GitService {
         let mut current = self
             .current_repo_path
             .write()
-            .map_err(|_| LeviathanError::OperationFailed("Lock poisoned".to_string()))?;
+            .map_err(|_| GitnadoError::OperationFailed("Lock poisoned".to_string()))?;
         *current = Some(path.to_path_buf());
         Ok(())
     }
@@ -33,7 +33,7 @@ impl GitService {
         let current = self
             .current_repo_path
             .read()
-            .map_err(|_| LeviathanError::OperationFailed("Lock poisoned".to_string()))?;
+            .map_err(|_| GitnadoError::OperationFailed("Lock poisoned".to_string()))?;
         Ok(current.clone())
     }
 
@@ -42,7 +42,7 @@ impl GitService {
         let mut current = self
             .current_repo_path
             .write()
-            .map_err(|_| LeviathanError::OperationFailed("Lock poisoned".to_string()))?;
+            .map_err(|_| GitnadoError::OperationFailed("Lock poisoned".to_string()))?;
         *current = None;
         Ok(())
     }

@@ -5,7 +5,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Validate that a file path stays within the repository directory.
 ///
@@ -19,7 +19,7 @@ use crate::error::{LeviathanError, Result};
 pub fn validate_path_within_repo(repo_path: &Path, file_path: &str) -> Result<PathBuf> {
     let rel = Path::new(file_path);
     if rel.is_absolute() || rel.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(LeviathanError::InvalidPath(
+        return Err(GitnadoError::InvalidPath(
             "File path must be relative and cannot contain '..'".to_string(),
         ));
     }
@@ -28,7 +28,7 @@ pub fn validate_path_within_repo(repo_path: &Path, file_path: &str) -> Result<Pa
 
     // Canonicalize the repo path as our trust boundary
     let canonical_repo = repo_path.canonicalize().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to resolve repo path: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to resolve repo path: {}", e))
     })?;
 
     // Walk up until we find an existing ancestor we can canonicalize
@@ -36,17 +36,17 @@ pub fn validate_path_within_repo(repo_path: &Path, file_path: &str) -> Result<Pa
     loop {
         if check.exists() {
             let canonical = check.canonicalize().map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to resolve path: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to resolve path: {}", e))
             })?;
             if !canonical.starts_with(&canonical_repo) {
-                return Err(LeviathanError::InvalidPath(
+                return Err(GitnadoError::InvalidPath(
                     "File path resolves to outside the repository".to_string(),
                 ));
             }
             break;
         }
         if !check.pop() {
-            return Err(LeviathanError::InvalidPath(
+            return Err(GitnadoError::InvalidPath(
                 "Cannot resolve file path".to_string(),
             ));
         }

@@ -6,8 +6,8 @@ This guide covers how to register OAuth applications with each integration provi
 
 1. Go to [GitHub Developer Settings](https://github.com/settings/applications/new)
 2. Fill in:
-   - **Application name**: Leviathan
-   - **Homepage URL**: https://github.com/anthropics/leviathan (or your app's website)
+   - **Application name**: Gitnado
+   - **Homepage URL**: https://github.com/hegsie/gitnado (or your app's website)
    - **Authorization callback URL**: `http://127.0.0.1/callback`
      - GitHub's loopback redirect allows any port, so the app can dynamically allocate one
 3. Click **Register application**
@@ -25,8 +25,8 @@ This guide covers how to register OAuth applications with each integration provi
 1. Go to [GitLab Applications](https://gitlab.com/-/user_settings/applications)
    - For self-hosted GitLab: `https://your-gitlab-instance/-/user_settings/applications`
 2. Fill in:
-   - **Name**: Leviathan
-   - **Redirect URI**: `leviathan://oauth/gitlab/callback`
+   - **Name**: Gitnado
+   - **Redirect URI**: `gitnado://oauth/gitlab/callback`
    - **Confidential**: **Unchecked** (this makes it a public client)
    - **Scopes**: Select `api` and `read_user`
 3. Click **Save application**
@@ -79,8 +79,8 @@ rejects personal Microsoft accounts (the `/consumers` authority).
 1. Go to your Bitbucket workspace settings:
    `https://bitbucket.org/YOUR_WORKSPACE/workspace/settings/oauth-consumers/new`
 2. Fill in:
-   - **Name**: Leviathan
-   - **Callback URL**: `leviathan://oauth/bitbucket/callback`
+   - **Name**: Gitnado
+   - **Callback URL**: `gitnado://oauth/bitbucket/callback`
    - **This is a private consumer**: **Unchecked** (makes it a public client)
    - **Permissions**:
      - Account: Read

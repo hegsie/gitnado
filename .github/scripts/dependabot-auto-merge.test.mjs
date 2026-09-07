@@ -116,7 +116,7 @@ function harness(overrides = {}) {
     get eventName() {
       return state.eventName;
     },
-    repo: { owner: 'hegsie', repo: 'Leviathan' },
+    repo: { owner: 'hegsie', repo: 'Gitnado' },
     payload: {
       workflow_run: { head_branch: 'dependabot/cargo/src-tauri/glob-0.3.4', head_sha: HEAD_SHA },
       repository: { default_branch: 'main' },
@@ -143,7 +143,7 @@ test('merges a compatible update by squash, pinned to the tested commit', async 
   assert.deepEqual(h.calls.merged, [
     {
       owner: 'hegsie',
-      repo: 'Leviathan',
+      repo: 'Gitnado',
       pull_number: 318,
       merge_method: 'squash',
       sha: HEAD_SHA,

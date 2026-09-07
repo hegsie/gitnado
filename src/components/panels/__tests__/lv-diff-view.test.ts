@@ -222,7 +222,7 @@ describe('lv-diff-view', () => {
     // test from the shipped defaults.
     settingsStore.getState().setDiffIgnoreWhitespace('none');
     settingsStore.getState().setDiffContextLines(3);
-    localStorage.removeItem('leviathan-diff-word-wrap');
+    localStorage.removeItem('gitnado-diff-word-wrap');
   });
 
   describe('async diff context pinning', () => {
@@ -1967,7 +1967,7 @@ describe('lv-diff-view', () => {
       clickWordWrapButton(el);
       await el.updateComplete;
 
-      expect(localStorage.getItem('leviathan-diff-word-wrap')).to.be.null;
+      expect(localStorage.getItem('gitnado-diff-word-wrap')).to.be.null;
     });
 
     it('stops following the setting once removed', async () => {

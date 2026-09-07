@@ -37,7 +37,7 @@ export function getErrorSuggestion(
   const msg = errorMessage.toLowerCase();
 
   // The backend refused because this repository already has a fetch, pull or
-  // push in flight (LeviathanError::RemoteOperationInFlight).
+  // push in flight (GitnadoError::RemoteOperationInFlight).
   //
   // Kept VERBATIM, and checked FIRST. The backend's wording already names
   // which operation holds the repository and says to retry — and it mentions

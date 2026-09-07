@@ -5,7 +5,7 @@
 
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::services::commit_index::{CommitIndex, IndexedCommit, SharedCommitIndex};
 
 /// Build the search index for a repository
@@ -26,7 +26,7 @@ pub async fn build_search_index(
     let path_clone = path.clone();
     let index = tokio::task::spawn_blocking(move || CommitIndex::build(&path_clone))
         .await
-        .map_err(|e| LeviathanError::Custom(format!("Index build failed: {}", e)))??;
+        .map_err(|e| GitnadoError::Custom(format!("Index build failed: {}", e)))??;
 
     let count = index.len();
     let mut guard = index_state.write().await;
@@ -35,7 +35,7 @@ pub async fn build_search_index(
         // this index was NOT stored. Report it so the frontend leaves the
         // repo un-ready instead of marking it ready over an empty backend
         // slot — it will rebuild on next activation.
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Search index build superseded by a newer generation".to_string(),
         ));
     }
@@ -56,7 +56,7 @@ pub async fn search_index(
     let guard = index_state.read().await;
     let index = guard
         .get(&path)
-        .ok_or_else(|| LeviathanError::OperationFailed("Search index not built yet".to_string()))?;
+        .ok_or_else(|| GitnadoError::OperationFailed("Search index not built yet".to_string()))?;
 
     let results = index.search(
         query.as_deref(),
@@ -88,15 +88,15 @@ pub async fn refresh_search_index(
         let path_clone = path.clone();
         let updated = tokio::task::spawn_blocking(move || {
             index.update_incremental(&path_clone)?;
-            Ok::<_, LeviathanError>(index)
+            Ok::<_, GitnadoError>(index)
         })
         .await
-        .map_err(|e| LeviathanError::Custom(format!("Index refresh failed: {}", e)))??;
+        .map_err(|e| GitnadoError::Custom(format!("Index refresh failed: {}", e)))??;
 
         let count = updated.len();
         let mut guard = index_state.write().await;
         if !guard.insert_if_current(path, updated, start_generation) {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Search index refresh superseded by a newer generation".to_string(),
             ));
         }

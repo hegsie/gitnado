@@ -17,7 +17,7 @@ function appliedScheme(page: Page): Promise<string | null> {
 
 function storedScheme(page: Page): Promise<{ scheme: string; auto: boolean }> {
   return page.evaluate(() => {
-    const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+    const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
       settingsStore: {
         getState: () => { graphColorScheme: string; graphColorSchemeAuto: boolean };
       };

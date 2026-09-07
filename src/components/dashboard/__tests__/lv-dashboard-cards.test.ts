@@ -346,7 +346,7 @@ describe('lv-repository-card', () => {
 
   describe('with repository', () => {
     it('renders repository name', async () => {
-      const repo = makeRepository({ name: 'leviathan' });
+      const repo = makeRepository({ name: 'gitnado' });
       const el = await fixture<LvRepositoryCard>(
         html`<lv-repository-card .repository=${repo}></lv-repository-card>`
       );
@@ -354,7 +354,7 @@ describe('lv-repository-card', () => {
 
       const name = el.shadowRoot!.querySelector('.repo-name');
       expect(name).to.not.be.null;
-      expect(name!.textContent).to.include('leviathan');
+      expect(name!.textContent).to.include('gitnado');
     });
 
     it('renders repository path', async () => {

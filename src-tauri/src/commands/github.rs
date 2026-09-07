@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::{ProviderRepository, ProviderRepositoryPage};
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
@@ -253,7 +253,7 @@ async fn resolve_github_token_with_source(
         return Ok((app_token, GitHubTokenSource::AppInstallation));
     }
 
-    Err(LeviathanError::OperationFailed(
+    Err(GitnadoError::OperationFailed(
         "GitHub token not configured".to_string(),
     ))
 }
@@ -274,8 +274,8 @@ async fn github_app_installation_token() -> Result<Option<String>> {
     let cfg = deserialize_app_config(&raw)?;
 
     let jwt = github_app::generate_jwt(cfg.app_id, &cfg.private_key_pem)
-        .map_err(LeviathanError::OperationFailed)?;
-    // Already a `LeviathanError`, so a gate refusal stays `NetworkBlocked`
+        .map_err(GitnadoError::OperationFailed)?;
+    // Already a `GitnadoError`, so a gate refusal stays `NetworkBlocked`
     // rather than being flattened into a generic failure.
     let token = github_app::get_installation_token(&jwt, cfg.installation_id).await?;
 
@@ -319,19 +319,19 @@ pub async fn check_github_connection(token: Option<String>) -> Result<GitHubConn
     let response = client
         .get(format!("{}/user", GITHUB_API_BASE))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to connect to GitHub: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to connect to GitHub: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error ({}): {}",
             status, error_body
         )));
@@ -348,7 +348,7 @@ pub async fn check_github_connection(token: Option<String>) -> Result<GitHubConn
     let user: GitHubUser = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse user: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse user: {}", e)))?;
 
     Ok(GitHubConnectionStatus {
         connected: true,
@@ -368,7 +368,7 @@ pub async fn detect_github_repo(
     remote_name: Option<String>,
 ) -> Result<Option<DetectedGitHubRepo>> {
     let repo = git2::Repository::open(&path)
-        .map_err(|e| LeviathanError::RepositoryNotFound(e.to_string()))?;
+        .map_err(|e| GitnadoError::RepositoryNotFound(e.to_string()))?;
 
     // Check all remotes for GitHub URLs
     for candidate in repo.remotes()?.iter().flatten().flatten() {
@@ -513,12 +513,12 @@ fn parse_github_repository_page(
     let entries: Vec<ApiRepoListEntry> = if from_app {
         serde_json::from_str::<ApiInstallationRepos>(body)
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to parse repositories: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
             })?
             .repositories
     } else {
         serde_json::from_str(body).map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to parse repositories: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
         })?
     };
 
@@ -563,11 +563,11 @@ fn parse_github_repository_page(
 /// "reconnect this account" for `AUTH_REQUIRED` rather than showing a raw API
 /// string. Everything else (403 rate limits included, whose body explains
 /// itself) keeps the module's usual message shape.
-fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> LeviathanError {
+fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return LeviathanError::AuthenticationRequired;
+        return GitnadoError::AuthenticationRequired;
     }
-    LeviathanError::OperationFailed(format!("GitHub API error {}: {}", status, body))
+    GitnadoError::OperationFailed(format!("GitHub API error {}: {}", status, body))
 }
 
 /// List the repositories the authenticated account can clone.
@@ -601,7 +601,7 @@ pub async fn list_github_repositories(
         .get(url)
         .query(&pagination_query(per_page, Some(page)))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28");
 
@@ -615,7 +615,7 @@ pub async fn list_github_repositories(
     }
 
     let response = request.send().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to fetch repositories: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to fetch repositories: {}", e))
     })?;
 
     if !response.status().is_success() {
@@ -625,7 +625,7 @@ pub async fn list_github_repositories(
     }
 
     let body = response.text().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read repositories: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to read repositories: {}", e))
     })?;
 
     parse_github_repository_page(&body, from_app, per_page, page)
@@ -659,17 +659,17 @@ pub async fn list_pull_requests(
         .query(&[("state", state.as_str())])
         .query(&pagination_query(per_page, page))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch PRs: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch PRs: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -713,7 +713,7 @@ pub async fn list_pull_requests(
     let prs: Vec<ApiPR> = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse PRs: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse PRs: {}", e)))?;
 
     Ok(prs
         .into_iter()
@@ -761,17 +761,17 @@ pub async fn get_pull_request(
             GITHUB_API_BASE, owner, repo, number
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch PR: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch PR: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -832,7 +832,7 @@ pub async fn get_pull_request(
     let pr: ApiPRDetail = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse PR: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse PR: {}", e)))?;
 
     Ok(PullRequestDetails {
         number: pr.number,
@@ -935,18 +935,18 @@ pub async fn create_pull_request(
             GITHUB_API_BASE, owner, repo
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .json(&body)
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to create PR: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create PR: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -985,7 +985,7 @@ pub async fn create_pull_request(
     let pr: ApiPR = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse PR: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse PR: {}", e)))?;
 
     Ok(PullRequestSummary {
         number: pr.number,
@@ -1030,17 +1030,17 @@ pub async fn get_pull_request_reviews(
             GITHUB_API_BASE, owner, repo, number
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch reviews: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch reviews: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1068,7 +1068,7 @@ pub async fn get_pull_request_reviews(
     let reviews: Vec<ApiReview> = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse reviews: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse reviews: {}", e)))?;
 
     Ok(reviews
         .into_iter()
@@ -1115,7 +1115,7 @@ pub async fn get_workflow_runs(
         ))
         .query(&pagination_query(per_page, page))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28");
 
@@ -1124,13 +1124,13 @@ pub async fn get_workflow_runs(
     }
 
     let response = request.send().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to fetch workflow runs: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to fetch workflow runs: {}", e))
     })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1158,7 +1158,7 @@ pub async fn get_workflow_runs(
     }
 
     let runs: ApiWorkflowRuns = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse workflow runs: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse workflow runs: {}", e))
     })?;
 
     Ok(runs
@@ -1198,19 +1198,17 @@ pub async fn get_check_runs(
             GITHUB_API_BASE, owner, repo, commit_sha
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch check runs: {}", e))
-        })?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch check runs: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1232,9 +1230,10 @@ pub async fn get_check_runs(
         html_url: Option<String>,
     }
 
-    let runs: ApiCheckRuns = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse check runs: {}", e))
-    })?;
+    let runs: ApiCheckRuns = response
+        .json()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse check runs: {}", e)))?;
 
     Ok(runs
         .check_runs
@@ -1268,19 +1267,19 @@ pub async fn get_commit_status(
             GITHUB_API_BASE, owner, repo, commit_sha
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch commit status: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch commit status: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1294,7 +1293,7 @@ pub async fn get_commit_status(
     let status: ApiStatus = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse status: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse status: {}", e)))?;
 
     Ok(status.state)
 }
@@ -1430,7 +1429,7 @@ pub async fn list_issues(
             .query(&[("state", state.as_str())])
             .query(&pagination_query(per_page, Some(current)))
             .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "Leviathan-Git-Client")
+            .header("User-Agent", "Gitnado-Git-Client")
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28");
 
@@ -1438,22 +1437,24 @@ pub async fn list_issues(
             request = request.query(&[("labels", labels)]);
         }
 
-        let response = request.send().await.map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch issues: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch issues: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "GitHub API error {}: {}",
                 status, body
             )));
         }
 
-        let issues: Vec<ApiIssue> = response.json().await.map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to parse issues: {}", e))
-        })?;
+        let issues: Vec<ApiIssue> = response
+            .json()
+            .await
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issues: {}", e)))?;
 
         fetches += 1;
         // The raw page length decides whether GitHub has more; the filtered
@@ -1535,17 +1536,17 @@ pub async fn get_issue(
             GITHUB_API_BASE, owner, repo, number
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch issue: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1587,7 +1588,7 @@ pub async fn get_issue(
     let issue: ApiIssue = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
 
     Ok(IssueSummary {
         number: issue.number,
@@ -1665,18 +1666,18 @@ pub async fn create_issue(
             GITHUB_API_BASE, owner, repo
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .json(&body)
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to create issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create issue: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1718,7 +1719,7 @@ pub async fn create_issue(
     let issue: ApiIssue = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
 
     Ok(IssueSummary {
         number: issue.number,
@@ -1784,18 +1785,18 @@ pub async fn update_issue_state(
             GITHUB_API_BASE, owner, repo, number
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .json(&UpdateBody { state })
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to update issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to update issue: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1837,7 +1838,7 @@ pub async fn update_issue_state(
     let issue: ApiIssue = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse issue: {}", e)))?;
 
     Ok(IssueSummary {
         number: issue.number,
@@ -1901,17 +1902,17 @@ pub async fn get_issue_comments(
         ))
         .query(&[("per_page", per_page.to_string())])
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch comments: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch comments: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -1939,7 +1940,7 @@ pub async fn get_issue_comments(
     let comments: Vec<ApiComment> = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse comments: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse comments: {}", e)))?;
 
     Ok(comments
         .into_iter()
@@ -1983,18 +1984,18 @@ pub async fn add_issue_comment(
             GITHUB_API_BASE, owner, repo, number
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .json(&CommentBody { body })
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to add comment: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to add comment: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -2022,7 +2023,7 @@ pub async fn add_issue_comment(
     let comment: ApiComment = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse comment: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse comment: {}", e)))?;
 
     Ok(IssueComment {
         id: comment.id,
@@ -2077,27 +2078,26 @@ pub async fn get_repo_labels(
             ))
             .query(&pagination_query(per_page, Some(current)))
             .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "Leviathan-Git-Client")
+            .header("User-Agent", "Gitnado-Git-Client")
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
-            .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Failed to fetch labels: {}", e))
-            })?;
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch labels: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "GitHub API error {}: {}",
                 status, body
             )));
         }
 
-        let raw: Vec<ApiLabel> = response.json().await.map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to parse labels: {}", e))
-        })?;
+        let raw: Vec<ApiLabel> = response
+            .json()
+            .await
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse labels: {}", e)))?;
 
         fetches += 1;
         let raw_len = raw.len();
@@ -2191,17 +2191,17 @@ pub async fn list_releases(
         ))
         .query(&pagination_query(per_page, page))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch releases: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch releases: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -2234,7 +2234,7 @@ pub async fn list_releases(
     let releases: Vec<ApiRelease> = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse releases: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse releases: {}", e)))?;
 
     Ok(releases
         .into_iter()
@@ -2277,17 +2277,17 @@ pub async fn get_release_by_tag(
             GITHUB_API_BASE, owner, repo, tag
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to fetch release: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch release: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -2320,7 +2320,7 @@ pub async fn get_release_by_tag(
     let release: ApiRelease = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse release: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse release: {}", e)))?;
 
     Ok(ReleaseSummary {
         id: release.id,
@@ -2359,19 +2359,19 @@ pub async fn get_latest_release(
             GITHUB_API_BASE, owner, repo
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
         .map_err(|e| {
-            LeviathanError::OperationFailed(format!("Failed to fetch latest release: {}", e))
+            GitnadoError::OperationFailed(format!("Failed to fetch latest release: {}", e))
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -2402,7 +2402,7 @@ pub async fn get_latest_release(
     }
 
     let release: ApiRelease = response.json().await.map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse latest release: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse latest release: {}", e))
     })?;
 
     Ok(ReleaseSummary {
@@ -2470,18 +2470,18 @@ pub async fn create_release(
             GITHUB_API_BASE, owner, repo
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .json(&body)
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to create release: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create release: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -2514,7 +2514,7 @@ pub async fn create_release(
     let release: ApiRelease = response
         .json()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to parse release: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse release: {}", e)))?;
 
     Ok(ReleaseSummary {
         id: release.id,
@@ -2554,17 +2554,17 @@ pub async fn delete_release(
             GITHUB_API_BASE, owner, repo, release_id
         ))
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to delete release: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to delete release: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "GitHub API error {}: {}",
             status, body
         )));
@@ -2939,12 +2939,12 @@ mod tests {
     const REPO_PAGE_JSON: &str = r#"[
         {
             "id": 1,
-            "name": "leviathan",
-            "full_name": "octocat/leviathan",
+            "name": "gitnado",
+            "full_name": "octocat/gitnado",
             "private": true,
             "description": "A git client",
-            "clone_url": "https://github.com/octocat/leviathan.git",
-            "html_url": "https://github.com/octocat/leviathan",
+            "clone_url": "https://github.com/octocat/gitnado.git",
+            "html_url": "https://github.com/octocat/gitnado",
             "default_branch": "main",
             "pushed_at": "2024-05-01T10:00:00Z",
             "owner": { "login": "octocat" }
@@ -2971,12 +2971,12 @@ mod tests {
         assert_eq!(page.repositories.len(), 2);
         let first = &page.repositories[0];
         assert_eq!(first.id, "1");
-        assert_eq!(first.name, "leviathan");
+        assert_eq!(first.name, "gitnado");
         assert_eq!(first.owner, "octocat");
-        assert_eq!(first.full_name, "octocat/leviathan");
+        assert_eq!(first.full_name, "octocat/gitnado");
         assert_eq!(first.description.as_deref(), Some("A git client"));
         assert!(first.is_private);
-        assert_eq!(first.clone_url, "https://github.com/octocat/leviathan.git");
+        assert_eq!(first.clone_url, "https://github.com/octocat/gitnado.git");
         assert_eq!(first.default_branch.as_deref(), Some("main"));
         assert_eq!(
             first.last_pushed_at.as_deref(),
@@ -3045,13 +3045,13 @@ mod tests {
         // A dead credential is reported as AUTH_REQUIRED so the picker can
         // offer to reconnect the account instead of showing an API string.
         let err = map_repository_list_error(reqwest::StatusCode::UNAUTHORIZED, "Bad credentials");
-        assert!(matches!(err, LeviathanError::AuthenticationRequired));
+        assert!(matches!(err, GitnadoError::AuthenticationRequired));
 
         // Everything else keeps its message — a 403 rate limit explains itself.
         let other =
             map_repository_list_error(reqwest::StatusCode::FORBIDDEN, "API rate limit exceeded");
         assert!(other.to_string().contains("API rate limit exceeded"));
-        assert!(matches!(other, LeviathanError::OperationFailed(_)));
+        assert!(matches!(other, GitnadoError::OperationFailed(_)));
     }
 
     #[tokio::test]
@@ -3085,7 +3085,7 @@ mod tests {
 
 /// Keyring key used to store the GitHub App configuration JSON.
 ///
-/// A single key is used (no per-app-id sharding) because Leviathan supports
+/// A single key is used (no per-app-id sharding) because Gitnado supports
 /// at most one GitHub App installation at a time.  The stored value is a JSON
 /// object containing `appId`, `installationId`, and `privateKeyPem`.
 const GITHUB_APP_KEYRING_KEY: &str = "github_app_config";
@@ -3105,14 +3105,14 @@ struct StoredGithubAppConfig {
 /// Serialise `StoredGithubAppConfig` to a JSON string for keyring storage.
 fn serialize_app_config(cfg: &StoredGithubAppConfig) -> Result<String> {
     serde_json::to_string(cfg).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to serialize GitHub App config: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to serialize GitHub App config: {}", e))
     })
 }
 
 /// Deserialise `StoredGithubAppConfig` from a JSON string retrieved from the keyring.
 fn deserialize_app_config(json: &str) -> Result<StoredGithubAppConfig> {
     serde_json::from_str(json).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to deserialize GitHub App config: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to deserialize GitHub App config: {}", e))
     })
 }
 
@@ -3133,7 +3133,7 @@ pub async fn configure_github_app(
 
     // Generate JWT to validate the key
     let jwt = github_app::generate_jwt(app_id, &private_key_pem)
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     // Get an installation token to verify it works. `get_installation_token`
     // goes through the module's guarded client, so this no longer reaches
@@ -3149,14 +3149,14 @@ pub async fn configure_github_app(
         ))
         .header("Authorization", format!("Bearer {}", token.token))
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Leviathan-Git-Client")
+        .header("User-Agent", "Gitnado-Git-Client")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| LeviathanError::OperationFailed(format!("Connection test failed: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Connection test failed: {}", e)))?;
 
     if !response.status().is_success() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Installation token verification failed".to_string(),
         ));
     }
@@ -3234,7 +3234,7 @@ pub async fn list_github_app_installations(
     use crate::services::github_app;
 
     let jwt = github_app::generate_jwt(app_id, &private_key_pem)
-        .map_err(LeviathanError::OperationFailed)?;
+        .map_err(GitnadoError::OperationFailed)?;
 
     github_app::list_installations(&jwt).await
 }

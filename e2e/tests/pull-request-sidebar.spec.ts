@@ -214,7 +214,7 @@ test.describe('Pull Requests sidebar section', () => {
     });
 
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         settingsStore: { getState: () => { setOfflineMode: (v: boolean) => void } };
       };
       stores.settingsStore.getState().setOfflineMode(true);
@@ -233,7 +233,7 @@ test.describe('Pull Requests sidebar section', () => {
 
     const setOffline = (value: boolean): Promise<void> =>
       page.evaluate((offline) => {
-        const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+        const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
           settingsStore: { getState: () => { setOfflineMode: (v: boolean) => void } };
         };
         stores.settingsStore.getState().setOfflineMode(offline);
@@ -264,7 +264,7 @@ test.describe('Pull Requests sidebar section', () => {
     // An allowlist that does not contain api.github.com makes the shared
     // network gate refuse the listing call before it reaches the backend.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         settingsStore: { getState: () => { setRemoteAllowlist: (v: string[]) => void } };
       };
       stores.settingsStore.getState().setRemoteAllowlist(['example.invalid']);
@@ -281,7 +281,7 @@ test.describe('Pull Requests sidebar section', () => {
 
     // Widening the allowlist and using the notice's own action loads the list.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         settingsStore: { getState: () => { setRemoteAllowlist: (v: string[]) => void } };
       };
       stores.settingsStore.getState().setRemoteAllowlist([]);

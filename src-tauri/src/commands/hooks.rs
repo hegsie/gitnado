@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Resolve the hooks directory exactly as git does:
 /// - `core.hooksPath` if set. A leading `~` is expanded to `$HOME`; a relative
@@ -156,7 +156,7 @@ pub fn run_hook(
     // exactly what git relies on.
 
     let mut child = cmd.spawn().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to run {} hook: {}", name, e))
+        GitnadoError::OperationFailed(format!("Failed to run {} hook: {}", name, e))
     })?;
 
     if let Some(data) = stdin_data {
@@ -168,7 +168,7 @@ pub fn run_hook(
     }
 
     let output = child.wait_with_output().map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to run {} hook: {}", name, e))
+        GitnadoError::OperationFailed(format!("Failed to run {} hook: {}", name, e))
     })?;
 
     let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
@@ -199,7 +199,7 @@ pub fn run_hook_blocking(
     let outcome = run_hook(repo, name, args, stdin_data)?;
     if outcome.ran && !outcome.success {
         let detail = outcome.output.trim();
-        return Err(LeviathanError::OperationFailed(if detail.is_empty() {
+        return Err(GitnadoError::OperationFailed(if detail.is_empty() {
             format!("{} hook failed", name)
         } else {
             format!("{} hook failed:\n{}", name, detail)
@@ -382,12 +382,12 @@ const HOOKS: &[(&str, &str)] = &[
     (
         "prepare-commit-msg",
         // Honest about reachability: git runs this to seed the message the
-        // editor opens on, and Leviathan commits from its own message box with
+        // editor opens on, and Gitnado commits from its own message box with
         // no editor, so it has no point to call it from. Advertising it
         // unqualified — and shipping a one-click template for it — meant a hook
         // could be installed, badged Enabled and counted as active while no
         // commit made in the app would ever run it.
-        "Run by git before the commit editor opens. Leviathan commits without an editor, so it does not run this hook.",
+        "Run by git before the commit editor opens. Gitnado commits without an editor, so it does not run this hook.",
     ),
     (
         "commit-msg",
@@ -408,7 +408,7 @@ const HOOKS: &[(&str, &str)] = &[
     ),
     (
         "pre-merge-commit",
-        // Leviathan runs this as a blocking hook on merge and on the merge leg
+        // Gitnado runs this as a blocking hook on merge and on the merge leg
         // of pull, exactly as git does. Leaving it out of this list meant the
         // dialog never listed it: a merge vetoed by a broken hook (husky
         // installs these under core.hooksPath) had no entry to read, edit or
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_existing_hookspath_hook_is_visible() {
-        // The inverse: a hook installed by husky before Leviathan ever opened
+        // The inverse: a hook installed by husky before Gitnado ever opened
         // the repo must not read as "not configured".
         let repo = TestRepo::with_initial_commit();
         let alt = repo.path.join(".husky");

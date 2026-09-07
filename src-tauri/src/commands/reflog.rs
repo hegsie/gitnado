@@ -17,17 +17,17 @@ pub(crate) fn ensure_resettable(repo: &git2::Repository) -> Result<()> {
     use git2::RepositoryState::*;
     match repo.state() {
         Rebase | RebaseInteractive | RebaseMerge | ApplyMailbox | ApplyMailboxOrRebase => {
-            Err(crate::error::LeviathanError::OperationFailed(
+            Err(crate::error::GitnadoError::OperationFailed(
                 "Cannot reset while a rebase is in progress. Finish or abort the rebase (git rebase --continue or --abort) first.".to_string(),
             ))
         }
-        Bisect => Err(crate::error::LeviathanError::OperationFailed(
+        Bisect => Err(crate::error::GitnadoError::OperationFailed(
             "Cannot reset while a bisect is in progress. Run 'git bisect reset' first.".to_string(),
         )),
-        CherryPickSequence => Err(crate::error::LeviathanError::OperationFailed(
+        CherryPickSequence => Err(crate::error::GitnadoError::OperationFailed(
             "Cannot reset while a cherry-pick sequence is in progress. Finish or abort it (git cherry-pick --continue or --abort) first.".to_string(),
         )),
-        RevertSequence => Err(crate::error::LeviathanError::OperationFailed(
+        RevertSequence => Err(crate::error::GitnadoError::OperationFailed(
             "Cannot reset while a revert sequence is in progress. Finish or abort it (git revert --continue or --abort) first.".to_string(),
         )),
         _ => Ok(()),
@@ -112,7 +112,7 @@ pub async fn reset_to_reflog(
     let (target_oid_str, message, timestamp, author) = {
         let reflog = repo.reflog("HEAD")?;
         let entry = reflog.get(reflog_index).ok_or_else(|| {
-            crate::error::LeviathanError::OperationFailed(format!(
+            crate::error::GitnadoError::OperationFailed(format!(
                 "Reflog entry {} not found",
                 reflog_index
             ))
@@ -128,7 +128,7 @@ pub async fn reset_to_reflog(
         // land somewhere the user never chose.
         if let Some(expected) = &expected_oid {
             if &oid_str != expected {
-                return Err(crate::error::LeviathanError::OperationFailed(
+                return Err(crate::error::GitnadoError::OperationFailed(
                     "The reflog changed since this entry was listed — refresh and try again."
                         .to_string(),
                 ));

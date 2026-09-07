@@ -669,7 +669,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     await page.evaluate(() => {
-      (window as any).__LEVIATHAN_STORES__.settingsStore.getState().setOfflineMode(true);
+      (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
     });
 
     await startCommandCaptureWithMocks(page, {
@@ -708,7 +708,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     await page.evaluate(() => {
-      (window as any).__LEVIATHAN_STORES__.settingsStore.getState().setOfflineMode(true);
+      (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
     });
 
     await page.locator('lv-commit-panel').evaluate(async (el: any) => {

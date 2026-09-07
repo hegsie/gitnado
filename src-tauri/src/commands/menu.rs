@@ -7,7 +7,7 @@
 
 use tauri::{AppHandle, Manager};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::menu::{AppMenuState, MenuItemUpdate};
 
 /// Update the enabled state and accelerator of application menu items.
@@ -17,9 +17,9 @@ pub fn sync_app_menu(app: AppHandle, items: Vec<MenuItemUpdate>) -> Result<()> {
     // build failed at startup (or on a platform without one), and a missing
     // state must be a plain error the frontend can log, not a panic that takes
     // the whole command bridge down.
-    let state = app.try_state::<AppMenuState>().ok_or_else(|| {
-        LeviathanError::OperationFailed("application menu is not available".into())
-    })?;
+    let state = app
+        .try_state::<AppMenuState>()
+        .ok_or_else(|| GitnadoError::OperationFailed("application menu is not available".into()))?;
 
     state.apply(&items)
 }

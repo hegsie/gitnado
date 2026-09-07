@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// A user-defined custom action
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
@@ -34,10 +34,7 @@ pub struct ActionResult {
 
 /// Path to the custom actions config file within the repo
 fn actions_file_path(repo_path: &Path) -> std::path::PathBuf {
-    repo_path
-        .join(".git")
-        .join("leviathan")
-        .join("custom_actions.json")
+    crate::utils::app_paths::repo_dir(&repo_path.join(".git")).join("custom_actions.json")
 }
 
 /// Read custom actions from disk
@@ -112,7 +109,7 @@ fn shell_quote_windows(value: &str) -> Result<String> {
         } else {
             format!("metacharacter '{}'", c)
         };
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Refusing to substitute value containing shell {} on Windows",
             label
         )));
@@ -153,7 +150,7 @@ fn substitute_variables(
 pub async fn get_custom_actions(path: String) -> Result<Vec<CustomAction>> {
     let repo_path = Path::new(&path);
     if !repo_path.join(".git").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
     read_actions(repo_path)
 }
@@ -163,7 +160,7 @@ pub async fn get_custom_actions(path: String) -> Result<Vec<CustomAction>> {
 pub async fn save_custom_action(path: String, action: CustomAction) -> Result<Vec<CustomAction>> {
     let repo_path = Path::new(&path);
     if !repo_path.join(".git").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     let mut actions = read_actions(repo_path)?;
@@ -184,7 +181,7 @@ pub async fn save_custom_action(path: String, action: CustomAction) -> Result<Ve
 pub async fn delete_custom_action(path: String, action_id: String) -> Result<Vec<CustomAction>> {
     let repo_path = Path::new(&path);
     if !repo_path.join(".git").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     let mut actions = read_actions(repo_path)?;
@@ -198,7 +195,7 @@ pub async fn delete_custom_action(path: String, action_id: String) -> Result<Vec
 /// # Security
 ///
 /// This command executes arbitrary shell commands defined by the user in
-/// `.git/leviathan/custom_actions.json`. Because the action definitions live
+/// `.git/gitnado/custom_actions.json`. Because the action definitions live
 /// inside the repository's `.git/` directory (not tracked by Git) and the
 /// user must explicitly create them through the UI, the trust boundary is
 /// equivalent to the user running commands in their own terminal.
@@ -215,14 +212,14 @@ pub async fn delete_custom_action(path: String, action_id: String) -> Result<Vec
 pub async fn run_custom_action(path: String, action_id: String) -> Result<ActionResult> {
     let repo_path = Path::new(&path);
     if !repo_path.join(".git").exists() {
-        return Err(LeviathanError::RepositoryNotFound(path));
+        return Err(GitnadoError::RepositoryNotFound(path));
     }
 
     let actions = read_actions(repo_path)?;
     let action = actions
         .iter()
         .find(|a| a.id == action_id)
-        .ok_or_else(|| LeviathanError::OperationFailed(format!("Action not found: {}", action_id)))?
+        .ok_or_else(|| GitnadoError::OperationFailed(format!("Action not found: {}", action_id)))?
         .clone();
 
     let branch = get_current_branch(repo_path);
@@ -286,7 +283,7 @@ pub async fn run_custom_action(path: String, action_id: String) -> Result<Action
                 success: output.status.success(),
             })
         }
-        Err(e) => Err(LeviathanError::OperationFailed(format!(
+        Err(e) => Err(GitnadoError::OperationFailed(format!(
             "Failed to execute command: {}",
             e
         ))),
@@ -652,7 +649,7 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
 
         // Write malformed JSON to the actions file
-        let actions_dir = repo.path.join(".git").join("leviathan");
+        let actions_dir = repo.path.join(".git").join("gitnado");
         std::fs::create_dir_all(&actions_dir).unwrap();
         std::fs::write(actions_dir.join("custom_actions.json"), "not valid json").unwrap();
 
@@ -666,7 +663,7 @@ mod tests {
         let result = actions_file_path(path);
         assert_eq!(
             result,
-            Path::new("/my/repo/.git/leviathan/custom_actions.json")
+            Path::new("/my/repo/.git/gitnado/custom_actions.json")
         );
     }
 

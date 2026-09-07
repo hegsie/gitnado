@@ -43,7 +43,7 @@ export interface KeyboardSettings {
  * registerDefaultShortcuts actually registers, and nothing that reads it can
  * act on the difference.
  */
-const STORAGE_KEY = 'leviathan-keyboard-settings';
+const STORAGE_KEY = 'gitnado-keyboard-settings';
 
 class KeyboardService {
   /**

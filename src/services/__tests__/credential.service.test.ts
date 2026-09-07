@@ -51,7 +51,7 @@ const mockInvoke = async (command: string, args?: unknown): Promise<unknown> => 
   }
 
   if (command === 'detect_credential_manager') {
-    return { gcmAvailable: true, gcmVersion: '2.0', configuredHelper: 'manager-core', usingLeviathanFallback: false };
+    return { gcmAvailable: true, gcmVersion: '2.0', configuredHelper: 'manager-core', usingGitnadoFallback: false };
   }
 
   return null;

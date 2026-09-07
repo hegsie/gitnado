@@ -2,7 +2,7 @@
 //!
 //! Allows users to configure local branch protection rules similar to
 //! GitKraken and SourceTree. Rules are stored per-repository in
-//! `.git/leviathan/branch_rules.json`.
+//! `.git/gitnado/branch_rules.json`.
 
 use std::fs;
 use std::path::Path;
@@ -10,7 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// A branch protection rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,9 +31,8 @@ pub struct BranchRule {
 /// Get the path to the branch rules file for a repository
 fn get_rules_path(repo_path: &Path) -> Result<std::path::PathBuf> {
     let repo = git2::Repository::open(repo_path)?;
-    let git_dir = repo.path().to_path_buf();
-    let leviathan_dir = git_dir.join("leviathan");
-    Ok(leviathan_dir.join("branch_rules.json"))
+    let gitnado_dir = crate::utils::app_paths::repo_dir(repo.path());
+    Ok(gitnado_dir.join("branch_rules.json"))
 }
 
 /// Load branch rules from the repository config
@@ -45,11 +44,11 @@ pub(crate) fn load_rules(repo_path: &Path) -> Result<Vec<BranchRule>> {
     }
 
     let content = fs::read_to_string(&rules_path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read branch rules file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to read branch rules file: {}", e))
     })?;
 
     serde_json::from_str(&content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse branch rules file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse branch rules file: {}", e))
     })
 }
 
@@ -97,22 +96,22 @@ pub(crate) fn is_force_push_prevented(rules: &[BranchRule], branch_name: &str) -
 fn save_rules(repo_path: &Path, rules: &[BranchRule]) -> Result<()> {
     let rules_path = get_rules_path(repo_path)?;
 
-    // Ensure the leviathan directory exists
+    // Ensure the gitnado directory exists
     if let Some(parent) = rules_path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
-            LeviathanError::OperationFailed(format!(
-                "Failed to create leviathan config directory: {}",
+            GitnadoError::OperationFailed(format!(
+                "Failed to create gitnado config directory: {}",
                 e
             ))
         })?;
     }
 
     let content = serde_json::to_string_pretty(rules).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to serialize branch rules: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to serialize branch rules: {}", e))
     })?;
 
     fs::write(&rules_path, content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to write branch rules file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to write branch rules file: {}", e))
     })?;
 
     Ok(())
@@ -128,7 +127,7 @@ pub async fn get_branch_rules(path: String) -> Result<Vec<BranchRule>> {
 #[command]
 pub async fn set_branch_rule(path: String, rule: BranchRule) -> Result<Vec<BranchRule>> {
     if rule.pattern.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Branch rule pattern cannot be empty".to_string(),
         ));
     }
@@ -155,7 +154,7 @@ pub async fn delete_branch_rule(path: String, pattern: String) -> Result<Vec<Bra
     rules.retain(|r| r.pattern != pattern);
 
     if rules.len() == initial_len {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "No branch rule found for pattern: {}",
             pattern
         )));
@@ -455,10 +454,10 @@ mod tests {
         assert!(
             rules_path
                 .to_string_lossy()
-                .contains("leviathan/branch_rules.json")
+                .contains("gitnado/branch_rules.json")
                 || rules_path
                     .to_string_lossy()
-                    .contains("leviathan\\branch_rules.json")
+                    .contains("gitnado\\branch_rules.json")
         );
     }
 }

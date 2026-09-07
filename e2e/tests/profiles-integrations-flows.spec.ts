@@ -1790,7 +1790,7 @@ test.describe('Integration dialog - disconnect & token management', () => {
 
     // The store should no longer contain the deleted account.
     const remainingAccounts = await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         unifiedProfileStore: { getState: () => { accounts: { id: string }[] } };
       };
       return stores.unifiedProfileStore.getState().accounts.map((a) => a.id);
@@ -1925,7 +1925,7 @@ test.describe('Connection statuses', () => {
     // detectProvider() to match a remote URL. Seed the open repository's
     // remotes so the dashboard can pick GitHub as the relevant provider.
     await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         repositoryStore: {
           getState: () => {
             openRepositories: { remotes: { name: string; url: string; pushUrl: string | null }[] }[];
@@ -2117,7 +2117,7 @@ test.describe('Keyboard & a11y', () => {
     // Wait for both checks to settle.
     await expect.poll(async () => {
       return page.evaluate(() => {
-        const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+        const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
           unifiedProfileStore: { getState: () => { accountConnectionStatus: Record<string, { status: string }> } };
         };
         const s = stores.unifiedProfileStore.getState().accountConnectionStatus;

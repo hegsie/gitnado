@@ -3,7 +3,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::models::Commit;
 
 /// Message git prints when a cherry-pick becomes empty (its changes are already
@@ -37,14 +37,14 @@ fn ensure_index_matches_head(repo: &git2::Repository) -> Result<()> {
     // cherry-pick dialog routes any message containing it to the
     // conflict-resolution flow, which has no operation to resolve here.
     if index.has_conflicts() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "The index has unmerged files. Resolve them before starting this operation."
                 .to_string(),
         ));
     }
 
     if index.write_tree()? != head_tree.id() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "The index has staged changes. Commit or stash them before starting this operation."
                 .to_string(),
         ));
@@ -179,13 +179,13 @@ enum PickOutcome {
 /// failures.
 fn cherry_pick_one(repo: &git2::Repository, commit: &git2::Commit) -> Result<PickOutcome> {
     if commit.parent_count() == 0 {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Cannot cherry-pick root commit {}",
             commit.id()
         )));
     }
     if commit.parent_count() > 1 {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Commit {} is a merge but no mainline parent was given; refusing to cherry-pick a merge commit without an explicit mainline.",
             commit.id()
         )));
@@ -293,20 +293,20 @@ fn resolve_sequence<'repo>(
 
     for commit_oid in commit_oids {
         let oid = git2::Oid::from_str(commit_oid)
-            .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
         let commit = repo
             .find_commit(oid)
-            .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
         // Same refusals cherry_pick_one makes, hoisted ahead of the first pick.
         if commit.parent_count() == 0 {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Cannot cherry-pick root commit {}",
                 commit.id()
             )));
         }
         if commit.parent_count() > 1 {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Commit {} is a merge but no mainline parent was given; refusing to cherry-pick a merge commit without an explicit mainline.",
                 commit.id()
             )));
@@ -347,7 +347,7 @@ fn resume_sequence(repo: &git2::Repository) -> Result<Option<Commit>> {
         // abort past commits it never touched.
         Err(e) => {
             clear_sequencer_state_if_not_in_progress(repo);
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Could not read the queued cherry-pick sequence: {}",
                 e
             )));
@@ -380,11 +380,11 @@ fn resume_sequence(repo: &git2::Repository) -> Result<Option<Commit>> {
             Ok(PickOutcome::Applied(c)) => last = Some(*c),
             Ok(PickOutcome::Conflicted) => {
                 std::fs::write(&seq_path, still.join("\n"))?;
-                return Err(LeviathanError::CherryPickConflict);
+                return Err(GitnadoError::CherryPickConflict);
             }
             Ok(PickOutcome::Empty) => {
                 std::fs::write(&seq_path, still.join("\n"))?;
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     EMPTY_CHERRY_PICK_MSG.to_string(),
                 ));
             }
@@ -417,18 +417,18 @@ pub async fn cherry_pick(
     if repo.state() != git2::RepositoryState::Clean {
         match repo.state() {
             git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
-                return Err(LeviathanError::CherryPickInProgress);
+                return Err(GitnadoError::CherryPickInProgress);
             }
             git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => {
-                return Err(LeviathanError::RevertInProgress);
+                return Err(GitnadoError::RevertInProgress);
             }
             git2::RepositoryState::Rebase
             | git2::RepositoryState::RebaseInteractive
             | git2::RepositoryState::RebaseMerge => {
-                return Err(LeviathanError::RebaseInProgress);
+                return Err(GitnadoError::RebaseInProgress);
             }
             _ => {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "Another operation is in progress".to_string(),
                 ));
             }
@@ -438,14 +438,14 @@ pub async fn cherry_pick(
 
     // Find the commit to cherry-pick
     let oid = git2::Oid::from_str(&commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
     let commit = repo
         .find_commit(oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     // Verify commit has a parent (can't cherry-pick root commit)
     if commit.parent_count() == 0 {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot cherry-pick root commit".to_string(),
         ));
     }
@@ -467,7 +467,7 @@ pub async fn cherry_pick(
                 opts.mainline(m);
             }
             Some(m) => {
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Mainline {} is out of range: commit {} has {} parents.",
                     m,
                     commit_oid,
@@ -475,7 +475,7 @@ pub async fn cherry_pick(
                 )));
             }
             None => {
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Commit {} is a merge but no mainline parent was given; choose which parent to cherry-pick relative to.",
                     commit_oid
                 )));
@@ -497,7 +497,7 @@ pub async fn cherry_pick(
 
     if has_conflicts {
         tracing::debug!("Returning CherryPickConflict error");
-        return Err(LeviathanError::CherryPickConflict);
+        return Err(GitnadoError::CherryPickConflict);
     }
 
     // If no_commit is true, just stage the changes without committing
@@ -515,7 +515,7 @@ pub async fn cherry_pick(
     // If the pick is already applied the result is empty; git stops here (leaving
     // CHERRY_PICK_HEAD in place) instead of creating an empty commit.
     if tree_oid == head.tree_id() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             EMPTY_CHERRY_PICK_MSG.to_string(),
         ));
     }
@@ -552,7 +552,7 @@ pub async fn continue_cherry_pick(path: String) -> Result<Commit> {
     // repo.path() so this works in linked worktrees (where <wt>/.git is a file).
     let cherry_pick_head_path = repo.path().join("CHERRY_PICK_HEAD");
     if !cherry_pick_head_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No cherry-pick in progress".to_string(),
         ));
     }
@@ -562,13 +562,13 @@ pub async fn continue_cherry_pick(path: String) -> Result<Commit> {
         .trim()
         .to_string();
     let original_oid = git2::Oid::from_str(&original_oid_str)
-        .map_err(|_| LeviathanError::CommitNotFound(original_oid_str.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(original_oid_str.clone()))?;
     let original_commit = repo.find_commit(original_oid)?;
 
     // Check for remaining conflicts
     let mut index = repo.index()?;
     if index.has_conflicts() {
-        return Err(LeviathanError::CherryPickConflict);
+        return Err(GitnadoError::CherryPickConflict);
     }
 
     // Get the current HEAD
@@ -580,7 +580,7 @@ pub async fn continue_cherry_pick(path: String) -> Result<Commit> {
     // A conflict resolution that leaves nothing to apply is empty; git stops
     // rather than recording an empty commit.
     if tree_oid == head.tree_id() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             EMPTY_CHERRY_PICK_MSG.to_string(),
         ));
     }
@@ -635,7 +635,7 @@ pub async fn skip_cherry_pick(path: String) -> Result<Option<Commit>> {
     // working tree untouched. Resolve via repo.path() (worktree-safe).
     let cherry_pick_head_path = repo.path().join("CHERRY_PICK_HEAD");
     if !cherry_pick_head_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "There is no cherry-pick in progress to skip.".to_string(),
         ));
     }
@@ -664,7 +664,7 @@ pub async fn abort_cherry_pick(path: String) -> Result<()> {
     // uncommitted work. Resolve the state file via repo.path() (worktree-safe).
     let cherry_pick_head_path = repo.path().join("CHERRY_PICK_HEAD");
     if !cherry_pick_head_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "There is no cherry-pick in progress to abort.".to_string(),
         ));
     }
@@ -701,7 +701,7 @@ pub async fn revert(path: String, commit_oid: String, mainline: Option<u32>) -> 
 
     // Check for existing operations in progress
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
@@ -709,14 +709,14 @@ pub async fn revert(path: String, commit_oid: String, mainline: Option<u32>) -> 
 
     // Find the commit to revert
     let oid = git2::Oid::from_str(&commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
     let commit = repo
         .find_commit(oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     // Verify commit has a parent (can't revert root commit)
     if commit.parent_count() == 0 {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot revert root commit".to_string(),
         ));
     }
@@ -738,7 +738,7 @@ pub async fn revert(path: String, commit_oid: String, mainline: Option<u32>) -> 
                 opts.mainline(m);
             }
             Some(m) => {
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Mainline {} is out of range: commit {} has {} parents.",
                     m,
                     commit_oid,
@@ -746,7 +746,7 @@ pub async fn revert(path: String, commit_oid: String, mainline: Option<u32>) -> 
                 )));
             }
             None => {
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Commit {} is a merge but no mainline parent was given; choose which parent to revert relative to.",
                     commit_oid
                 )));
@@ -759,7 +759,7 @@ pub async fn revert(path: String, commit_oid: String, mainline: Option<u32>) -> 
     // Check if there are conflicts
     let mut index = repo.index()?;
     if index.has_conflicts() {
-        return Err(LeviathanError::RevertConflict);
+        return Err(GitnadoError::RevertConflict);
     }
 
     // No conflicts - the working directory and index are updated, now create the commit
@@ -769,9 +769,7 @@ pub async fn revert(path: String, commit_oid: String, mainline: Option<u32>) -> 
     // A revert that changes nothing is empty; git stops rather than recording an
     // empty commit (leaving REVERT_HEAD in place).
     if tree_oid == head.tree_id() {
-        return Err(LeviathanError::OperationFailed(
-            EMPTY_REVERT_MSG.to_string(),
-        ));
+        return Err(GitnadoError::OperationFailed(EMPTY_REVERT_MSG.to_string()));
     }
 
     let tree = repo.find_tree(tree_oid)?;
@@ -822,7 +820,7 @@ pub async fn continue_revert(path: String) -> Result<Commit> {
     // works in linked worktrees (where <wt>/.git is a file, not a directory).
     let revert_head_path = repo.path().join("REVERT_HEAD");
     if !revert_head_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No revert in progress".to_string(),
         ));
     }
@@ -832,13 +830,13 @@ pub async fn continue_revert(path: String) -> Result<Commit> {
         .trim()
         .to_string();
     let original_oid = git2::Oid::from_str(&original_oid_str)
-        .map_err(|_| LeviathanError::CommitNotFound(original_oid_str.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(original_oid_str.clone()))?;
     let original_commit = repo.find_commit(original_oid)?;
 
     // Check for remaining conflicts
     let mut index = repo.index()?;
     if index.has_conflicts() {
-        return Err(LeviathanError::RevertConflict);
+        return Err(GitnadoError::RevertConflict);
     }
 
     // Get the current HEAD
@@ -850,9 +848,7 @@ pub async fn continue_revert(path: String) -> Result<Commit> {
     // A conflict resolution that undoes nothing is empty; git stops rather than
     // recording an empty commit.
     if tree_oid == head.tree_id() {
-        return Err(LeviathanError::OperationFailed(
-            EMPTY_REVERT_MSG.to_string(),
-        ));
+        return Err(GitnadoError::OperationFailed(EMPTY_REVERT_MSG.to_string()));
     }
 
     let tree = repo.find_tree(tree_oid)?;
@@ -896,7 +892,7 @@ pub async fn skip_revert(path: String) -> Result<()> {
     // tree untouched. Resolve via repo.path() (worktree-safe).
     let revert_head_path = repo.path().join("REVERT_HEAD");
     if !revert_head_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "There is no revert in progress to skip.".to_string(),
         ));
     }
@@ -919,7 +915,7 @@ pub async fn abort_revert(path: String) -> Result<()> {
     // work. Resolve the state file via repo.path() (worktree-safe).
     let revert_head_path = repo.path().join("REVERT_HEAD");
     if !revert_head_path.exists() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "There is no revert in progress to abort.".to_string(),
         ));
     }
@@ -939,14 +935,14 @@ pub async fn cherry_pick_range(path: String, commit_oids: Vec<String>) -> Result
 
     // Check for existing operations in progress
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
     ensure_index_matches_head(&repo)?;
 
     if commit_oids.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No commits specified for cherry-pick".to_string(),
         ));
     }
@@ -982,7 +978,7 @@ pub async fn cherry_pick_range(path: String, commit_oids: Vec<String>) -> Result
                 // pre-sequence HEAD so continue/abort behave like git's
                 // sequencer.
                 write_sequencer_state(&repo, pre_sequence_head, &remaining)?;
-                return Err(LeviathanError::CherryPickConflict);
+                return Err(GitnadoError::CherryPickConflict);
             }
             Ok(PickOutcome::Empty) => {
                 // git's sequencer stops on an already-applied pick but keeps the
@@ -990,7 +986,7 @@ pub async fn cherry_pick_range(path: String, commit_oids: Vec<String>) -> Result
                 // this the remainder was dropped on the floor and Abort — which
                 // rewinds every applied pick — was the only way out.
                 write_sequencer_state(&repo, pre_sequence_head, &remaining)?;
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     EMPTY_CHERRY_PICK_MSG.to_string(),
                 ));
             }
@@ -1182,7 +1178,7 @@ pub async fn get_rebase_todo(path: String) -> Result<RebaseTodo> {
             | git2::RepositoryState::RebaseInteractive
             | git2::RepositoryState::RebaseMerge
     ) {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No rebase in progress".to_string(),
         ));
     }
@@ -1198,7 +1194,7 @@ pub async fn get_rebase_todo(path: String) -> Result<RebaseTodo> {
     } else if rebase_apply_dir.exists() {
         rebase_apply_dir
     } else {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot find rebase directory".to_string(),
         ));
     };
@@ -1233,7 +1229,7 @@ pub async fn update_rebase_todo(path: String, entries: Vec<RebaseTodoEntry>) -> 
             | git2::RepositoryState::RebaseInteractive
             | git2::RepositoryState::RebaseMerge
     ) {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No rebase in progress".to_string(),
         ));
     }
@@ -1249,7 +1245,7 @@ pub async fn update_rebase_todo(path: String, entries: Vec<RebaseTodoEntry>) -> 
     } else if rebase_apply_dir.exists() {
         rebase_apply_dir
     } else {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot find rebase directory".to_string(),
         ));
     };
@@ -1275,14 +1271,14 @@ pub async fn skip_rebase_commit(path: String) -> Result<()> {
         .current_dir(&path)
         .args(["rebase", "--skip"])
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(e.to_string()))?;
+        .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("CONFLICT") || stderr.contains("conflict") {
-            return Err(LeviathanError::RebaseConflict);
+            return Err(GitnadoError::RebaseConflict);
         }
-        return Err(LeviathanError::OperationFailed(stderr.to_string()));
+        return Err(GitnadoError::OperationFailed(stderr.to_string()));
     }
 
     Ok(())
@@ -1305,10 +1301,10 @@ pub async fn reset(path: String, target_ref: String, mode: String) -> Result<()>
     // Find the target commit
     let obj = repo
         .revparse_single(&target_ref)
-        .map_err(|_| LeviathanError::CommitNotFound(target_ref.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(target_ref.clone()))?;
     let commit = obj
         .peel_to_commit()
-        .map_err(|_| LeviathanError::CommitNotFound(target_ref.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(target_ref.clone()))?;
 
     // Determine reset type
     let reset_type = match mode.as_str() {
@@ -1316,7 +1312,7 @@ pub async fn reset(path: String, target_ref: String, mode: String) -> Result<()>
         "mixed" => git2::ResetType::Mixed,
         "hard" => git2::ResetType::Hard,
         _ => {
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Invalid reset mode: {}. Use 'soft', 'mixed', or 'hard'",
                 mode
             )));
@@ -1354,7 +1350,7 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
 
     // Check for existing operations in progress
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
@@ -1366,7 +1362,7 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
             .iter()
             .any(|s| s.status() != git2::Status::IGNORED && s.status() != git2::Status::CURRENT);
         if has_changes {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Working directory has uncommitted changes. Commit or stash them first."
                     .to_string(),
             ));
@@ -1375,11 +1371,11 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
 
     // Parse the commit OID
     let target_oid = git2::Oid::from_str(&commit_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     let target_commit = repo
         .find_commit(target_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(commit_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(commit_oid.clone()))?;
 
     let dropped_message = target_commit
         .message()
@@ -1391,7 +1387,7 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
 
     // Cannot drop root commit (no parent to rebase onto)
     if target_commit.parent_count() == 0 {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot drop root commit".to_string(),
         ));
     }
@@ -1434,7 +1430,7 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
 
     // Verify that target_commit is an ancestor of HEAD
     if !repo.graph_descendant_of(head_commit.id(), target_commit.id())? {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Commit to drop is not an ancestor of HEAD".to_string(),
         ));
     }
@@ -1565,7 +1561,7 @@ pub async fn reorder_commits(
 
     // Check for existing operations in progress
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
@@ -1577,7 +1573,7 @@ pub async fn reorder_commits(
             .iter()
             .any(|s| s.status() != git2::Status::IGNORED && s.status() != git2::Status::CURRENT);
         if has_changes {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Working directory has uncommitted changes. Commit or stash them first."
                     .to_string(),
             ));
@@ -1585,26 +1581,26 @@ pub async fn reorder_commits(
     }
 
     if commit_order.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No commits specified for reordering".to_string(),
         ));
     }
 
     // Parse the base commit
     let base_oid = git2::Oid::from_str(&base_commit)
-        .map_err(|_| LeviathanError::CommitNotFound(base_commit.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(base_commit.clone()))?;
     let _base = repo
         .find_commit(base_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(base_commit.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(base_commit.clone()))?;
 
     // Parse and validate all commit OIDs in the new order
     let mut commits_in_order = Vec::new();
     for oid_str in &commit_order {
         let oid = git2::Oid::from_str(oid_str)
-            .map_err(|_| LeviathanError::CommitNotFound(oid_str.clone()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(oid_str.clone()))?;
         let commit = repo
             .find_commit(oid)
-            .map_err(|_| LeviathanError::CommitNotFound(oid_str.clone()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(oid_str.clone()))?;
         commits_in_order.push(commit);
     }
 
@@ -1626,7 +1622,7 @@ pub async fn reorder_commits(
         commits_in_order.iter().map(|c| c.id()).collect();
 
     if original_oids != reorder_oids {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Reorder list must contain exactly the same commits as the original range".to_string(),
         ));
     }
@@ -1642,7 +1638,7 @@ pub async fn reorder_commits(
 
         // Cherry-pick this commit onto the new base using tree merge
         let commit_parent = commit.parent(0).map_err(|_| {
-            LeviathanError::OperationFailed(format!("Cannot reorder root commit {}", commit.id()))
+            GitnadoError::OperationFailed(format!("Cannot reorder root commit {}", commit.id()))
         })?;
         let parent_tree = commit_parent.tree()?;
         let commit_tree = commit.tree()?;
@@ -1731,18 +1727,18 @@ pub async fn cherry_pick_from_branch(
     if repo.state() != git2::RepositoryState::Clean {
         match repo.state() {
             git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
-                return Err(LeviathanError::CherryPickInProgress);
+                return Err(GitnadoError::CherryPickInProgress);
             }
             git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => {
-                return Err(LeviathanError::RevertInProgress);
+                return Err(GitnadoError::RevertInProgress);
             }
             git2::RepositoryState::Rebase
             | git2::RepositoryState::RebaseInteractive
             | git2::RepositoryState::RebaseMerge => {
-                return Err(LeviathanError::RebaseInProgress);
+                return Err(GitnadoError::RebaseInProgress);
             }
             _ => {
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     "Another operation is in progress".to_string(),
                 ));
             }
@@ -1752,7 +1748,7 @@ pub async fn cherry_pick_from_branch(
 
     let count = count.unwrap_or(1);
     if count == 0 {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Count must be at least 1".to_string(),
         ));
     }
@@ -1761,12 +1757,12 @@ pub async fn cherry_pick_from_branch(
     let branch_ref = repo
         .find_branch(&branch, git2::BranchType::Local)
         .or_else(|_| repo.find_branch(&branch, git2::BranchType::Remote))
-        .map_err(|_| LeviathanError::BranchNotFound(branch.clone()))?;
+        .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
     let tip_oid = branch_ref
         .get()
         .target()
-        .ok_or_else(|| LeviathanError::BranchNotFound(branch.clone()))?;
+        .ok_or_else(|| GitnadoError::BranchNotFound(branch.clone()))?;
 
     // Walk backwards from the tip to collect `count` commits (oldest first)
     let mut revwalk = repo.revwalk()?;
@@ -1783,7 +1779,7 @@ pub async fn cherry_pick_from_branch(
     }
 
     if commit_oids.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No commits found on the specified branch".to_string(),
         ));
     }
@@ -1816,13 +1812,13 @@ pub async fn cherry_pick_from_branch(
             Ok(PickOutcome::Applied(new_commit)) => results.push(*new_commit),
             Ok(PickOutcome::Conflicted) => {
                 write_sequencer_state(&repo, pre_sequence_head, &remaining)?;
-                return Err(LeviathanError::CherryPickConflict);
+                return Err(GitnadoError::CherryPickConflict);
             }
             Ok(PickOutcome::Empty) => {
                 // Keep the rest of the range queued so Skip can resume it — see
                 // cherry_pick_range's Empty arm.
                 write_sequencer_state(&repo, pre_sequence_head, &remaining)?;
-                return Err(LeviathanError::OperationFailed(
+                return Err(GitnadoError::OperationFailed(
                     EMPTY_CHERRY_PICK_MSG.to_string(),
                 ));
             }
@@ -2029,7 +2025,7 @@ mod tests {
         assert!(result.is_err(), "Cherry-pick should fail with conflict");
         let err = result.unwrap_err();
         assert!(
-            matches!(err, LeviathanError::CherryPickConflict),
+            matches!(err, GitnadoError::CherryPickConflict),
             "Error should be CherryPickConflict"
         );
 
@@ -2172,7 +2168,7 @@ mod tests {
             "Should not be able to cherry-pick root commit"
         );
         let err = result.unwrap_err();
-        assert!(matches!(err, LeviathanError::OperationFailed(_)));
+        assert!(matches!(err, GitnadoError::OperationFailed(_)));
     }
 
     #[tokio::test]
@@ -2225,7 +2221,7 @@ mod tests {
             "Should fail when cherry-pick already in progress"
         );
         let err = result.unwrap_err();
-        assert!(matches!(err, LeviathanError::CherryPickInProgress));
+        assert!(matches!(err, GitnadoError::CherryPickInProgress));
     }
 
     #[tokio::test]
@@ -2479,7 +2475,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
         assert!(
             repo.repo().path().join(CHERRY_PICK_SEQUENCE_HEAD).exists(),
             "a conflict stop must keep the sequence head so abort can rewind"
@@ -2608,7 +2604,7 @@ mod tests {
 
         assert!(result.is_err(), "Revert should fail with conflict");
         let err = result.unwrap_err();
-        assert!(matches!(err, LeviathanError::RevertConflict));
+        assert!(matches!(err, GitnadoError::RevertConflict));
     }
 
     #[tokio::test]
@@ -2780,7 +2776,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, LeviathanError::OperationFailed(_)));
+        assert!(matches!(err, GitnadoError::OperationFailed(_)));
     }
 
     #[tokio::test]
@@ -3938,7 +3934,7 @@ mod tests {
 
         // Cherry-pick conflicts on conflict.txt.
         let result = cherry_pick(test_repo.path_str(), feature_oid.to_string(), None, None).await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // Abort must restore conflict.txt but preserve the unrelated edit.
         abort_cherry_pick(test_repo.path_str()).await.unwrap();
@@ -3965,7 +3961,7 @@ mod tests {
 
         // Reverting the add conflicts on file.txt (later modified).
         let result = revert(test_repo.path_str(), add_oid.to_string(), None).await;
-        assert!(matches!(result, Err(LeviathanError::RevertConflict)));
+        assert!(matches!(result, Err(GitnadoError::RevertConflict)));
 
         abort_revert(test_repo.path_str()).await.unwrap();
 
@@ -4016,7 +4012,7 @@ mod tests {
         test_repo.create_commit("Main edits shared", &[("shared.txt", "main")]);
 
         let result = cherry_pick(test_repo.path_str(), feature_oid.to_string(), None, None).await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
         assert!(
             test_repo.path.join(odd_rel).exists(),
             "the conflicting pick writes the added file into the working tree"
@@ -4059,7 +4055,7 @@ mod tests {
         // Range [A, B]: A applies cleanly, B conflicts.
         let result =
             cherry_pick_range(test_repo.path_str(), vec![a.to_string(), b.to_string()]).await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // A was applied on top of M, so HEAD advanced and a.txt exists.
         assert_ne!(test_repo.head_oid(), m);
@@ -4143,7 +4139,7 @@ mod tests {
             vec![a.to_string(), b.to_string(), c.to_string()],
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // Resolve B's conflict and stage it.
         std::fs::write(test_repo.path.join("shared.txt"), "resolved").unwrap();
@@ -4269,7 +4265,7 @@ mod tests {
             vec![a.to_string(), b.to_string(), c.to_string()],
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // Skip abandons the conflicted B and applies the pending C.
         let last = skip_cherry_pick(test_repo.path_str())
@@ -4354,7 +4350,7 @@ mod tests {
             vec![a.to_string(), b.to_string(), c.to_string()],
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // C is still queued; corrupt the file so read_to_string fails with
         // something other than NotFound (invalid UTF-8 -> InvalidData).
@@ -4440,7 +4436,7 @@ mod tests {
             vec![a.to_string(), b.to_string(), d.to_string(), e.to_string()],
         )
         .await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // Resolve B and stage it.
         std::fs::write(test_repo.path.join("shared.txt"), "resolved").unwrap();
@@ -4534,7 +4530,7 @@ mod tests {
 
         // Cherry-pick in the worktree conflicts.
         let result = cherry_pick(wt_path_str.clone(), feature_oid.to_string(), None, None).await;
-        assert!(matches!(result, Err(LeviathanError::CherryPickConflict)));
+        assert!(matches!(result, Err(GitnadoError::CherryPickConflict)));
 
         // Resolve the conflict inside the worktree and stage it.
         std::fs::write(wt_path.join("conflict.txt"), "resolved in wt").unwrap();

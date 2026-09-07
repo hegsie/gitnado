@@ -22,7 +22,7 @@ import '../dialogs/lv-clone-dialog.ts';
 import '../dialogs/lv-init-dialog.ts';
 import type { LvCloneDialog } from '../dialogs/lv-clone-dialog.ts';
 import type { LvInitDialog } from '../dialogs/lv-init-dialog.ts';
-import mascotImage from '../../assets/mascot/leviathan-tower-400.png';
+import mascotImage from '../../assets/mascot/gitnado-tower-400.png';
 
 @customElement('lv-welcome')
 @localized()
@@ -594,8 +594,8 @@ export class LvWelcome extends LitElement {
         : ''}
 
       <div class="welcome-content">
-        <img class="mascot" src="${mascotImage}" alt=${msg('Leviathan - Dragon wrapped around a tower')} />
-        <div class="logo">Leviathan</div>
+        <img class="mascot" src="${mascotImage}" alt=${msg('Gitnado - Dragon wrapped around a tower')} />
+        <div class="logo">Gitnado</div>
         <p class="tagline">${msg('A powerful, open-source Git client')}</p>
 
         <div class="actions">

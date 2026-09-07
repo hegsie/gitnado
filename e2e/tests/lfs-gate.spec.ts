@@ -21,7 +21,7 @@ import {
  */
 
 type SettingsStoreWindow = {
-  __LEVIATHAN_STORES__?: {
+  __GITNADO_STORES__?: {
     settingsStore?: {
       getState: () => { setRemoteAllowlist: (domains: string[]) => void };
     };
@@ -32,12 +32,12 @@ type SettingsStoreWindow = {
 async function setAllowlist(page: Page, domains: string[]): Promise<void> {
   await page.waitForFunction(
     () =>
-      typeof (window as unknown as SettingsStoreWindow).__LEVIATHAN_STORES__?.settingsStore !==
+      typeof (window as unknown as SettingsStoreWindow).__GITNADO_STORES__?.settingsStore !==
       'undefined'
   );
   await page.evaluate((list) => {
     (window as unknown as SettingsStoreWindow)
-      .__LEVIATHAN_STORES__!.settingsStore!.getState()
+      .__GITNADO_STORES__!.settingsStore!.getState()
       .setRemoteAllowlist(list);
   }, domains);
 }

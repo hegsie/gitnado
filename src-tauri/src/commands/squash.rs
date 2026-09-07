@@ -3,7 +3,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Result of a squash operation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -24,14 +24,14 @@ pub struct SquashResult {
 /// never picks a merge either — refuse while nothing has been moved yet.
 fn ensure_replayable(commit: &git2::Commit, action: &str, position: &str) -> Result<()> {
     if commit.parent_count() > 1 {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Cannot {action}: commit {} {position} is a merge. \
              Use an interactive rebase instead.",
             commit.id()
         )));
     }
     if commit.parent_count() == 0 {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Cannot {action}: commit {} {position} has no parent (an unrelated \
              history was merged in). Use an interactive rebase instead.",
             commit.id()
@@ -61,7 +61,7 @@ pub async fn squash_commits(
 
     // Check for existing operations in progress
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
@@ -73,7 +73,7 @@ pub async fn squash_commits(
             .iter()
             .any(|s| s.status() != git2::Status::IGNORED && s.status() != git2::Status::CURRENT);
         if has_changes {
-            return Err(LeviathanError::OperationFailed(
+            return Err(GitnadoError::OperationFailed(
                 "Working directory has uncommitted changes. Commit or stash them first."
                     .to_string(),
             ));
@@ -82,17 +82,17 @@ pub async fn squash_commits(
 
     // Parse the OIDs
     let from = git2::Oid::from_str(&from_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(from_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(from_oid.clone()))?;
     let to =
-        git2::Oid::from_str(&to_oid).map_err(|_| LeviathanError::CommitNotFound(to_oid.clone()))?;
+        git2::Oid::from_str(&to_oid).map_err(|_| GitnadoError::CommitNotFound(to_oid.clone()))?;
 
     // Find the commits
     let from_commit = repo
         .find_commit(from)
-        .map_err(|_| LeviathanError::CommitNotFound(from_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(from_oid.clone()))?;
     let to_commit = repo
         .find_commit(to)
-        .map_err(|_| LeviathanError::CommitNotFound(to_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(to_oid.clone()))?;
 
     // Collect commits to squash (from oldest to newest, exclusive of from_commit)
     let mut commits_to_squash = Vec::new();
@@ -108,7 +108,7 @@ pub async fn squash_commits(
     }
 
     if commits_to_squash.is_empty() {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No commits found in the specified range".to_string(),
         ));
     }
@@ -120,7 +120,7 @@ pub async fn squash_commits(
     // the branch to foreign history.
     let head_commit = repo.head()?.peel_to_commit()?;
     if head_commit.id() != to && !repo.graph_descendant_of(head_commit.id(), to)? {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "The commits to squash must be part of the current branch history.".to_string(),
         ));
     }
@@ -171,7 +171,7 @@ pub async fn squash_commits(
         let mut merge_result = repo.merge_trees(&parent_tree, &base_tree, &commit_tree, None)?;
         if merge_result.has_conflicts() {
             // Nothing has been moved yet — the repository is untouched.
-            return Err(LeviathanError::OperationFailed(format!(
+            return Err(GitnadoError::OperationFailed(format!(
                 "Cannot squash: replaying the later commit {} onto the squashed \
                  commit produced a conflict. Use an interactive rebase instead.",
                 commit.id()
@@ -244,7 +244,7 @@ pub async fn fixup_commit(
 
     // Check for existing operations in progress
     if repo.state() != git2::RepositoryState::Clean {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Another operation is in progress".to_string(),
         ));
     }
@@ -263,7 +263,7 @@ pub async fn fixup_commit(
         )
     });
     if has_unstaged {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Cannot fixup: you have unstaged changes. Commit or stash them first.".to_string(),
         ));
     }
@@ -275,18 +275,18 @@ pub async fn fixup_commit(
     // Check for staged changes by comparing index to HEAD
     let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
     if diff.deltas().len() == 0 {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "No staged changes to fixup".to_string(),
         ));
     }
 
     // Parse the target OID
     let target = git2::Oid::from_str(&target_oid)
-        .map_err(|_| LeviathanError::CommitNotFound(target_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(target_oid.clone()))?;
 
     let target_commit = repo
         .find_commit(target)
-        .map_err(|_| LeviathanError::CommitNotFound(target_oid.clone()))?;
+        .map_err(|_| GitnadoError::CommitNotFound(target_oid.clone()))?;
 
     // Get the current HEAD
     let head_commit = repo.head()?.peel_to_commit()?;
@@ -298,7 +298,7 @@ pub async fn fixup_commit(
     if head_commit.id() != target_commit.id()
         && !repo.graph_descendant_of(head_commit.id(), target_commit.id())?
     {
-        return Err(LeviathanError::OperationFailed(
+        return Err(GitnadoError::OperationFailed(
             "Target commit is not an ancestor of HEAD".to_string(),
         ));
     }
@@ -333,7 +333,7 @@ pub async fn fixup_commit(
     let mut merge_result = repo.merge_trees(&head_tree, &target_tree, &staged_tree, None)?;
     if merge_result.has_conflicts() {
         // Nothing has been moved yet — the repository is untouched.
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Cannot fixup: the staged changes conflict with commit {}. \
              Use an interactive rebase instead.",
             target_commit.id()
@@ -383,7 +383,7 @@ pub async fn fixup_commit(
             if merge_result.has_conflicts() {
                 // Write the conflicted index
                 merge_result.write_tree_to(&repo)?;
-                return Err(LeviathanError::OperationFailed(format!(
+                return Err(GitnadoError::OperationFailed(format!(
                     "Conflict while replaying commit {}. Manual resolution required.",
                     commit.id()
                 )));

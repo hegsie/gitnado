@@ -339,7 +339,7 @@ export async function openAppDialog(
 ): Promise<void> {
   await page.evaluate(
     ({ id: dialogId, context: ctx }) => {
-      const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
         dialogStore: {
           getState: () => { open: (id: string, context?: unknown) => void };
         };
@@ -354,7 +354,7 @@ export async function openAppDialog(
 /** Whether one of app-shell's dialogs/views is currently open. */
 export async function isAppDialogOpen(page: Page, id: string): Promise<boolean> {
   return page.evaluate((dialogId) => {
-    const stores = (window as unknown as Record<string, unknown>).__LEVIATHAN_STORES__ as {
+    const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
       dialogStore: { getState: () => { isOpen: (id: string) => boolean } };
     };
     if (!stores?.dialogStore) throw new Error('dialog store is not exposed');

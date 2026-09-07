@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// Create a patch from commits
 #[command]
@@ -18,7 +18,7 @@ pub async fn create_patch(
 
     for (i, oid_str) in commit_oids.iter().enumerate() {
         let oid = git2::Oid::from_str(oid_str)
-            .map_err(|_| LeviathanError::CommitNotFound(oid_str.clone()))?;
+            .map_err(|_| GitnadoError::CommitNotFound(oid_str.clone()))?;
         let commit = repo.find_commit(oid)?;
 
         // Get the diff for this commit
@@ -157,7 +157,7 @@ pub async fn apply_patch(path: String, patch_path: String, check_only: Option<bo
         apply_opts.check(true);
         repo.apply(&diff, git2::ApplyLocation::WorkDir, Some(&mut apply_opts))
             .map_err(|e| {
-                LeviathanError::OperationFailed(format!("Patch would not apply cleanly: {}", e))
+                GitnadoError::OperationFailed(format!("Patch would not apply cleanly: {}", e))
             })?;
     } else {
         repo.apply(&diff, git2::ApplyLocation::WorkDir, None)?;

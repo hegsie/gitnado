@@ -46,7 +46,7 @@ use std::time::Duration;
 use notify::{Config, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, NoCache};
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 
 /// How long raw file system events are collected before a batch is delivered.
 /// A `git gc` or `fetch` fires its events far faster than this, so the whole
@@ -306,7 +306,7 @@ impl WatcherService {
             NoCache::new(),
             config,
         )
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to create watcher: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create watcher: {}", e)))?;
 
         let mut roots: Vec<(PathBuf, RecursiveMode)> = Vec::new();
 
@@ -584,15 +584,15 @@ fn is_watch_limit(error: &notify::Error) -> bool {
 /// Build the error the frontend turns into a user-visible warning. The watch
 /// limit is called out by name because it is the one cause the user can
 /// actually fix.
-fn watch_error(path: &Path, error: &notify::Error) -> LeviathanError {
+fn watch_error(path: &Path, error: &notify::Error) -> GitnadoError {
     if is_watch_limit(error) {
-        LeviathanError::OperationFailed(format!(
+        GitnadoError::OperationFailed(format!(
             "the system file-watch limit was reached while watching {}. {}",
             path.display(),
             WATCH_LIMIT_HINT
         ))
     } else {
-        LeviathanError::OperationFailed(format!("failed to watch {}: {}", path.display(), error))
+        GitnadoError::OperationFailed(format!("failed to watch {}: {}", path.display(), error))
     }
 }
 

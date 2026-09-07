@@ -1,6 +1,6 @@
 //! Bookmark and recent repository commands
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -25,9 +25,9 @@ const MAX_RECENT_REPOS: usize = 50;
 fn get_bookmarks_path() -> Result<PathBuf> {
     let data_dir = dirs::data_dir().unwrap_or_else(std::env::temp_dir);
 
-    let app_dir = data_dir.join("leviathan");
+    let app_dir = crate::utils::app_paths::app_subdir(&data_dir);
     fs::create_dir_all(&app_dir).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to create app directory: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to create app directory: {}", e))
     })?;
 
     Ok(app_dir.join("bookmarks.json"))
@@ -42,11 +42,11 @@ fn load_bookmarks() -> Result<Vec<RepoBookmark>> {
     }
 
     let content = fs::read_to_string(&path).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to read bookmarks file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to read bookmarks file: {}", e))
     })?;
 
     serde_json::from_str(&content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to parse bookmarks file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to parse bookmarks file: {}", e))
     })
 }
 
@@ -55,11 +55,11 @@ fn save_bookmarks(bookmarks: &[RepoBookmark]) -> Result<()> {
     let path = get_bookmarks_path()?;
 
     let content = serde_json::to_string_pretty(bookmarks).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to serialize bookmarks: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to serialize bookmarks: {}", e))
     })?;
 
     fs::write(&path, content).map_err(|e| {
-        LeviathanError::OperationFailed(format!("Failed to write bookmarks file: {}", e))
+        GitnadoError::OperationFailed(format!("Failed to write bookmarks file: {}", e))
     })?;
 
     Ok(())
@@ -82,7 +82,7 @@ pub async fn add_bookmark(
 
     // Check if bookmark already exists for this path
     if bookmarks.iter().any(|b| b.path == path) {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bookmark already exists for path: {}",
             path
         )));
@@ -120,7 +120,7 @@ pub async fn update_bookmark(bookmark: RepoBookmark) -> Result<Vec<RepoBookmark>
     if let Some(pos) = bookmarks.iter().position(|b| b.path == bookmark.path) {
         bookmarks[pos] = bookmark;
     } else {
-        return Err(LeviathanError::OperationFailed(format!(
+        return Err(GitnadoError::OperationFailed(format!(
             "Bookmark not found for path: {}",
             bookmark.path
         )));

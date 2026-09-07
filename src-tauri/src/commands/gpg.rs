@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use crate::error::{LeviathanError, Result};
+use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
 /// GPG key information
@@ -90,7 +90,7 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<String> {
     let output = create_command(cmd)
         .args(args)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run {}: {}", cmd, e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run {}: {}", cmd, e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -98,7 +98,7 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<String> {
     if output.status.success() {
         Ok(stdout)
     } else {
-        Err(LeviathanError::OperationFailed(
+        Err(GitnadoError::OperationFailed(
             if stderr.is_empty() { stdout } else { stderr }
                 .trim()
                 .to_string(),
@@ -112,7 +112,7 @@ fn run_git_command(repo_path: &Path, args: &[&str]) -> Result<String> {
         .current_dir(repo_path)
         .args(args)
         .output()
-        .map_err(|e| LeviathanError::OperationFailed(format!("Failed to run git: {}", e)))?;
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -120,7 +120,7 @@ fn run_git_command(repo_path: &Path, args: &[&str]) -> Result<String> {
     if output.status.success() {
         Ok(stdout.trim().to_string())
     } else {
-        Err(LeviathanError::OperationFailed(
+        Err(GitnadoError::OperationFailed(
             if stderr.is_empty() { stdout } else { stderr }
                 .trim()
                 .to_string(),

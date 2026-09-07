@@ -1,12 +1,12 @@
-# Leviathan Roadmap
+# Gitnado Roadmap
 
-This document outlines the strategic vision and planned features for Leviathan. For current features, see [README.md](README.md).
+This document outlines the strategic vision and planned features for Gitnado. For current features, see [README.md](README.md).
 
 ## Vision
 
-Leviathan is transitioning from a "Git GUI with AI" to a **Local-First AI Development Hub**. The goal is to move beyond simple commit message generation and leverage Leviathan's unique position inside the user's filesystem and Git history.
+Gitnado is transitioning from a "Git GUI with AI" to a **Local-First AI Development Hub**. The goal is to move beyond simple commit message generation and leverage Gitnado's unique position inside the user's filesystem and Git history.
 
-Unlike commercial alternatives, Leviathan:
+Unlike commercial alternatives, Gitnado:
 
 - **Runs entirely offline** with no telemetry, account requirements, or cloud dependencies
 - **Respects your privacy** by keeping all data local
@@ -166,7 +166,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 ### 3. Long-term: Polish & Hardening
 
-**Goal:** Make Leviathan robust, accessible, and trusted for professional use.
+**Goal:** Make Gitnado robust, accessible, and trusted for professional use.
 
 #### Accessibility
 
@@ -235,6 +235,8 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 - ✅ **Package manager delivery** — winget, Homebrew cask (Apple Silicon tap), and Scoop manifest published automatically on each release; community-maintained AUR package. Future candidates: Chocolatey, Flathub, Snapcraft
 
+- ✅ **Rename to Gitnado (0.9.0)** — new name, icon and identifiers; existing Leviathan installs migrate settings, keychain entries and per-repo rules on first launch (see [docs/upgrading-from-leviathan.md](docs/upgrading-from-leviathan.md))
+
 ---
 
 ### AI & Machine Learning Features
@@ -251,14 +253,14 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 *Establishing the hardware-accelerated foundation.*
 
-- ✅ **Adaptive Model Switching** — Leviathan detects system VRAM/GPU and selects the optimal model:
+- ✅ **Adaptive Model Switching** — Gitnado detects system VRAM/GPU and selects the optimal model:
   - **Ultra-light (8GB RAM):** Uses **Gemma 3 1B** (distilled) or **Llama 3.2 1B**
   - **Standard (16GB+ RAM):** Uses **Gemma 3 4B** or **Phi-4-mini** (3.8B)
   - System capability detection (RAM, GPU vendor, VRAM) with tier-based recommendations
 
 - ✅ **GPU-Accelerated Local Inference** — Rust-native GGUF inference via `llama-cpp-2` with hardware acceleration: Metal on macOS ARM64, CUDA on Linux/Windows, CPU fallback. Supports llama, gemma, phi, mistral, and qwen architectures.
 
-- ✅ **The "Context Proxy" (MCP)** — Local-first implementation of the **Model Context Protocol**. Leviathan serves as an MCP host with HTTP/JSON-RPC server, exposing 7 Git tools (`get_commit_history`, `get_branches`, `get_status`, `get_diff`, `get_file_blame`, `search_commits`, `get_open_repositories`) for external tools to query.
+- ✅ **The "Context Proxy" (MCP)** — Local-first implementation of the **Model Context Protocol**. Gitnado serves as an MCP host with HTTP/JSON-RPC server, exposing 7 Git tools (`get_commit_history`, `get_branches`, `get_status`, `get_diff`, `get_file_blame`, `search_commits`, `get_open_repositories`) for external tools to query.
 
 - ✅ **Local Model Management** — Download models from HuggingFace with SHA-256 verification, progress tracking, cancellation support. Load/unload/delete models. Settings UI with system capabilities display and model browser.
 
@@ -305,7 +307,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 #### The Competitive Killer
 
-By Q2 2027, Leviathan's primary advantage is that **it costs $0 in API credits** and **is 100% air-gapped**. While GitKraken users are paying $15/month for cloud-based AI that sees their private code, Leviathan users are getting the same intelligence powered by their own GPU.
+By Q2 2027, Gitnado's primary advantage is that **it costs $0 in API credits** and **is 100% air-gapped**. While GitKraken users are paying $15/month for cloud-based AI that sees their private code, Gitnado users are getting the same intelligence powered by their own GPU.
 
 ---
 
@@ -317,7 +319,7 @@ By Q2 2027, Leviathan's primary advantage is that **it costs $0 in API credits**
 - ✅ **Azure DevOps** — Microsoft Entra ID OAuth (work/school accounts) + org-scoped PAT authentication, PRs/work items/pipelines. Global PATs deprecated March 2026, fully removed December 2026.
 
 - ✅ **GitHub App Installation** — users configure their own GitHub App (App ID, private key, installation ID). RS256 JWT authentication with automatic installation token refresh (1-hour tokens, cached with 5-min buffer). Fine-grained, org-level permissions that don't expire.
-- ✅ **Git Credential Manager Detection** — auto-detects GCM, osxkeychain, and configured credential helpers. Delegates credential resolution when available, falls back to Leviathan's built-in keyring storage.
+- ✅ **Git Credential Manager Detection** — auto-detects GCM, osxkeychain, and configured credential helpers. Delegates credential resolution when available, falls back to Gitnado's built-in keyring storage.
 
 - ✅ **Enterprise SSO (OIDC)** — OpenID Connect support for corporate identity providers (Okta, Azure AD, Auth0, Keycloak, etc.). OIDC discovery via `.well-known/openid-configuration`, PKCE-protected authorization code flow, JWT ID token decoding for user identity extraction. Configurable issuer URL, client ID, and scopes.
 
@@ -366,7 +368,7 @@ Have ideas or feedback on these plans? We welcome community input!
 3. **Submit a PR** if you want to help implement a feature
 4. **Join discussions** in GitHub Discussions for broader topics
 
-Remember: Leviathan's core value proposition is **privacy-first, offline-capable, high-performance Git GUI**. Features should align with these principles.
+Remember: Gitnado's core value proposition is **privacy-first, offline-capable, high-performance Git GUI**. Features should align with these principles.
 
 ---
 
