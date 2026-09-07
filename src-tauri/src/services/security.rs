@@ -227,14 +227,17 @@ pub fn url_host(url: &str) -> Option<String> {
     if !trimmed.contains("://") {
         return scp_like_host(trimmed);
     }
-    url::Url::parse(trimmed)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(|host| host.to_lowercase()))
-        .filter(|host| !host.is_empty())
+    parse_url_target(trimmed).map(|target| target.host)
 }
 
-/// `user@host:path` — the scp-like form. Equivalent to the frontend's
-/// `/^[^@\/]+@([^:\/]+):/`.
+/// `user@host:path` — the scp-like form. The frontend's
+/// `/^[^@\/]+@([^:\/]+):/` is the same rule, short only of the bracketed IPv6
+/// literal its character classes cannot express — which it declines rather than
+/// mis-reads, so it never approves more than this does.
+///
+/// The host is the one after the FIRST `@` and before the FIRST `:`, which is
+/// how git reads this form: `git@github.com:x@evil.test:y` is the path
+/// `x@evil.test:y` on `github.com`, not a repository on `evil.test`.
 fn scp_like_host(value: &str) -> Option<String> {
     let at = value.find('@')?;
     if at == 0 {
@@ -244,7 +247,14 @@ fn scp_like_host(value: &str) -> Option<String> {
         return None;
     }
     let rest = &value[at + 1..];
-    let colon = rest.find(':')?;
+    // A bracketed IPv6 literal carries colons of its own; only one AFTER the
+    // closing bracket separates the host from the path.
+    let colon = if rest.starts_with('[') {
+        let end = rest.find(']')?;
+        rest[end..].find(':').map(|i| end + i)?
+    } else {
+        rest.find(':')?
+    };
     if colon == 0 {
         return None;
     }
@@ -255,11 +265,81 @@ fn scp_like_host(value: &str) -> Option<String> {
     Some(host.to_lowercase())
 }
 
+/// Where a remote URL points: the login it names, the host, and the port.
+///
+/// The allowlist and the command that then contacts the host have to agree on
+/// WHERE the request is going, so both read this one parse. They used to have
+/// two. The gate took the host after the first `@` — which is what git does —
+/// while `test_credentials` and `test_ssh_connection` took the one after the
+/// LAST, so `git@github.com:x@evil.test:y` was approved as `github.com` and
+/// then handed to `ssh` as `evil.test`: an outbound connection to a host the
+/// allowlist never saw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteTarget {
+    /// The login the URL names, if it names one. `git` is deliberately NOT
+    /// substituted here: an scp-form remote may authenticate as `deploy`, and
+    /// an AWS CodeCommit URL as an access-key id.
+    pub user: Option<String>,
+    /// Lowercased host — the exact string [`host_allowed`] judges.
+    pub host: String,
+    /// The port the URL names, if it names one.
+    pub port: Option<u16>,
+    /// The URL's scheme, lowercased. `None` for the scheme-less forms.
+    pub scheme: Option<String>,
+    /// Whether git would reach this remote over ssh: an `ssh://`/`git+ssh://`
+    /// URL, or one of the scheme-less forms that carry a login.
+    pub is_ssh: bool,
+}
+
+/// Resolve `target` the way [`check`] judges it — the same rule, with the rest
+/// of the answer the callers need to contact it.
+pub fn parse_target(target: &str) -> Option<RemoteTarget> {
+    let trimmed = target.trim();
+    if !trimmed.contains("://") {
+        if let Some(host) = scp_like_host(trimmed) {
+            let user = &trimmed[..trimmed.find('@').unwrap_or(0)];
+            return Some(RemoteTarget {
+                user: (!user.is_empty()).then(|| user.to_string()),
+                host,
+                port: None,
+                scheme: None,
+                is_ssh: true,
+            });
+        }
+        // Bare `host`, `host:port` and `user@host` — the forms the SSH settings
+        // dialog accepts. Reading them as an https URL is what this gate has
+        // always done; a login and no scheme means an ssh destination.
+        let mut resolved = parse_url_target(&format!("https://{}", trimmed))?;
+        resolved.is_ssh = resolved.user.is_some();
+        resolved.scheme = None;
+        return Some(resolved);
+    }
+    parse_url_target(trimmed)
+}
+
+/// The `[user@]host[:port]` of a target that carries a scheme.
+fn parse_url_target(url: &str) -> Option<RemoteTarget> {
+    let parsed = url::Url::parse(url.trim()).ok()?;
+    let host = parsed
+        .host_str()
+        .filter(|host| !host.is_empty())?
+        .to_lowercase();
+    let user = parsed.username();
+    let scheme = parsed.scheme().to_lowercase();
+    Some(RemoteTarget {
+        user: (!user.is_empty()).then(|| user.to_string()),
+        host,
+        port: parsed.port(),
+        is_ssh: scheme == "ssh" || scheme == "git+ssh",
+        scheme: Some(scheme),
+    })
+}
+
 /// The host a target string resolves to, trying it as written and then as an
 /// https URL — the fallback is what lets the bare `git@host` and `host` forms
 /// resolve, exactly as the frontend does.
 fn target_host(target: &str) -> Option<String> {
-    url_host(target).or_else(|| url_host(&format!("https://{}", target.trim())))
+    parse_target(target).map(|resolved| resolved.host)
 }
 
 /// Whether `host` is covered by `allowlist`.
@@ -1217,17 +1297,42 @@ mod tests {
             "test_credentials off the allowlist",
         );
 
-        // On an allowed host the guard steps aside; whatever ssh then reports
-        // is not a NetworkBlocked error, which is the whole distinction.
-        let allowed = crate::commands::credentials::test_credentials(
-            repo.path_str(),
-            "git@github.com:me/app.git".to_string(),
-        )
-        .await;
+        // The allowed direction is asserted on the guard itself. Calling the
+        // command here really ran `ssh -T -o StrictHostKeyChecking=accept-new
+        // git@github.com`: an outbound connection out of the unit suite, and
+        // `accept-new` ADDS github.com's host key to the developer's
+        // ~/.ssh/known_hosts. It stayed green only because `ssh` is absent on
+        // CI and the failed spawn is not a NetworkBlocked error — a pass for a
+        // reason that has nothing to do with the gate.
         assert!(
-            !matches!(allowed, Err(LeviathanError::NetworkBlocked(_))),
+            guard_url("git@github.com:me/app.git").is_ok(),
             "github.com is allowlisted, so the guard must not be what stops it"
         );
+    }
+
+    /// A URL the gate approves cannot then be contacted somewhere else.
+    ///
+    /// The gate reads the host after the FIRST `@` — `git@github.com:x@evil.test:y`
+    /// is, to git, the path `x@evil.test:y` on `github.com` — while the commands
+    /// that go on to contact it read the host after the LAST. Two parses meant a
+    /// `github.com` allowlist approved an ssh connection to `evil.test`; the
+    /// destination now comes from this one.
+    #[test]
+    fn a_gate_approved_url_cannot_smuggle_in_a_second_host() {
+        let url = "git@github.com:x@evil.test:y";
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        assert!(
+            guard_url(url).is_ok(),
+            "the gate reads the host git reads, so this URL is allowlisted"
+        );
+        let target = parse_target(url).expect("an scp-form remote resolves");
+        assert_eq!(
+            target.host, "github.com",
+            "the destination must be the host the gate approved"
+        );
+        assert_eq!(target.user.as_deref(), Some("git"));
+        assert!(target.is_ssh);
     }
 
     /// An allowlist refuses the provider it does not name while still allowing
@@ -1244,13 +1349,13 @@ mod tests {
             .await,
             "check_gitlab_connection",
         );
-        // GitHub is allowed through the gate. It then fails on the network,
-        // which is a different error — and that is the point: the guard is not
-        // what stopped it.
-        let allowed =
-            crate::commands::github::check_github_connection(Some("token".to_string())).await;
+        // GitHub is allowed through the gate. Asserted on the guard rather than
+        // by calling the command: `check_github_connection` would issue a real
+        // request to api.github.com from the unit suite, and then "pass"
+        // because the network error it fails with is not a NetworkBlocked one.
+        // `api_client()` in commands/github.rs guards this exact URL.
         assert!(
-            !matches!(allowed, Err(LeviathanError::NetworkBlocked(_))),
+            guard_url("https://api.github.com").is_ok(),
             "an allowlisted host must not be refused by the gate"
         );
     }
@@ -1515,14 +1620,11 @@ mod tests {
             "list_ado_repositories",
         );
 
-        let allowed = crate::commands::github::list_github_repositories(
-            Some(10),
-            Some(1),
-            Some("token".to_string()),
-        )
-        .await;
+        // GitHub's listing is allowed through — asserted on the guard, for the
+        // same reason as above: calling the command would put a real request to
+        // api.github.com in the unit suite and then pass on its network error.
         assert!(
-            !matches!(allowed, Err(LeviathanError::NetworkBlocked(_))),
+            guard_url("https://api.github.com").is_ok(),
             "an allowlisted host must not be refused by the gate"
         );
     }

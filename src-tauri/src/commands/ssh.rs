@@ -290,37 +290,6 @@ struct SshTarget {
     expected_pattern: &'static str,
 }
 
-/// Split a `[user@]host[:port]` fragment into its host and port parts.
-///
-/// Bracketed IPv6 literals keep their brackets — `ssh` wants them that way —
-/// and only an all-digit suffix counts as a port, so an SCP path remnant like
-/// `github.com:owner` does not turn into one.
-fn split_host_port(host_port: &str) -> (&str, Option<String>) {
-    let split_at = if host_port.starts_with('[') {
-        // Only a colon AFTER the closing bracket can be a port separator.
-        match host_port.find(']') {
-            Some(end) => host_port[end..].find(':').map(|i| end + i),
-            None => None,
-        }
-    } else {
-        host_port.rfind(':')
-    };
-
-    match split_at {
-        Some(i) => {
-            let (bare, rest) = host_port.split_at(i);
-            let port = &rest[1..];
-            if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
-                (bare, Some(port.to_string()))
-            } else {
-                // An SCP-style path (`git@github.com:owner/repo.git`) — not a port.
-                (bare, None)
-            }
-        }
-        None => (host_port, None),
-    }
-}
-
 /// Which host to connect to, and the success banner to expect from it.
 ///
 /// The canonical SaaS hosts are matched EXACTLY. Matching on `contains` and then
@@ -334,28 +303,21 @@ fn split_host_port(host_port: &str) -> (&str, Option<String>) {
 /// and `ssh://git@github.com:2222/owner/repo.git` all resolve to the same host.
 /// Handing those URL forms to `ssh -T` verbatim made every one of them miss the
 /// canonical-host match and then fail to connect at all.
+///
+/// The destination comes from `security::parse_target` — the SAME parse the
+/// allowlist judges — so the host the gate approved is the host `ssh` is given.
+/// Splitting on the LAST `@` here while the gate split on the FIRST resolved
+/// `git@github.com:x@evil.test:y` to `evil.test`, which a `github.com`
+/// allowlist had just approved as `github.com`.
 fn resolve_ssh_target(host: &str) -> SshTarget {
-    let mut rest = host.trim();
-    for scheme in ["ssh://", "git+ssh://"] {
-        if let Some(stripped) = rest.strip_prefix(scheme) {
-            rest = stripped;
-            break;
-        }
-    }
-    // Drop the repository path, from either URL form.
-    if let Some(slash) = rest.find('/') {
-        rest = &rest[..slash];
-    }
-
-    let (user, host_port) = match rest.rsplit_once('@') {
-        Some((user, host_port)) if !user.is_empty() => (Some(user), host_port),
-        Some((_, host_port)) => (None, host_port),
-        None => (None, rest),
+    let (user, bare, port) = match crate::services::security::parse_target(host) {
+        Some(target) => (target.user, target.host, target.port.map(|p| p.to_string())),
+        // Nothing a URL parser recognises: hand it to ssh as typed and let ssh
+        // say why it cannot be reached.
+        None => (None, host.trim().to_string(), None),
     };
 
-    let (bare, port) = split_host_port(host_port);
-
-    let expected_pattern = match bare.to_ascii_lowercase().as_str() {
+    let expected_pattern = match bare.as_str() {
         "github.com" | "ssh.github.com" => "successfully authenticated",
         "gitlab.com" => "welcome to gitlab",
         "bitbucket.org" => "logged in as",
@@ -363,7 +325,7 @@ fn resolve_ssh_target(host: &str) -> SshTarget {
     };
 
     SshTarget {
-        ssh_host: format!("{}@{}", user.unwrap_or("git"), bare),
+        ssh_host: format!("{}@{}", user.as_deref().unwrap_or("git"), bare),
         port,
         expected_pattern,
     }
@@ -658,6 +620,50 @@ mod tests {
         let v6 = resolve_ssh_target("ssh://git@[2001:db8::1]:2222/owner/repo.git");
         assert_eq!(v6.ssh_host, "git@[2001:db8::1]");
         assert_eq!(v6.port.as_deref(), Some("2222"));
+    }
+
+    /// The host handed to `ssh` must be the host the allowlist judged.
+    ///
+    /// `git@github.com:x@evil.test:y` is, to git, the path `x@evil.test:y` on
+    /// `github.com`, and that is the host the gate reads. Splitting on the LAST
+    /// `@` here resolved it to `evil.test`, so a `github.com` allowlist
+    /// approved a connection to a host it never saw.
+    #[test]
+    fn test_the_target_is_the_host_the_gate_judged() {
+        for input in [
+            "git@github.com:x@evil.test:y",
+            "ssh://git@github.com/x@evil.test/y.git",
+        ] {
+            assert_eq!(
+                crate::services::security::url_host(input).as_deref(),
+                Some("github.com"),
+                "gate host for {}",
+                input
+            );
+            assert_eq!(
+                resolve_ssh_target(input).ssh_host,
+                "git@github.com",
+                "destination for {}",
+                input
+            );
+        }
+    }
+
+    /// The login the URL names is the login ssh is given: an scp-form remote
+    /// may authenticate as `deploy`, and a CodeCommit URL as an access-key id.
+    #[test]
+    fn test_a_login_other_than_git_is_preserved() {
+        assert_eq!(
+            resolve_ssh_target("deploy@git.example.test:team/app.git").ssh_host,
+            "deploy@git.example.test"
+        );
+        assert_eq!(
+            resolve_ssh_target(
+                "ssh://APKAEXAMPLEKEYID@git-codecommit.eu-west-1.amazonaws.com/v1/repos/app"
+            )
+            .ssh_host,
+            "APKAEXAMPLEKEYID@git-codecommit.eu-west-1.amazonaws.com"
+        );
     }
 
     /// With no known banner, expected_pattern is "" — and contains("") is
