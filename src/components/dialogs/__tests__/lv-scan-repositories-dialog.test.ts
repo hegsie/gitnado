@@ -26,7 +26,7 @@ let cbId = 0;
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html, waitUntil } from '@open-wc/testing';
+import { aTimeout, expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-scan-repositories-dialog.ts';
 import type { LvScanRepositoriesDialog } from '../lv-scan-repositories-dialog.ts';
 import { repositoryStore, uiStore } from '../../../stores/index.ts';
@@ -342,6 +342,102 @@ describe('lv-scan-repositories-dialog', () => {
     expect(
       invokeCallArgs.find((c) => c.command === 'scan_for_repositories')?.args.path,
     ).to.equal('/projects');
+  });
+
+  it('re-scans a folder dropped while the dialog is already open', async () => {
+    mockResponses['scan_for_repositories'] = (args) =>
+      scanResult({ root: args.path as string });
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the first results list');
+
+    // A second OS drop: the shell writes the new folder and asks the dialog
+    // store to open a dialog that is already open, so `open` never changes.
+    el.scanPath = '/other';
+    await el.updateComplete;
+
+    await waitUntil(
+      () =>
+        invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').length === 2,
+      'the second folder to be scanned',
+    );
+    expect(
+      invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').map((c) => c.args.path),
+    ).to.deep.equal(['/code', '/other']);
+    await waitUntil(() => text(el, '.folder-path').includes('/other'), 'the new folder on screen');
+    // The drop must not be silent (CLAUDE.md: every user-initiated operation
+    // gives feedback).
+    expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain('other');
+  });
+
+  it('never lets the previous folder\'s scan land on the folder that replaced it', async () => {
+    let finishFirst: (value: unknown) => void = () => {};
+    mockResponses['scan_for_repositories'] = (args) =>
+      (args.path as string) === '/code'
+        ? new Promise((resolve) => {
+            finishFirst = resolve;
+          })
+        : scanResult({ root: args.path as string });
+    mockResponses['cancel_repository_scan'] = () => null;
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'scan_for_repositories'),
+      'the first scan to reach the backend',
+    );
+
+    // Re-targeted at a folder that only wants the offer step.
+    el.scanPath = '/other';
+    el.mode = 'offer';
+    await el.updateComplete;
+    await waitUntil(
+      () => query(el, '.offer-actions') !== null,
+      'the offer for the new folder',
+    );
+
+    // The abandoned scan finishes now: its repositories belong to /code and
+    // must never appear under /other.
+    finishFirst(scanResult({ root: '/code' }));
+    await aTimeout(0);
+    await el.updateComplete;
+
+    expect(queryAll(el, '.result-item').length, 'no stale results').to.equal(0);
+    expect(text(el, '.folder-path')).to.contain('/other');
+    expect(allText(el)).to.not.contain('/code/alpha');
+  });
+
+  it('initializes the folder it is showing after being re-targeted', async () => {
+    mockResponses['scan_for_repositories'] = (args) =>
+      scanResult({ root: args.path as string, repositories: [], scannedDirectories: 3 });
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+
+    let initPath: string | undefined;
+    el.addEventListener('initialize-repository', (e) => {
+      initPath = (e as CustomEvent<{ path: string }>).detail.path;
+    });
+
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => text(el, '.explanation').includes('No Git repositories'), 'the first empty state');
+
+    el.scanPath = '/other';
+    await el.updateComplete;
+    await waitUntil(
+      () => text(el, '.folder-path') === '/other',
+      'the empty state for the new folder',
+    );
+
+    const onScreen = text(el, '.folder-path');
+    buttonWithText(el, 'Initialize a repository here').click();
+    expect(initPath, 'init acts on the folder named on screen').to.equal(onScreen);
+    expect(initPath).to.equal('/other');
   });
 
   it('asks the backend to stop a scan the user closed', async () => {

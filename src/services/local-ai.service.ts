@@ -3,6 +3,8 @@
  * Manages local model inference, downloads, and system capabilities
  */
 
+import { msg } from '@lit/localize';
+
 import { invokeCommand, listenToEvent } from './tauri-api.ts';
 import { showToast } from './notification.service.ts';
 import { checkOutboundHostAllowed } from './git.service.ts';
@@ -268,12 +270,16 @@ export function formatBytes(bytes: number): string {
  * Get display name for a model tier
  */
 export function getTierDisplayName(tier: ModelTier): string {
+  // Called from the render, not cached, so it re-resolves when the locale
+  // changes. These are UI labels rather than registry data: the settings
+  // dialog shows them in the Local AI status pill and in every model row,
+  // beside text that is already localised.
   switch (tier) {
     case 'ultra_light':
-      return 'Ultra-Light (8GB+ RAM)';
+      return msg('Ultra-Light (8GB+ RAM)');
     case 'standard':
-      return 'Standard (16GB+ RAM)';
+      return msg('Standard (16GB+ RAM)');
     case 'none':
-      return 'Not Supported';
+      return msg('Not Supported');
   }
 }

@@ -1030,6 +1030,44 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     expect((scanCalls[0].args as { path: string }).path).toBe('/projects');
   });
 
+  test('re-points the scan dialog at a folder dropped while it is already open', async ({
+    page,
+  }) => {
+    await startCommandCaptureWithMocks(page, {
+      classify_repository_path: {
+        path: '/projects',
+        name: 'projects',
+        exists: true,
+        isDirectory: true,
+        isRepository: false,
+        isBare: false,
+      },
+      scan_for_repositories: scanResultPayload({ root: '/projects' }),
+    });
+
+    await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
+    const dialog = page.locator('lv-scan-repositories-dialog');
+    await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
+    await dialog.getByRole('button', { name: 'Scan it for repositories' }).click();
+    await expect(dialog.locator('.result-item')).toHaveCount(2);
+
+    // An OS drop is not blocked by an in-page modal: a second folder can land
+    // while the dialog is open, and it must re-point the dialog rather than
+    // vanish.
+    await emitDragEvent(page, 'tauri://drag-drop', ['/elsewhere']);
+
+    await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
+    await expect(dialog.locator('.folder-path')).toHaveText('/elsewhere');
+    await expect(dialog.locator('.result-item')).toHaveCount(0);
+    await expect(page.locator('.toast')).toContainText('elsewhere');
+
+    // Initialize acts on the folder the dialog is actually showing.
+    await dialog.getByRole('button', { name: 'Initialize a repository here' }).click();
+    await expect(page.getByRole('textbox', { name: /Repository Location/i })).toHaveValue(
+      '/elsewhere'
+    );
+  });
+
   test('offers to initialize a dropped folder that is not a repository', async ({ page }) => {
     await injectCommandMock(page, {
       classify_repository_path: {

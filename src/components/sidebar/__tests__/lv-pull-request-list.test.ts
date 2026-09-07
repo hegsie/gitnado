@@ -439,6 +439,27 @@ describe('lv-pull-request-list', () => {
       expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
     });
 
+    it('re-checks offline mode when the section is re-expanded', async () => {
+      // The offline state is reached from a cached provider detection plus a
+      // synchronous settings read - no network, no IPC - so it must not be
+      // cached either: re-opening the section has to see offline mode turned
+      // off since, rather than replaying a false statement about the user's
+      // own settings.
+      settingsStore.getState().setOfflineMode(true);
+      setupMocks({ pullRequests: [makePr()] });
+      const el = await renderList();
+      expect(text(el)).to.contain('unavailable while offline mode is enabled');
+
+      el.expanded = false;
+      await settle(el);
+      settingsStore.getState().setOfflineMode(false);
+      el.expanded = true;
+      await settle(el);
+
+      expect(text(el)).to.not.contain('offline mode is enabled');
+      expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
+    });
+
     it('offers Try again beside Connect so a finished sign-in can be picked up', async () => {
       unifiedProfileStore.getState().setAccounts([makeAccount()] as never);
       setupMocks({ token: null });

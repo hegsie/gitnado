@@ -683,6 +683,15 @@
 <trans-unit id="s3420935f88f459e9">
   <source>Failed to save MCP port</source>
   <target>Échec de l'enregistrement du port MCP</target></trans-unit>
+<trans-unit id="s59af9cc8acfda651">
+  <source>Ultra-Light (8GB+ RAM)</source>
+  <target>Ultra-léger (8 Go+ de RAM)</target></trans-unit>
+<trans-unit id="s33c1c6766b419d56">
+  <source>Standard (16GB+ RAM)</source>
+  <target>Standard (16 Go+ de RAM)</target></trans-unit>
+<trans-unit id="sde169a28c0b76e74">
+  <source>Not Supported</source>
+  <target>Non pris en charge</target></trans-unit>
 </body>
 </file>
 </xliff>

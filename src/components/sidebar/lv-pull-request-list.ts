@@ -390,14 +390,24 @@ export class LvPullRequestList extends LitElement {
       if (!isFresh()) return;
       // A failure is not a result, so it is NOT cached: re-opening the section
       // is a natural "try again", and it cannot loop because collapsing and
-      // re-expanding is a deliberate gesture. "Not connected" is not cached
-      // for the same reason and at no cost: reaching it makes no provider API
-      // call at all (detection has its own cache and the token is a local
-      // lookup), so re-opening the section must be able to see a credential
-      // added since. Every other state is cached and has its own way out -
-      // Try again for offline and allowlist, and a repository-refresh or the
-      // section's refresh button for all of them.
-      if (entry.state !== 'error' && entry.state !== 'unauthenticated') {
+      // re-expanding is a deliberate gesture. "Not connected" and "offline"
+      // are not cached for the same reason and at no cost: reaching either
+      // makes no provider API call at all - detection has its own cache, the
+      // token is a local lookup, and offline mode is a synchronous settings
+      // read - so re-opening the section must be able to see a credential
+      // added, or offline mode turned off, since. Caching "offline" made the
+      // section keep asserting that offline mode was enabled after the user
+      // had disabled it, which is a false statement about their own settings
+      // and one nothing here subscribes to correct.
+      //
+      // "Blocked by the allowlist" IS still cached: recomputing that one costs
+      // a provider API call. Its way out is Try again, a repository-refresh,
+      // or the section's refresh button.
+      if (
+        entry.state !== 'error' &&
+        entry.state !== 'unauthenticated' &&
+        entry.state !== 'offline'
+      ) {
         this.cache.set(loadedPath, entry);
       }
       this.applyState(entry);

@@ -20,10 +20,36 @@ const mockInvoke: MockInvoke = async (command: string) => {
       return '0.1.0';
     case 'get_settings':
       return {};
+    // A REAL `SystemCapabilities`. The old literal used none of the interface's
+    // field names, so `recommendedTier` was undefined, the Local AI status pill
+    // rendered empty, and the comparison below could not see the English it
+    // would otherwise have contained.
     case 'get_system_capabilities':
-      return { hasGpu: false, gpuName: null, totalRam: 8 };
-    case 'get_downloaded_models':
+      return {
+        totalRamBytes: 17_179_869_184,
+        availableRamBytes: 8_589_934_592,
+        gpuInfo: null,
+        recommendedTier: 'standard',
+        gpuAccelerationAvailable: false,
+      };
+    // At least one model, for the same reason: with an empty registry no model
+    // row exists, so nothing inside it is ever compared.
     case 'get_available_models':
+      return [
+        {
+          id: 'qwen2.5-coder-1.5b',
+          displayName: 'Qwen2.5 Coder 1.5B',
+          hfRepo: 'org/repo',
+          hfFilename: 'model.gguf',
+          sha256: 'x'.repeat(64),
+          sizeBytes: 1_073_741_824,
+          minRamBytes: 8_589_934_592,
+          tier: 'ultra_light',
+          architecture: 'qwen2',
+          contextLength: 32_768,
+        },
+      ];
+    case 'get_downloaded_models':
     case 'get_available_diff_tools':
     case 'get_available_merge_tools':
     case 'list_diff_tools':
@@ -168,7 +194,11 @@ describe('lv-settings-dialog language setting', () => {
     // error happens, so it is provoked in each language below rather than
     // relying on the re-render. Without it here, a bare template rendered
     // into the banner showed English under "fr" with nothing to catch it.
-    const LOCALISED = '.section-title, .setting-name, .setting-description, .error-text';
+    // `.status-indicator` earns its place here: the stack localised several of
+    // these pills (`Configured`, `Not configured`, `Loaded`) while the Local AI
+    // tier pill beside them stayed English, and this selector could not see it.
+    const LOCALISED =
+      '.section-title, .setting-name, .setting-description, .error-text, .status-indicator';
     // The mock answers `test_ai_provider` with nothing, which the dialog
     // reports as the provider being unavailable.
     const provokeAiError = async (): Promise<void> => {
@@ -188,7 +218,10 @@ describe('lv-settings-dialog language setting', () => {
      * be a word French borrows unchanged — if a row lands here because nobody
      * translated it, that is the bug this test exists to catch.
      */
-    const SAME_IN_FRENCH = new Set(['Port']);
+    // `Port` is a word French borrows unchanged. The model name is registry
+    // DATA, not a label: it is the product's own name and reads identically in
+    // every locale, so it is not evidence of a missing translation.
+    const SAME_IN_FRENCH = new Set(['Port', 'Qwen2.5 Coder 1.5B']);
 
     await provokeAiError();
     const english = visibleText();
