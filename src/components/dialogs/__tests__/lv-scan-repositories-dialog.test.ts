@@ -440,6 +440,165 @@ describe('lv-scan-repositories-dialog', () => {
     expect(initPath).to.equal('/other');
   });
 
+  /**
+   * The open loop takes seconds per repository, and an OS folder drop is not
+   * blocked by the modal: the dialog can be re-pointed at another folder while
+   * it is still opening. The loop that no longer owns the dialog must not write
+   * its outcome — or its close — over what the user is looking at now.
+   */
+  it('does not close the re-targeted dialog when an abandoned open finishes', async () => {
+    let finishAlpha: (value: unknown) => void = () => {};
+    mockResponses['scan_for_repositories'] = (args) => scanResult({ root: args.path as string });
+    mockResponses['open_repository'] = (args) => {
+      const path = args.path as string;
+      if (path === '/code/alpha') {
+        return new Promise((resolve) => {
+          finishAlpha = () => resolve(mockRepoPayload(path));
+        });
+      }
+      return mockRepoPayload(path);
+    };
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    let closed = 0;
+    el.addEventListener('close', () => {
+      closed += 1;
+    });
+
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the first results list');
+    buttonWithText(el, 'Select all').click();
+    await el.updateComplete;
+    buttonWithText(el, 'Open selected').click();
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'open_repository'),
+      'the open loop to start',
+    );
+
+    // A second folder is dropped while the repositories are still opening.
+    el.scanPath = '/other';
+    await el.updateComplete;
+    await waitUntil(
+      () => text(el, '.folder-path').includes('/other'),
+      'the dialog re-targeted at the dropped folder',
+    );
+
+    // The abandoned loop finishes now.
+    finishAlpha(null);
+    await waitUntil(
+      () =>
+        invokeCallArgs.filter((c) => c.command === 'open_repository').length === 2,
+      'the abandoned loop to open the rest of its selection',
+    );
+    await aTimeout(0);
+    await el.updateComplete;
+
+    expect(closed, 'the re-targeted dialog is never closed by the old loop').to.equal(0);
+    expect(el.open).to.equal(true);
+    expect(text(el, '.folder-path')).to.contain('/other');
+    expect(query(el, '.error-message'), 'no stale error over the new folder').to.equal(null);
+    // The repositories DID open, so that is still reported — as a toast, which
+    // says what happened without touching the screen the user moved on to.
+    expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain(
+      'Opened 2 repositories',
+    );
+    expect(
+      repositoryStore.getState().openRepositories.map((r) => r.repository.path),
+    ).to.deep.equal(['/code/alpha', '/code/beta']);
+  });
+
+  it('reports an abandoned open that failed instead of dropping it', async () => {
+    let failAlpha: () => void = () => {};
+    mockResponses['scan_for_repositories'] = (args) => scanResult({ root: args.path as string });
+    mockResponses['open_repository'] = (args) => {
+      const path = args.path as string;
+      if (path === '/code/alpha') {
+        return new Promise((_resolve, reject) => {
+          failAlpha = () => reject(new Error('permission denied'));
+        });
+      }
+      return mockRepoPayload(path);
+    };
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the first results list');
+    queryAll<HTMLInputElement>(el, '.result-item input')[0].click();
+    await el.updateComplete;
+    buttonWithText(el, 'Open selected').click();
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'open_repository'),
+      'the open loop to start',
+    );
+
+    el.scanPath = '/other';
+    await el.updateComplete;
+    await waitUntil(
+      () => text(el, '.folder-path').includes('/other'),
+      'the dialog re-targeted at the dropped folder',
+    );
+    uiStore.setState({ toasts: [] });
+
+    failAlpha();
+    await waitUntil(
+      () => uiStore.getState().toasts.length > 0,
+      'the abandoned failure to be reported',
+    );
+
+    const toast = uiStore.getState().toasts[0] as any;
+    expect(toast.type).to.equal('error');
+    expect(toast.message).to.contain('permission denied');
+    // The failure belongs to the folder the user left, so it must not be
+    // written into the new folder's screen.
+    expect(query(el, '.error-message'), 'no stale error over the new folder').to.equal(null);
+    expect(el.open).to.equal(true);
+  });
+
+  it('refuses Escape while repositories are still being opened', async () => {
+    let finishAlpha: (value: unknown) => void = () => {};
+    mockResponses['scan_for_repositories'] = () => scanResult();
+    mockResponses['open_repository'] = (args) => {
+      const path = args.path as string;
+      if (path === '/code/alpha') {
+        return new Promise((resolve) => {
+          finishAlpha = () => resolve(mockRepoPayload(path));
+        });
+      }
+      return mockRepoPayload(path);
+    };
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    let closed = 0;
+    el.addEventListener('close', () => {
+      closed += 1;
+    });
+
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the results list');
+    queryAll<HTMLInputElement>(el, '.result-item input')[0].click();
+    await el.updateComplete;
+    buttonWithText(el, 'Open selected').click();
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'open_repository'),
+      'the open loop to start',
+    );
+
+    // Escape, the overlay and the × all arrive as the modal's close event.
+    query(el, 'lv-modal')!.dispatchEvent(new CustomEvent('close'));
+    await el.updateComplete;
+    expect(closed, 'Escape is refused while repositories are opening').to.equal(0);
+    expect(el.open).to.equal(true);
+
+    finishAlpha(null);
+    await waitUntil(() => closed === 1, 'the dialog closes once the open finishes');
+  });
+
   it('asks the backend to stop a scan the user closed', async () => {
     mockResponses['scan_for_repositories'] = () => new Promise(() => {});
     mockResponses['cancel_repository_scan'] = () => null;

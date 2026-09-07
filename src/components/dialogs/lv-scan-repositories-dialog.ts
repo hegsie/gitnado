@@ -489,6 +489,11 @@ export class LvScanRepositoriesDialog extends LitElement {
       .filter((path) => this.selected.has(path));
     if (paths.length === 0) return;
 
+    // Opening a repository takes seconds, and an OS folder drop is not blocked
+    // by the modal: the dialog can be closed or re-pointed at another folder
+    // while this loop is still running. The same token that keeps a stale scan
+    // off the screen keeps this loop's outcome off it too.
+    const token = this.scanToken;
     this.isOpening = true;
     let opened = 0;
     let alreadyOpen = 0;
@@ -502,7 +507,15 @@ export class LvScanRepositoriesDialog extends LitElement {
         else failures.push(`${outcome.path}: ${outcome.message ?? 'failed to open'}`);
       }
     } finally {
-      this.isOpening = false;
+      // `reset()` already cleared this for the folder that replaced ours; only
+      // release the guard if this loop still owns the dialog, or Escape would
+      // be let through for a pass that never armed it.
+      if (token === this.scanToken) this.isOpening = false;
+    }
+
+    if (token !== this.scanToken) {
+      this.reportAbandonedOpen(opened, failures);
+      return;
     }
 
     if (failures.length > 0) {
@@ -538,6 +551,32 @@ export class LvScanRepositoriesDialog extends LitElement {
       );
     }
     this.close();
+  }
+
+  /**
+   * Report an open loop that finished after the dialog was closed or re-pointed
+   * at another folder.
+   *
+   * The repositories really did open, so saying nothing would lose the outcome
+   * of an action the user asked for. It is reported as toasts only: the screen
+   * now belongs to another folder (or to nothing), so writing an error message
+   * into it, or closing it, would take away the drop the user just made.
+   */
+  private reportAbandonedOpen(opened: number, failures: string[]): void {
+    if (opened > 0) {
+      showToast(
+        opened === 1 ? 'Opened 1 repository' : `Opened ${opened} repositories`,
+        'success',
+      );
+    }
+    for (const failure of failures) {
+      showToast(`Could not open ${failure}`, 'error');
+    }
+    // Anything that did open belongs in the "already open" badges of whatever
+    // the dialog is showing now.
+    this.openPaths = repositoryStore
+      .getState()
+      .openRepositories.map((repo) => repo.repository.path);
   }
 
   public close(): void {
