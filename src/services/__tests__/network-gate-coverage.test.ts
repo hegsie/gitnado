@@ -60,6 +60,16 @@ const responses: Record<string, unknown> = {};
     // whole of unified-profile.service would be swept without ever reaching an
     // invoke — a sweep that proves nothing is worse than no sweep.
     if (command === 'get_keyring_token') return Promise.resolve('sweep-token');
+    // A real authorize response, so the sweep reaches what `startOAuth` does
+    // NEXT — hand the URL to the system browser. With a null reply it threw
+    // first and the browser handoff was never exercised. No `loopbackPort`, so
+    // no background poll is left running behind the sweep.
+    if (command === 'oauth_get_authorize_url') {
+      return Promise.resolve({
+        authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=sweep',
+        state: 'sweep-state',
+      });
+    }
     return Promise.resolve(null);
   }) as MockInvoke,
   transformCallback: () => 0,
@@ -89,6 +99,8 @@ import * as credentialService from '../credential.service.ts';
 import * as localAiService from '../local-ai.service.ts';
 import * as updateService from '../update.service.ts';
 import * as unifiedProfileService from '../unified-profile.service.ts';
+import * as aiService from '../ai.service.ts';
+import * as oauthService from '../oauth.service.ts';
 import { embeddingIndexService } from '../embedding-index.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 
@@ -142,6 +154,23 @@ const NETWORK_COMMANDS = new Set([
   // the auto-updater: `check_for_update` fetches latest.json from the release
   // host and `download_and_install_update` pulls a binary and runs it.
   'check_for_update', 'download_and_install_update',
+  // ai.service: every call that reaches the ACTIVE provider, which is a cloud
+  // provider (api.openai.com, api.anthropic.com, ...) whenever one is
+  // selected. `is_ai_available` and `ai_unavailable_reason` are here too: both
+  // ask that provider whether it is reachable, which is itself a request.
+  'test_ai_provider', 'generate_commit_message', 'suggest_conflict_resolution',
+  'generate_changelog', 'analyze_staged_changes', 'generate_pr_description',
+  'suggest_commit_splits', 'explain_conflict', 'find_reflog_entry',
+  'is_ai_available', 'ai_unavailable_reason',
+  // oauth.service: the token endpoint (github.com, gitlab, Entra, bitbucket)
+  // and the OIDC issuer's `.well-known` document.
+  'oauth_exchange_code', 'oauth_refresh_token', 'discover_oidc_provider',
+  // Not a Tauri command of ours but the shell plugin's: it hands a URL to the
+  // system browser, which then fetches it. It is in this set because that is
+  // the step `startOAuth` takes BEFORE any of the gated commands — with
+  // offline mode on it opened github.com, the user authorised the app against
+  // their real account, and only the code exchange afterwards was refused.
+  'plugin:shell|open',
 ]);
 
 /**
@@ -182,6 +211,19 @@ const LOCAL_COMMANDS = new Set([
   'start_auto_update_check',
   'stop_auto_update_check',
   'is_auto_update_running',
+
+  // ai.service: reading and writing the AI configuration, and the local-only
+  // probe. Gating any of these would make offline mode hide the controls that
+  // turn a cloud provider off, and `auto_detect_ai_providers` probes only
+  // Ollama and LM Studio, both on localhost.
+  'get_ai_providers', 'get_active_ai_provider', 'set_ai_provider',
+  'set_ai_api_key', 'set_ai_model', 'auto_detect_ai_providers',
+
+  // oauth.service: building the authorize URL (it mints PKCE values and binds
+  // a LOOPBACK socket — nothing outbound), waiting on that loopback socket,
+  // releasing it, and decoding a JWT already in hand.
+  'oauth_get_authorize_url', 'oauth_wait_for_callback', 'oauth_cancel_flow',
+  'decode_oidc_id_token',
 
   // ---- the rest of the surface the sweep touches ---------------------------
   //
@@ -314,6 +356,12 @@ const SKIP = new Set([
   'stopPeriodicTokenValidation',
   // Reads the whole profile config and then kicks off the same validation.
   'initializeUnifiedProfiles',
+  // oauth.service: registers the app-lifetime deep-link listeners, and the
+  // state-change subscription. `onOAuthStateChange` would also install the
+  // sweep's argument grab-bag as a "listener", which every later
+  // `notifyStateChange` would then try to call.
+  'initOAuthListener',
+  'onOAuthStateChange',
 ]);
 
 /**
@@ -322,8 +370,12 @@ const SKIP = new Set([
  * keep up to date, which is the entire point of this file.
  *
  * Deliberately NOT listed: services that only ever invoke commands in
- * LOCAL_COMMANDS, and ai.service, whose gate is pinned by its own
- * `ai.service.test.ts` because its refusal depends on which provider is active.
+ * LOCAL_COMMANDS. Nothing else — the claim above is the whole point of the
+ * file, and it was false twice: ai.service was left out because
+ * `ai.service.test.ts` pins its refusal per provider (coverage of one service
+ * by another file is not coverage HERE, and its commands were in neither
+ * classification set, so the partition test could not see them either), and
+ * oauth.service was left out while it had no frontend gate at all.
  */
 const SWEPT_MODULES: Array<{ label: string; entries: Array<[string, unknown]> }> = [
   { label: 'git.service', entries: Object.entries(gitService) },
@@ -340,6 +392,14 @@ const SWEPT_MODULES: Array<{ label: string; entries: Array<[string, unknown]> }>
   // claimed to sweep "every service that invokes a command capable of leaving
   // the machine" without listing it.
   { label: 'unified-profile.service', entries: Object.entries(unifiedProfileService) },
+  // The AI providers: with OpenAI / Anthropic / Gemini selected, "Generate
+  // commit message" posts the staged diff. It gates itself, but it was not
+  // swept — so the gate held only for as long as someone remembered it.
+  { label: 'ai.service', entries: Object.entries(aiService) },
+  // Sign in with GitHub. It had NO frontend gate: with offline mode on it
+  // opened the system browser, the user granted their real account access, and
+  // only the code exchange afterwards hit the backend guard and refused.
+  { label: 'oauth.service', entries: Object.entries(oauthService) },
   {
     label: 'embedding-index.service',
     // A class instance: its methods live on the prototype, so Object.entries
@@ -428,19 +488,43 @@ function drivenCalls(): SweptCall[] {
     cachedUser: null,
   });
 
+  const extra: SweptCall[] = [
+    {
+      // The grab-bag's first argument is an object, and an issuer URL is a
+      // string the service reads as one — so without this the call throws
+      // before it ever reaches its invoke.
+      label: 'oauth.service',
+      name: 'discoverOidcProvider(issuer)',
+      fn: oauthService.discoverOidcProvider as unknown as (...a: unknown[]) => unknown,
+      args: ['https://auth.example.test'],
+    },
+    {
+      // `testAiProvider` is gated on the provider NAMED, so drive it with a
+      // real cloud one: the grab-bag's object is an unrecognised provider,
+      // which is a different (fail-closed) branch.
+      label: 'ai.service',
+      name: 'testAiProvider(open_ai)',
+      fn: aiService.testAiProvider as unknown as (...a: unknown[]) => unknown,
+      args: ['open_ai'],
+    },
+  ];
+
   return [
+    ...extra,
+    ...[
     ['github', { type: 'github' }],
     ['gitlab', { type: 'gitlab', instanceUrl: 'https://gitlab.example.test' }],
     ['azure-devops', { type: 'azure-devops', organization: 'contoso' }],
     ['bitbucket', { type: 'bitbucket', workspace: 'team' }],
-  ].map(([integrationType, config]) => ({
-    label: 'unified-profile.service',
-    name: `refreshAccountCachedUser(${integrationType as string})`,
-    fn: unifiedProfileService.refreshAccountCachedUser as unknown as (
-      ...a: unknown[]
-    ) => unknown,
-    args: [account(integrationType as string, config as Record<string, unknown>)],
-  }));
+    ].map(([integrationType, config]) => ({
+      label: 'unified-profile.service',
+      name: `refreshAccountCachedUser(${integrationType as string})`,
+      fn: unifiedProfileService.refreshAccountCachedUser as unknown as (
+        ...a: unknown[]
+      ) => unknown,
+      args: [account(integrationType as string, config as Record<string, unknown>)],
+    })),
+  ];
 }
 
 describe('network gate coverage', () => {
@@ -639,6 +723,122 @@ describe('network gate coverage', () => {
     expect(invoked.includes('fetch')).to.equal(true);
   });
 
+  /**
+   * The dead end this sweep existed to catch and could not see, because
+   * oauth.service was not in it: with offline mode on, "Sign in with GitHub"
+   * opened the system browser, the user granted their REAL account access, the
+   * callback landed, and only then did the code exchange hit the backend guard
+   * and refuse. The refusal has to come before the browser is opened.
+   */
+  it('offline mode refuses a sign-in before the browser is ever opened', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    const states: string[] = [];
+    const unsubscribe = oauthService.onOAuthStateChange((state) => {
+      if (state.provider === 'github' && state.status === 'error') {
+        states.push(state.error ?? '');
+      }
+    });
+    invoked.length = 0;
+    await oauthService.startOAuth('github', 'client-id');
+    unsubscribe();
+
+    expect(invoked.includes('oauth_get_authorize_url'), 'no flow is started').to.equal(false);
+    expect(invoked.includes('plugin:shell|open'), 'the browser is never opened').to.equal(false);
+    expect(states, 'the dialog is told, the way it is told about every other failure')
+      .to.have.lengthOf(1);
+    expect(states[0]).to.contain('offline mode');
+    expect(states[0]).to.contain('Settings > Security');
+  });
+
+  it('an allowlist naming the provider still permits a sign-in', async () => {
+    // A gate that refused either way would just be offline mode by another name.
+    settingsStore.setState({
+      offlineMode: false,
+      confirmNetworkOps: false,
+      remoteAllowlist: ['github.com'],
+    });
+
+    invoked.length = 0;
+    await oauthService.startOAuth('github', 'client-id');
+
+    expect(invoked.includes('oauth_get_authorize_url')).to.equal(true);
+    expect(invoked.includes('plugin:shell|open')).to.equal(true);
+
+    // A list that does not name it refuses, and says which host is missing.
+    settingsStore.setState({ offlineMode: false, remoteAllowlist: ['gitlab.com'] });
+    const errors: string[] = [];
+    const unsubscribe = oauthService.onOAuthStateChange((state) => {
+      if (state.status === 'error') errors.push(state.error ?? '');
+    });
+    invoked.length = 0;
+    await oauthService.startOAuth('github', 'client-id');
+    unsubscribe();
+
+    expect(invoked.includes('plugin:shell|open')).to.equal(false);
+    expect(errors[0]).to.contain('github.com');
+    expect(errors[0]).to.contain('allowlist');
+  });
+
+  it('the token exchange and the OIDC discovery refuse with the same reason', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    let exchangeError: string | null = null;
+    try {
+      await oauthService.exchangeCode('github', 'state', 'code');
+    } catch (err) {
+      exchangeError = (err as Error).message;
+    }
+    expect(exchangeError).to.contain('offline mode');
+
+    let discoveryError: string | null = null;
+    try {
+      await oauthService.discoverOidcProvider('https://auth.example.test');
+    } catch (err) {
+      discoveryError = (err as Error).message;
+    }
+    expect(discoveryError).to.contain('auth.example.test');
+    expect(discoveryError).to.contain('offline mode');
+
+    let refreshError: string | null = null;
+    try {
+      await oauthService.refreshToken('gitlab', 'refresh-token', 'https://gitlab.example.test');
+    } catch (err) {
+      refreshError = (err as Error).message;
+    }
+    expect(refreshError).to.contain('gitlab.example.test');
+  });
+
+  /**
+   * `test_ai_provider` is in NETWORK_COMMANDS because it CAN leave the machine
+   * — it probes whichever provider is named. Ollama and LM Studio listen on
+   * localhost, so the same command must still go through for them, and the
+   * sweep above never drives it with a local provider.
+   */
+  it('a local AI provider is still reachable with offline mode on', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    for (const provider of ['ollama', 'lm_studio', 'local_inference'] as const) {
+      invoked.length = 0;
+      const result = await aiService.testAiProvider(provider);
+      expect(invoked.includes('test_ai_provider'), `${provider} runs on this machine`).to.equal(
+        true,
+      );
+      expect(result.error?.code).to.not.equal('BLOCKED');
+    }
+
+    // A provider this build does not recognise is not known to be local, and
+    // reading "local" as "not in the cloud list" made it fail OPEN.
+    invoked.length = 0;
+    const unknown = await aiService.testAiProvider(
+      'brand_new_cloud_provider' as unknown as Parameters<typeof aiService.testAiProvider>[0],
+    );
+    expect(invoked.includes('test_ai_provider'), 'an unknown destination fails closed').to.equal(
+      false,
+    );
+    expect(unknown.error?.code).to.equal('BLOCKED');
+  });
+
   it('every command in LOCAL_COMMANDS is absent from NETWORK_COMMANDS', () => {
     const both = [...LOCAL_COMMANDS].filter((c) => NETWORK_COMMANDS.has(c));
     expect(both, 'a command cannot be both local and network').to.deep.equal([]);
@@ -802,6 +1002,16 @@ describe('network gate coverage', () => {
       'check_gitlab_connection',
       'check_ado_connection',
       'check_bitbucket_connection_with_token',
+      // ai.service and oauth.service, the two modules the sweep claimed to
+      // cover and did not. `plugin:shell|open` is the browser handoff that
+      // made the OAuth dead end possible.
+      'generate_commit_message',
+      'test_ai_provider',
+      'is_ai_available',
+      'oauth_exchange_code',
+      'oauth_refresh_token',
+      'discover_oidc_provider',
+      'plugin:shell|open',
     ]) {
       expect(reached.has(command), `the sweep reaches ${command} when nothing blocks it`).to.equal(
         true,
