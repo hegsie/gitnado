@@ -35,19 +35,21 @@
 //! allowlist. `test_a_bare_git_command_site_can_never_reach_the_panel` checks
 //! that for every site rather than trusting this paragraph.
 //!
-//! `merge.rs` is a real exception, not a read. `preview_rebase` runs its ghost
-//! rebase in a temp checkout, but it OBTAINS that checkout with `git -C <the
-//! user's repository> worktree add --detach` and gives it back with `git -C
-//! <the user's repository> worktree remove --force` — two writes to
-//! `<repo>/.git/worktrees/` in the PRIMARY repository, and the second parses
-//! nothing (`let _ = …output()`, like the `git rebase --abort` beside it).
-//! Those two calls belong on [`create_command`]. They are still bare only
-//! because the command has no caller today — `previewRebase` in
-//! `git.service.ts` is unwired — and because moving them while
-//! `add_worktree`/`remove_worktree` name `worktree` as their claimable
-//! subcommand would let a ghost worktree's row replace a real worktree
-//! operation's in the panel. Wiring `preview_rebase` up means moving them
-//! first.
+//! `merge.rs` is a real exception, not a read. `preview_rebase` spawns four
+//! bare commands, and they are of two kinds. It OBTAINS its throwaway checkout
+//! with `git worktree add --detach` and gives it back with `git worktree
+//! remove --force`, both `-C <the user's repository>` — two writes to
+//! `<repo>/.git/worktrees/` in the PRIMARY repository. It then runs the ghost
+//! `git rebase` and, on failure, `git rebase --abort`, both `-C <the temp
+//! checkout>`, so those two mutate only the throwaway tree; the abort parses
+//! nothing (`let _ = …output()`).
+//!
+//! All four belong on [`create_command`]. They are still bare only because the
+//! command has no caller today — `previewRebase` in `git.service.ts` is
+//! unwired — and because moving them while `add_worktree`/`remove_worktree`
+//! name `worktree` as their claimable subcommand would let a ghost worktree's
+//! row replace a real worktree operation's in the panel. Wiring
+//! `preview_rebase` up means moving them first.
 //!
 //! Reads that DO come through here (because they share a helper with a write)
 //! are filtered out by [`is_read_only_form`] instead, so a `git worktree list`
@@ -798,52 +800,138 @@ mod tests {
     /// The bare-`Command` sites this module's header enumerates must be the
     /// ones that actually exist. That header is the document an author
     /// consults to decide whether a new bare `Command` is acceptable, so a
-    /// list that has drifted — in either direction — is worse than no list.
+    /// One production site that spawns `git` outside [`create_command`].
+    struct BareSite {
+        /// Path relative to `src/`, e.g. `commands/merge.rs`.
+        file: String,
+        /// 1-based line of the spawn.
+        line: usize,
+        /// The string literals of the builder chain, in order.
+        argv: Vec<String>,
+    }
+
+    /// Every production `Command::new("git")` under `src/`.
+    ///
+    /// Recursive on purpose: an earlier version read only `src/commands/*.rs`,
+    /// so a bare spawn added under `services/`, `utils/` or `ai/` would have
+    /// been invisible to both tests below while the header's claim is written
+    /// without any such scope.
+    fn bare_git_command_sites() -> Vec<BareSite> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("a source directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        files.sort();
+
+        let mut sites = Vec::new();
+        for path in files {
+            let relative = path
+                .strip_prefix(&src)
+                .expect("under src")
+                .to_string_lossy()
+                .replace('\\', "/");
+            // This file's own tests quote the literal they scan for.
+            if relative == "utils/command.rs" {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a source file");
+            let lines: Vec<&str> = source.lines().collect();
+
+            // rustfmt puts a top-level test module and its closing brace at
+            // column 0, which tells test scaffolding apart from production.
+            let mut in_tests = false;
+            for (index, line) in lines.iter().enumerate() {
+                if *line == "mod tests {" {
+                    in_tests = true;
+                    continue;
+                }
+                if in_tests {
+                    if *line == "}" {
+                        in_tests = false;
+                    }
+                    continue;
+                }
+                if !line.contains("Command::new(\"git\")") {
+                    continue;
+                }
+
+                // Collect the builder chain's literals. Two shapes occur: a
+                // chained `let x = Command::new("git").arg(..).output()`, and a
+                // `let mut cmd = Command::new("git");` followed by `cmd.arg(..)`
+                // statements. Stopping correctly matters — an earlier version
+                // knew only the first shape, so for the second it read on past
+                // the end of the function and swallowed unrelated literals from
+                // whatever followed (in one file, strings from `mod tests`).
+                let mut argv: Vec<String> = Vec::new();
+                for (offset, text) in lines.iter().skip(index).take(60).enumerate() {
+                    let terminator = [".output()", ".status()", ".spawn("]
+                        .iter()
+                        .filter_map(|needle| text.find(needle))
+                        .min();
+                    let scanned = &text[..terminator.unwrap_or(text.len())];
+                    argv.extend(
+                        scanned
+                            .split('"')
+                            .skip(1)
+                            .step_by(2)
+                            .filter(|token| *token != "git")
+                            .map(str::to_string),
+                    );
+                    // The spawn's own line ends in `;` for the second shape, so
+                    // it can never be the terminator; any later statement end is.
+                    if terminator.is_some() || (offset > 0 && text.trim_end().ends_with(';')) {
+                        break;
+                    }
+                }
+
+                sites.push(BareSite {
+                    file: relative.clone(),
+                    line: index + 1,
+                    argv,
+                });
+            }
+        }
+        sites
+    }
+
+    /// The module header keeps a list of the files that spawn `git` outside
+    /// [`create_command`]. This keeps that list and the code in step.
     #[test]
     fn test_the_header_names_every_bare_git_command_site() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let header: String = std::fs::read_to_string(root.join("src/utils/command.rs"))
-            .expect("command.rs must be readable")
-            .lines()
-            .take_while(|line| line.starts_with("//!"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let header = module_header();
         assert!(
             header.contains("bare `Command`"),
             "the module header is missing; this test guards it"
         );
 
-        let commands = root.join("src/commands");
-        let mut found: Vec<String> = Vec::new();
-        for entry in std::fs::read_dir(&commands).expect("src/commands must be readable") {
-            let path = entry.expect("a directory entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).expect("a command module");
-            // rustfmt puts a top-level test module and its closing brace at
-            // column 0, which is enough to tell test scaffolding apart from
-            // the production spawns this list is about.
-            let mut in_tests = false;
-            let mut has_bare = false;
-            for line in source.lines() {
-                if line == "mod tests {" {
-                    in_tests = true;
-                } else if in_tests && line == "}" {
-                    in_tests = false;
-                } else if !in_tests && line.contains("Command::new(\"git\")") {
-                    has_bare = true;
-                }
-            }
-            if has_bare {
-                found.push(path.file_name().unwrap().to_string_lossy().to_string());
-            }
-        }
-        found.sort();
+        let sites = bare_git_command_sites();
         assert!(
-            !found.is_empty(),
+            !sites.is_empty(),
             "the scan found nothing at all, so it proves nothing"
         );
+
+        let mut found: Vec<String> = sites
+            .iter()
+            .map(|site| {
+                site.file
+                    .rsplit('/')
+                    .next()
+                    .expect("a file name")
+                    .to_string()
+            })
+            .collect();
+        found.sort();
+        found.dedup();
 
         for file in &found {
             assert!(
@@ -857,129 +945,105 @@ mod tests {
             if index % 2 == 0 || !token.ends_with(".rs") {
                 continue;
             }
-            if !commands.join(token).exists() {
-                continue;
+            if !sites.iter().any(|site| site.file.ends_with(token)) {
+                assert!(
+                    !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("src/commands")
+                        .join(token)
+                        .exists(),
+                    "the header names {token} as spawning a bare git Command; it no longer does"
+                );
             }
-            assert!(
-                found.contains(&token.to_string()),
-                "the header names {token} as spawning a bare git Command; it no longer does"
-            );
         }
     }
 
+    fn module_header() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/utils/command.rs"),
+        )
+        .expect("command.rs must be readable")
+        .lines()
+        .take_while(|line| line.starts_with("//!"))
+        .collect::<Vec<_>>()
+        .join("\n")
+    }
+
     /// The header claims the bare-`Command` sites cannot reach the panel. That
-    /// is a claim about SUBCOMMANDS, and the test above only checks file names,
-    /// so a site that started running a logged, mutating form would slip
-    /// through it. (One already had: the header said every one of those
+    /// is a claim about SUBCOMMANDS, and the file-name test above cannot see
+    /// one, so a site that started running a logged, mutating form would slip
+    /// past it. (One already had: the header said every one of those
     /// subcommands was absent from `LOGGED_SUBCOMMANDS` while naming `ai.rs`'s
     /// `git reflog`, which is in it.)
     #[test]
     fn test_a_bare_git_command_site_can_never_reach_the_panel() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let commands = root.join("src/commands");
-        let mut checked = 0usize;
-
-        // The header declares exactly one site that DOES run a logged, mutating
-        // form: `preview_rebase`'s worktree add/remove. The exemption is read
-        // from the header rather than hard-coded, so deleting that paragraph
-        // fails this test instead of silently widening the exception.
-        let header: String = std::fs::read_to_string(root.join("src/utils/command.rs"))
-            .expect("command.rs must be readable")
-            .lines()
-            .take_while(|line| line.starts_with("//!"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let declared_exception = header
-            .contains("`merge.rs` is a real exception")
-            .then_some("merge.rs");
+        // The header declares ONE exception that does run a logged, mutating
+        // form: `preview_rebase`'s worktree add/remove. Both the file AND the
+        // form are read out of the header rather than hard-coded, so a
+        // different mutating spawn added to that same file is NOT exempt, and
+        // deleting the paragraph fails this test instead of widening it.
+        let header = module_header();
+        // The exempted FORMS are read out of the paragraph too, not just the
+        // file: every ``git <subcommand>`` it quotes. A file-wide exemption hid
+        // the ghost `git rebase` from this test entirely, which is exactly the
+        // shape it exists to catch.
+        let exception = header
+            .split("`merge.rs` is a real exception")
+            .nth(1)
+            .map(|paragraph| {
+                let forms: Vec<String> = paragraph
+                    .split('`')
+                    .skip(1)
+                    .step_by(2)
+                    .filter_map(|quoted| quoted.strip_prefix("git "))
+                    .filter_map(|rest| rest.split_whitespace().next())
+                    .map(str::to_string)
+                    .collect();
+                ("merge.rs", forms)
+            });
         let mut exception_seen = false;
 
-        for entry in std::fs::read_dir(&commands).expect("src/commands must be readable") {
-            let path = entry.expect("a directory entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).expect("a command module");
-            let file = path.file_name().unwrap().to_string_lossy().to_string();
-
-            // Same test-scaffolding rule as the scan above.
-            let mut in_tests = false;
-            for (index, line) in source.lines().enumerate() {
-                if line == "mod tests {" {
-                    in_tests = true;
-                    continue;
-                }
-                if in_tests {
-                    if line == "}" {
-                        in_tests = false;
-                    }
-                    continue;
-                }
-                if !line.contains("Command::new(\"git\")") {
-                    continue;
-                }
-
-                // The argv is the string literals between the spawn and the
-                // end of the builder chain. Stopping at the terminator matters:
-                // reading past it swallows the error-message literals in the
-                // `map_err` below, which then look like positional arguments
-                // and make a bare `git reflog` read as a mutating form.
-                let mut argv: Vec<String> = Vec::new();
-                for line in source.lines().skip(index).take(40) {
-                    let end = ["    .output()", ".status()", ".spawn("]
-                        .iter()
-                        .filter_map(|terminator| line.find(terminator))
-                        .min();
-                    let scanned = &line[..end.unwrap_or(line.len())];
-                    argv.extend(
-                        scanned
-                            .split('"')
-                            .skip(1)
-                            .step_by(2)
-                            .filter(|token| *token != "git")
-                            .map(str::to_string),
-                    );
-                    if end.is_some() {
-                        break;
-                    }
-                }
-
-                let Some(position) = argv
-                    .iter()
-                    .position(|token| LOGGED_SUBCOMMANDS.contains(&token.as_str()))
-                else {
-                    // Nothing this site runs is reported, so it cannot appear.
-                    checked += 1;
-                    continue;
-                };
-
-                let subcommand = argv[position].clone();
-                let rest: Vec<String> = argv[position + 1..].to_vec();
-                if !is_read_only_form(&subcommand, &rest) && declared_exception == Some(&*file) {
-                    exception_seen = true;
-                    checked += 1;
-                    continue;
-                }
-                assert!(
-                    is_read_only_form(&subcommand, &rest),
-                    "{file}:{} spawns a bare git Command running `{subcommand}`, which IS in \
-                     LOGGED_SUBCOMMANDS and is not a read-only form. Either route it through \
-                     create_command so the panel sees it, or explain here why it may not be \
-                     reported - the module header's claim that these sites cannot reach the \
-                     panel is now false.",
-                    index + 1
-                );
-                checked += 1;
-            }
-        }
-
+        let sites = bare_git_command_sites();
         assert!(
-            checked > 0,
+            !sites.is_empty(),
             "the scan found no bare git Command sites at all, so it proves nothing"
         );
+
+        for site in &sites {
+            let Some(position) = site
+                .argv
+                .iter()
+                .position(|token| LOGGED_SUBCOMMANDS.contains(&token.as_str()))
+            else {
+                // Nothing this site runs is reported, so it cannot appear.
+                continue;
+            };
+
+            let subcommand = site.argv[position].clone();
+            let rest: Vec<String> = site.argv[position + 1..].to_vec();
+            if is_read_only_form(&subcommand, &rest) {
+                continue;
+            }
+
+            if let Some((file, allowed)) = exception.as_ref() {
+                if site.file.ends_with(file) && allowed.contains(&subcommand) {
+                    exception_seen = true;
+                    continue;
+                }
+            }
+
+            panic!(
+                "{}:{} spawns a bare git Command running `{subcommand}`, which IS in \
+                 LOGGED_SUBCOMMANDS and is not a read-only form. Either route it through \
+                 create_command so the panel sees it, or explain here why it may not be \
+                 reported - the module header's claim that these sites cannot reach the \
+                 panel is now false.",
+                site.file, site.line
+            );
+        }
+
         // And the declared exception must still BE one: if `preview_rebase`
         // moves onto `create_command`, this paragraph has to go with it.
-        if declared_exception.is_some() {
+        if exception.is_some() {
             assert!(
                 exception_seen,
                 "the header still declares merge.rs a real exception, but nothing there runs a \
