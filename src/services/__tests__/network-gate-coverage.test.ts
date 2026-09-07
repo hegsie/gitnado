@@ -16,9 +16,18 @@
  * Round 20 showed the inversion was only half done: the sweep enumerated
  * git.service and nothing else, so `download_model` (multi-GB, huggingface.co),
  * `download_embedding_model` and the two GitHub App endpoints in
- * credential.service shipped with no frontend gate and a green suite. Every
- * service that invokes a command capable of leaving the machine is swept here
- * now — see SWEPT_MODULES.
+ * credential.service shipped with no frontend gate and a green suite.
+ *
+ * And the claim that followed — "every service that invokes a command capable
+ * of leaving the machine is swept here" — was false while it stood:
+ * unified-profile.service checks a GitLab, Azure DevOps or Bitbucket account
+ * against that provider's API every five minutes on a background timer, and
+ * three of its four provider branches went straight to `invokeCommand`. It is
+ * swept now, and driven with real accounts (see `drivenCalls`), because a
+ * module whose arguments never reach an invoke is coverage on paper only.
+ *
+ * Every service that invokes a command capable of leaving the machine is swept
+ * here — see SWEPT_MODULES, and the exclusions named beside it.
  */
 
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
@@ -30,6 +39,11 @@ const invoked: string[] = [];
     // Shapes permissive enough that callers which post-process a result don't
     // throw before reaching their invoke.
     if (command === 'get_remotes') return Promise.resolve([]);
+    // A stored credential. `refreshAccountCachedUser` returns before any
+    // provider check when the account has no token, so with a null keyring the
+    // whole of unified-profile.service would be swept without ever reaching an
+    // invoke — a sweep that proves nothing is worse than no sweep.
+    if (command === 'get_keyring_token') return Promise.resolve('sweep-token');
     return Promise.resolve(null);
   }) as MockInvoke,
   transformCallback: () => 0,
@@ -58,6 +72,7 @@ import * as gitService from '../git.service.ts';
 import * as credentialService from '../credential.service.ts';
 import * as localAiService from '../local-ai.service.ts';
 import * as updateService from '../update.service.ts';
+import * as unifiedProfileService from '../unified-profile.service.ts';
 import { embeddingIndexService } from '../embedding-index.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 
@@ -175,6 +190,14 @@ const SKIP = new Set([
   'onDownloadProgress',
   'onUpdateReady',
   'onUpdateError',
+  // unified-profile.service: starts (or stops) the 5-minute token-validation
+  // timer. Sweeping it would leave an interval running for the rest of the
+  // suite; the work it schedules is `refreshAccountCachedUser`, which the sweep
+  // drives directly below.
+  'startPeriodicTokenValidation',
+  'stopPeriodicTokenValidation',
+  // Reads the whole profile config and then kicks off the same validation.
+  'initializeUnifiedProfiles',
 ]);
 
 /**
@@ -194,6 +217,13 @@ const SWEPT_MODULES: Array<{ label: string; entries: Array<[string, unknown]> }>
   // entry in this sweep — and the only one that runs unattended and installs a
   // binary. It is swept whole now, like everything else here.
   { label: 'update.service', entries: Object.entries(updateService) },
+  // The account refresher: it checks a GitHub, GitLab, Azure DevOps or
+  // Bitbucket account's token against that provider's API every five minutes
+  // in the background. Three of the four went straight to `invokeCommand`
+  // while the GitHub branch beside them used the gated wrapper, and this file
+  // claimed to sweep "every service that invokes a command capable of leaving
+  // the machine" without listing it.
+  { label: 'unified-profile.service', entries: Object.entries(unifiedProfileService) },
   {
     label: 'embedding-index.service',
     // A class instance: its methods live on the prototype, so Object.entries
@@ -214,13 +244,13 @@ const SWEPT_MODULES: Array<{ label: string; entries: Array<[string, unknown]> }>
  * plus the methods of exported namespace objects (credential.service groups
  * per-provider credential helpers that way, and a gap could hide in one).
  */
-function sweptCallables(): Array<{ label: string; name: string; fn: (...a: unknown[]) => unknown }> {
-  const out: Array<{ label: string; name: string; fn: (...a: unknown[]) => unknown }> = [];
+function sweptCallables(): SweptCall[] {
+  const out: SweptCall[] = [];
   for (const { label, entries } of SWEPT_MODULES) {
     for (const [name, value] of entries) {
       if (SKIP.has(name)) continue;
       if (typeof value === 'function') {
-        out.push({ label, name, fn: value as (...a: unknown[]) => unknown });
+        out.push({ label, name, fn: value as (...a: unknown[]) => unknown, args: ARGS });
         continue;
       }
       // A plain namespace object of helpers (GitHubCredentials, ...).
@@ -231,13 +261,14 @@ function sweptCallables(): Array<{ label: string; name: string; fn: (...a: unkno
               label,
               name: `${name}.${key}`,
               fn: (member as (...a: unknown[]) => unknown).bind(value),
+              args: ARGS,
             });
           }
         }
       }
     }
   }
-  return out;
+  return [...out, ...drivenCalls()];
 }
 
 /** A grab-bag of arguments wide enough to get any of these functions to its
@@ -250,6 +281,52 @@ const ARGS: unknown[] = [
   1,
 ];
 
+type SweptCall = {
+  label: string;
+  name: string;
+  fn: (...a: unknown[]) => unknown;
+  args: unknown[];
+};
+
+/**
+ * Calls the grab-bag above cannot drive to their invoke, given real arguments
+ * so the sweep exercises them instead of passing vacuously.
+ *
+ * `refreshAccountCachedUser` switches on `account.integrationType`, so ARGS —
+ * which carries none — falls into the default branch, finds no token and
+ * returns before any provider check. Adding the module to SWEPT_MODULES without
+ * these would look like coverage and prove nothing.
+ */
+function drivenCalls(): SweptCall[] {
+  const account = (
+    integrationType: string,
+    config: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    id: `${integrationType}-sweep`,
+    name: `${integrationType} sweep account`,
+    integrationType,
+    urlPatterns: [],
+    isDefault: false,
+    color: null,
+    config,
+    cachedUser: null,
+  });
+
+  return [
+    ['github', { type: 'github' }],
+    ['gitlab', { type: 'gitlab', instanceUrl: 'https://gitlab.example.test' }],
+    ['azure-devops', { type: 'azure-devops', organization: 'contoso' }],
+    ['bitbucket', { type: 'bitbucket', workspace: 'team' }],
+  ].map(([integrationType, config]) => ({
+    label: 'unified-profile.service',
+    name: `refreshAccountCachedUser(${integrationType as string})`,
+    fn: unifiedProfileService.refreshAccountCachedUser as unknown as (
+      ...a: unknown[]
+    ) => unknown,
+    args: [account(integrationType as string, config as Record<string, unknown>)],
+  }));
+}
+
 describe('network gate coverage', () => {
   afterEach(() => {
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
@@ -259,10 +336,10 @@ describe('network gate coverage', () => {
     settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
 
     const leaked = new Map<string, string>();
-    for (const { label, name, fn } of sweptCallables()) {
+    for (const { label, name, fn, args } of sweptCallables()) {
       invoked.length = 0;
       try {
-        await fn(...ARGS);
+        await fn(...args);
       } catch {
         // A rejected call is fine — it certainly didn't reach the network.
       }
@@ -452,10 +529,10 @@ describe('network gate coverage', () => {
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
 
     const reached = new Set<string>();
-    for (const { fn } of sweptCallables()) {
+    for (const { fn, args } of sweptCallables()) {
       invoked.length = 0;
       try {
-        await fn(...ARGS);
+        await fn(...args);
       } catch {
         /* ignore */
       }
@@ -478,6 +555,12 @@ describe('network gate coverage', () => {
       'deepen_repository',
       'unshallow_repository',
       'test_credentials',
+      // The three provider checks in unified-profile.service. They prove the
+      // driven calls above really do reach a provider API: without them the
+      // module could be listed, swept and assert nothing at all.
+      'check_gitlab_connection',
+      'check_ado_connection',
+      'check_bitbucket_connection_with_token',
     ]) {
       expect(reached.has(command), `the sweep reaches ${command} when nothing blocks it`).to.equal(
         true,
