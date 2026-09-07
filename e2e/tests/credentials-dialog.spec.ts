@@ -278,6 +278,10 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // ...and none of it is drawn as a failure: nothing here is broken.
     await expect(result).not.toHaveClass(/\berror\b/);
     await expect(result).toHaveClass(/\binfo\b/);
+    // The sentence is about the protocol reported, not a fixed `git:// and
+    // file://` pair naming two schemes at every transport that lands here.
+    await expect(result).toContainText('git:// remotes do not authenticate');
+    await expect(result).not.toContainText('file://');
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
   });
 
@@ -288,11 +292,15 @@ test.describe('Credentials Dialog - testing a remote', () => {
       detect_credential_manager: null,
       get_remotes: [{ name: 'origin', url: 'file:///srv/git/app.git', pushUrl: null }],
       test_credentials: {
+        // What the backend really sends: `credential_target`'s unresolved
+        // branch reports the remote AS TYPED, because a `file://` URL carries
+        // no host. Mocking a bare path here left what a real user sees — a
+        // whole URL under a "Host:" label — untested.
         success: false,
-        host: '/srv/git/app.git',
+        host: 'file:///srv/git/app.git',
         protocol: 'file',
         username: null,
-        message: 'No credentials found for /srv/git/app.git',
+        message: 'No credentials found for file:///srv/git/app.git',
       },
     });
     await openTestTab(page);
@@ -302,7 +310,41 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // this branch was written for could not previously reach it.
     const result = page.locator('lv-credentials-dialog .test-result');
     await expect(result).toContainText('Protocol: file');
+    await expect(result).toContainText('Path: file:///srv/git/app.git');
+    await expect(result, 'a URL is not a hostname').not.toContainText('Host:');
     await expect(result).toContainText('No Credentials Needed');
+    await expect(result).not.toContainText(/no credentials found/i);
+    await expect(result).not.toHaveClass(/\berror\b/);
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
+
+  test('a bare local path is reported as a path, under no scheme at all', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [{ name: 'origin', url: '/srv/git/repo.git', pushUrl: null }],
+      test_credentials: {
+        success: false,
+        host: '/srv/git/repo.git',
+        protocol: 'file',
+        username: null,
+        message: 'No credentials found for /srv/git/repo.git',
+      },
+    });
+    await openTestTab(page);
+
+    // `git clone /srv/git/bare.git` leaves `origin` in exactly this form. It
+    // used to be reported as "No Credentials Found / Host: srv / Protocol:
+    // https" — an HTTPS host invented from the path, appearing nowhere in the
+    // user's config — while the same repository spelled `file:///srv/git/
+    // repo.git` was correctly told nothing is stored for it.
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('No Credentials Needed');
+    await expect(result).toContainText('Path: /srv/git/repo.git');
+    await expect(result).toContainText('Protocol: file');
+    await expect(result, 'a path is not a hostname').not.toContainText('Host:');
+    await expect(result, 'a plain path is not a file:// URL').not.toContainText('file://');
     await expect(result).not.toContainText(/no credentials found/i);
     await expect(result).not.toHaveClass(/\berror\b/);
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);

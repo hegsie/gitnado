@@ -359,27 +359,66 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(panel.className, 'panel reads as information').to.match(/\binfo\b/);
     // ...and it says why nothing was found, in place of the backend's line.
     expect(panelText(el)).to.include('do not authenticate');
+    // About THIS protocol. The sentence named a fixed pair — "git:// and
+    // file:// remotes" — so every neutral transport was told about two schemes
+    // it is not necessarily one of.
+    expect(panelText(el), 'the sentence is about the protocol reported').to.include('git://');
+    expect(panelText(el)).to.not.include('file://');
+    expect(panelText(el)).to.include('git.internal.test');
   });
 
   it('reports a missing file:// credential as nothing to find either', async () => {
     // The backend reports a scheme-carrying URL under its own scheme, so a
     // local `file://` remote arrives here as `protocol: 'file'` — the second
-    // transport this branch was written for.
+    // transport this branch was written for. The host it sends is the remote
+    // AS TYPED: `credential_target`'s unresolved branch has no host to report,
+    // and `a_file_url_keeps_its_own_scheme` pins exactly that. Mocking a bare
+    // path here left what a real user sees untested.
     mockRemotes = [remote('file:///srv/git/app.git')];
     mockTestResult = testResult({
       success: false,
       protocol: 'file',
-      host: '/srv/git/app.git',
+      host: 'file:///srv/git/app.git',
       username: null,
-      message: 'No credentials found for /srv/git/app.git',
+      message: 'No credentials found for file:///srv/git/app.git',
     });
     const el = await openTestTab();
     await runTest(el);
 
     expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
     expect(panelText(el)).to.not.include('no credentials found');
+    // A whole URL under a "Host:" label is not a host, and the sentence
+    // underneath ended in one too.
+    expect(panelText(el)).to.include('path: file:///srv/git/app.git');
+    expect(panelText(el), 'a URL is not a hostname').to.not.include('host:');
+    expect(panelText(el)).to.not.include('nothing is stored for file://');
     expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
     expect(offersErase(el), 'a file:// remote stores no credential either').to.be.false;
+  });
+
+  it('reports a bare local path as a path, under no scheme at all', async () => {
+    // `git clone /srv/git/bare.git` leaves `origin` in exactly this form, and
+    // the backend now reports it as the local path it is rather than the host
+    // `srv` its https fallback used to invent.
+    mockRemotes = [remote('/srv/git/repo.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'file',
+      host: '/srv/git/repo.git',
+      username: null,
+      message: 'No credentials found for /srv/git/repo.git',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
+    expect(panelText(el)).to.include('path: /srv/git/repo.git');
+    expect(panelText(el), 'a path is not a hostname').to.not.include('host:');
+    // ...and nothing claims a scheme this remote does not carry.
+    expect(panelText(el), 'a plain path is not a file:// URL').to.not.include('file://');
+    expect(panelText(el)).to.not.include('no credentials found');
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
+    expect(offersErase(el), 'a local repository stores no credential').to.be.false;
   });
 
   it('offers no erase for a transport that stores no credential', async () => {
