@@ -310,28 +310,38 @@ export class LvScanRepositoriesDialog extends LitElement {
     if (this.open) {
       void this.activate(retargeted);
     } else {
-      this.abortScan();
+      void this.abortScan();
     }
   }
 
   /**
    * Stop any running scan and make sure neither its results nor its progress
    * events can land on whatever the dialog shows next.
+   *
+   * Returns the cancellation it fired, if any, so a caller that has to wait for
+   * the backend to acknowledge one waits for THAT cancel rather than issuing a
+   * second: the backend clears its cancellation flag when a scan STARTS, so a
+   * cancel still in flight can land after the next scan has begun and abort it.
    */
-  private abortScan(): void {
+  private abortScan(): Promise<unknown> | undefined {
     // Closing (or re-pointing) mid-scan must stop the backend walk, not leave
     // it running against a dialog nobody can see.
+    let cancelling: Promise<unknown> | undefined;
     if (this.phase === 'scanning') {
       this.cancelRequested = true;
-      if (this.scanIssued) void cancelRepositoryScan();
+      if (this.scanIssued) {
+        cancelling = cancelRepositoryScan();
+        // That walk is cancelled; nothing may ask for it to be cancelled twice.
+        this.scanIssued = false;
+      }
     }
     this.scanToken++;
     this.detachProgress();
+    return cancelling;
   }
 
   /** Point the dialog at `scanPath`, whether it just opened or was re-targeted. */
   private async activate(retargeted: boolean): Promise<void> {
-    const cancelInFlight = retargeted && this.phase === 'scanning' && this.scanIssued;
     // The same folder dropped a second time. Re-scanning it is what the user is
     // asking for — they have just created, cloned or moved something in it, and
     // a re-drop is the only way to refresh results from inside the dialog. The
@@ -343,7 +353,7 @@ export class LvScanRepositoriesDialog extends LitElement {
     const rescanSameFolder = sameFolder && this.phase !== 'offer';
     this.activatedPath = this.scanPath;
     this.activatedMode = this.mode;
-    this.abortScan();
+    const cancelling = this.abortScan();
     const token = this.scanToken;
 
     this.reset();
@@ -357,11 +367,12 @@ export class LvScanRepositoriesDialog extends LitElement {
       showToast(this.retargetMessage(sameFolder, rescanSameFolder), 'info');
     }
 
-    if (cancelInFlight) {
-      // Wait for the backend to acknowledge the cancellation before asking for
-      // the next scan: the backend clears its cancellation flag when a scan
-      // STARTS, so a cancel still in flight could otherwise stop the new scan.
-      await cancelRepositoryScan();
+    if (cancelling) {
+      // Wait for the backend to acknowledge the cancellation abortScan just
+      // fired before asking for the next scan: the backend clears its
+      // cancellation flag when a scan STARTS, so a cancel still in flight could
+      // otherwise stop the new scan.
+      await cancelling;
       // Re-targeted again while we waited; that pass owns the dialog now.
       if (token !== this.scanToken) return;
     }

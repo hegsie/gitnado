@@ -453,6 +453,41 @@ describe('lv-scan-repositories-dialog', () => {
     expect(allText(el)).to.not.contain('/code/alpha');
   });
 
+  it('issues exactly one cancel when a running scan is re-targeted', async () => {
+    // Two cancels for one re-target is not just noise: the backend clears its
+    // cancellation flag when a scan STARTS, so a second cancel still in flight
+    // can land after the new scan has started and abort the folder the user
+    // just dropped. The re-target waits for the cancel it actually fired.
+    mockResponses['scan_for_repositories'] = (args) =>
+      (args.path as string) === '/code'
+        ? new Promise(() => {})
+        : scanResult({ root: args.path as string });
+    mockResponses['cancel_repository_scan'] = () => null;
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'scan_for_repositories'),
+      'the first scan to reach the backend',
+    );
+
+    el.scanPath = '/other';
+    await el.updateComplete;
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, 'the new folder\'s results');
+
+    expect(
+      invokeCallArgs.filter((c) => c.command === 'cancel_repository_scan').length,
+      'one cancel for one abandoned scan',
+    ).to.equal(1);
+    // And it is ordered before the scan it was waiting to make room for.
+    const commands = invokeCallArgs.map((c) => c.command);
+    expect(commands.indexOf('cancel_repository_scan')).to.be.lessThan(
+      commands.lastIndexOf('scan_for_repositories'),
+    );
+  });
+
   it('initializes the folder it is showing after being re-targeted', async () => {
     mockResponses['scan_for_repositories'] = (args) =>
       scanResult({ root: args.path as string, repositories: [], scannedDirectories: 3 });
