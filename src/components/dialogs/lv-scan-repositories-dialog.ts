@@ -30,6 +30,12 @@ import './lv-modal.ts';
 
 type ScanPhase = 'offer' | 'scanning' | 'results' | 'error';
 
+/** Last path segment, for toasts that must not print a whole absolute path. */
+function folderName(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
 @customElement('lv-scan-repositories-dialog')
 export class LvScanRepositoriesDialog extends LitElement {
   static styles = [
@@ -272,24 +278,71 @@ export class LvScanRepositoriesDialog extends LitElement {
   private scanIssued = false;
 
   updated(changed: PropertyValues): void {
-    if (!changed.has('open')) return;
+    // An OS folder drop is not blocked by an in-page modal, so a second folder
+    // can be dropped while this dialog is already open. The shell re-points the
+    // dialog by writing `scanPath`/`mode` and asking the dialog store to open a
+    // dialog that is open already — `open` never changes, so reacting only to
+    // `open` would leave the user looking at the FIRST folder while every
+    // action here (Initialize, the re-scan) silently used the second one.
+    const retargeted =
+      this.open && !changed.has('open') && (changed.has('scanPath') || changed.has('mode'));
+    if (!changed.has('open') && !retargeted) return;
+
     if (this.open) {
-      this.reset();
-      this.openPaths = repositoryStore
-        .getState()
-        .openRepositories.map((repo) => repo.repository.path);
-      if (this.mode === 'scan' && this.scanPath) {
-        void this.startScan();
-      }
+      void this.activate(retargeted);
     } else {
-      // Closing mid-scan must stop the backend walk, not leave it running
-      // against a dialog nobody can see.
-      if (this.phase === 'scanning') {
-        this.cancelRequested = true;
-        if (this.scanIssued) void cancelRepositoryScan();
-      }
-      this.scanToken++;
-      this.detachProgress();
+      this.abortScan();
+    }
+  }
+
+  /**
+   * Stop any running scan and make sure neither its results nor its progress
+   * events can land on whatever the dialog shows next.
+   */
+  private abortScan(): void {
+    // Closing (or re-pointing) mid-scan must stop the backend walk, not leave
+    // it running against a dialog nobody can see.
+    if (this.phase === 'scanning') {
+      this.cancelRequested = true;
+      if (this.scanIssued) void cancelRepositoryScan();
+    }
+    this.scanToken++;
+    this.detachProgress();
+  }
+
+  /** Point the dialog at `scanPath`, whether it just opened or was re-targeted. */
+  private async activate(retargeted: boolean): Promise<void> {
+    const cancelInFlight = retargeted && this.phase === 'scanning' && this.scanIssued;
+    this.abortScan();
+    const token = this.scanToken;
+
+    this.reset();
+    this.openPaths = repositoryStore
+      .getState()
+      .openRepositories.map((repo) => repo.repository.path);
+
+    if (retargeted) {
+      // The dialog was already on screen showing another folder: say what just
+      // replaced it, or the drop looks like it did nothing.
+      showToast(
+        this.mode === 'scan'
+          ? `Now scanning ${folderName(this.scanPath)}`
+          : `Now showing ${folderName(this.scanPath)}`,
+        'info',
+      );
+    }
+
+    if (cancelInFlight) {
+      // Wait for the backend to acknowledge the cancellation before asking for
+      // the next scan: the backend clears its cancellation flag when a scan
+      // STARTS, so a cancel still in flight could otherwise stop the new scan.
+      await cancelRepositoryScan();
+      // Re-targeted again while we waited; that pass owns the dialog now.
+      if (token !== this.scanToken) return;
+    }
+
+    if (this.mode === 'scan' && this.scanPath) {
+      void this.startScan();
     }
   }
 
@@ -388,6 +441,11 @@ export class LvScanRepositoriesDialog extends LitElement {
     }
   }
 
+  /** The folder the dialog currently names on screen. */
+  private get displayedPath(): string {
+    return this.phase === 'results' ? (this.result?.root ?? this.scanPath) : this.scanPath;
+  }
+
   private handleScanFromOffer(): void {
     void this.startScan();
   }
@@ -397,7 +455,9 @@ export class LvScanRepositoriesDialog extends LitElement {
     // the branch-name settings and the error handling for init.
     this.dispatchEvent(
       new CustomEvent<{ path: string }>('initialize-repository', {
-        detail: { path: this.scanPath },
+        // The empty-results screen names `result.root`, so initialise THAT and
+        // never a path the user cannot see.
+        detail: { path: this.displayedPath },
         bubbles: true,
         composed: true,
       }),
