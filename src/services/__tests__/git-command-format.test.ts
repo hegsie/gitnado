@@ -503,6 +503,18 @@ describe('git-command-format', () => {
       }
     });
 
+    it('declares BOTH runs of a command whose branches differ', () => {
+      // A command that delegates or takes a fast path can report a different
+      // first run than its name suggests. `reword_commit` rebases a commit
+      // below HEAD, but hands a HEAD reword to `amend_commit`, which signs
+      // through `git commit --amend` — the ordinary case. Declaring only
+      // `rebase` made the claim fail there, so the real row stood AND the
+      // operation wrote its own: the very doubling this map removes.
+      const reword = claimableSubcommands('reword_commit', undefined) ?? [];
+      expect(reword).to.include('rebase');
+      expect(reword, 'a HEAD reword reports `git commit --amend`').to.include('commit');
+    });
+
     it('always keeps the builder\'s own subcommand claimable', () => {
       for (const command of SYNTHESIZED_COMMANDS) {
         const line = synthesizeGitCommand(command, {

@@ -27,9 +27,13 @@
 //! - `merge.rs` — `preview_rebase`.
 //!
 //! Every one of those but `merge.rs` is a pure READ that parses its own stdout
-//! rather than showing it, changes nothing, and could not reach the panel in
-//! any case: `grep`, `log`, `diff`, `describe`, `ls-files`, `config` and
-//! `credential-manager` are all absent from [`LOGGED_SUBCOMMANDS`].
+//! rather than showing it and changes nothing. Most could not reach the panel
+//! in any case: `grep`, `log`, `diff`, `describe`, `ls-files`, `config` and
+//! `credential-manager` are absent from [`LOGGED_SUBCOMMANDS`]. `ai.rs`'s
+//! `git reflog` is the exception that proves the rule — `reflog` IS logged, and
+//! what keeps that listing off the panel is [`is_read_only_form`], not the
+//! allowlist. `test_a_bare_git_command_site_can_never_reach_the_panel` checks
+//! that for every site rather than trusting this paragraph.
 //!
 //! `merge.rs` is a real exception, not a read. `preview_rebase` runs its ghost
 //! rebase in a temp checkout, but it OBTAINS that checkout with `git -C <the
@@ -859,6 +863,127 @@ mod tests {
             assert!(
                 found.contains(&token.to_string()),
                 "the header names {token} as spawning a bare git Command; it no longer does"
+            );
+        }
+    }
+
+    /// The header claims the bare-`Command` sites cannot reach the panel. That
+    /// is a claim about SUBCOMMANDS, and the test above only checks file names,
+    /// so a site that started running a logged, mutating form would slip
+    /// through it. (One already had: the header said every one of those
+    /// subcommands was absent from `LOGGED_SUBCOMMANDS` while naming `ai.rs`'s
+    /// `git reflog`, which is in it.)
+    #[test]
+    fn test_a_bare_git_command_site_can_never_reach_the_panel() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let commands = root.join("src/commands");
+        let mut checked = 0usize;
+
+        // The header declares exactly one site that DOES run a logged, mutating
+        // form: `preview_rebase`'s worktree add/remove. The exemption is read
+        // from the header rather than hard-coded, so deleting that paragraph
+        // fails this test instead of silently widening the exception.
+        let header: String = std::fs::read_to_string(root.join("src/utils/command.rs"))
+            .expect("command.rs must be readable")
+            .lines()
+            .take_while(|line| line.starts_with("//!"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let declared_exception = header
+            .contains("`merge.rs` is a real exception")
+            .then_some("merge.rs");
+        let mut exception_seen = false;
+
+        for entry in std::fs::read_dir(&commands).expect("src/commands must be readable") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a command module");
+            let file = path.file_name().unwrap().to_string_lossy().to_string();
+
+            // Same test-scaffolding rule as the scan above.
+            let mut in_tests = false;
+            for (index, line) in source.lines().enumerate() {
+                if line == "mod tests {" {
+                    in_tests = true;
+                    continue;
+                }
+                if in_tests {
+                    if line == "}" {
+                        in_tests = false;
+                    }
+                    continue;
+                }
+                if !line.contains("Command::new(\"git\")") {
+                    continue;
+                }
+
+                // The argv is the string literals between the spawn and the
+                // end of the builder chain. Stopping at the terminator matters:
+                // reading past it swallows the error-message literals in the
+                // `map_err` below, which then look like positional arguments
+                // and make a bare `git reflog` read as a mutating form.
+                let mut argv: Vec<String> = Vec::new();
+                for line in source.lines().skip(index).take(40) {
+                    let end = ["    .output()", ".status()", ".spawn("]
+                        .iter()
+                        .filter_map(|terminator| line.find(terminator))
+                        .min();
+                    let scanned = &line[..end.unwrap_or(line.len())];
+                    argv.extend(
+                        scanned
+                            .split('"')
+                            .skip(1)
+                            .step_by(2)
+                            .filter(|token| *token != "git")
+                            .map(str::to_string),
+                    );
+                    if end.is_some() {
+                        break;
+                    }
+                }
+
+                let Some(position) = argv
+                    .iter()
+                    .position(|token| LOGGED_SUBCOMMANDS.contains(&token.as_str()))
+                else {
+                    // Nothing this site runs is reported, so it cannot appear.
+                    checked += 1;
+                    continue;
+                };
+
+                let subcommand = argv[position].clone();
+                let rest: Vec<String> = argv[position + 1..].to_vec();
+                if !is_read_only_form(&subcommand, &rest) && declared_exception == Some(&*file) {
+                    exception_seen = true;
+                    checked += 1;
+                    continue;
+                }
+                assert!(
+                    is_read_only_form(&subcommand, &rest),
+                    "{file}:{} spawns a bare git Command running `{subcommand}`, which IS in \
+                     LOGGED_SUBCOMMANDS and is not a read-only form. Either route it through \
+                     create_command so the panel sees it, or explain here why it may not be \
+                     reported - the module header's claim that these sites cannot reach the \
+                     panel is now false.",
+                    index + 1
+                );
+                checked += 1;
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "the scan found no bare git Command sites at all, so it proves nothing"
+        );
+        // And the declared exception must still BE one: if `preview_rebase`
+        // moves onto `create_command`, this paragraph has to go with it.
+        if declared_exception.is_some() {
+            assert!(
+                exception_seen,
+                "the header still declares merge.rs a real exception, but nothing there runs a \
+                 logged mutating form any more - delete that paragraph"
             );
         }
     }

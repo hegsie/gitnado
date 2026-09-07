@@ -436,8 +436,14 @@ const SHELL_OUT_SUBCOMMANDS: Readonly<Record<string, ReadonlyArray<string>>> = {
   create_orphan_branch: ['checkout'],
   // commit.rs — signed amend, and the rebase both date/message edits drive
   amend_commit_message: ['commit'],
+  // `edit_commit_date` rewrites a HEAD commit through git2, which reports
+  // nothing at all, so its only reported run is the rebase.
   edit_commit_date: ['rebase'],
-  reword_commit: ['rebase'],
+  // `reword_commit` has two: it rebases a commit below HEAD, but hands a HEAD
+  // reword to `amend_commit`, which signs through `git commit --amend`. That
+  // is the ORDINARY case, and declaring only `rebase` refused the claim and
+  // left two rows for it.
+  reword_commit: ['rebase', 'commit'],
   // staging.rs — every hunk/line stage applies a patch to the index
   stage_hunk: ['apply'],
   unstage_hunk: ['apply'],
