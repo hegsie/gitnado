@@ -391,4 +391,29 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(el.shadowRoot!.querySelector('.test-result-header')!.className).to.match(/\berror\b/);
     expect(offersErase(el), 'nothing to erase when nothing was found').to.be.false;
   });
+
+  it('says the password is missing when the username was found', async () => {
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    mockTestResult = testResult({
+      success: false,
+      username: 'alice',
+      message: 'Username found but no password for git.example.test',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    // The backend tells these three apart — found, username but no password,
+    // nothing at all — and the panel printed its "Username found but no
+    // password" line under a header saying "No Credentials Found", with the
+    // username listed right above it. Anyone with `credential.https://host
+    // .username` set, or a helper holding a username whose token was revoked,
+    // lands here and is pointed at the wrong repair.
+    expect(el.shadowRoot!.textContent).to.include('Password Not Stored');
+    expect(panelText(el), 'the header must not contradict the body').to.not.include(
+      'no credentials found',
+    );
+    // Still a real fault for https, and still nothing to erase.
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
+    expect(offersErase(el), 'no complete credential was found').to.be.false;
+  });
 });

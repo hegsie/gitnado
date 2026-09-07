@@ -623,11 +623,22 @@ export class LvCredentialsDialog extends LitElement {
     return 'info';
   }
 
-  /** The one-line verdict at the top of the result panel. */
+  /**
+   * The one-line verdict at the top of the result panel.
+   *
+   * The backend tells three https outcomes apart — found, a username with no
+   * password, nothing at all — and this collapsed the last two into "No
+   * Credentials Found". The panel then printed "Username found but no password
+   * for <host>" underneath, with the username listed right above it, and
+   * pointed the user at the wrong repair: the login is stored, the secret is
+   * what is missing. Anyone with `credential.<url>.username` set, or a helper
+   * holding a username whose token was revoked, is in exactly that state.
+   */
   private testResultHeadline(result: CredentialTestResult, tone: string): string {
     if (tone === 'success') return 'Credentials Working';
     if (tone === 'info') return 'No Credentials Needed';
-    return result.protocol === 'ssh' ? 'SSH Authentication Failed' : 'No Credentials Found';
+    if (result.protocol === 'ssh') return 'SSH Authentication Failed';
+    return result.username ? 'Password Not Stored' : 'No Credentials Found';
   }
 
   /**

@@ -324,4 +324,34 @@ test.describe('Credentials Dialog - testing a remote', () => {
     await expect(result).toContainText('No Credentials Found');
     await expect(result).toHaveClass(/\berror\b/);
   });
+
+  test('a username with no password is not reported as no credentials at all', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'https://git.example.test/team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: false,
+        host: 'git.example.test',
+        protocol: 'https',
+        username: 'alice',
+        message: 'Username found but no password for git.example.test',
+      },
+    });
+    await openTestTab(page);
+
+    // The header said "No Credentials Found" over a body reading "Username
+    // found but no password for git.example.test", with `Username: alice`
+    // listed between them — three lines contradicting each other, pointing at
+    // the wrong repair. The login is stored; the secret is what is missing.
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('Password Not Stored');
+    await expect(result).not.toContainText(/no credentials found/i);
+    await expect(result).toContainText('Username: alice');
+    await expect(result).toHaveClass(/\berror\b/);
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
 });
