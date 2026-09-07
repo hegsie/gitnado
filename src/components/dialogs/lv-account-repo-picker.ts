@@ -634,7 +634,7 @@ export class LvAccountRepoPicker extends LitElement {
         Azure DevOps account to clone one of your repositories without pasting a
         URL.
         <div class="state-actions">
-          <button class="link-btn" @click=${this.requestManageAccounts}>
+          <button class="link-btn" @click=${this.requestManageAccounts} ?disabled=${this.disabled}>
             Connect an account
           </button>
         </div>
@@ -647,7 +647,7 @@ export class LvAccountRepoPicker extends LitElement {
       <div class="state-message" data-state="no-provider-accounts">
         No ${INTEGRATION_TYPE_NAMES[this.provider]} account is connected.
         <div class="state-actions">
-          <button class="link-btn" @click=${this.requestManageAccounts}>
+          <button class="link-btn" @click=${this.requestManageAccounts} ?disabled=${this.disabled}>
             Connect an account
           </button>
         </div>
@@ -699,7 +699,9 @@ export class LvAccountRepoPicker extends LitElement {
         <div class="state-message" data-state="empty">
           This account has no repositories to clone.
           <div class="state-actions">
-            <button class="link-btn" @click=${this.handleRetry}>Retry</button>
+            <button class="link-btn" @click=${this.handleRetry} ?disabled=${this.disabled}>
+              Retry
+            </button>
           </div>
         </div>
       `;
@@ -805,7 +807,9 @@ export class LvAccountRepoPicker extends LitElement {
           You can still paste a clone URL under "From URL".
           ${this.failedAppendPage !== null
             ? html`<div class="state-actions">
-                <button class="link-btn" @click=${this.handleRetry}>Retry</button>
+                <button class="link-btn" @click=${this.handleRetry} ?disabled=${this.disabled}>
+                  Retry
+                </button>
               </div>`
             : nothing}
         </div>
@@ -822,10 +826,12 @@ export class LvAccountRepoPicker extends LitElement {
             ? `This ${providerName} account's token was rejected — it has probably expired. Reconnect the account to list its repositories.`
             : `This ${providerName} account has no stored credential. Reconnect it to list its repositories.`}
           <div class="state-actions">
-            <button class="link-btn" @click=${this.requestManageAccounts}>
+            <button class="link-btn" @click=${this.requestManageAccounts} ?disabled=${this.disabled}>
               Reconnect account
             </button>
-            <button class="link-btn" @click=${this.handleRetry}>Retry</button>
+            <button class="link-btn" @click=${this.handleRetry} ?disabled=${this.disabled}>
+              Retry
+            </button>
           </div>
         </div>
       `;
@@ -835,7 +841,9 @@ export class LvAccountRepoPicker extends LitElement {
       <div class="state-message error" data-state="error">
         ${this.errorMessage || `Failed to list ${providerName} repositories.`}
         <div class="state-actions">
-          <button class="link-btn" @click=${this.handleRetry}>Retry</button>
+          <button class="link-btn" @click=${this.handleRetry} ?disabled=${this.disabled}>
+            Retry
+          </button>
         </div>
       </div>
     `;

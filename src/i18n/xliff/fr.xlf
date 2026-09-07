@@ -626,6 +626,18 @@
 <trans-unit id="sdfd045b4e3898993">
   <source>Could not check for updates. Try again later.</source>
   <target>Impossible de vérifier les mises à jour. Réessayez plus tard.</target></trans-unit>
+<trans-unit id="s8c04b169bee5549b">
+  <source><x id="0" equiv-text="${aiService.getProviderDisplayName(providerType)}"/> is not available. Check your API key and try again.</source>
+  <target><x id="0" equiv-text="${aiService.getProviderDisplayName(providerType)}"/> n'est pas disponible. Vérifiez votre clé d'API et réessayez.</target></trans-unit>
+<trans-unit id="sd91e344cb5c0232b">
+  <source>Loading failed for <x id="0" equiv-text="${event.payload.modelId}"/>: <x id="1" equiv-text="${reason}"/></source>
+  <target>Échec du chargement de <x id="0" equiv-text="${event.payload.modelId}"/> : <x id="1" equiv-text="${reason}"/></target></trans-unit>
+<trans-unit id="s09f7206ed00062e1">
+  <source>Download failed for <x id="0" equiv-text="${event.payload.modelId}"/>: <x id="1" equiv-text="${event.payload.error}"/></source>
+  <target>Échec du téléchargement de <x id="0" equiv-text="${event.payload.modelId}"/> : <x id="1" equiv-text="${event.payload.error}"/></target></trans-unit>
+<trans-unit id="sa6d63ff474ed0ca3">
+  <source>unknown error</source>
+  <target>erreur inconnue</target></trans-unit>
 </body>
 </file>
 </xliff>

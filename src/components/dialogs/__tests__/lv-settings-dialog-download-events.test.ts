@@ -79,6 +79,7 @@ function emit(event: string, payload: unknown): void {
 import { expect, fixture, html } from '@open-wc/testing';
 import '../lv-settings-dialog.ts';
 import type { LvSettingsDialog } from '../lv-settings-dialog.ts';
+import { setAppLocale } from '../../../i18n/index.ts';
 
 async function waitForListener(event: string): Promise<void> {
   for (let i = 0; i < 50; i++) {
@@ -140,6 +141,33 @@ describe('lv-settings-dialog download events', () => {
 
     expect(bannerText(el)).to.contain('m1');
     expect(bannerText(el)).to.contain('unknown error');
+  });
+
+  // Both messages reach the banner through events, outside the two-locale
+  // render diff the language test runs, so their translation is pinned here.
+  it('reports download and load failures in the UI language', async () => {
+    await setAppLocale('fr');
+    try {
+      const el = await createDialog();
+
+      emit('model-download-error', { modelId: 'm1', error: 'Network unreachable' });
+      await el.updateComplete;
+      expect(bannerText(el).trim()).to.equal(
+        'Échec du téléchargement de m1 : Network unreachable',
+      );
+
+      emit('model-download-complete', { modelId: 'm1', loaded: false, loadError: 'bad weights' });
+      await el.updateComplete;
+      expect(bannerText(el).trim()).to.equal('Échec du chargement de m1 : bad weights');
+
+      emit('model-download-complete', { modelId: 'm1', loaded: false });
+      await el.updateComplete;
+      expect(bannerText(el).trim(), 'the fallback reason is translated too').to.equal(
+        'Échec du chargement de m1 : erreur inconnue',
+      );
+    } finally {
+      await setAppLocale('en');
+    }
   });
 
   it('clears the progress row and reports no error when the model loads', async () => {
