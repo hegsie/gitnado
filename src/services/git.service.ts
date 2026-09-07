@@ -4405,7 +4405,7 @@ export async function getCommitStatus(
   commitSha: string,
   token?: string | null,
 ): Promise<CommandResult<string>> {
-  return invokeCommand<string>("get_commit_status", {
+  return invokeProviderCommand<string>("get_commit_status", {
     owner,
     repo,
     commitSha,
