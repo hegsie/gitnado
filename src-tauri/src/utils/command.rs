@@ -12,15 +12,42 @@
 //! has to be added to a hand-kept list.
 //!
 //! The invariant is deliberately narrower than "every git subprocess". A
-//! handful of pure READS still spawn a bare `Command` — `git describe`, the
-//! `git log`/`git grep` behind the search panes, `git ls-files`, the AI
-//! helpers' `git reflog`/`git log`/`git diff --stat`, and the throwaway
-//! worktree `preview_rebase` builds in a temp directory. None of them changes
-//! the repository, none has any business in the Output panel, and every one of
-//! them parses its stdout rather than showing it. Reads that DO come through
-//! here (because they share a helper with a write) are filtered out by
-//! [`is_read_only_form`] instead, so a `git worktree list` never masquerades
-//! as an executed operation.
+//! handful of sites still spawn a bare `Command`, and
+//! `test_the_header_names_every_bare_git_command_site` keeps this list and the
+//! code in step:
+//!
+//! - `search.rs`, `advanced_search.rs`, `workspace.rs` — the `git grep`,
+//!   `git log` and `git diff` behind the search panes.
+//! - `describe.rs` — `git describe`.
+//! - `repository.rs` — `git ls-files`.
+//! - `ai.rs` — the AI helpers' `git reflog`, `git log` and `git diff --stat`.
+//! - `credentials.rs` — `detect_credential_manager`'s probes,
+//!   `git credential-manager --version` and `git config --get
+//!   credential.helper`.
+//! - `merge.rs` — `preview_rebase`.
+//!
+//! Every one of those but `merge.rs` is a pure READ that parses its own stdout
+//! rather than showing it, changes nothing, and could not reach the panel in
+//! any case: `grep`, `log`, `diff`, `describe`, `ls-files`, `config` and
+//! `credential-manager` are all absent from [`LOGGED_SUBCOMMANDS`].
+//!
+//! `merge.rs` is a real exception, not a read. `preview_rebase` runs its ghost
+//! rebase in a temp checkout, but it OBTAINS that checkout with `git -C <the
+//! user's repository> worktree add --detach` and gives it back with `git -C
+//! <the user's repository> worktree remove --force` — two writes to
+//! `<repo>/.git/worktrees/` in the PRIMARY repository, and the second parses
+//! nothing (`let _ = …output()`, like the `git rebase --abort` beside it).
+//! Those two calls belong on [`create_command`]. They are still bare only
+//! because the command has no caller today — `previewRebase` in
+//! `git.service.ts` is unwired — and because moving them while
+//! `add_worktree`/`remove_worktree` name `worktree` as their claimable
+//! subcommand would let a ghost worktree's row replace a real worktree
+//! operation's in the panel. Wiring `preview_rebase` up means moving them
+//! first.
+//!
+//! Reads that DO come through here (because they share a helper with a write)
+//! are filtered out by [`is_read_only_form`] instead, so a `git worktree list`
+//! never masquerades as an executed operation.
 
 use std::ffi::OsStr;
 use std::io;
@@ -762,6 +789,78 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The bare-`Command` sites this module's header enumerates must be the
+    /// ones that actually exist. That header is the document an author
+    /// consults to decide whether a new bare `Command` is acceptable, so a
+    /// list that has drifted — in either direction — is worse than no list.
+    #[test]
+    fn test_the_header_names_every_bare_git_command_site() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let header: String = std::fs::read_to_string(root.join("src/utils/command.rs"))
+            .expect("command.rs must be readable")
+            .lines()
+            .take_while(|line| line.starts_with("//!"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            header.contains("bare `Command`"),
+            "the module header is missing; this test guards it"
+        );
+
+        let commands = root.join("src/commands");
+        let mut found: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&commands).expect("src/commands must be readable") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a command module");
+            // rustfmt puts a top-level test module and its closing brace at
+            // column 0, which is enough to tell test scaffolding apart from
+            // the production spawns this list is about.
+            let mut in_tests = false;
+            let mut has_bare = false;
+            for line in source.lines() {
+                if line == "mod tests {" {
+                    in_tests = true;
+                } else if in_tests && line == "}" {
+                    in_tests = false;
+                } else if !in_tests && line.contains("Command::new(\"git\")") {
+                    has_bare = true;
+                }
+            }
+            if has_bare {
+                found.push(path.file_name().unwrap().to_string_lossy().to_string());
+            }
+        }
+        found.sort();
+        assert!(
+            !found.is_empty(),
+            "the scan found nothing at all, so it proves nothing"
+        );
+
+        for file in &found {
+            assert!(
+                header.contains(&format!("`{file}`")),
+                "{file} spawns a bare git Command in production but the header does not name it"
+            );
+        }
+
+        // ...and nothing the header names may have stopped doing it.
+        for (index, token) in header.split('`').enumerate() {
+            if index % 2 == 0 || !token.ends_with(".rs") {
+                continue;
+            }
+            if !commands.join(token).exists() {
+                continue;
+            }
+            assert!(
+                found.contains(&token.to_string()),
+                "the header names {token} as spawning a bare git Command; it no longer does"
+            );
+        }
     }
 
     /// The subcommand has to be found past git's own global options, or a
