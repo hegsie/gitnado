@@ -24,6 +24,7 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const SRC_DIR = join(REPO_ROOT, 'src');
 export const FR_TEMPLATES = join(REPO_ROOT, 'src/i18n/generated/locales/fr.ts');
 export const FR_XLIFF = join(REPO_ROOT, 'src/i18n/xliff/fr.xlf');
+export const LOCALISATION_DOC = join(REPO_ROOT, 'docs/localisation.md');
 
 /**
  * `inputFiles` as lit-localize.json states it. Kept literal so a change to the
@@ -166,6 +167,42 @@ export function collectXliffSources(file = FR_XLIFF) {
 /** The ids the XLIFF carries, so the two translation files cannot drift apart. */
 export function collectXliffIds(file = FR_XLIFF) {
   return new Set(collectXliffSources(file).keys());
+}
+
+/** A repo-relative path with forward slashes, whatever the platform uses. */
+function toPosix(path) {
+  return path.split(sep).join('/');
+}
+
+/**
+ * Every source file with at least one `msg()` call site — i.e. every file that
+ * is localised, derived rather than remembered.
+ */
+export function collectLocalisedFiles(files = listSourceFiles()) {
+  const out = [];
+  for (const file of files) {
+    const rel = toPosix(relative(REPO_ROOT, file));
+    if (extractMessages(readFileSync(file, 'utf8'), rel).messages.length > 0) out.push(rel);
+  }
+  return out.sort();
+}
+
+/**
+ * The files `docs/localisation.md` says are localised: the backticked path that
+ * opens each bullet of its "What is localised today" list.
+ *
+ * The doc is what a maintainer checks before re-wording a label, and a stale
+ * one sends them to detach a translation — the exact failure the rest of this
+ * module exists to catch — so the list is derived from here too.
+ */
+export function documentedLocalisedFiles(file = LOCALISATION_DOC) {
+  const section = readFileSync(file, 'utf8')
+    .split(/^## /m)
+    .find((part) => part.startsWith('What is localised today'));
+  if (section === undefined) {
+    throw new Error(`${file} has no "## What is localised today" section to check`);
+  }
+  return [...section.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
 }
 
 /** `a \ b`, as a sorted array. */

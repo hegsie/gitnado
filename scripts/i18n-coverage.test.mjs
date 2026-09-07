@@ -21,12 +21,14 @@ import { generateMsgId } from '@lit/localize/internal/id-generation.js';
 
 import {
   EXPECTED_INPUT_FILES,
+  collectLocalisedFiles,
   collectSourceMessages,
   collectTemplateIds,
   collectXliffIds,
   collectXliffSources,
   configuredInputFiles,
   difference,
+  documentedLocalisedFiles,
   extractMessages,
   listSourceFiles,
 } from './i18n-coverage.mjs';
@@ -145,6 +147,20 @@ test('every French translation still has a msg() source string', () => {
       `re-worded or removed. Re-point or delete them (and their trans-unit in ` +
       `src/i18n/xliff/fr.xlf):\n` +
       orphaned.map(describe).join('\n')
+  );
+});
+
+test('docs/localisation.md names exactly the files that are localised', () => {
+  // The doc is what a maintainer reads before re-wording a label, and it went
+  // stale inside a single stack: it named three surfaces while later commits
+  // put msg() into three more files, so re-wording a string in one of those
+  // looked safe and would have silently detached its translation.
+  assert.deepEqual(
+    documentedLocalisedFiles(),
+    collectLocalisedFiles(),
+    'the "What is localised today" list in docs/localisation.md no longer matches the ' +
+      'files that contain msg() calls — add (or remove) a bullet whose first backticked ' +
+      'value is the repo-relative path'
   );
 });
 
