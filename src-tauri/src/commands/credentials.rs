@@ -1201,6 +1201,10 @@ mod tests {
     /// DIALOG reports, not about what the gate permits.
     #[test]
     fn a_host_less_remote_is_still_refused_by_a_configured_allowlist() {
+        // The verdict below is computed from the settings passed in, but the
+        // gate is reached all the same, and the policy lock is what keeps that
+        // from racing a test that switches a policy on.
+        let _policy = crate::services::security::test_support::no_policy();
         let settings = crate::services::security::SecuritySettings {
             offline_mode: false,
             remote_allowlist: vec!["github.com".to_string()],
