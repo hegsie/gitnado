@@ -134,6 +134,11 @@ async function runTest(el: LvCredentialsDialog): Promise<void> {
   await el.updateComplete;
 }
 
+/** The result panel's text, lowercased — so a claim about it is case-blind. */
+function panelText(el: LvCredentialsDialog): string {
+  return (el.shadowRoot!.querySelector('.test-result')?.textContent ?? '').toLowerCase();
+}
+
 /** Is the "Erase Credentials" action offered on the current result panel? */
 function offersErase(el: LvCredentialsDialog): boolean {
   return [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.test-result button')].some((b) =>
@@ -266,6 +271,8 @@ describe('lv-credentials-dialog credential test result', () => {
 
     expect(el.shadowRoot!.textContent).to.include('SSH Authentication Failed');
     expect(el.shadowRoot!.textContent).to.not.include('No Credentials Found');
+    // A rejected key IS a fault to go and fix, so this one stays red.
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
   });
 
   it('erases the http credential an http remote actually stores', async () => {
@@ -307,7 +314,55 @@ describe('lv-credentials-dialog credential test result', () => {
     // `git://` never authenticates, so "No Credentials Found" reads as a fault
     // to go and fix when there is nothing to fix.
     expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
-    expect(el.shadowRoot!.textContent).to.not.include('No Credentials Found');
+    // Case-INSENSITIVELY: the line this panel actually carried was the
+    // backend's own lowercase `No credentials found for <host>`, rendered
+    // verbatim underneath a header saying the opposite. Asserting the
+    // title-case spelling alone sailed straight past it.
+    expect(panelText(el)).to.not.include('no credentials found');
+  });
+
+  it('does not draw a transport that stores nothing as a failure', async () => {
+    mockRemotes = [remote('git://git.internal.test/team/app.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'git',
+      host: 'git.internal.test',
+      username: null,
+      message: 'No credentials found for git.internal.test',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    // `success: false` is not a fault here, so the red border, the error
+    // background and the ✗ icon all say something untrue.
+    const panel = el.shadowRoot!.querySelector('.test-result')!;
+    const header = el.shadowRoot!.querySelector('.test-result-header')!;
+    expect(panel.className, 'panel not styled as an error').to.not.match(/\berror\b/);
+    expect(header.className, 'header not styled as an error').to.not.match(/\berror\b/);
+    expect(panel.className, 'panel reads as information').to.match(/\binfo\b/);
+    // ...and it says why nothing was found, in place of the backend's line.
+    expect(panelText(el)).to.include('do not authenticate');
+  });
+
+  it('reports a missing file:// credential as nothing to find either', async () => {
+    // The backend reports a scheme-carrying URL under its own scheme, so a
+    // local `file://` remote arrives here as `protocol: 'file'` — the second
+    // transport this branch was written for.
+    mockRemotes = [remote('file:///srv/git/app.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'file',
+      host: '/srv/git/app.git',
+      username: null,
+      message: 'No credentials found for /srv/git/app.git',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
+    expect(panelText(el)).to.not.include('no credentials found');
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
+    expect(offersErase(el), 'a file:// remote stores no credential either').to.be.false;
   });
 
   it('offers no erase for a transport that stores no credential', async () => {
@@ -330,6 +385,10 @@ describe('lv-credentials-dialog credential test result', () => {
     await runTest(el);
 
     expect(el.shadowRoot!.textContent).to.include('No Credentials Found');
+    // https DOES store a credential, so a missing one is a real failure and
+    // keeps the failure styling the neutral branch drops.
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
+    expect(el.shadowRoot!.querySelector('.test-result-header')!.className).to.match(/\berror\b/);
     expect(offersErase(el), 'nothing to erase when nothing was found').to.be.false;
   });
 });

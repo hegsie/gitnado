@@ -263,7 +263,65 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // there rejects an entry git would never have consulted.
     const result = page.locator('lv-credentials-dialog .test-result');
     await expect(result).toContainText('No Credentials Needed');
-    await expect(result).not.toContainText('No Credentials Found');
+    // Case-INSENSITIVELY: what the panel actually carried was the backend's own
+    // lowercase `No credentials found for <host>`, printed verbatim under a
+    // header saying the opposite. The title-case assertion alone missed it.
+    await expect(result).not.toContainText(/no credentials found/i);
+    // ...and none of it is drawn as a failure: nothing here is broken.
+    await expect(result).not.toHaveClass(/\berror\b/);
+    await expect(result).toHaveClass(/\binfo\b/);
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
+
+  test('a file:// remote is told the same, under its own protocol', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [{ name: 'origin', url: 'file:///srv/git/app.git', pushUrl: null }],
+      test_credentials: {
+        success: false,
+        host: '/srv/git/app.git',
+        protocol: 'file',
+        username: null,
+        message: 'No credentials found for /srv/git/app.git',
+      },
+    });
+    await openTestTab(page);
+
+    // The backend keeps a scheme-carrying URL's own scheme, so a local remote
+    // arrives as `file` rather than being reported as https — the transport
+    // this branch was written for could not previously reach it.
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('Protocol: file');
+    await expect(result).toContainText('No Credentials Needed');
+    await expect(result).not.toContainText(/no credentials found/i);
+    await expect(result).not.toHaveClass(/\berror\b/);
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
+
+  test('a missing https credential is still reported as a failure', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'https://git.example.test/team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: false,
+        host: 'git.example.test',
+        protocol: 'https',
+        username: null,
+        message: 'No credentials found for git.example.test',
+      },
+    });
+    await openTestTab(page);
+
+    // https DOES store a credential, so a missing one is a real fault and keeps
+    // the failure styling the neutral branch drops.
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('No Credentials Found');
+    await expect(result).toHaveClass(/\berror\b/);
   });
 });

@@ -358,6 +358,11 @@ export class LvCredentialsDialog extends LitElement {
         background: var(--color-error-bg);
       }
 
+      .test-result.info {
+        border-color: var(--color-info);
+        background: var(--color-info-bg);
+      }
+
       .test-result-header {
         display: flex;
         align-items: center;
@@ -372,6 +377,10 @@ export class LvCredentialsDialog extends LitElement {
 
       .test-result-header.error {
         color: var(--color-error);
+      }
+
+      .test-result-header.info {
+        color: var(--color-info);
       }
 
       .test-result-details {
@@ -598,6 +607,42 @@ export class LvCredentialsDialog extends LitElement {
   }
 
   /**
+   * How a result should READ, which is not the same question as `success`.
+   *
+   * A transport that stores no credential — `git://`, `file://` — comes back
+   * `success: false` because nothing was found, and nothing ever will be:
+   * there is no credential to find. Drawing that in the failure colours, with
+   * a ✗ and the backend's "No credentials found for <host>" underneath, sent
+   * the user off to fix a remote that works. SSH and https/http keep the
+   * failure styling, because for those a missing or rejected credential is a
+   * real fault.
+   */
+  private testResultTone(result: CredentialTestResult): 'success' | 'error' | 'info' {
+    if (result.success) return 'success';
+    if (result.protocol === 'ssh' || this.usesStoredCredentials(result.protocol)) return 'error';
+    return 'info';
+  }
+
+  /** The one-line verdict at the top of the result panel. */
+  private testResultHeadline(result: CredentialTestResult, tone: string): string {
+    if (tone === 'success') return 'Credentials Working';
+    if (tone === 'info') return 'No Credentials Needed';
+    return result.protocol === 'ssh' ? 'SSH Authentication Failed' : 'No Credentials Found';
+  }
+
+  /**
+   * What to print under the verdict.
+   *
+   * The backend's message is written for the transports that DO store a
+   * credential, so for the neutral branch it contradicts the header it sits
+   * under. Say what is actually going on there instead.
+   */
+  private testResultMessage(result: CredentialTestResult, tone: string): string {
+    if (tone !== 'info') return result.message;
+    return `git:// and file:// remotes do not authenticate, so nothing is stored for ${result.host}.`;
+  }
+
+  /**
    * Erase the stored credential the test just found.
    *
    * Offered for the transports `usesStoredCredentials` names, and only after a
@@ -782,55 +827,56 @@ export class LvCredentialsDialog extends LitElement {
         </button>
       </div>
 
-      ${this.testResult
-        ? html`
-            <div class="test-result ${this.testResult.success ? 'success' : 'error'}">
-              <div class="test-result-header ${this.testResult.success ? 'success' : 'error'}">
-                ${this.testResult.success
-                  ? html`
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                      </svg>
-                      Credentials Working
-                    `
-                  : html`
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="15" y1="9" x2="9" y2="15"></line>
-                        <line x1="9" y1="9" x2="15" y2="15"></line>
-                      </svg>
-                      ${this.testResult.protocol === 'ssh'
-                        ? 'SSH Authentication Failed'
-                        : this.usesStoredCredentials(this.testResult.protocol)
-                          ? 'No Credentials Found'
-                          : // `git://` and `file://` never authenticate, so a
-                            // missing credential is not a fault to go and fix.
-                            'No Credentials Needed'}
-                    `}
+      ${this.testResult ? this.renderTestResult(this.testResult) : ''}
+    `;
+  }
+
+  private renderTestResult(result: CredentialTestResult) {
+    const tone = this.testResultTone(result);
+    const message = this.testResultMessage(result, tone);
+    return html`
+      <div class="test-result ${tone}">
+        <div class="test-result-header ${tone}">
+          ${tone === 'success'
+            ? html`
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+              `
+            : tone === 'info'
+              ? html`
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                `
+              : html`
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="15" y1="9" x2="9" y2="15"></line>
+                    <line x1="9" y1="9" x2="15" y2="15"></line>
+                  </svg>
+                `}
+          ${this.testResultHeadline(result, tone)}
+        </div>
+        <div class="test-result-details">
+          <div>Host: ${result.host}</div>
+          <div>Protocol: ${result.protocol}</div>
+          ${result.username ? html`<div>Username: ${result.username}</div>` : ''}
+        </div>
+        ${message ? html`<div class="test-result-message">${message}</div>` : ''}
+        ${result.success && this.usesStoredCredentials(result.protocol)
+          ? html`
+              <div class="form-actions" style="margin-top: var(--spacing-sm)">
+                <button class="btn btn-secondary" @click=${this.handleEraseCredentials}>
+                  Erase Credentials
+                </button>
               </div>
-              <div class="test-result-details">
-                <div>Host: ${this.testResult.host}</div>
-                <div>Protocol: ${this.testResult.protocol}</div>
-                ${this.testResult.username
-                  ? html`<div>Username: ${this.testResult.username}</div>`
-                  : ''}
-              </div>
-              ${this.testResult.message
-                ? html`<div class="test-result-message">${this.testResult.message}</div>`
-                : ''}
-              ${this.testResult.success && this.usesStoredCredentials(this.testResult.protocol)
-                ? html`
-                    <div class="form-actions" style="margin-top: var(--spacing-sm)">
-                      <button class="btn btn-secondary" @click=${this.handleEraseCredentials}>
-                        Erase Credentials
-                      </button>
-                    </div>
-                  `
-                : ''}
-            </div>
-          `
-        : ''}
+            `
+          : ''}
+      </div>
     `;
   }
 
