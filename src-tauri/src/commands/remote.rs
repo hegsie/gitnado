@@ -229,6 +229,8 @@ fn guard_remote_op(
 fn guard_push_destinations(path: &str, remotes: &[String]) -> Result<()> {
     for r in remotes {
         crate::services::security::guard_push_remote(path, Some(r))?;
+        // ...and the LFS endpoint its pre-push upload would reach.
+        crate::commands::lfs::guard_lfs_upload(path, Some(r))?;
     }
     Ok(())
 }
@@ -1457,6 +1459,10 @@ pub async fn push(
     guard_remote_op(&path, true, |repo| {
         Some(resolve_push_remote(repo, remote.clone()))
     })?;
+    // In an LFS repository the pre-push hook uploads objects BEFORE any ref
+    // is sent, to an endpoint a committed `.lfsconfig` may choose — gated on
+    // that endpoint, for the same destination the gate above just judged.
+    crate::commands::lfs::guard_lfs_upload(&path, remote.as_deref())?;
 
     // The claim the racing retry is about. Push has no abort point at all, so
     // when the network timeout fires the git2/CLI push keeps running against

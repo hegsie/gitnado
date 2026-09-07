@@ -252,6 +252,8 @@ pub async fn push_tag(
     // Offline mode / remote allowlist, enforced backend-side too — on the
     // remote's PUSH url, which is where this push goes.
     crate::services::security::guard_push_remote(&path, Some(&remote_name))?;
+    // The pre-push hook below uploads LFS objects reachable from the tag.
+    crate::commands::lfs::guard_lfs_upload(&path, Some(&remote_name))?;
     let mut remote_obj = repo
         .find_remote(&remote_name)
         .map_err(|_| LeviathanError::RemoteNotFound(remote_name.clone()))?;
@@ -447,6 +449,42 @@ mod tests {
             "delete_remote_tag: {}",
             message
         );
+    }
+
+    /// A tag push runs the pre-push hook, which in an LFS repository uploads
+    /// to the endpoint a committed `.lfsconfig` names — so it is gated on
+    /// that endpoint too, not only on the git remote.
+    #[tokio::test]
+    async fn test_push_tag_is_refused_when_the_lfs_upload_endpoint_is_off_the_allowlist() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.create_commit(
+            "lfs",
+            &[
+                (
+                    ".gitattributes",
+                    "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+                ),
+                (
+                    ".lfsconfig",
+                    "[lfs]\n\tpushurl = https://evil.example.net/org/x.git/info/lfs\n",
+                ),
+            ],
+        );
+        repo.create_lightweight_tag("v1");
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let message = blocked_message(
+            push_tag(
+                repo.path_str(),
+                "v1".to_string(),
+                Some("origin".to_string()),
+                None,
+                None,
+            )
+            .await,
+        );
+        assert!(message.contains("evil.example.net"), "got: {}", message);
     }
 
     #[tokio::test]

@@ -3340,10 +3340,29 @@ export async function getLfsFiles(
   return invokeCommand<LfsFile[]>("get_lfs_files", { path: repoPath });
 }
 
+/**
+ * The URL an LFS transfer will contact, for the allowlist.
+ *
+ * git-lfs does not talk to the git remote: its endpoint comes from `lfs.url`
+ * / `remote.<r>.lfsurl`, which a COMMITTED `.lfsconfig` may set, before it
+ * falls back to the remote. The backend resolves it the way git-lfs does
+ * (`get_lfs_endpoint`); judged on the git remote alone, a github.com
+ * allowlist waved through a pull that transferred from wherever the
+ * repository's own `.lfsconfig` pointed. `null` when nothing names one — the
+ * gate then falls back to the remote, and the backend's own check (which
+ * fails closed) is the backstop. Only an allowlist needs the lookup.
+ */
+async function resolveLfsEndpoint(repoPath: string): Promise<string | null> {
+  if (settingsStore.getState().remoteAllowlist.length === 0) return null;
+  const result = await invokeCommand<string | null>('get_lfs_endpoint', { path: repoPath });
+  return result.success && result.data ? result.data : null;
+}
+
 export async function lfsPull(
   repoPath: string,
 ): Promise<CommandResult<string>> {
-  if (!await checkNetworkPermission('LFS pull', repoPath)) {
+  const endpoint = await resolveLfsEndpoint(repoPath);
+  if (!await checkNetworkPermission('LFS pull', repoPath, undefined, endpoint)) {
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
@@ -3354,7 +3373,8 @@ export async function lfsFetch(
   repoPath: string,
   refs?: string[],
 ): Promise<CommandResult<string>> {
-  if (!await checkNetworkPermission('LFS fetch', repoPath)) {
+  const endpoint = await resolveLfsEndpoint(repoPath);
+  if (!await checkNetworkPermission('LFS fetch', repoPath, undefined, endpoint)) {
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);

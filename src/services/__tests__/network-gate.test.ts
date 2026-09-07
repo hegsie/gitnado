@@ -710,6 +710,73 @@ describe('network security gate', () => {
     });
   });
 
+  describe('an LFS transfer is judged on the LFS endpoint, not the git remote', () => {
+    // git-lfs reads `lfs.url` from `.lfsconfig`, a file committed to the
+    // repository, before it falls back to the remote — so the host an LFS
+    // pull reaches is chosen by whoever pushed the repository.
+    const installLfsEndpoint = (endpoint: string | null) => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_lfs_endpoint'
+            ? endpoint
+            : command === 'get_fetch_remote'
+              ? 'origin'
+              : command === 'get_remotes'
+                ? [{ name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null }]
+                : null,
+        );
+    };
+
+    it('blocks an LFS pull whose committed endpoint is off the list', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
+    });
+
+    it('blocks an LFS fetch the same way', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsFetch('/repo', ['main']);
+
+      expect(result.success).to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'lfs_fetch')).to.equal(false);
+    });
+
+    it('allows an LFS pull whose endpoint is on the list', async () => {
+      installLfsEndpoint('https://github.com/o/r.git');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+
+    it('falls back to the git remote when no endpoint can be resolved', async () => {
+      installLfsEndpoint(null);
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+    });
+
+    it('does not look the endpoint up when no allowlist is configured', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: [] });
+
+      await lfsPull('/repo');
+
+      expect(invokeHistory.some((c) => c.command === 'get_lfs_endpoint')).to.equal(false);
+    });
+  });
+
   describe('the push gate judges the PUSH url', () => {
     // git2 and `git push` contact `remote.<n>.pushurl` when one is set — and
     // the Remote dialog can set one, on any host — so a push gated on the
