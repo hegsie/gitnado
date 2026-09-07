@@ -584,6 +584,13 @@ export class LvCredentialsDialog extends LitElement {
     }
   }
 
+  /**
+   * Erase the stored credential the test just found.
+   *
+   * Offered for HTTPS only. SSH authenticates with a key, and there is no
+   * credential-helper entry to reject — `git credential reject protocol=ssh`
+   * is a silent no-op — so the button would promise something it cannot do.
+   */
   private async handleEraseCredentials(): Promise<void> {
     if (!this.testResult) return;
 
@@ -780,7 +787,9 @@ export class LvCredentialsDialog extends LitElement {
                         <line x1="15" y1="9" x2="9" y2="15"></line>
                         <line x1="9" y1="9" x2="15" y2="15"></line>
                       </svg>
-                      No Credentials Found
+                      ${this.testResult.protocol === 'ssh'
+                        ? 'SSH Authentication Failed'
+                        : 'No Credentials Found'}
                     `}
               </div>
               <div class="test-result-details">
@@ -793,7 +802,7 @@ export class LvCredentialsDialog extends LitElement {
               ${this.testResult.message
                 ? html`<div class="test-result-message">${this.testResult.message}</div>`
                 : ''}
-              ${this.testResult.success
+              ${this.testResult.success && this.testResult.protocol !== 'ssh'
                 ? html`
                     <div class="form-actions" style="margin-top: var(--spacing-sm)">
                       <button class="btn btn-secondary" @click=${this.handleEraseCredentials}>

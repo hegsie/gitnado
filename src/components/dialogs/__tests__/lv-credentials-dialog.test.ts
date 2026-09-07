@@ -7,7 +7,8 @@
  */
 
 import { expect, fixture, html } from '@open-wc/testing';
-import type { CredentialHelper } from '../../../services/git.service.ts';
+import type { CredentialHelper, CredentialTestResult } from '../../../services/git.service.ts';
+import type { Remote } from '../../../types/git.types.ts';
 
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 
@@ -20,6 +21,8 @@ let mockHelpers: CredentialHelper[] = [];
  * (and the silent no-op this dialog used to produce).
  */
 let unsetFailure: { message: string } | null = null;
+let mockRemotes: Remote[] = [];
+let mockTestResult: CredentialTestResult | null = null;
 
 /** Does this `unset_credential_helper` call target `mockHelpers[0]`'s file? */
 function aimedAtHelperFile(args: unknown): boolean {
@@ -38,7 +41,11 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
     case 'get_available_helpers':
       return [];
     case 'get_remotes':
-      return [];
+      return mockRemotes;
+    case 'test_credentials':
+      return mockTestResult;
+    case 'erase_credentials':
+      return null;
     case 'detect_credential_manager':
       return null;
     case 'unset_credential_helper':
@@ -93,6 +100,45 @@ function unsetCalls(): Array<Record<string, unknown>> {
   return invokeCalls
     .filter((c) => c.command === 'unset_credential_helper')
     .map((c) => c.args as Record<string, unknown>);
+}
+
+function remote(url: string): Remote {
+  return { name: 'origin', url, pushUrl: null };
+}
+
+function testResult(over: Partial<CredentialTestResult>): CredentialTestResult {
+  return {
+    success: true,
+    host: 'git.example.test',
+    protocol: 'https',
+    username: 'someone',
+    message: 'Credentials found',
+    ...over,
+  };
+}
+
+/** Open the dialog and switch to the "Test Credentials" tab. */
+async function openTestTab(): Promise<LvCredentialsDialog> {
+  const el = await fixture<LvCredentialsDialog>(
+    html`<lv-credentials-dialog ?open=${true} .repositoryPath=${'/test/repo'}></lv-credentials-dialog>`,
+  );
+  const tabs = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.tab');
+  tabs[tabs.length - 1].click();
+  await waitFor(() => el.shadowRoot!.querySelectorAll('.remote-item').length > 0);
+  return el;
+}
+
+async function runTest(el: LvCredentialsDialog): Promise<void> {
+  el.shadowRoot!.querySelector<HTMLButtonElement>('.form-actions .btn-primary')!.click();
+  await waitFor(() => el.shadowRoot!.querySelector('.test-result') !== null);
+  await el.updateComplete;
+}
+
+/** Is the "Erase Credentials" action offered on the current result panel? */
+function offersErase(el: LvCredentialsDialog): boolean {
+  return [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.test-result button')].some((b) =>
+    b.textContent?.includes('Erase Credentials'),
+  );
 }
 
 describe('lv-credentials-dialog helper removal', () => {
@@ -164,5 +210,71 @@ describe('lv-credentials-dialog helper removal', () => {
     expect(banner!.textContent).to.include('could not lock config file');
     // The helper it failed to remove is still listed.
     expect(el.shadowRoot!.querySelectorAll('.helper-item')).to.have.length(1);
+  });
+});
+
+/**
+ * The credential test reports the protocol git would actually use. An scp-form
+ * remote whose login is not `git` (`deploy@host:team/app.git`) is SSH, and used
+ * to be reported as HTTPS: a working remote came back "No Credentials Found",
+ * and the erase button then offered to drop `https` credentials that were never
+ * in play.
+ */
+describe('lv-credentials-dialog credential test result', () => {
+  beforeEach(() => {
+    invokeCalls.length = 0;
+    mockHelpers = [];
+    mockRemotes = [remote('deploy@git.example.test:team/app.git')];
+    mockTestResult = null;
+  });
+
+  it('offers to erase the credential an HTTPS remote actually stores', async () => {
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    mockTestResult = testResult({ protocol: 'https' });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('Credentials Working');
+    expect(offersErase(el), 'HTTPS keeps its erase button').to.be.true;
+  });
+
+  it('does not offer to erase anything for an SSH remote', async () => {
+    mockTestResult = testResult({
+      protocol: 'ssh',
+      username: 'deploy',
+      message: "Hi deploy! You've successfully authenticated",
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('Protocol: ssh');
+    // SSH authenticates with a key: there is no credential entry to reject, so
+    // the button would be a silent no-op.
+    expect(offersErase(el), 'SSH has no stored credential to erase').to.be.false;
+    expect(invokeCalls.some((c) => c.command === 'erase_credentials')).to.be.false;
+  });
+
+  it('reports a failed SSH handshake as an authentication failure, not a missing credential', async () => {
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'ssh',
+      username: null,
+      message: 'Permission denied (publickey).',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('SSH Authentication Failed');
+    expect(el.shadowRoot!.textContent).to.not.include('No Credentials Found');
+  });
+
+  it('still reports a missing HTTPS credential as one', async () => {
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    mockTestResult = testResult({ success: false, username: null, message: 'No credentials found' });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Found');
+    expect(offersErase(el), 'nothing to erase when nothing was found').to.be.false;
   });
 });

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
-import { openViaCommandPalette } from '../fixtures/test-helpers';
+import { injectCommandMock, openViaCommandPalette } from '../fixtures/test-helpers';
 
 /**
  * E2E tests for the Credential Management dialog (lv-credentials-dialog).
@@ -106,5 +106,100 @@ test.describe('Credentials Dialog - removing URL-scoped helpers', () => {
     const removeButton = page.locator('lv-credentials-dialog .helper-item .btn-icon.danger');
     await expect(removeButton).toBeDisabled();
     await expect(removeButton).toHaveAttribute('title', /system git config/);
+  });
+});
+
+/**
+ * The "Test Credentials" tab reports the protocol git would actually use.
+ *
+ * An scp-form remote whose login is not `git` — `deploy@host:team/app.git`, an
+ * ordinary corporate remote — is SSH, and was classified as HTTPS: a working
+ * remote came back "No Credentials Found", and the erase button then offered
+ * to drop `https` credentials that were never in play.
+ */
+test.describe('Credentials Dialog - testing a remote', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupOpenRepository(page);
+  });
+
+  async function openTestTab(page: import('@playwright/test').Page): Promise<void> {
+    await openCredentialsDialog(page);
+    await page.locator('lv-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
+    await expect(page.locator('lv-credentials-dialog .remote-item')).toHaveCount(1);
+    await page.locator('lv-credentials-dialog .form-actions .btn-primary').click();
+    await expect(page.locator('lv-credentials-dialog .test-result')).toBeVisible();
+  }
+
+  test('an scp-form remote is reported over ssh and offers nothing to erase', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'deploy@git.example.test:team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: true,
+        host: 'git.example.test',
+        protocol: 'ssh',
+        username: 'deploy',
+        message: "Hi deploy! You've successfully authenticated",
+      },
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('Credentials Working');
+    await expect(result).toContainText('Protocol: ssh');
+    // SSH authenticates with a key; there is no credential entry to reject, so
+    // the button would be a silent no-op.
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
+
+  test('a failed ssh handshake is reported as an authentication failure', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'deploy@git.example.test:team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: false,
+        host: 'git.example.test',
+        protocol: 'ssh',
+        username: null,
+        message: 'Permission denied (publickey).',
+      },
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('SSH Authentication Failed');
+    await expect(result).not.toContainText('No Credentials Found');
+    await expect(result).toContainText('Permission denied (publickey).');
+  });
+
+  test('an https remote still offers to erase the credential it found', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: 'https://git.example.test/team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        success: true,
+        host: 'git.example.test',
+        protocol: 'https',
+        username: 'someone',
+        message: 'Credentials found for git.example.test',
+      },
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('Protocol: https');
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toBeVisible();
   });
 });
