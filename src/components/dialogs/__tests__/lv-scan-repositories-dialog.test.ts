@@ -97,6 +97,39 @@ function buttonWithText(el: LvScanRepositoriesDialog, text: string): HTMLButtonE
   return match;
 }
 
+/**
+ * Mock a `cancel_repository_scan` that does not answer until it is released,
+ * and record — for every scan that reaches the backend — whether that cancel
+ * had been acknowledged yet.
+ *
+ * The backend clears its cancellation flag when a scan STARTS, so a scan that
+ * is sent while a cancel is still in flight can be aborted by it. `/code` is
+ * the folder being cancelled; its scan never answers.
+ */
+function deferCancel(): { release: () => void; cancelSeenByScanOf: Record<string, boolean> } {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let acknowledged = false;
+  const cancelSeenByScanOf: Record<string, boolean> = {};
+  mockResponses['cancel_repository_scan'] = () =>
+    gate.then(() => {
+      acknowledged = true;
+      return null;
+    });
+  mockResponses['scan_for_repositories'] = (args) => {
+    const path = args.path as string;
+    cancelSeenByScanOf[path] = acknowledged;
+    return path === '/code' ? new Promise(() => {}) : scanResult({ root: path });
+  };
+  return { release, cancelSeenByScanOf };
+}
+
+function scannedPaths(): unknown[] {
+  return invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').map((c) => c.args.path);
+}
+
 describe('lv-scan-repositories-dialog', () => {
   beforeEach(() => {
     invokeCallArgs.length = 0;
@@ -486,6 +519,165 @@ describe('lv-scan-repositories-dialog', () => {
     expect(commands.indexOf('cancel_repository_scan')).to.be.lessThan(
       commands.lastIndexOf('scan_for_repositories'),
     );
+  });
+
+  it('waits for an unanswered cancel before scanning a folder dropped third', async () => {
+    // The wait was per-pass, not per-dialog: the THIRD drop found `scanIssued`
+    // already cleared by the second, so it had nothing of its own to wait for
+    // and started its scan while the FIRST folder's cancel was still in flight.
+    // The backend clears its cancellation flag when a scan starts, so that
+    // cancel lands on the new walk and the user is told "Scan cancelled" for a
+    // folder they never cancelled.
+    const { release, cancelSeenByScanOf } = deferCancel();
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'scan_for_repositories'),
+      'the first scan to reach the backend',
+    );
+
+    el.scanPath = '/second';
+    await el.updateComplete;
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'cancel_repository_scan'),
+      'the cancel for the first folder',
+    );
+
+    el.scanPath = '/third';
+    await el.updateComplete;
+    await aTimeout(10);
+
+    expect(scannedPaths(), 'no scan may be sent while a cancel is unanswered').to.deep.equal([
+      '/code',
+    ]);
+
+    release();
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, "the third folder's results");
+
+    expect(
+      invokeCallArgs.filter((c) => c.command === 'cancel_repository_scan').length,
+      'one cancel for the one scan that was running',
+    ).to.equal(1);
+    expect(
+      cancelSeenByScanOf['/third'],
+      'the third scan waited for the first folder\'s cancel',
+    ).to.equal(true);
+    expect(text(el, '.folder-path')).to.contain('/third');
+  });
+
+  it('waits for the cancel the user asked for before scanning a folder dropped on top', async () => {
+    // The Cancel button's cancellation counted for nothing: a drop landing
+    // before the cancelled walk had answered fired a SECOND cancel for the same
+    // walk and waited only for that one, so the user's own cancel could still
+    // be in flight when the new folder's scan started.
+    const { release, cancelSeenByScanOf } = deferCancel();
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'scan_for_repositories'),
+      'the first scan to reach the backend',
+    );
+
+    buttonWithText(el, 'Cancel scan').click();
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'cancel_repository_scan'),
+      'the cancel the user asked for',
+    );
+
+    el.scanPath = '/dropped';
+    await el.updateComplete;
+    await aTimeout(10);
+
+    expect(scannedPaths(), 'no scan may be sent while a cancel is unanswered').to.deep.equal([
+      '/code',
+    ]);
+    expect(
+      invokeCallArgs.filter((c) => c.command === 'cancel_repository_scan').length,
+      'one cancel for the one walk being stopped',
+    ).to.equal(1);
+
+    release();
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, "the dropped folder's results");
+    expect(
+      cancelSeenByScanOf['/dropped'],
+      "the dropped folder's scan waited for the user's cancel",
+    ).to.equal(true);
+  });
+
+  it('lets a close retry a cancellation the backend refused', async () => {
+    mockResponses['scan_for_repositories'] = () => new Promise(() => {});
+    let cancels = 0;
+    mockResponses['cancel_repository_scan'] = () => {
+      cancels++;
+      // The first attempt fails; the walk is still running.
+      if (cancels === 1) throw new Error('no scan is running');
+      return null;
+    };
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'scan_for_repositories'),
+      'the scan to reach the backend',
+    );
+
+    buttonWithText(el, 'Cancel scan').click();
+    await waitUntil(
+      () => uiStore.getState().toasts.length > 0,
+      'the failed cancellation to be reported',
+    );
+    expect(uiStore.getState().toasts[0].type).to.equal('error');
+
+    // The walk was never stopped, so closing the dialog must try again rather
+    // than leave it running against a dialog nobody can see.
+    el.open = false;
+    await el.updateComplete;
+    await waitUntil(() => cancels === 2, 'the close to retry the cancellation');
+  });
+
+  it('waits for the cancel a close fired before scanning the folder opened next', async () => {
+    // Closing mid-scan cancels the walk but used to throw the cancellation
+    // promise away, so reopening the dialog on another folder scanned it into
+    // that unanswered cancel.
+    const { release, cancelSeenByScanOf } = deferCancel();
+
+    const el = await fixture<LvScanRepositoriesDialog>(
+      html`<lv-scan-repositories-dialog></lv-scan-repositories-dialog>`,
+    );
+    await openDialog(el, 'scan', '/code');
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'scan_for_repositories'),
+      'the first scan to reach the backend',
+    );
+
+    el.open = false;
+    await el.updateComplete;
+    await waitUntil(
+      () => invokeCallArgs.some((c) => c.command === 'cancel_repository_scan'),
+      'the scan to be cancelled on close',
+    );
+
+    await openDialog(el, 'scan', '/reopened');
+    await aTimeout(10);
+
+    expect(scannedPaths(), 'no scan may be sent while a cancel is unanswered').to.deep.equal([
+      '/code',
+    ]);
+
+    release();
+    await waitUntil(() => queryAll(el, '.result-item').length > 0, "the reopened folder's results");
+    expect(
+      cancelSeenByScanOf['/reopened'],
+      "the reopened folder's scan waited for the close's cancel",
+    ).to.equal(true);
   });
 
   /**

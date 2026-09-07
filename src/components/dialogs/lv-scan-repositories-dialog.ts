@@ -287,6 +287,18 @@ export class LvScanRepositoriesDialog extends LitElement {
   /** True once the scan command has actually been sent to the backend. */
   private scanIssued = false;
   /**
+   * A cancellation that has been sent but not yet answered.
+   *
+   * It lives on the instance rather than on the pass that fired it because the
+   * pass that has to WAIT for it is usually not the pass that fired it: a third
+   * drop (or a reopen after a close mid-scan) finds `scanIssued` already
+   * cleared by the pass before it, so it fires no cancel of its own and would
+   * otherwise see nothing to wait for. The backend clears its cancellation flag
+   * when a scan STARTS, so a cancel still in flight can land on the next scan
+   * and abort a folder the user never cancelled.
+   */
+  private pendingCancel?: Promise<unknown>;
+  /**
    * What the last `activate()` pointed the dialog at, so a re-drop of the same
    * folder can be told apart from a drop of a different one and reported for
    * what it is.
@@ -310,7 +322,7 @@ export class LvScanRepositoriesDialog extends LitElement {
     if (this.open) {
       void this.activate(retargeted);
     } else {
-      void this.abortScan();
+      this.abortScan();
     }
   }
 
@@ -318,25 +330,37 @@ export class LvScanRepositoriesDialog extends LitElement {
    * Stop any running scan and make sure neither its results nor its progress
    * events can land on whatever the dialog shows next.
    *
-   * Returns the cancellation it fired, if any, so a caller that has to wait for
-   * the backend to acknowledge one waits for THAT cancel rather than issuing a
-   * second: the backend clears its cancellation flag when a scan STARTS, so a
-   * cancel still in flight can land after the next scan has begun and abort it.
+   * Any cancellation it fires is parked on `pendingCancel` so that whichever
+   * pass starts the NEXT scan waits for it — including a pass that fired no
+   * cancel of its own, and including one that follows a close.
    */
-  private abortScan(): Promise<unknown> | undefined {
+  private abortScan(): void {
     // Closing (or re-pointing) mid-scan must stop the backend walk, not leave
     // it running against a dialog nobody can see.
-    let cancelling: Promise<unknown> | undefined;
     if (this.phase === 'scanning') {
       this.cancelRequested = true;
-      if (this.scanIssued) {
-        cancelling = cancelRepositoryScan();
-        // That walk is cancelled; nothing may ask for it to be cancelled twice.
-        this.scanIssued = false;
-      }
+      if (this.scanIssued) this.issueCancel();
     }
     this.scanToken++;
     this.detachProgress();
+  }
+
+  /**
+   * Ask the backend to stop the walk that is running, and remember the request
+   * until it is answered.
+   *
+   * Every cancellation goes through here — the user's Cancel button as well as
+   * a close or a re-target — so there is never more than one outstanding for
+   * one walk, and so whichever pass starts the NEXT scan can wait for it.
+   */
+  private issueCancel(): ReturnType<typeof cancelRepositoryScan> {
+    // That walk is cancelled; nothing may ask for it to be cancelled twice.
+    this.scanIssued = false;
+    const cancelling = cancelRepositoryScan().finally(() => {
+      // Only clear it if a later cancellation has not already replaced it.
+      if (this.pendingCancel === cancelling) this.pendingCancel = undefined;
+    });
+    this.pendingCancel = cancelling;
     return cancelling;
   }
 
@@ -353,7 +377,7 @@ export class LvScanRepositoriesDialog extends LitElement {
     const rescanSameFolder = sameFolder && this.phase !== 'offer';
     this.activatedPath = this.scanPath;
     this.activatedMode = this.mode;
-    const cancelling = this.abortScan();
+    this.abortScan();
     const token = this.scanToken;
 
     this.reset();
@@ -367,13 +391,15 @@ export class LvScanRepositoriesDialog extends LitElement {
       showToast(this.retargetMessage(sameFolder, rescanSameFolder), 'info');
     }
 
-    if (cancelling) {
-      // Wait for the backend to acknowledge the cancellation abortScan just
-      // fired before asking for the next scan: the backend clears its
-      // cancellation flag when a scan STARTS, so a cancel still in flight could
-      // otherwise stop the new scan.
-      await cancelling;
-      // Re-targeted again while we waited; that pass owns the dialog now.
+    // Wait for every cancellation still outstanding — the one abortScan just
+    // fired, or one an earlier drop (or a close) fired and has not been
+    // answered yet — before asking for the next scan: the backend clears its
+    // cancellation flag when a scan STARTS, so a cancel still in flight would
+    // otherwise stop the new scan and report it as one the user cancelled.
+    while (this.pendingCancel) {
+      await this.pendingCancel;
+      // Re-targeted (or closed) again while we waited; that pass owns the
+      // dialog now.
       if (token !== this.scanToken) return;
     }
 
@@ -480,9 +506,12 @@ export class LvScanRepositoriesDialog extends LitElement {
     this.cancelRequested = true;
     // Nothing is running in the backend yet; startScan will stop on its own.
     if (!this.scanIssued) return;
-    const result = await cancelRepositoryScan();
+    const result = await this.issueCancel();
     if (!result.success) {
       this.isCancelling = false;
+      // The walk is still running, so closing the dialog (or dropping another
+      // folder on it) must still be allowed to try to stop it.
+      this.scanIssued = true;
       showToast(result.error?.message ?? 'Failed to cancel the scan', 'error');
     }
   }
