@@ -800,6 +800,56 @@ describe('output-log.service', () => {
       expect(entries[0].gitCommand).to.equal('git -C /repo push --force-with-lease origin main');
     });
 
+    it('a successful late run replaces the row of a shell-out operation with no builder', async () => {
+      // `run_gc` has no builder, so before its shell-out subcommands were
+      // declared its operation knew none and could never CONFIRM a late claim.
+      // The strict late-claim rule then refused the splice and the panel showed
+      // BOTH `run_gc` and `git gc --aggressive --prune=now` — two rows for one
+      // click on Garbage Collect, on the ordinary success path.
+      await invokeCommand('run_gc', { path: '/repo', aggressive: true, prune: 'now' });
+      expect(getLogEntries().length).to.equal(1);
+
+      recordGitCommandEvent({
+        command: 'git gc --aggressive --prune=now',
+        output: 'Counting objects: 12, done.',
+        success: true,
+        durationMs: 900,
+        repoPath: '/repo',
+      });
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].synthesized).to.be.false;
+      expect(entries[0].gitCommand).to.equal('git gc --aggressive --prune=now');
+    });
+
+    it('a failed shell-out operation colours the real row rather than adding one', async () => {
+      // Same operation, failure path: the confirmed late claim must carry the
+      // IPC error onto the real `git gc` row instead of leaving a red synthetic
+      // row beside a green real one.
+      mockInvoke = () =>
+        Promise.reject({
+          code: 'GC_FAILED',
+          message: 'gc failed: bad object HEAD',
+        });
+      await invokeCommand('run_gc', { path: '/repo' });
+      expect(getLogEntries().length).to.equal(1);
+
+      recordGitCommandEvent({
+        command: 'git gc --auto',
+        output: 'error: bad object HEAD',
+        success: false,
+        durationMs: 20,
+        repoPath: '/repo',
+      });
+
+      const entries = getLogEntries();
+      expect(entries.length).to.equal(1);
+      expect(entries[0].success).to.be.false;
+      expect(entries[0].gitCommand).to.equal('git gc --auto');
+      expect(entries[0].output).to.contain('bad object HEAD');
+    });
+
     it('a failure after a successful real run is carried onto that row', async () => {
       // The commit itself ran; something after it (a hook, a refresh) failed.
       // The user must still see why, without a second row appearing.

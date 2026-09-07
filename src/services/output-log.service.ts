@@ -299,11 +299,12 @@ function findClaimable(
   );
   if (matches.length === 0) return undefined;
   // Prefer the operation whose subcommand IS this run's. `operationMatches` is
-  // permissive about an unknown subcommand so the operations with no
-  // synthesised line (`clone_repository`, `run_gc`, `bundle_create`, the index
-  // builders) can still be claimed — but those are pending far more often, and
-  // `matches` is oldest-first, so without this a background index refresh would
-  // take a push's claim and the push would write a second, contradictory row.
+  // permissive about an unknown subcommand so the operations that declare none
+  // (`set_upstream_branch` and the rest of the pure-libgit2 commands with no
+  // builder and no shell-out) can still be claimed — but those are pending far
+  // more often, and `matches` is oldest-first, so without this a background
+  // refresh would take a push's claim and the push would write a second,
+  // contradictory row.
   const confirmed = matches.filter((op) => confirms(op, subcommand));
   const preferred = confirmed.length > 0 ? confirmed : matches;
   // A run that reports NO repository (`git clone` has no working directory
@@ -472,10 +473,12 @@ export function claimGitOperationForEntry(
 
   // Stricter than the in-flight path: a late claim REPLACES a row the panel
   // has already shown, so only a claim CONFIRMED by a matching subcommand may
-  // take it. The permissive fallback (an operation with no builder, hence no
-  // known subcommand, or a run whose subcommand it does not name) is a
-  // compatibility guess — good enough to suppress a row that has not been
-  // written yet, not good enough to splice out one that has. Without this, a
+  // take it. The permissive fallback (an operation that declares no subcommand
+  // at all, or a run whose subcommand it does not name) is a compatibility
+  // guess — good enough to suppress a row that has not been written yet, not
+  // good enough to splice out one that has. Operations with no builder that
+  // really do shell out declare their subcommand in `SHELL_OUT_SUBCOMMANDS`
+  // precisely so they can confirm their own run here. Without this, a
   // read the backend happened to report — `git worktree list` when the
   // Worktrees dialog opened 1.5 s after "Set upstream" settled — replaced the
   // set-upstream row with a line for a command the user never ran. Two rows

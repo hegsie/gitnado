@@ -404,19 +404,126 @@ const BACKEND_SUBCOMMANDS: Readonly<Record<string, ReadonlyArray<string>>> = {
 };
 
 /**
+ * The git subcommand each SHELL-OUT operation runs that has no builder above.
+ *
+ * These commands never went through libgit2, so there is no line to synthesise
+ * and nothing for `gitSubcommand` to read — yet the backend really does run
+ * `git`, and really does report it. Without a declared subcommand such an
+ * operation can never CONFIRM a claim, and the Output panel's strict late-claim
+ * rule (see `claimGitOperationForEntry`) then refuses to splice out the row the
+ * operation already wrote: one click on "Garbage collect" showed both `run_gc`
+ * and `git gc --aggressive --prune=now`.
+ *
+ * Each entry names the subcommand of the FIRST run the backend reports for that
+ * operation — deliberately not every subcommand it may run afterwards. A second
+ * run (`git rm` after `git submodule deinit`, `git fetch` after `git bundle
+ * verify`) genuinely is a second invocation and has earned its own row, and
+ * every extra name here is one more way for a settled operation to swallow a
+ * row that belongs to a different one.
+ *
+ * Derived from the `create_command("git")` sites in `src-tauri/src/commands/`
+ * reachable from a registered IPC command that the panel logs. Runs whose
+ * subcommand the backend does not report at all — `git config` (the config,
+ * profile, GPG and editor commands), `git credential`, `git fsck`,
+ * `git check-ignore`, `git verify-commit` — are absent because no row is ever
+ * written for them, and so are the read-only forms (`git bundle list-heads`,
+ * `git stash show`) that `is_read_only_form` filters out backend-side.
+ */
+const SHELL_OUT_SUBCOMMANDS: Readonly<Record<string, ReadonlyArray<string>>> = {
+  // repository.rs — `git clone --progress …`
+  clone_repository: ['clone'],
+  // branch.rs — `git checkout --orphan <name>`
+  create_orphan_branch: ['checkout'],
+  // commit.rs — signed amend, and the rebase both date/message edits drive
+  amend_commit_message: ['commit'],
+  edit_commit_date: ['rebase'],
+  reword_commit: ['rebase'],
+  // staging.rs — every hunk/line stage applies a patch to the index
+  stage_hunk: ['apply'],
+  unstage_hunk: ['apply'],
+  stage_hunk_by_index: ['apply'],
+  unstage_hunk_by_index: ['apply'],
+  stage_lines: ['apply'],
+  // remote.rs
+  push_to_multiple_remotes: ['push'],
+  deepen_repository: ['fetch'],
+  unshallow_repository: ['fetch'],
+  // merge.rs
+  execute_interactive_rebase: ['rebase'],
+  // tags.rs — retagging a signed tag goes through the CLI
+  edit_tag_message: ['tag'],
+  // bisect.rs
+  bisect_start: ['bisect'],
+  bisect_bad: ['bisect'],
+  bisect_good: ['bisect'],
+  bisect_skip: ['bisect'],
+  bisect_reset: ['bisect'],
+  // submodule.rs (remove_submodule deinits first, then runs `git rm`)
+  add_submodule: ['submodule'],
+  init_submodules: ['submodule'],
+  update_submodules: ['submodule'],
+  sync_submodules: ['submodule'],
+  deinit_submodule: ['submodule'],
+  remove_submodule: ['submodule'],
+  submodule_foreach: ['submodule'],
+  // worktree.rs
+  add_worktree: ['worktree'],
+  remove_worktree: ['worktree'],
+  prune_worktrees: ['worktree'],
+  lock_worktree: ['worktree'],
+  unlock_worktree: ['worktree'],
+  move_worktree: ['worktree'],
+  repair_worktrees: ['worktree'],
+  // lfs.rs
+  init_lfs: ['lfs'],
+  lfs_track: ['lfs'],
+  lfs_untrack: ['lfs'],
+  lfs_pull: ['lfs'],
+  lfs_fetch: ['lfs'],
+  lfs_prune: ['lfs'],
+  lfs_migrate: ['lfs'],
+  // maintenance.rs (`run_fsck`/`verify_repository` run `git fsck`, which the
+  // backend does not report, so they declare nothing)
+  run_garbage_collection: ['gc'],
+  run_gc: ['gc'],
+  run_prune: ['prune'],
+  prune_remote_tracking_branches: ['remote'],
+  // difftool.rs / merge_tool.rs
+  launch_diff_tool: ['difftool'],
+  launch_merge_tool: ['mergetool'],
+  // archive.rs — the export writes `--output`; the dialog's listing does not
+  // and is filtered out backend-side
+  create_archive: ['archive'],
+  // bundle.rs (unbundle verifies the bundle before it fetches from it)
+  bundle_create: ['bundle'],
+  bundle_verify: ['bundle'],
+  bundle_unbundle: ['bundle'],
+  // sparse_checkout.rs
+  enable_sparse_checkout: ['sparse-checkout'],
+  disable_sparse_checkout: ['sparse-checkout'],
+  set_sparse_checkout_patterns: ['sparse-checkout'],
+  add_sparse_checkout_patterns: ['sparse-checkout'],
+};
+
+/**
  * Every git subcommand a real run of `command` may carry: the one its
- * synthesised `line` names plus any the backend is known to run instead.
- * `undefined` when the line names none — the operation's shape is unknown
- * then, and the caller stays permissive exactly as it did before.
+ * synthesised `line` names plus any the backend is known to run instead, or —
+ * for an operation with no builder — the subcommand it shells out to.
+ * `undefined` when neither is known (`set_upstream_branch` and the rest of the
+ * pure-libgit2 operations), and the caller stays permissive exactly as before.
  */
 export function claimableSubcommands(
   command: string,
   line: string | undefined,
-): string[] | undefined {
+): readonly string[] | undefined {
   const own = gitSubcommand(line);
-  if (own === undefined) return undefined;
+  if (own === undefined) return SHELL_OUT_SUBCOMMANDS[command];
   return [own, ...(BACKEND_SUBCOMMANDS[command] ?? [])];
 }
+
+/** The shell-out operations with a declared subcommand — exported for tests. */
+export const SHELL_OUT_COMMANDS: ReadonlyArray<string> =
+  Object.keys(SHELL_OUT_SUBCOMMANDS);
 
 /**
  * git's own options that take a SEPARATE value argument, so the subcommand
