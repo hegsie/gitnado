@@ -14,8 +14,35 @@ const mockInvoke: MockInvoke = async (command: string) => {
   if (command === 'plugin:notification|is_permission_granted') return false;
 
   switch (command) {
+    // Two REAL `AiProviderInfo`s. With none, the entire API-key provider block
+    // rendered nothing, so `Configured`, `Not configured` and `✗ Failed` — the
+    // pills the `.status-indicator` selector below was widened FOR — were never
+    // on screen to compare. One has a key and one does not, so both pills show.
     case 'get_ai_providers':
-      return [];
+      return [
+        {
+          providerType: 'open_ai',
+          name: 'OpenAI',
+          available: false,
+          probed: true,
+          requiresApiKey: true,
+          hasApiKey: true,
+          endpoint: 'https://api.openai.com/v1',
+          models: ['gpt-4o'],
+          selectedModel: 'gpt-4o',
+        },
+        {
+          providerType: 'anthropic',
+          name: 'Anthropic',
+          available: false,
+          probed: true,
+          requiresApiKey: true,
+          hasApiKey: false,
+          endpoint: 'https://api.anthropic.com',
+          models: [],
+          selectedModel: null,
+        },
+      ];
     case 'get_app_version':
       return '0.1.0';
     case 'get_settings':
@@ -49,13 +76,45 @@ const mockInvoke: MockInvoke = async (command: string) => {
           contextLength: 32_768,
         },
       ];
+    // The model above, downloaded AND loaded. Without a downloaded model the
+    // model row only ever offers `Download`, so `Loaded` — named in the comment
+    // on the guard below — could not render either.
     case 'get_downloaded_models':
+      return [
+        {
+          id: 'qwen2.5-coder-1.5b',
+          displayName: 'Qwen2.5 Coder 1.5B',
+          sizeBytes: 1_073_741_824,
+          path: '/models/qwen2.5-coder-1.5b.gguf',
+          status: 'ready',
+        },
+      ];
+    // `LocalModelStatus`, and the name the engine reports for what it loaded.
+    // The old `get_local_model_status` mock answered a command nothing invokes
+    // (`local-ai.service.ts:168` asks for `get_model_status`), so the Engine
+    // Status row never rendered at all.
+    case 'get_model_status':
+      return 'ready';
+    case 'get_loaded_model_name':
+      return 'Qwen2.5 Coder 1.5B';
+    // A second model, not downloaded, so the "Recommended" row renders too.
+    case 'get_recommended_model':
+      return {
+        id: 'qwen2.5-coder-7b',
+        displayName: 'Qwen2.5 Coder 7B',
+        hfRepo: 'org/repo-7b',
+        hfFilename: 'model-7b.gguf',
+        sha256: 'y'.repeat(64),
+        sizeBytes: 4_294_967_296,
+        minRamBytes: 17_179_869_184,
+        tier: 'standard',
+        architecture: 'qwen2',
+        contextLength: 32_768,
+      };
     case 'get_available_diff_tools':
     case 'get_available_merge_tools':
     case 'list_diff_tools':
       return [];
-    case 'get_local_model_status':
-      return { loaded: false, modelId: null };
     case 'get_mcp_status':
       return { servers: [], totalTools: 0 };
     case 'get_merge_tool_config':
@@ -195,8 +254,11 @@ describe('lv-settings-dialog language setting', () => {
     // relying on the re-render. Without it here, a bare template rendered
     // into the banner showed English under "fr" with nothing to catch it.
     // `.status-indicator` earns its place here: the stack localised several of
-    // these pills (`Configured`, `Not configured`, `Loaded`) while the Local AI
-    // tier pill beside them stayed English, and this selector could not see it.
+    // these pills while the Local AI tier pill beside them stayed English, and
+    // this selector could not see it. Which pills it can actually see depends
+    // entirely on the mocks at the top of this file — the selector was widened
+    // once while they kept every one of those regions empty — so the control
+    // block below asserts each named pill is really in the comparison.
     const LOCALISED =
       '.section-title, .setting-name, .setting-description, .error-text, .status-indicator';
     // The mock answers `test_ai_provider` with nothing, which the dialog
@@ -229,6 +291,19 @@ describe('lv-settings-dialog language setting', () => {
     expect(
       [...english].some((text) => text.includes('OpenAI is not available')),
       'control: the AI banner is on screen and part of the comparison'
+    ).to.be.true;
+    // Every pill the comment above names, proved present rather than assumed:
+    // a mock trimmed back to `[]` would empty these regions again and quietly
+    // narrow the comparison to nothing.
+    for (const pill of ['Configured', 'Not configured', '✗ Failed', 'Loaded', 'Model Loaded']) {
+      expect(
+        english.has(pill),
+        `control: the "${pill}" pill is on screen and part of the comparison`
+      ).to.be.true;
+    }
+    expect(
+      [...english].some((text) => text.startsWith('Recommended:')),
+      'control: the recommended-model row is part of the comparison'
     ).to.be.true;
 
     await choose(el, 'fr');
