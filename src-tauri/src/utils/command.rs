@@ -53,6 +53,12 @@
 //! operation's in the panel. Wiring `preview_rebase` up means moving them
 //! first.
 //!
+//! `advanced_search.rs` builds a `Command` and hands it to `execute_git_log`,
+//! so its three spawns run outside the function that assembles them. That is
+//! the ONLY file whose builder escapes its own statement; the scan cannot read
+//! such a site's arguments, so it is acknowledged here by name rather than
+//! silently passed.
+//!
 //! Reads that DO come through here (because they share a helper with a write)
 //! are filtered out by [`is_read_only_form`] instead, so a `git worktree list`
 //! never masquerades as an executed operation.
@@ -807,6 +813,11 @@ mod tests {
         line: usize,
         /// The string literals of the builder chain, in order.
         argv: Vec<String>,
+        /// Whether the scan actually reached this spawn's `.output()`/
+        /// `.status()`/`.spawn(`. A site whose builder is handed to a helper
+        /// ends without one, and its arguments may be built out of this
+        /// function's sight.
+        terminated: bool,
     }
 
     /// Every production `Command::new("git")` under `src/`.
@@ -907,7 +918,26 @@ mod tests {
                 // crate's spawns were judged without their subcommand ever
                 // being seen.
                 let mut in_statement = false;
-                for (offset, text) in lines.iter().skip(index).take(80).enumerate() {
+                // The window ends at the enclosing function, not after a fixed
+                // line count: three sites hand their builder to a helper, so
+                // the terminator is in another function entirely and a fixed
+                // window ran past the end and collected the NEXT function's
+                // arguments — one command's argv attributed to another site.
+                let function_end = lines
+                    .iter()
+                    .enumerate()
+                    .skip(index)
+                    .find(|(_, text)| *text == &"}")
+                    .map(|(at, _)| at - index)
+                    .unwrap_or(usize::MAX);
+                let mut terminated = false;
+                // Set when an argument is assembled by a macro, so its value
+                // cannot be read from the source at all.
+                let mut opaque_argument = false;
+                for (offset, text) in lines.iter().skip(index).enumerate() {
+                    if offset > function_end {
+                        break;
+                    }
                     // Comments quote argv words too (one file's comment names
                     // `"push"`), and reading them would fail this check for a
                     // command that never runs.
@@ -925,16 +955,47 @@ mod tests {
                     in_statement = mentions_binding && !code.trim_end().ends_with(';');
                     if mentions_binding {
                         let scanned = &code[..terminator.unwrap_or(code.len())];
-                        argv.extend(
-                            scanned
-                                .split('"')
-                                .skip(1)
-                                .step_by(2)
-                                .filter(|token| *token != "git")
-                                .map(str::to_string),
-                        );
+                        // ONLY the literals inside `.arg(`/`.args(`. Harvesting
+                        // every literal on the line let an `.env("LC_ALL", "C")`
+                        // pair, a `.current_dir(…)` or a `format!` template
+                        // satisfy the "has a real argument" guard on its own —
+                        // so a site whose actual arguments the scanner never
+                        // read still looked judged.
+                        for (at, _) in scanned.match_indices(".arg") {
+                            let rest = &scanned[at..];
+                            let Some(open) = rest.find('(') else { continue };
+                            let Some(close) = rest.find(')') else {
+                                continue;
+                            };
+                            if close < open {
+                                continue;
+                            }
+                            let inside = &rest[open..close];
+                            if inside.contains('!') {
+                                // A macro: `format!("{}", sub)`. Its literal is
+                                // a TEMPLATE, not an argument word, and the
+                                // real value is built at runtime. That only
+                                // makes the site unjudgeable when it could BE
+                                // the subcommand — a macro AFTER a literal
+                                // subcommand (`log --format=…` then
+                                // `format!("-{}", n)`) hides nothing.
+                                if !argv.iter().any(|token| !token.starts_with('-')) {
+                                    opaque_argument = true;
+                                }
+                                continue;
+                            }
+                            argv.extend(
+                                inside
+                                    .split('"')
+                                    .skip(1)
+                                    .step_by(2)
+                                    .filter(|token| *token != "git")
+                                    .map(str::to_string),
+                            );
+                        }
                     }
                     if terminator.is_some() && mentions_binding {
+                        terminated = true;
                         break;
                     }
                     // Without a binding there is nothing to follow, so the
@@ -948,6 +1009,7 @@ mod tests {
                     file: relative.clone(),
                     line: index + 1,
                     argv,
+                    terminated: terminated && !opaque_argument,
                 });
             }
         }
@@ -1068,6 +1130,34 @@ mod tests {
             // exactly that state: the window stopped at the `current_dir` line
             // before the `arg("describe")`, so it was read as taking no
             // arguments and waved through by the "nothing logged here" branch.
+            // A site whose builder is handed to a helper never reaches its
+            // own terminator, so its arguments may be assembled somewhere this
+            // scan cannot see. Three sites are in that shape; they are named in
+            // the header so the exemption is visible rather than accidental.
+            if !site.terminated {
+                // Exempted by a DEDICATED sentence, not by the header naming
+                // the file somewhere: every bare-`Command` file is named in
+                // the header by construction, so that test was no test at all.
+                let acknowledged = header
+                    .split("hands it to `execute_git_log`")
+                    .next()
+                    .is_some_and(|before| {
+                        before.rsplit("//!").next().is_some_and(|sentence| {
+                            sentence.contains(site.file.rsplit('/').next().unwrap())
+                        })
+                    })
+                    && header.contains("hands it to `execute_git_log`");
+                assert!(
+                    acknowledged,
+                    "{}:{}: this spawn's builder leaves the function before it runs (or an \
+                     argument is built by a macro), so the scan cannot read what it runs. Run \
+                     the builder where it is assembled, use literal arguments, or acknowledge \
+                     this file in the header's own sentence about builders that escape.",
+                    site.file, site.line
+                );
+                continue;
+            }
+
             // Not merely non-empty: a site read as `["-C"]` is a global flag
             // and nothing else, which is just as unjudgeable as reading
             // nothing, and it used to satisfy an is_empty check.
