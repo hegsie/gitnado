@@ -623,11 +623,36 @@ export class LvCredentialsDialog extends LitElement {
     return 'info';
   }
 
-  /** The one-line verdict at the top of the result panel. */
+  /**
+   * The one-line verdict at the top of the result panel.
+   *
+   * The backend tells three https outcomes apart — found, a username with no
+   * password, nothing at all — and this collapsed the last two into "No
+   * Credentials Found". The panel then printed "Username found but no password
+   * for <host>" underneath, with the username listed right above it, and
+   * pointed the user at the wrong repair: the login is stored, the secret is
+   * what is missing. Anyone with `credential.<url>.username` set, or a helper
+   * holding a username whose token was revoked, is in exactly that state.
+   */
   private testResultHeadline(result: CredentialTestResult, tone: string): string {
     if (tone === 'success') return 'Credentials Working';
     if (tone === 'info') return 'No Credentials Needed';
-    return result.protocol === 'ssh' ? 'SSH Authentication Failed' : 'No Credentials Found';
+    if (result.protocol === 'ssh') return 'SSH Authentication Failed';
+    return result.username ? 'Password Not Stored' : 'No Credentials Found';
+  }
+
+  /**
+   * Whether the reported target names a location on this machine rather than a
+   * host to connect to.
+   *
+   * A `file` target has no host to report — a `file://` URL carries none, and a
+   * bare local path (`/srv/git/repo.git`, `C:\repos\x.git`, `../sibling.git`)
+   * is not a host either — so the backend reports the remote AS TYPED. Printed
+   * under a "Host:" label that put a whole URL, or a path, where a hostname
+   * belongs, and left the sentence below it ending in one.
+   */
+  private isPathTarget(result: CredentialTestResult): boolean {
+    return result.protocol === 'file';
   }
 
   /**
@@ -635,11 +660,17 @@ export class LvCredentialsDialog extends LitElement {
    *
    * The backend's message is written for the transports that DO store a
    * credential, so for the neutral branch it contradicts the header it sits
-   * under. Say what is actually going on there instead.
+   * under. Say what is actually going on there instead — about the protocol
+   * actually reported, not a fixed `git://` and `file://` pair, which named
+   * two schemes at every transport that lands here and named a scheme at all
+   * for a remote that is a plain path.
    */
   private testResultMessage(result: CredentialTestResult, tone: string): string {
     if (tone !== 'info') return result.message;
-    return `git:// and file:// remotes do not authenticate, so nothing is stored for ${result.host}.`;
+    if (this.isPathTarget(result)) {
+      return 'A local repository does not authenticate, so nothing is stored for it.';
+    }
+    return `${result.protocol}:// remotes do not authenticate, so nothing is stored for ${result.host}.`;
   }
 
   /**
@@ -862,7 +893,7 @@ export class LvCredentialsDialog extends LitElement {
           ${this.testResultHeadline(result, tone)}
         </div>
         <div class="test-result-details">
-          <div>Host: ${result.host}</div>
+          <div>${this.isPathTarget(result) ? 'Path' : 'Host'}: ${result.host}</div>
           <div>Protocol: ${result.protocol}</div>
           ${result.username ? html`<div>Username: ${result.username}</div>` : ''}
         </div>

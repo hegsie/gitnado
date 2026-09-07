@@ -23,6 +23,12 @@ let mockHelpers: CredentialHelper[] = [];
 let unsetFailure: { message: string } | null = null;
 let mockRemotes: Remote[] = [];
 let mockTestResult: CredentialTestResult | null = null;
+/**
+ * When set, `test_credentials` rejects with it — the shape a Rust
+ * `GitnadoError` arrives in. A `NetworkBlocked` from the BACKEND gate comes
+ * through as `code: 'BLOCKED'` with nothing having toasted it.
+ */
+let testCredentialsFailure: { code: string; message: string } | null = null;
 
 /** Does this `unset_credential_helper` call target `mockHelpers[0]`'s file? */
 function aimedAtHelperFile(args: unknown): boolean {
@@ -43,6 +49,7 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
     case 'get_remotes':
       return mockRemotes;
     case 'test_credentials':
+      if (testCredentialsFailure) throw testCredentialsFailure;
       return mockTestResult;
     case 'erase_credentials':
       return null;
@@ -68,6 +75,8 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
 // Import the component AFTER setting up the mock
 import '../lv-credentials-dialog.ts';
 import type { LvCredentialsDialog } from '../lv-credentials-dialog.ts';
+import { uiStore } from '../../../stores/ui.store.ts';
+import { settingsStore } from '../../../stores/settings.store.ts';
 
 function urlHelper(configScope: string): CredentialHelper {
   return {
@@ -231,6 +240,14 @@ describe('lv-credentials-dialog credential test result', () => {
     mockHelpers = [];
     mockRemotes = [remote('deploy@git.example.test:team/app.git')];
     mockTestResult = null;
+    testCredentialsFailure = null;
+    uiStore.setState({ toasts: [] });
+  });
+
+  afterEach(() => {
+    testCredentialsFailure = null;
+    uiStore.setState({ toasts: [] });
+    settingsStore.setState({ offlineMode: false });
   });
 
   it('offers to erase the credential an HTTPS remote actually stores', async () => {
@@ -342,27 +359,66 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(panel.className, 'panel reads as information').to.match(/\binfo\b/);
     // ...and it says why nothing was found, in place of the backend's line.
     expect(panelText(el)).to.include('do not authenticate');
+    // About THIS protocol. The sentence named a fixed pair — "git:// and
+    // file:// remotes" — so every neutral transport was told about two schemes
+    // it is not necessarily one of.
+    expect(panelText(el), 'the sentence is about the protocol reported').to.include('git://');
+    expect(panelText(el)).to.not.include('file://');
+    expect(panelText(el)).to.include('git.internal.test');
   });
 
   it('reports a missing file:// credential as nothing to find either', async () => {
     // The backend reports a scheme-carrying URL under its own scheme, so a
     // local `file://` remote arrives here as `protocol: 'file'` — the second
-    // transport this branch was written for.
+    // transport this branch was written for. The host it sends is the remote
+    // AS TYPED: `credential_target`'s unresolved branch has no host to report,
+    // and `a_file_url_keeps_its_own_scheme` pins exactly that. Mocking a bare
+    // path here left what a real user sees untested.
     mockRemotes = [remote('file:///srv/git/app.git')];
     mockTestResult = testResult({
       success: false,
       protocol: 'file',
-      host: '/srv/git/app.git',
+      host: 'file:///srv/git/app.git',
       username: null,
-      message: 'No credentials found for /srv/git/app.git',
+      message: 'No credentials found for file:///srv/git/app.git',
     });
     const el = await openTestTab();
     await runTest(el);
 
     expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
     expect(panelText(el)).to.not.include('no credentials found');
+    // A whole URL under a "Host:" label is not a host, and the sentence
+    // underneath ended in one too.
+    expect(panelText(el)).to.include('path: file:///srv/git/app.git');
+    expect(panelText(el), 'a URL is not a hostname').to.not.include('host:');
+    expect(panelText(el)).to.not.include('nothing is stored for file://');
     expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
     expect(offersErase(el), 'a file:// remote stores no credential either').to.be.false;
+  });
+
+  it('reports a bare local path as a path, under no scheme at all', async () => {
+    // `git clone /srv/git/bare.git` leaves `origin` in exactly this form, and
+    // the backend now reports it as the local path it is rather than the host
+    // `srv` its https fallback used to invent.
+    mockRemotes = [remote('/srv/git/repo.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'file',
+      host: '/srv/git/repo.git',
+      username: null,
+      message: 'No credentials found for /srv/git/repo.git',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
+    expect(panelText(el)).to.include('path: /srv/git/repo.git');
+    expect(panelText(el), 'a path is not a hostname').to.not.include('host:');
+    // ...and nothing claims a scheme this remote does not carry.
+    expect(panelText(el), 'a plain path is not a file:// URL').to.not.include('file://');
+    expect(panelText(el)).to.not.include('no credentials found');
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
+    expect(offersErase(el), 'a local repository stores no credential').to.be.false;
   });
 
   it('offers no erase for a transport that stores no credential', async () => {
@@ -390,5 +446,75 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
     expect(el.shadowRoot!.querySelector('.test-result-header')!.className).to.match(/\berror\b/);
     expect(offersErase(el), 'nothing to erase when nothing was found').to.be.false;
+  });
+
+  it('tells the user when the BACKEND gate refuses the test', async () => {
+    // `test_credentials` guards on the Rust side too — deliberately, because
+    // `git credential fill` is not reliably local. When the two allowlists
+    // diverge (security-sync.service warns about exactly that state) the
+    // frontend gate lets the test through and the backend refuses it: the
+    // button flipped to "Testing...", flipped back, and NOTHING appeared. Its
+    // siblings — deepen, unshallow, push tag, LFS — all surface that refusal.
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    testCredentialsFailure = {
+      code: 'BLOCKED',
+      message: 'Remote "https://git.example.test/team/app.git" is not in your allowlist',
+    };
+    const el = await openTestTab();
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.form-actions .btn-primary')!.click();
+    await waitFor(() => uiStore.getState().toasts.length > 0);
+    await el.updateComplete;
+
+    const toasts = uiStore.getState().toasts;
+    expect(toasts.some((t) => t.message.includes('not in your allowlist'))).to.be.true;
+    expect(toasts.some((t) => t.type === 'error')).to.be.true;
+    // Exactly ONE explanation: the dialog stays quiet on a BLOCKED result
+    // because the gate accounts for it, so an inline banner here would say the
+    // same thing twice.
+    expect(el.shadowRoot!.querySelector('.error-banner'), 'said once, not twice').to.equal(null);
+    expect(el.shadowRoot!.querySelector('.test-result'), 'no result to show').to.equal(null);
+  });
+
+  it('explains a FRONTEND refusal exactly once', async () => {
+    // The other half of the same seam: the frontend gate toasts its own reason
+    // and the dialog stays quiet on the `BLOCKED` it returns. Surfacing the
+    // backend's refusal must not turn that into two toasts, or a toast plus an
+    // inline banner saying the same thing.
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    settingsStore.setState({ offlineMode: true });
+    const el = await openTestTab();
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.form-actions .btn-primary')!.click();
+    await waitFor(() => uiStore.getState().toasts.length > 0);
+    await el.updateComplete;
+
+    expect(uiStore.getState().toasts.length, 'said once, not twice').to.equal(1);
+    expect(uiStore.getState().toasts[0].message).to.include('Offline mode');
+    expect(el.shadowRoot!.querySelector('.error-banner')).to.equal(null);
+    expect(invokeCalls.some((c) => c.command === 'test_credentials')).to.be.false;
+  });
+
+  it('says the password is missing when the username was found', async () => {
+    mockRemotes = [remote('https://git.example.test/team/app.git')];
+    mockTestResult = testResult({
+      success: false,
+      username: 'alice',
+      message: 'Username found but no password for git.example.test',
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    // The backend tells these three apart — found, username but no password,
+    // nothing at all — and the panel printed its "Username found but no
+    // password" line under a header saying "No Credentials Found", with the
+    // username listed right above it. Anyone with `credential.https://host
+    // .username` set, or a helper holding a username whose token was revoked,
+    // lands here and is pointed at the wrong repair.
+    expect(el.shadowRoot!.textContent).to.include('Password Not Stored');
+    expect(panelText(el), 'the header must not contradict the body').to.not.include(
+      'no credentials found',
+    );
+    // Still a real fault for https, and still nothing to erase.
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
+    expect(offersErase(el), 'no complete credential was found').to.be.false;
   });
 });
