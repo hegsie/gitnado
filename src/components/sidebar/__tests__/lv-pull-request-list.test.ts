@@ -95,6 +95,20 @@ function makePr(overrides: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
+/** A stored GitHub account, as the unified profile store holds it. */
+function makeAccount(id = 'gh-1'): Record<string, unknown> {
+  return {
+    id,
+    name: 'GitHub',
+    integrationType: 'github',
+    config: { type: 'pat' },
+    color: null,
+    cachedUser: null,
+    urlPatterns: [],
+    isDefault: true,
+  };
+}
+
 async function renderList(
   expanded = true,
   repositoryPath = REPO_PATH,
@@ -148,7 +162,7 @@ describe('lv-pull-request-list', () => {
     // Reset accounts BEFORE the counters: mocha runs the innermost afterEach
     // first, so a reset there would still reach the previous test's live
     // element and start one more load.
-    unifiedProfileStore.getState().setAccounts([]);
+    unifiedProfileStore.getState().reset();
     invokedCommands = [];
     invokeCalls = [];
     invalidateProviderDetection();
@@ -360,7 +374,7 @@ describe('lv-pull-request-list', () => {
       expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
     });
 
-    it('reloads when an account is connected while showing "not connected"', async () => {
+    it('reloads when a new account is connected while showing "not connected"', async () => {
       setupMocks({ token: null });
       const el = await renderList();
       expect(text(el)).to.contain('Not connected to GitHub');
@@ -368,18 +382,74 @@ describe('lv-pull-request-list', () => {
       // Connecting through the dialog the Connect button opens lands as a new
       // account in the shared store; the section must notice.
       setupMocks({ token: 'gh-token', pullRequests: [makePr()] });
-      unifiedProfileStore.getState().setAccounts([
-        {
-          id: 'gh-1',
-          name: 'GitHub',
-          integrationType: 'github',
-          config: { type: 'pat' },
-          color: null,
-          cachedUser: null,
-          urlPatterns: [],
-          isDefault: true,
-        },
-      ] as never);
+      unifiedProfileStore.getState().setAccounts([makeAccount()] as never);
+      await settle(el);
+
+      expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
+    });
+
+    it('reloads when a credential lands on an account that already existed', async () => {
+      // The dead end this covers: the account is there but its stored token is
+      // gone, so the section says "Not connected". Reconnecting it pastes a
+      // token onto the SAME account — the id list never changes, so nothing
+      // about the account set can be the signal.
+      unifiedProfileStore.getState().setAccounts([makeAccount()] as never);
+      setupMocks({ token: null });
+      const el = await renderList();
+      expect(text(el)).to.contain('Not connected to GitHub');
+
+      setupMocks({ token: 'gh-token', pullRequests: [makePr()] });
+      unifiedProfileStore.getState().setAccountConnectionStatus('gh-1', 'connected');
+      await settle(el);
+
+      expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
+    });
+
+    it('reloads when the active profile changes', async () => {
+      // The profile decides which account each provider resolves to, so
+      // switching to a profile that prefers a connected account changes the
+      // answer with an identical account id list.
+      unifiedProfileStore.getState().setAccounts([makeAccount()] as never);
+      setupMocks({ token: null });
+      const el = await renderList();
+      expect(text(el)).to.contain('Not connected to GitHub');
+
+      setupMocks({ token: 'gh-token', pullRequests: [makePr()] });
+      unifiedProfileStore.getState().setActiveProfile({ id: 'profile-2' } as never);
+      await settle(el);
+
+      expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
+    });
+
+    it('re-checks the credential when a "not connected" section is re-expanded', async () => {
+      // "Not connected" costs no provider API call to recompute (detection is
+      // cached separately and the token is a local lookup), so it must not be
+      // cached: re-opening the section has to see a credential added since.
+      unifiedProfileStore.getState().setAccounts([makeAccount()] as never);
+      setupMocks({ token: null });
+      const el = await renderList();
+      expect(text(el)).to.contain('Not connected to GitHub');
+
+      el.expanded = false;
+      await settle(el);
+      setupMocks({ token: 'gh-token', pullRequests: [makePr()] });
+      el.expanded = true;
+      await settle(el);
+
+      expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
+    });
+
+    it('offers Try again beside Connect so a finished sign-in can be picked up', async () => {
+      unifiedProfileStore.getState().setAccounts([makeAccount()] as never);
+      setupMocks({ token: null });
+      const el = await renderList();
+
+      const retry = el.shadowRoot!.querySelector('.btn-secondary') as HTMLButtonElement;
+      expect(retry, 'the unauthenticated state must offer a retry').to.exist;
+      expect(retry.textContent).to.contain('Try again');
+
+      setupMocks({ token: 'gh-token', pullRequests: [makePr()] });
+      retry.click();
       await settle(el);
 
       expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.equal(1);
