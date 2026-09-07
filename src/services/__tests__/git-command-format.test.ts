@@ -6,6 +6,7 @@ import {
   redactSecrets,
   synthesizeGitCommand,
   SYNTHESIZED_COMMANDS,
+  SHELL_OUT_COMMANDS,
 } from '../git-command-format.ts';
 
 describe('git-command-format', () => {
@@ -450,11 +451,56 @@ describe('git-command-format', () => {
       ]);
     });
 
-    it('stays unknown when the line names no subcommand', () => {
+    it('stays unknown when nothing is known about the operation', () => {
       // Unknown keeps the caller permissive; a declared extra must not turn an
       // operation with no line into one that accepts only that extra.
       expect(claimableSubcommands('merge', undefined)).to.equal(undefined);
-      expect(claimableSubcommands('clone_repository', undefined)).to.equal(undefined);
+      // Pure libgit2, no builder, no shell-out: it must declare nothing, or a
+      // stray real run could confirm a claim on its settled row.
+      expect(claimableSubcommands('set_upstream_branch', undefined)).to.equal(undefined);
+      expect(claimableSubcommands('resolve_conflict', undefined)).to.equal(undefined);
+    });
+
+    it('is the shelled-out subcommand for an operation with no builder', () => {
+      // Without these the strict late-claim rule can never confirm the real run
+      // and the panel shows two rows for one click.
+      expect(claimableSubcommands('run_gc', undefined)).to.deep.equal(['gc']);
+      expect(claimableSubcommands('clone_repository', undefined)).to.deep.equal(['clone']);
+      expect(claimableSubcommands('update_submodules', undefined)).to.deep.equal(['submodule']);
+      expect(claimableSubcommands('add_worktree', undefined)).to.deep.equal(['worktree']);
+      expect(claimableSubcommands('lfs_pull', undefined)).to.deep.equal(['lfs']);
+      expect(claimableSubcommands('deepen_repository', undefined)).to.deep.equal(['fetch']);
+      expect(claimableSubcommands('stage_lines', undefined)).to.deep.equal(['apply']);
+      expect(claimableSubcommands('enable_sparse_checkout', undefined)).to.deep.equal([
+        'sparse-checkout',
+      ]);
+    });
+
+    it('never declares a shell-out subcommand for a command that has a builder', () => {
+      // A builder's own line is the source of truth; a duplicate entry in the
+      // shell-out map would be dead and could drift from it.
+      for (const command of SHELL_OUT_COMMANDS) {
+        expect(SYNTHESIZED_COMMANDS, command).to.not.contain(command);
+      }
+    });
+
+    it('declares only subcommands the backend actually reports', () => {
+      // Mirrors LOGGED_SUBCOMMANDS in src-tauri/src/utils/command.rs: a name
+      // the backend never reports can only ever mis-match a real run.
+      const logged = new Set([
+        'add', 'am', 'apply', 'archive', 'bisect', 'branch', 'bundle', 'checkout',
+        'cherry-pick', 'clean', 'clone', 'commit', 'difftool', 'fetch',
+        'filter-branch', 'gc', 'init', 'lfs', 'maintenance', 'merge', 'mergetool',
+        'mv', 'notes', 'prune', 'pull', 'push', 'rebase', 'reflog', 'remote',
+        'repack', 'replace', 'reset', 'restore', 'revert', 'rm', 'sparse-checkout',
+        'stash', 'submodule', 'switch', 'tag', 'update-index', 'update-ref',
+        'worktree',
+      ]);
+      for (const command of SHELL_OUT_COMMANDS) {
+        for (const subcommand of claimableSubcommands(command, undefined) ?? []) {
+          expect(logged, `${command} → ${subcommand}`).to.contain(subcommand);
+        }
+      }
     });
 
     it('always keeps the builder\'s own subcommand claimable', () => {
