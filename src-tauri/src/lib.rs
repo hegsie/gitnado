@@ -91,6 +91,14 @@ pub fn run() {
     tracing::info!("Starting Gitnado");
 
     // Build the app with plugins
+    // The identifier changed with the 0.9.0 rename, which moves the per-app
+    // config and data directories. This must happen BEFORE the builder: the
+    // window-state plugin reads `<app_config_dir>/.window-state.json` in its
+    // own setup, which runs ahead of the setup closure below, and writes it
+    // back on exit — so adopting later would restore the default geometry and
+    // then overwrite the migrated file with it.
+    crate::utils::app_paths::adopt_legacy_identifier_dirs_early();
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -152,10 +160,9 @@ pub fn run() {
         // parameter on every network command.
         .manage(services::security::global().clone())
         .setup(|app| {
-            // The identifier changed with the 0.9.0 rename, which moves the
-            // per-app config/data directories; carry over the old ones so
-            // settings and downloaded models survive the upgrade. This runs
-            // FIRST: everything below reads those directories.
+            // Backstop for the adoption done before the builder: idempotent,
+            // and it covers a platform whose resolved directory does not match
+            // the roots used there.
             for dir in [app.path().app_config_dir(), app.path().app_data_dir()]
                 .into_iter()
                 .flatten()

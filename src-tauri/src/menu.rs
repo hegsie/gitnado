@@ -1,6 +1,6 @@
 //! Native application menu bar.
 //!
-//! Most of Leviathan's feature set (clean, bisect, worktrees, submodules, LFS,
+//! Most of Gitnado's feature set (clean, bisect, worktrees, submodules, LFS,
 //! hooks, git configuration, repository health, .gitignore/.gitattributes) was
 //! reachable only by typing into the command palette. A desktop app is expected
 //! to show those commands — and the keys that trigger them — in a menu bar.
@@ -144,7 +144,7 @@ pub const APP_MENU: &[MenuSection] = &[
         label: "Help",
         entries: &[
             item("keyboard-shortcuts", "Keyboard Shortcuts"),
-            item("about", "About Leviathan"),
+            item("about", "About Gitnado"),
         ],
     },
 ];
@@ -252,11 +252,11 @@ pub fn init_app_menu(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let about_metadata = tauri::menu::AboutMetadata {
-            name: Some("Leviathan".into()),
+            name: Some("Gitnado".into()),
             version: Some(env!("CARGO_PKG_VERSION").into()),
             ..Default::default()
         };
-        let app_menu = SubmenuBuilder::new(app, "Leviathan")
+        let app_menu = SubmenuBuilder::new(app, "Gitnado")
             .about(Some(about_metadata))
             .separator()
             .services()

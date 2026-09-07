@@ -73,6 +73,30 @@ pub fn adopt_legacy_identifier_dir(current: &Path) -> PathBuf {
     }
 }
 
+/// The bundle identifier the app ships with today.
+pub const APP_IDENTIFIER: &str = "io.github.hegsie.gitnado";
+
+/// Adopt the previous identifier's config and data directories, BEFORE Tauri
+/// builds.
+///
+/// [`adopt_legacy_identifier_dir`] is the same operation resolved through
+/// `AppHandle::path()`, but by the time a handle exists the window-state plugin
+/// has already read `<app_config_dir>/.window-state.json` during its own setup
+/// — and on exit it writes that file back. An upgrading user would therefore
+/// open at the default geometry and have their restored size, position and
+/// maximised state overwritten on quit: the one migrated item the adoption is
+/// meant to protect, silently lost. Resolving the roots directly here runs
+/// before any plugin is registered.
+///
+/// The roots match Tauri's own resolution: the identifier is the directory name
+/// under the platform config and data roots.
+pub fn adopt_legacy_identifier_dirs_early() {
+    for root in [dirs::config_dir(), dirs::data_dir()].into_iter().flatten() {
+        let current = root.join(APP_IDENTIFIER);
+        adopt_legacy_dir(&root.join(LEGACY_APP_IDENTIFIER), &current);
+    }
+}
+
 /// The user-level config directory (`<config root>/gitnado`), created if missing.
 pub fn config_dir() -> Result<PathBuf> {
     let root = dirs::config_dir().ok_or_else(|| {
@@ -99,6 +123,22 @@ fn ensure_app_subdir(root: &Path, what: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// `APP_IDENTIFIER` is duplicated from `tauri.conf.json` because the early
+    /// adoption runs before a Tauri handle exists to ask. If the two ever
+    /// diverge, the adoption silently targets a directory the app never uses.
+    #[test]
+    fn the_shipped_identifier_matches_the_bundle() {
+        let config = include_str!("../../tauri.conf.json");
+        let needle = format!("\"identifier\": \"{APP_IDENTIFIER}\"");
+        assert!(
+            config.contains(&needle),
+            "tauri.conf.json does not declare {APP_IDENTIFIER}; the early directory adoption \
+             would target a directory the app never uses"
+        );
+    }
+
     use super::*;
     use tempfile::TempDir;
 

@@ -5010,8 +5010,8 @@ export class AppShell extends LitElement {
     try {
       const version = await updateService.getAppVersion();
       await showMessage(
-        'About Leviathan',
-        `Leviathan ${version}\n\nA fully-featured, open-source, cross-platform Git GUI client.`
+        'About Gitnado',
+        `Gitnado ${version}\n\nA fully-featured, open-source, cross-platform Git GUI client.`
       );
     } catch (error) {
       log.warn('Failed to show the About dialog:', error);

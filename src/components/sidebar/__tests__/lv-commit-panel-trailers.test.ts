@@ -160,7 +160,7 @@ describe('lv-commit-panel trailers', () => {
     invokeHistory.length = 0;
     identity = IDENTITY;
     history = [commitOf('Last commit message', 'Some body text')];
-    localStorage.removeItem('leviathan-commit-history');
+    localStorage.removeItem('gitnado-commit-history');
     settingsStore.getState().setAlwaysSignOff(false);
     setupDefaultMocks();
     setupStore();

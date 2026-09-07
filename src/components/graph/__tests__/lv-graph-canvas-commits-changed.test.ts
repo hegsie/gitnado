@@ -103,7 +103,7 @@ describe('lv-graph-canvas graph-commits-changed', () => {
     clearGraphCacheForTests();
     setupMocks([commitB, commitA]);
     try {
-      localStorage.removeItem(`leviathan-hidden-branches-${REPO_PATH}`);
+      localStorage.removeItem(`gitnado-hidden-branches-${REPO_PATH}`);
     } catch {
       // Ignore
     }

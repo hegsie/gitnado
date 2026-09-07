@@ -585,19 +585,19 @@ mod tests {
     #[test]
     fn a_binary_url_the_manifest_names_has_to_pass_the_allowlist_too() {
         let _guard = test_support::allowlist(&["github.com"]);
-        guard_update_download("https://github.com/o/r/releases/download/v1/Leviathan.AppImage")
+        guard_update_download("https://github.com/o/r/releases/download/v1/Gitnado.AppImage")
             .expect("a binary served from the allowlisted host is permitted");
         // The manifest picks this URL, not `plugins.updater.endpoints`. A
         // `latest.json` on github.com naming a binary on cdn.example.net used
         // to pass the endpoint gate and then download and RUN that binary.
-        guard_update_download("https://cdn.example.net/Leviathan.AppImage")
+        guard_update_download("https://cdn.example.net/Gitnado.AppImage")
             .expect_err("a binary from an unlisted host must not be downloaded");
     }
 
     #[test]
     fn offline_mode_refuses_the_binary_download_too() {
         let _guard = test_support::offline();
-        guard_update_download("https://github.com/o/r/Leviathan.AppImage")
+        guard_update_download("https://github.com/o/r/Gitnado.AppImage")
             .expect_err("offline mode refuses the download, not just the check");
     }
 
@@ -607,7 +607,7 @@ mod tests {
         // toast, and the 24-hour timer kept alive.
         let _guard = test_support::allowlist(&["github.com"]);
         match classify_tick(guard_update_download(
-            "https://cdn.example.net/Leviathan.AppImage",
+            "https://cdn.example.net/Gitnado.AppImage",
         )) {
             TickReport::Skipped(reason) => assert!(reason.contains("allowlist")),
             other => panic!("a refused download must be Skipped, got {:?}", other),

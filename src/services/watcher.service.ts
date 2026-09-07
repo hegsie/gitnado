@@ -52,7 +52,7 @@ function reportWatchFailure(path: string, error: unknown): void {
   const detail = raw.trim().replace(/\.$/, '');
   showToast(
     `Auto-refresh is unavailable for "${repositoryLabel(path)}" — ${detail}. ` +
-      'Changes made outside Leviathan will not appear until you refresh manually.',
+      'Changes made outside Gitnado will not appear until you refresh manually.',
     'warning',
     15000,
     {

@@ -839,10 +839,12 @@ mod tests {
                 .expect("under src")
                 .to_string_lossy()
                 .replace('\\', "/");
-            // This file's own tests quote the literal they scan for.
-            if relative == "utils/command.rs" {
-                continue;
-            }
+            // This file's own tests quote the literal they scan for, but the
+            // `mod tests` filter below already excludes those — and skipping
+            // the whole file is the same exemption-by-file shape that was
+            // hiding a second mutating spawn in `merge.rs`. Only the wrapper's
+            // own `Command::new(program)` lives here, and that is not the
+            // literal being scanned for.
             let source = std::fs::read_to_string(&path).expect("a source file");
             let lines: Vec<&str> = source.lines().collect();
 
@@ -898,6 +900,13 @@ mod tests {
                     .flatten();
 
                 let mut argv: Vec<String> = Vec::new();
+                // A statement that names the binding may CONTINUE onto chained
+                // lines that do not — `cmd.arg("-C")` then `.arg(&path)` then
+                // `.arg("log")`. Crediting only lines containing the name read
+                // the first of those and skipped the rest, so nine of this
+                // crate's spawns were judged without their subcommand ever
+                // being seen.
+                let mut in_statement = false;
                 for (offset, text) in lines.iter().skip(index).take(80).enumerate() {
                     // Comments quote argv words too (one file's comment names
                     // `"push"`), and reading them would fail this check for a
@@ -912,7 +921,8 @@ mod tests {
                         .min();
                     let mentions_binding = binding
                         .as_deref()
-                        .is_none_or(|name| offset == 0 || code.contains(name));
+                        .is_none_or(|name| offset == 0 || code.contains(name) || in_statement);
+                    in_statement = mentions_binding && !code.trim_end().ends_with(';');
                     if mentions_binding {
                         let scanned = &code[..terminator.unwrap_or(code.len())];
                         argv.extend(
@@ -1058,12 +1068,16 @@ mod tests {
             // exactly that state: the window stopped at the `current_dir` line
             // before the `arg("describe")`, so it was read as taking no
             // arguments and waved through by the "nothing logged here" branch.
+            // Not merely non-empty: a site read as `["-C"]` is a global flag
+            // and nothing else, which is just as unjudgeable as reading
+            // nothing, and it used to satisfy an is_empty check.
             assert!(
-                !site.argv.is_empty(),
-                "{}:{}: the scanner read no arguments for this spawn, so it cannot judge it. \
-                 Widen the window rather than trusting the pass.",
+                site.argv.iter().any(|token| !token.starts_with('-')),
+                "{}:{}: the scanner read no subcommand for this spawn ({:?}), so it cannot judge \
+                 it. Widen the window rather than trusting the pass.",
                 site.file,
-                site.line
+                site.line,
+                site.argv
             );
 
             let Some(position) = site

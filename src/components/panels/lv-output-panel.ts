@@ -37,7 +37,7 @@ export function formatDuration(ms: number): string {
 }
 
 /**
- * Marker on a line Leviathan DERIVED rather than executed.
+ * Marker on a line Gitnado DERIVED rather than executed.
  *
  * Most operations run through libgit2, so no `git` process exists to quote.
  * The panel shows the equivalent command line so the user can see what git was
@@ -328,7 +328,7 @@ export class LvOutputPanel extends LitElement {
     const duration =
       entry.durationMs === undefined ? '' : formatDuration(entry.durationMs);
     const tooltip = synthesized
-      ? `${line}\n\nEquivalent command — Leviathan performed this with libgit2 (IPC: ${entry.command})`
+      ? `${line}\n\nEquivalent command — Gitnado performed this with libgit2 (IPC: ${entry.command})`
       : line;
 
     return html`
@@ -416,7 +416,7 @@ export class LvOutputPanel extends LitElement {
       </div>
       ${hasSynthesized
         ? html`<div class="legend">
-            ${SYNTHESIZED_MARK} Leviathan runs these operations with libgit2 —
+            ${SYNTHESIZED_MARK} Gitnado runs these operations with libgit2 —
             the line shown is the equivalent <code>git</code> command, not one
             that was executed.
           </div>`

@@ -1,7 +1,7 @@
 /**
  * Git command formatting for the Output panel.
  *
- * Leviathan runs most operations through libgit2 (git2), so there is no `git`
+ * Gitnado runs most operations through libgit2 (git2), so there is no `git`
  * process to quote. The panel would otherwise show the IPC command name
  * (`create_commit`, `stage_files`), which tells a user nothing about what git
  * was asked to do. `synthesizeGitCommand` renders the EQUIVALENT command line

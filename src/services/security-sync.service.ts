@@ -62,7 +62,7 @@ export async function emitSecuritySettings(
     if (!failureReported) {
       failureReported = true;
       showToast(
-        'Could not apply your security settings to the backend. Restart Leviathan to be sure they take effect.',
+        'Could not apply your security settings to the backend. Restart Gitnado to be sure they take effect.',
         'error',
       );
     }

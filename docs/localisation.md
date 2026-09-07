@@ -1,6 +1,6 @@
 # Localisation
 
-Leviathan uses [`@lit/localize`](https://lit.dev/docs/localization/overview/) in
+Gitnado uses [`@lit/localize`](https://lit.dev/docs/localization/overview/) in
 **runtime mode**. The active locale is a normal setting (Settings → Appearance →
 Language): changing it swaps the templates in place and every migrated component
 re-renders, with no restart and no page reload. Transform mode — the other option
