@@ -259,16 +259,45 @@ struct SubmoduleTarget {
 }
 
 /// Every submodule `.gitmodules` declares in the repository at `repo_path`.
-fn list_submodule_targets(repo_path: &Path) -> Result<Vec<SubmoduleTarget>> {
+/// The submodules `git submodule update` will contact, each with the url it
+/// will clone from — resolved the way git does, NOT the way libgit2 does.
+///
+/// `submodule--helper update` clones from `submodule.<name>.url` in the
+/// repository CONFIG; `.gitmodules` is only consulted by `init`, which copies
+/// its url into the config when none is set yet. libgit2's `Submodule::url()`
+/// reads the `.gitmodules` snapshot alone. So guarding the `.gitmodules` url
+/// judged the wrong host whenever the two disagreed — and repository content
+/// can make them disagree on purpose: commit 1 names evil.example, the user
+/// runs Init (which writes it into config), commit 2 renames the url to
+/// github.com, and Update then clones from evil.example under a github.com
+/// allowlist. `git submodule sync` or a hand edit reaches the same state
+/// with no attacker.
+///
+/// The mirror image, same root: without `--init`, git SKIPS a submodule that
+/// has no config url (verified: exit 0, nothing contacted), so such an entry
+/// is dropped from the selection rather than refused for a host git was never
+/// going to touch. With `--init` the `.gitmodules` url is what `init` will
+/// write, so it is the one to judge; an entry with neither is kept with no
+/// url, which the gate fails closed on.
+fn list_submodule_targets(repo_path: &Path, init: bool) -> Result<Vec<SubmoduleTarget>> {
     let repo = git2::Repository::open(repo_path)?;
-    let targets = repo
-        .submodules()?
-        .iter()
-        .map(|submodule| SubmoduleTarget {
-            path: submodule.path().to_string_lossy().to_string(),
-            url: submodule.url().ok().flatten().map(str::to_string),
-        })
-        .collect();
+    let config = repo.config().ok();
+    let mut targets = Vec::new();
+    for submodule in repo.submodules()? {
+        let path = submodule.path().to_string_lossy().to_string();
+        let configured = submodule.name().ok().and_then(|name| {
+            config
+                .as_ref()
+                .and_then(|cfg| cfg.get_string(&format!("submodule.{}.url", name)).ok())
+                .filter(|url| !url.trim().is_empty())
+        });
+        let url = match configured {
+            Some(url) => Some(url),
+            None if init => submodule.url().ok().flatten().map(str::to_string),
+            None => continue,
+        };
+        targets.push(SubmoduleTarget { path, url });
+    }
     Ok(targets)
 }
 
@@ -342,9 +371,20 @@ fn network_policy_active() -> bool {
 /// A submodule whose URL cannot be read is handed to the gate as an
 /// unresolved target — the same fail-closed rule the rest of the gate uses,
 /// rather than being skipped as if it had no destination.
+///
+/// The url git will CLONE from (`list_submodule_targets`) is only half of it.
+/// An already-cloned submodule is a repository of its own, and `git submodule
+/// update` (always with `--remote`, and whenever the wanted commit is
+/// missing) runs `git fetch` INSIDE it against its own `remote.origin.url` —
+/// which `git submodule sync` keeps in step with the config url, but a
+/// `remote set-url` inside the submodule moves on its own. So each cloned
+/// submodule's actual `origin` is guarded as well; `init` says whether the
+/// run carries `--init`, which decides which url an uncloned entry is judged
+/// on, or whether it is judged at all.
 fn guard_submodule_urls(
     repo_path: &Path,
     submodule_paths: Option<&[String]>,
+    init: bool,
 ) -> Result<Option<Vec<SubmoduleTarget>>> {
     if !network_policy_active() {
         // Nothing could refuse anything, so do not pay to open the repository
@@ -352,18 +392,30 @@ fn guard_submodule_urls(
         return Ok(None);
     }
 
-    let selected = select_submodules(list_submodule_targets(repo_path)?, submodule_paths);
-    let repo_path = repo_path.to_string_lossy();
+    let selected = select_submodules(list_submodule_targets(repo_path, init)?, submodule_paths);
+    let repo_path_str = repo_path.to_string_lossy();
     for submodule in &selected {
         match &submodule.url {
-            Some(url) => guard_submodule_url(&repo_path, url)?,
+            Some(url) => guard_submodule_url(&repo_path_str, url)?,
             None => crate::services::security::check(
                 &crate::services::security::global().snapshot(),
                 None,
             )?,
         }
+        if let Some(origin) = initialised_submodule_origin(repo_path, &submodule.path) {
+            guard_submodule_url(&repo_path_str, &origin)?;
+        }
     }
     Ok(Some(selected))
+}
+
+/// The url an initialised submodule's own `origin` points at — the one its
+/// fetches really contact — or `None` when the submodule is not checked out
+/// (an uninitialised or deinitialised one has no repository to ask).
+fn initialised_submodule_origin(repo_path: &Path, submodule_path: &str) -> Option<String> {
+    let sub_repo = git2::Repository::open(repo_path.join(submodule_path)).ok()?;
+    let origin = sub_repo.find_remote("origin").ok()?;
+    origin.url().ok().map(str::to_string)
 }
 
 /// How deep a submodule tree is followed before the recursion gives up.
@@ -415,7 +467,8 @@ fn update_nested_submodules(
         if git2::Repository::open(&sub_path).is_err() {
             continue;
         }
-        let nested = guard_submodule_urls(&sub_path, None)?.unwrap_or_default();
+        let nested =
+            guard_submodule_urls(&sub_path, None, args.contains(&"--init"))?.unwrap_or_default();
         if nested.is_empty() {
             continue;
         }
@@ -549,6 +602,7 @@ pub async fn update_submodules(
     let selected = guard_submodule_urls(
         repo_path,
         submodule_paths.as_deref().filter(|paths| !paths.is_empty()),
+        init.unwrap_or(false),
     )?;
 
     let mut args = vec!["submodule", "update"];
@@ -772,10 +826,10 @@ mod tests {
         );
         let _guard = test_support::allowlist(&["github.com"]);
 
-        // No `--init`: before the guard existed this returned Ok having done
-        // nothing locally, which is exactly how the hole stayed invisible.
+        // `--init` is what makes git clone this uncloned submodule; without it
+        // git skips an entry that has no config url, and so does the gate.
         let message = blocked_message(
-            update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+            update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
         );
         assert!(
             message.contains("gitlab.com"),
@@ -813,7 +867,7 @@ mod tests {
         let result = update_submodules(
             repo.path_str(),
             Some(vec!["vendor/ok".to_string()]),
-            None,
+            Some(true),
             None,
             None,
             None,
@@ -826,7 +880,7 @@ mod tests {
             update_submodules(
                 repo.path_str(),
                 Some(vec!["vendor/off".to_string()]),
-                None,
+                Some(true),
                 None,
                 None,
                 None,
@@ -890,7 +944,7 @@ mod tests {
         let _guard = test_support::allowlist(&["github.com"]);
 
         blocked_message(
-            update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+            update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
         );
     }
 
@@ -999,7 +1053,7 @@ mod tests {
             update_submodules(
                 repo.path_str(),
                 Some(vec!["vendor".to_string()]),
-                None,
+                Some(true),
                 None,
                 None,
                 None,
@@ -1029,7 +1083,7 @@ mod tests {
             update_submodules(
                 repo.path_str(),
                 Some(vec!["vendor/*".to_string()]),
-                None,
+                Some(true),
                 None,
                 None,
                 None,
@@ -1056,7 +1110,7 @@ mod tests {
             update_submodules(
                 repo.path_str(),
                 Some(vec!["nothing/here".to_string()]),
-                None,
+                Some(true),
                 None,
                 None,
                 None,
@@ -1106,7 +1160,7 @@ mod tests {
         let _guard = test_support::allowlist(&["github.com"]);
 
         blocked_message(
-            update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+            update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
         );
     }
 
@@ -1574,6 +1628,171 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    // ---- an initialised submodule fetches from ITS OWN origin ----
+    //
+    // `.gitmodules` says where a submodule is cloned from; once cloned, its
+    // fetches go to its own `remote.origin.url`, which stays where it was when
+    // upstream changes `.gitmodules` (until `git submodule sync`) or after a
+    // `remote set-url` inside it. Guarding the declared url alone admitted the
+    // new host while git contacted the old one.
+
+    /// A superproject with `vendor/dep` cloned from `dep.test`, and the clone's
+    /// own origin then pointed at `origin_host`.
+    fn superproject_with_initialised_submodule(origin_host: &str) -> (TestRepo, TestRepo) {
+        let dep = TestRepo::with_initial_commit();
+        let superproject = TestRepo::with_initial_commit();
+        let declared = format!("file://dep.test{}", dep.path.display());
+        git_in(
+            &superproject.path,
+            &["submodule", "add", &declared, "vendor/dep"],
+        );
+        git_in(&superproject.path, &["commit", "-m", "add dep"]);
+        let actual = format!("file://{}{}", origin_host, dep.path.display());
+        git_in(
+            &superproject.path.join("vendor/dep"),
+            &["remote", "set-url", "origin", &actual],
+        );
+        (superproject, dep)
+    }
+
+    #[tokio::test]
+    async fn an_initialised_submodule_is_judged_on_its_own_origin_too() {
+        let (superproject, _dep) = superproject_with_initialised_submodule("moved.test");
+        let _guard = test_support::allowlist(&["dep.test"]);
+
+        // `--remote` fetches inside the submodule, and the declared host is
+        // on the list — only the clone's real origin is not.
+        let message = blocked_message(
+            update_submodules(
+                superproject.path_str(),
+                None,
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+            )
+            .await,
+        );
+        assert!(
+            message.contains("moved.test"),
+            "the refusal should name the host the submodule really fetches from, got: {}",
+            message
+        );
+    }
+
+    #[tokio::test]
+    async fn an_initialised_submodule_whose_origin_is_allowlisted_is_updated() {
+        let (superproject, _dep) = superproject_with_initialised_submodule("dep.test");
+        let _guard = test_support::allowlist(&["dep.test"]);
+
+        let result = update_submodules(
+            superproject.path_str(),
+            None,
+            None,
+            None,
+            Some(true),
+            None,
+            None,
+        )
+        .await;
+        assert_not_blocked(
+            &result,
+            "a submodule whose declared and actual origin are both allowlisted",
+        );
+    }
+
+    // ---- git clones from the CONFIG url, not the `.gitmodules` one ----
+    //
+    // `submodule--helper update` reads `submodule.<name>.url` from the repo
+    // config; `.gitmodules` only feeds `init`. Verified against git 2.43:
+    // with the two disagreeing, `update --init` cloned the config url.
+
+    /// `.gitmodules` on `gitmodules_host`, config url on `config_host` — the
+    /// state Init followed by an upstream rename (or `submodule sync`) leaves.
+    fn superproject_with_config_url(gitmodules_host: &str, config_host: &str) -> TestRepo {
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[(
+                "vendor/dep",
+                &format!("https://{}/x/dep.git", gitmodules_host),
+            )],
+        );
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str(
+                "submodule.vendor/dep.url",
+                &format!("https://{}/x/dep.git", config_host),
+            )
+            .unwrap();
+        repo
+    }
+
+    #[tokio::test]
+    async fn the_config_url_git_clones_from_is_judged_not_the_gitmodules_one() {
+        // Commit 1 named gitlab.com and the user ran Init; commit 2 renamed
+        // the url to github.com. The guard used to read github.com and admit
+        // the update; git cloned from gitlab.com.
+        let repo = superproject_with_config_url("github.com", "gitlab.com");
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        for init in [None, Some(true)] {
+            let message = blocked_message(
+                update_submodules(repo.path_str(), None, init, None, None, None, None).await,
+            );
+            assert!(
+                message.contains("gitlab.com"),
+                "init={:?}: the refusal should name the CONFIG host, got: {}",
+                init,
+                message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_config_url_on_the_allowlist_is_admitted_whatever_gitmodules_says() {
+        let repo = superproject_with_config_url("gitlab.com", "github.com");
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let result = update_submodules(repo.path_str(), None, None, None, None, None, None).await;
+        assert_not_blocked(&result, "a submodule whose config url is allowlisted");
+    }
+
+    #[tokio::test]
+    async fn an_uncloned_submodule_off_the_allowlist_does_not_refuse_an_update_without_init() {
+        // One submodule Init has registered (config url, allowlisted) and one
+        // it never touched (no config url, off the list). Without `--init`
+        // git skips the second entirely — verified: exit 0, nothing contacted
+        // — so refusing the update for its host blocked an update that was
+        // never going to reach it.
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[
+                ("vendor/ok", "https://github.com/x/ok.git"),
+                ("vendor/off", "https://gitlab.com/x/off.git"),
+            ],
+        );
+        // The registered one clones over a transport the sandboxed git
+        // refuses, so the update fails fast on git itself, never the gate.
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("submodule.vendor/ok.url", "file://github.com/x/ok.git")
+            .unwrap();
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        let result = update_submodules(repo.path_str(), None, None, None, None, None, None).await;
+        assert_not_blocked(&result, "an update that skips the unregistered submodule");
+
+        // With `--init` that same submodule WOULD be registered and cloned
+        // from its `.gitmodules` url, so it is judged — and refused.
+        let message = blocked_message(
+            update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
+        );
+        assert!(message.contains("gitlab.com"), "got: {}", message);
     }
 
     /// Canonical `git rm`-based submodule removal preserves the submodule's

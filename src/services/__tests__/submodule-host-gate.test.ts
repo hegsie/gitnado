@@ -34,6 +34,8 @@ interface MockSubmodule {
   name: string;
   path: string;
   url: string | null;
+  /** Cloned already. Defaults to true. */
+  initialized?: boolean;
 }
 
 function mockRepo(submodules: MockSubmodule[], superUrl = SUPER_URL): void {
@@ -49,8 +51,8 @@ function mockRepo(submodules: MockSubmodule[], superUrl = SUPER_URL): void {
           ...s,
           headOid: null,
           branch: null,
-          initialized: true,
-          status: 'current',
+          initialized: s.initialized ?? true,
+          status: s.initialized === false ? 'uninitialized' : 'current',
         })),
       );
     }
@@ -95,6 +97,56 @@ describe('the submodule hosts the gate has to check', () => {
     expect(toasts.length, 'a refusal the user cannot see is a silent failure').to.be.greaterThan(0);
     expect(toasts.some((t) => t.message.includes('gitlab.com'))).to.equal(true);
     expect(toasts.some((t) => t.type === 'error')).to.equal(true);
+  });
+
+  it('does not refuse an update without --init for a submodule git will skip', async () => {
+    // git skips a submodule that was never registered unless `--init`
+    // registers it — verified: exit 0, nothing contacted. Refusing the update
+    // for that host blocked one that was never going to reach it.
+    mockRepo([
+      { name: 'ok', path: 'vendor/ok', url: 'https://github.com/x/ok.git' },
+      { name: 'off', path: 'vendor/off', url: 'https://gitlab.com/x/off.git', initialized: false },
+    ]);
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const plain = await updateSubmodules('/repo');
+    expect(plain.success, 'the unregistered submodule is not contacted').to.not.equal(false);
+    expect(reachedUpdate()).to.equal(true);
+
+    // With --init it IS registered and cloned from that url, so it is judged.
+    invokeHistory.length = 0;
+    const withInit = await updateSubmodules('/repo', { init: true });
+    expect(withInit.success).to.equal(false);
+    expect(reachedUpdate()).to.equal(false);
+    expect(uiStore.getState().toasts.some((t) => t.message.includes('gitlab.com'))).to.equal(true);
+  });
+
+  it('a refusal only the backend could make is still told to the user', async () => {
+    // The backend sees the `submodule.<name>.url` git really clones from and
+    // a cloned submodule's own origin; the frontend sees `.gitmodules`. When
+    // only the backend refuses, the dialog's "BLOCKED means the gate already
+    // explained itself" contract would otherwise leave the user with nothing.
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: 'https://github.com/x/y.git' }]);
+    const listing = mockInvoke;
+    mockInvoke = (command: string) => {
+      if (command === 'update_submodules') {
+        return Promise.reject({
+          code: 'BLOCKED',
+          message: 'Remote "https://gitlab.com/x/y.git" is not in your allowlist',
+        });
+      }
+      return listing(command);
+    };
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success).to.equal(false);
+    expect(result.error?.code).to.equal('BLOCKED');
+    expect(
+      uiStore.getState().toasts.some((t) => t.message.includes('gitlab.com')),
+      'the backend reason reaches the user',
+    ).to.equal(true);
   });
 
   it('allows an update whose submodules are all on the allowlist', async () => {

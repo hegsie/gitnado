@@ -320,6 +320,25 @@ export function isNetworkGateRefusal(error?: { code?: string }): boolean {
 }
 
 /**
+ * Surface a refusal the BACKEND gate made after the frontend gate had let the
+ * operation through.
+ *
+ * The two gates judge the same thing from different vantage points, and the
+ * backend can see what the frontend cannot: the `submodule.<name>.url` git
+ * really clones from, a cloned submodule's own origin, an LFS endpoint. Every
+ * dialog treats a `BLOCKED` result as "the gate already explained itself" and
+ * shows nothing — right when the frontend gate refused and toasted, wrong when
+ * only the backend did. So a `BLOCKED` reaching here is one the user has not
+ * been told about yet, and it is toasted with the backend's own reason.
+ */
+function surfaceBackendRefusal<T>(result: CommandResult<T>): CommandResult<T> {
+  if (!result.success && result.error?.code === 'BLOCKED' && result.error.message) {
+    showToast(result.error.message, 'error');
+  }
+  return result;
+}
+
+/**
  * The user pressed Cancel on the operation's progress row and the backend
  * really stopped the transfer.
  *
@@ -2385,7 +2404,7 @@ export async function pushTag(
     }
   }
 
-  return invokeCommand<void>("push_tag", args);
+  return surfaceBackendRefusal(await invokeCommand<void>("push_tag", args));
 }
 
 export async function getPushRemote(
@@ -2431,7 +2450,7 @@ export async function deleteRemoteTag(
     }
   }
 
-  return invokeCommand<void>("delete_remote_tag", args);
+  return surfaceBackendRefusal(await invokeCommand<void>("delete_remote_tag", args));
 }
 
 export async function getTagDetails(
@@ -3046,6 +3065,12 @@ function selectSubmodules(all: Submodule[], submodulePaths?: string[]): Submodul
 async function checkSubmoduleHostsAllowed(
   repoPath: string,
   submodulePaths?: string[],
+  /** Whether the update carries `--init`. Without it git skips a submodule
+   * that was never registered — verified: exit 0, nothing contacted — so its
+   * host is not one this update will reach and must not refuse it. The
+   * backend gate, which can see the config url git really clones from, is
+   * the authority; this only spares the user a refusal for nothing. */
+  init = false,
 ): Promise<boolean> {
   if (!isNetworkPolicyActive()) return true;
   if (settingsStore.getState().offlineMode) {
@@ -3058,6 +3083,7 @@ async function checkSubmoduleHostsAllowed(
   }
 
   for (const submodule of selectSubmodules(listed.data, submodulePaths)) {
+    if (!submodule.initialized && !init) continue;
     if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) {
       // Resolves against the superproject's remote, so that remote is the
       // host to check — the one case it decides anything.
@@ -3127,7 +3153,7 @@ export async function updateSubmodules(
   // behind the same gate as fetch/pull — applied to every host named in
   // `.gitmodules`, which is where the clones and fetches this spawns actually
   // go, rather than to the superproject's own remote.
-  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths)) {
+  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths, options?.init)) {
     return blockedResult();
   }
   // The confirm, when the user asked for one. The hard blocks were settled
@@ -3151,7 +3177,7 @@ export async function updateSubmodules(
     tokenRemote = resolved.remoteName;
   }
 
-  return invokeCommand<void>("update_submodules", {
+  return surfaceBackendRefusal(await invokeCommand<void>("update_submodules", {
     path: repoPath,
     submodulePaths: options?.submodulePaths,
     init: options?.init,
@@ -3159,7 +3185,7 @@ export async function updateSubmodules(
     remote: options?.remote,
     token,
     tokenRemote,
-  });
+  }));
 }
 
 export async function syncSubmodules(
@@ -3366,7 +3392,7 @@ export async function lfsPull(
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
-  return invokeCommand<string>("lfs_pull", { path: repoPath, token });
+  return surfaceBackendRefusal(await invokeCommand<string>("lfs_pull", { path: repoPath, token }));
 }
 
 export async function lfsFetch(
@@ -3378,7 +3404,9 @@ export async function lfsFetch(
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
-  return invokeCommand<string>("lfs_fetch", { path: repoPath, refs, token });
+  return surfaceBackendRefusal(
+    await invokeCommand<string>("lfs_fetch", { path: repoPath, refs, token }),
+  );
 }
 
 export async function lfsPrune(
