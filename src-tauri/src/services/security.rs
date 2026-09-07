@@ -1185,6 +1185,49 @@ mod tests {
             crate::commands::ssh::test_ssh_connection("git@github.com".to_string()).await,
             "test_ssh_connection",
         );
+        // `test_credentials` runs the same `ssh -T` handshake as the command
+        // above it. It was gated on the frontend only, so this sample — which
+        // exists precisely because it is a sample and not an enumeration — did
+        // not name it and nothing on this side noticed.
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        expect_blocked(
+            crate::commands::credentials::test_credentials(
+                repo.path_str(),
+                "git@github.com:me/app.git".to_string(),
+            )
+            .await,
+            "test_credentials",
+        );
+    }
+
+    /// The credential test reaches a host, so an allowlist has to judge it —
+    /// including the scp form with a login that is not `git`, which is an
+    /// ordinary corporate remote rather than an exotic one.
+    #[tokio::test]
+    async fn the_credential_test_is_judged_on_the_host_it_would_contact() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        expect_blocked(
+            crate::commands::credentials::test_credentials(
+                repo.path_str(),
+                "deploy@git.example.test:team/app.git".to_string(),
+            )
+            .await,
+            "test_credentials off the allowlist",
+        );
+
+        // On an allowed host the guard steps aside; whatever ssh then reports
+        // is not a NetworkBlocked error, which is the whole distinction.
+        let allowed = crate::commands::credentials::test_credentials(
+            repo.path_str(),
+            "git@github.com:me/app.git".to_string(),
+        )
+        .await;
+        assert!(
+            !matches!(allowed, Err(LeviathanError::NetworkBlocked(_))),
+            "github.com is allowlisted, so the guard must not be what stops it"
+        );
     }
 
     /// An allowlist refuses the provider it does not name while still allowing

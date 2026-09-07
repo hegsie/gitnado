@@ -520,6 +520,19 @@ fn check_helper_available(helper: &str) -> bool {
 /// Test credentials for a remote URL
 #[command]
 pub async fn test_credentials(path: String, remote_url: String) -> Result<CredentialTestResult> {
+    // The SSH branch below opens a real connection to the remote, exactly as
+    // `test_ssh_connection` does — and that one guards here as well as in the
+    // frontend. This command was gated on the frontend only, leaving the one
+    // network-reaching path in the app whose enforcement had no backstop.
+    //
+    // The HTTPS branch is guarded too, deliberately. `git credential fill` is
+    // not reliably local: a configured `credential.helper` such as Git
+    // Credential Manager performs an OAuth round trip to the host on a cache
+    // miss, so "HTTPS stays on this machine" is a property of the user's
+    // helper configuration rather than of this command. Under an explicitly
+    // configured policy, refusing is the right side to err on.
+    crate::services::security::guard_url(&remote_url)?;
+
     let repo_path = Path::new(&path);
 
     // Determine protocol and host from URL
