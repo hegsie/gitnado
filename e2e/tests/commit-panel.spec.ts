@@ -731,6 +731,61 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     await expect(rightPanel.commitMessage).toHaveValue(/local model message/);
     await expect(page.locator('lv-commit-panel .error')).toHaveCount(0);
   });
+
+  test('offline mode leaves the local fallback working with no provider selected', async ({ page }) => {
+    // A fresh install with Ollama running: nothing selects a provider, because
+    // Ollama and LM Studio need no API key and only a stored key auto-selects
+    // one. The backend resolves the fallback itself and skips every provider
+    // the security settings forbid, so the request is served on loopback —
+    // refusing it here hid every AI affordance and named a cloud risk that
+    // cannot arise.
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(
+      page,
+      withStagedFiles([{ path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false }])
+    );
+
+    await injectCommandMock(page, {
+      is_ai_available: true,
+      get_active_ai_provider: null,
+    });
+
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          __GITNADO_STORES__: {
+            settingsStore: { getState(): { setOfflineMode(on: boolean): void } };
+          };
+        }
+      ).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
+    });
+
+    await page.locator('lv-commit-panel').evaluate(
+      async (el: Element & {
+        checkAiAvailability?: () => Promise<void>;
+        updateComplete?: Promise<unknown>;
+      }) => {
+        if (typeof el.checkAiAvailability === 'function') {
+          await el.checkAiAvailability();
+          await el.updateComplete;
+        }
+      }
+    );
+    // The affordance stays available rather than being hidden as "no AI".
+    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+
+    await startCommandCaptureWithMocks(page, {
+      generate_commit_message: { summary: 'feat: fallback model message', body: null },
+      is_ai_available: true,
+      get_active_ai_provider: null,
+    });
+
+    await rightPanel.aiGenerateButton.click();
+
+    await waitForCommand(page, 'generate_commit_message');
+    await expect(rightPanel.commitMessage).toHaveValue(/fallback model message/);
+    await expect(page.locator('lv-commit-panel .error')).toHaveCount(0);
+  });
 });
 
 test.describe('Commit Panel - Trailers', () => {

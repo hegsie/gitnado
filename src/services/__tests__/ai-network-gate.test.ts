@@ -213,20 +213,42 @@ describe('AI provider network gate', () => {
     expect(invoked.includes('generate_commit_message')).to.equal(true);
   });
 
-  it('refuses when offline and no provider is selected', async () => {
-    // With nothing chosen the backend falls back to whatever provider is
-    // reachable, cloud ones included, so the destination is unknown and the
-    // gate has to fail closed.
+  /**
+   * With nothing chosen the backend refuses nothing up front — `guard_ai_request`
+   * judges `active_provider_endpoint()`, which is `None` — because
+   * `resolve_provider` tries the embedded model first and then SKIPS every
+   * provider whose endpoint the security settings forbid. A fallback request
+   * therefore cannot reach a destination this gate would have refused.
+   *
+   * Refusing here instead broke the local fallback outright: on a fresh install
+   * with Ollama on loopback and offline mode on, nothing selects a provider
+   * (`set_ai_api_key` auto-selects only when a KEY is stored, and Ollama and LM
+   * Studio need none), so every AI affordance was hidden behind a refusal
+   * naming a cloud risk that could not arise.
+   */
+  it('permits the local fallback when offline and no provider is selected', async () => {
     settingsStore.setState({ offlineMode: true });
     activeProvider = null;
 
     invoked.length = 0;
     const result = await aiService.generateCommitMessage('/repo');
 
-    expect(result.success).to.equal(false);
-    expect(result.error?.code).to.equal('BLOCKED');
-    expect(result.error?.message).to.contain('no AI provider is selected');
-    expect(invoked.includes('generate_commit_message')).to.equal(false);
+    expect(result.success, 'the backend resolves a permitted provider itself').to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
+    expect(await aiService.isAiAvailable(), 'the AI affordances stay usable').to.equal(true);
+  });
+
+  it('permits the fallback when an allowlist is configured and no provider is selected', async () => {
+    // Same rule on the allowlist side: `resolve_provider` skips every provider
+    // whose host the allowlist omits, so there is nothing to refuse up front.
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+    activeProvider = null;
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success).to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
   });
 
   it('allows an unselected provider when no policy is in force', async () => {
@@ -373,6 +395,44 @@ describe('AI provider network gate', () => {
 
     expect(result.error?.message).to.contain('ollama.corp.example');
     expect(result.error?.message).to.not.contain('is a cloud AI provider');
+  });
+
+  it('does not tell a local-provider user to select a local provider', async () => {
+    // The offline branch was split for exactly this reason in an earlier
+    // round; the allowlist branch beside it still ended in "select a local
+    // provider" while Ollama — a local provider — was the one selected.
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+    activeProvider = 'ollama';
+    providerListing = [{ providerType: 'ollama', endpoint: 'https://ollama.corp.example' }];
+
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.error?.code).to.equal('BLOCKED');
+    expect(result.error?.message).to.contain('ollama.corp.example');
+    expect(result.error?.message, 'Ollama IS the local provider').to.not.contain(
+      'select a local provider',
+    );
+  });
+
+  it('names a remedy that exists when a local provider points off this machine', async () => {
+    // There is no endpoint control anywhere in the app: no `set_ai_endpoint`
+    // command beside set_ai_provider / set_ai_api_key / set_ai_model, and no
+    // field for it in the settings dialog. "Point it back at this machine in
+    // Settings > AI" sent the user looking for something that does not exist —
+    // the endpoint lives in ai_config.json, and removing it there restores the
+    // provider's loopback default (`endpoint_for`).
+    settingsStore.setState({ offlineMode: true });
+    activeProvider = 'ollama';
+    providerListing = [{ providerType: 'ollama', endpoint: 'https://ollama.corp.example' }];
+
+    const offline = await aiService.generateCommitMessage('/repo');
+    expect(offline.error?.message).to.contain('ai_config.json');
+    expect(offline.error?.message, 'no such setting exists').to.not.contain('Settings > AI');
+
+    settingsStore.setState({ offlineMode: false, remoteAllowlist: ['github.com'] });
+    const allowlisted = await aiService.generateCommitMessage('/repo');
+    expect(allowlisted.error?.message).to.contain('ai_config.json');
+    expect(allowlisted.error?.message, 'no such setting exists').to.not.contain('Settings > AI');
   });
 
   it('judges a local provider against the allowlist on its endpoint', async () => {
