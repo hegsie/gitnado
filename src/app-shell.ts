@@ -5373,6 +5373,12 @@ export class AppShell extends LitElement {
     // The coalescing that matters here is still in force: keyboardService has
     // no e.repeat guard, so HOLDING Ctrl+Shift+F fires many times a second,
     // and every repeat used to launch a fully concurrent fetch.
+    //
+    // No has-a-remote check here either, and deliberately: these three
+    // handlers are where the shortcut, the palette and the native menu
+    // converge, and a check written HERE would still leave the dashboard's
+    // direct calls to the runner out. The runner refuses a repository with no
+    // remote itself, with the toolbar's own wording.
     return runFetch(repoPath);
   }
 

@@ -44,6 +44,8 @@ import {
 import { progressService } from '../progress.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 import { uiStore } from '../../stores/ui.store.ts';
+import { repositoryStore } from '../../stores/repository.store.ts';
+import { NO_REMOTE_MESSAGE } from '../../utils/remote-availability.ts';
 import {
   isRefOpRunning,
   isPushRunning,
@@ -93,6 +95,41 @@ function progressMessages(): string[] {
   return progressService.getOperations().map((op) => op.message);
 }
 
+function warningToasts(): string[] {
+  return uiStore
+    .getState()
+    .toasts.filter((t) => t.type === 'warning')
+    .map((t) => t.message);
+}
+
+/**
+ * Open `REPO` in the repository store with the remotes given.
+ *
+ * The runner reads the remotes of the repository it is about to operate ON,
+ * so a test about a repository with no remote has to open one — the rest of
+ * this file drives a path the store has never heard of, which the runner
+ * deliberately leaves alone.
+ */
+function openRepo(remotes: Array<{ name: string; url: string }>): void {
+  repositoryStore.setState({
+    openRepositories: [
+      {
+        repository: { path: REPO, name: 'a', isValid: true, isBare: false },
+        branches: [],
+        currentBranch: null,
+        remotes,
+        tags: [],
+        stashes: [],
+      },
+    ],
+    activeIndex: 0,
+  } as never);
+}
+
+function closeRepos(): void {
+  repositoryStore.setState({ openRepositories: [], activeIndex: 0 } as never);
+}
+
 describe('remote operations runner', () => {
   beforeEach(() => {
     invoked.length = 0;
@@ -105,6 +142,7 @@ describe('remote operations runner', () => {
 
   afterEach(() => {
     resetRefOpLocks();
+    closeRepos();
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
   });
 
@@ -517,6 +555,89 @@ describe('remote operations runner', () => {
       failures.set('pull', { code: 'MERGE_CONFLICT', message: 'conflicts in 2 files' });
       await runPull(REPO);
       expect(isRefOpRunning(REPO)).to.equal(false);
+    });
+  });
+
+  /**
+   * A repository with nowhere to fetch, pull or push TO — a folder that has
+   * just been `git init`ed.
+   *
+   * The rule used to be the SURFACE's to apply, and only the two that render
+   * buttons applied it: the toolbar and the dashboard greyed their three out
+   * and said why, while Ctrl+Shift+F, the command palette's "Fetch from
+   * remote" and the native Repository ▸ Fetch — which have no disabled state
+   * to grey — opened a cancellable progress row and ended in a red toast
+   * carrying git's own "remote 'origin' does not exist", one row under a
+   * button that had already said the operation was unavailable. Pinned HERE,
+   * on the runner every one of those surfaces goes through, so a sixth cannot
+   * lose it by forgetting to ask.
+   */
+  describe('a repository with no remote configured', () => {
+    beforeEach(() => {
+      openRepo([]);
+    });
+
+    for (const [kind, run] of [
+      ['fetch', runFetch],
+      ['pull', runPull],
+      ['push', runPush],
+    ] as const) {
+      it(`refuses a ${kind} before it starts, and says why`, async () => {
+        await run(REPO);
+
+        expect(counts(kind), 'nothing reaches git').to.equal(0);
+        expect(progressMessages(), 'and no cancellable row is opened').to.deep.equal([]);
+        expect(warningToasts(), 'the refusal is user-visible').to.deep.equal([NO_REMOTE_MESSAGE]);
+        expect(errorToasts(), "git's own wording never reaches the user").to.deep.equal([]);
+      });
+    }
+
+    it('walks away holding no lock, so the repository is not wedged', async () => {
+      await runPull(REPO);
+
+      expect(isRefOpRunning(REPO), 'the working-tree lock').to.equal(false);
+      expect(isPushRunning(remoteSlotKey(REPO)), 'the shared remote slot').to.equal(false);
+      expect(isRemoteOperationRunning(REPO)).to.equal(false);
+    });
+
+    it('answers a held-down shortcut once, not once per repeat', async () => {
+      // keyboardService has no `e.repeat` guard, so holding Ctrl+Shift+F asks
+      // many times a second — and unlike the busy case, where the first ask
+      // wins the lock, every one of these is refused.
+      await runFetch(REPO);
+      await runFetch(REPO);
+      await runFetch(REPO);
+
+      expect(warningToasts()).to.deep.equal([NO_REMOTE_MESSAGE]);
+    });
+
+    it('says it again once the first refusal has gone from the screen', async () => {
+      await runFetch(REPO);
+      uiStore.setState({ toasts: [] });
+      await runFetch(REPO);
+
+      expect(warningToasts(), 'a fresh gesture is answered').to.deep.equal([NO_REMOTE_MESSAGE]);
+    });
+
+    it('lets the operation through as soon as a remote exists', async () => {
+      // Guards the tests above: a rule that refused always would pass them.
+      openRepo([{ name: 'origin', url: 'https://example.test/o/r.git' }]);
+
+      await runFetch(REPO);
+
+      expect(counts('fetch')).to.equal(1);
+      expect(warningToasts()).to.deep.equal([]);
+    });
+
+    it('leaves a repository the app has not opened alone', async () => {
+      // Nothing is known about the remotes of a repository that was never
+      // loaded, and "not loaded" must not be read as "no remote".
+      closeRepos();
+
+      await runFetch(REPO);
+
+      expect(counts('fetch')).to.equal(1);
+      expect(warningToasts()).to.deep.equal([]);
     });
   });
 });

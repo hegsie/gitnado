@@ -18,6 +18,18 @@
  * the progress row, the conflict routing, the failure reporting and the
  * refresh. A surface is now a button that calls `runFetch(repoPath)`.
  *
+ * The "has this repository anywhere to go at all?" rule is here too, for the
+ * same reason. It was a check each SURFACE made for itself, so it held on the
+ * two that render buttons (which can grey them out and say why) and on
+ * neither of the three that cannot — the Ctrl+Shift+F/P/U shortcuts, the
+ * command palette's three entries and the native Repository menu all ran a
+ * fetch on a freshly `git init`ed folder and ended in git's own
+ * "remote 'origin' does not exist", one row under a greyed-out Fetch button
+ * that had already said the operation was unavailable. A surface can still
+ * pre-empt the refusal to disable a button — `remote-availability.ts` holds
+ * the rule and its wording for exactly that - but it can no longer LOSE it by
+ * forgetting to ask.
+ *
  * Deliberately NOT here: the security gate (offline mode, the remote
  * allowlist, the "Allow push to origin?" confirm), the remote resolution that
  * picks the branch's real upstream rather than a hard-coded `origin`, the
@@ -36,6 +48,9 @@ import {
 import { progressService } from './progress.service.ts';
 import { showErrorWithSuggestion } from './error-suggestion.service.ts';
 import { showToast } from './notification.service.ts';
+import { repositoryStore } from '../stores/repository.store.ts';
+import { uiStore } from '../stores/ui.store.ts';
+import { hasConfiguredRemote, NO_REMOTE_MESSAGE } from '../utils/remote-availability.ts';
 import {
   tryAcquirePush,
   releasePush,
@@ -194,6 +209,37 @@ function claimLocks(
 }
 
 /**
+ * Refuse an operation on a repository that has nowhere to send it.
+ *
+ * Read from the repository STORE, keyed by the path the operation runs on —
+ * not from whichever surface asked and not from the active tab: `handlePull`
+ * carries a pinned path from the push-rejection suggestion toast, and every
+ * one of these operations can outlive a tab switch.
+ *
+ * A path that is not open is left alone. Nothing is known about the remotes of
+ * a repository the app has not loaded, and refusing on an absence would turn
+ * "not loaded yet" into "no remote" — so the rule is only ever applied to a
+ * repository whose remotes have actually been read.
+ *
+ * Returns true when the operation must not start; the caller has already been
+ * told why.
+ */
+function refuseWithoutRemote(repoPath: string): boolean {
+  const repo = repositoryStore
+    .getState()
+    .openRepositories.find((r) => r.repository.path === repoPath);
+  if (!repo || hasConfiguredRemote(repo)) return false;
+
+  // One toast per burst, not one per key repeat: `keyboardService` has no
+  // `e.repeat` guard, so HOLDING Ctrl+Shift+F asks many times a second and
+  // every ask is refused (unlike the busy case, where the first one wins the
+  // lock). While the refusal is still on screen, saying it again adds nothing.
+  const showing = uiStore.getState().toasts.some((t) => t.message === NO_REMOTE_MESSAGE);
+  if (!showing) showToast(NO_REMOTE_MESSAGE, 'warning');
+  return true;
+}
+
+/**
  * Ask for a refresh of the repository an operation just landed on.
  *
  * A window event pinned to the repository, not a call back into whichever
@@ -290,6 +336,11 @@ async function runRemoteOperation(
   repoPath: string,
   options?: RemoteOperationOptions,
 ): Promise<void> {
+  // Before the locks and before the progress row: a repository with no remote
+  // must not get a cancellable "Fetching from remote..." row that can only end
+  // in git's own error.
+  if (refuseWithoutRemote(repoPath)) return;
+
   const claim = claimLocks(kind, repoPath, options?.warnWhenBusy ?? kind !== 'fetch');
   // Coalesced, not queued: the second gesture is a user action that already
   // has a spinner on screen for the first one, and silently waiting behind a

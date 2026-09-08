@@ -899,6 +899,8 @@ describe('app-shell remote-operation feedback', () => {
    * badge reads.
    */
   describe('the status-bar ahead/behind badge', () => {
+    const ORIGIN = { name: 'origin', url: 'https://example.com/test/repo.git', pushUrl: null };
+
     function branch(aheadBehind?: { ahead: number; behind: number }) {
       return {
         name: 'main',
@@ -924,13 +926,18 @@ describe('app-shell remote-operation feedback', () => {
     ): Promise<AppShell> {
       // Quiet the sidebar lists that mount with the shell — an unmocked
       // command resolves to null and each list toasts its own load failure.
-      for (const cmd of ['get_stashes', 'get_tags', 'get_status', 'get_remotes']) {
+      for (const cmd of ['get_stashes', 'get_tags', 'get_status']) {
         if (!mockResponses[cmd]) mockResponses[cmd] = () => [];
       }
+      // A remote, like `mountWithRemote` below: this branch tracks
+      // origin/main, and fetch/pull/push are refused on a repository with
+      // nowhere to send them — wherever they were asked for.
+      if (!mockResponses['get_remotes']) mockResponses['get_remotes'] = () => [ORIGIN];
       const el = createAppShell();
       document.body.appendChild(el);
       await (el as any).updateComplete;
       repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
+      repositoryStore.getState().updateRepoData('/repo/one', { remotes: [ORIGIN] } as any);
       if (aheadBehind !== 'no-branch') {
         repositoryStore
           .getState()
@@ -958,7 +965,7 @@ describe('app-shell remote-operation feedback', () => {
       let pushed = false;
       mockResponses['open_repository'] = () => mockRepo('/repo/one', 'one');
       mockResponses['get_status'] = () => [];
-      mockResponses['get_remotes'] = () => [];
+      mockResponses['get_remotes'] = () => [ORIGIN];
       mockResponses['get_cleanup_candidates'] = () => [];
       mockResponses['get_branches'] = () => [
         branch(pushed ? { ahead: 0, behind: 0 } : { ahead: 3, behind: 0 }),
@@ -984,7 +991,7 @@ describe('app-shell remote-operation feedback', () => {
       failures['push'] = { code: 'COMMAND_ERROR', message: 'Updates were rejected' };
       mockResponses['open_repository'] = () => mockRepo('/repo/one', 'one');
       mockResponses['get_status'] = () => [];
-      mockResponses['get_remotes'] = () => [];
+      mockResponses['get_remotes'] = () => [ORIGIN];
       mockResponses['get_cleanup_candidates'] = () => [];
       mockResponses['get_branches'] = () => [branch({ ahead: 3, behind: 0 })];
 
