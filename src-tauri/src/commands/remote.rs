@@ -204,15 +204,26 @@ pub async fn get_remotes(path: String) -> Result<Vec<Remote>> {
 /// the wrong host in the ordinary fork layout, which is the same reason
 /// `get_pull_remote` and `get_push_remote` exist. `for_push` judges the
 /// remote's `pushurl` when it has one, which is where a push really goes.
+///
+/// Offline mode used to short-circuit here to `guard_remote(path, None)`, on
+/// the belief that it "refuses everything" so naming the remote was wasted
+/// work. It does not: `check` permits a target that never leaves the machine.
+/// That fast path threw away both the remote `resolve` had just named and the
+/// push/fetch distinction, and judged the CURRENT BRANCH's tracking remote and
+/// its FETCH url instead — so with a branch tracking a local `/mnt/usb` remote
+/// it let a `fetch` from `origin` on github.com through (the backstop failing
+/// OPEN, with nothing behind it to re-check), and with a branch tracking
+/// `origin` it refused a push to `/mnt/usb`. Nothing is paid for on the hot
+/// path regardless: `guard_remote`/`guard_push_remote` return immediately when
+/// no policy is in force, and the repository is only opened past this point.
 fn guard_remote_op(
     path: &str,
     for_push: bool,
     resolve: impl FnOnce(&git2::Repository) -> Option<String>,
 ) -> Result<()> {
-    // Offline mode refuses everything, so don't pay for opening the repository
-    // just to name a remote nobody is allowed to reach.
-    if crate::services::security::global().snapshot().offline_mode {
-        return crate::services::security::guard_remote(path, None);
+    let settings = crate::services::security::global().snapshot();
+    if !settings.offline_mode && settings.remote_allowlist.is_empty() {
+        return Ok(());
     }
     let repo = git2::Repository::open(Path::new(path)).ok();
     let remote = repo.as_ref().and_then(resolve);
@@ -2311,6 +2322,71 @@ mod tests {
             &["mirror".to_string(), "origin".to_string()],
         );
         assert!(blocked_host(refused).contains("gitlab.example"));
+    }
+
+    /// `origin` on github.com, `backup` on a USB disk, and the current branch
+    /// tracking whichever `tracks` names.
+    fn repo_tracking(tracks: &str) -> TestRepo {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/me/app.git");
+        repo.add_remote("backup", "/mnt/usb/app.git");
+        let branch = repo.current_branch();
+        let git = repo.repo();
+        let mut cfg = git.config().unwrap();
+        cfg.set_str(&format!("branch.{}.remote", branch), tracks)
+            .unwrap();
+        cfg.set_str(
+            &format!("branch.{}.merge", branch),
+            &format!("refs/heads/{}", branch),
+        )
+        .unwrap();
+        drop(cfg);
+        repo
+    }
+
+    /// Offline mode used to short-circuit this guard to
+    /// `guard_remote(path, None)` on the belief that it "refuses everything" —
+    /// which stopped being true when `check` grew the local-target carve-out.
+    /// The short-circuit threw away both the remote the caller had just
+    /// resolved and the push/fetch distinction, and judged the CURRENT
+    /// BRANCH's tracking remote and its FETCH url instead.
+    ///
+    /// The serious direction is fail-OPEN: with the branch tracking a remote on
+    /// a USB disk, a `fetch` from `origin` on github.com was judged on
+    /// `/mnt/usb/app.git`, found local, and permitted — with offline mode on.
+    /// Nothing downstream re-checks it: fetch and pull have no LFS guard behind
+    /// them, so this backstop was the only gate left.
+    #[test]
+    fn offline_mode_judges_the_remote_the_caller_named_not_the_tracked_one() {
+        let repo = repo_tracking("backup");
+        let _guard = crate::services::security::test_support::offline();
+
+        let fetch = guard_remote_op(&repo.path_str(), false, |repo| {
+            Some(resolve_fetch_remote(repo, Some("origin".to_string())))
+        });
+        assert!(
+            blocked_host(fetch).contains("Offline mode"),
+            "a fetch from github.com is not excused by a local tracking remote"
+        );
+    }
+
+    /// ...and the fail-CLOSED direction of the same line: the branch tracks
+    /// `origin` on github.com, the user pushes to the USB disk, and the guard
+    /// judged origin's github url and refused a push that never leaves the
+    /// machine — the refusal the local-target carve-out exists to remove.
+    #[test]
+    fn offline_mode_permits_a_push_to_a_local_remote_the_branch_does_not_track() {
+        let repo = repo_tracking("origin");
+        let _guard = crate::services::security::test_support::offline();
+
+        let push = guard_remote_op(&repo.path_str(), true, |repo| {
+            Some(resolve_push_remote(repo, Some("backup".to_string())))
+        });
+        assert!(
+            push.is_ok(),
+            "a push to a USB disk opens no socket: {:?}",
+            push
+        );
     }
 
     // ---- a timed-out remote operation is never abandoned silently ----

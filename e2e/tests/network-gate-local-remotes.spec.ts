@@ -100,6 +100,27 @@ test.describe('a remote on this machine is not a network operation', () => {
     await expect(page.locator('.toast.error, .toast.warning')).toHaveCount(0);
   });
 
+  /**
+   * The backend's `is_local_target` accepts every LOOPBACK host in a `file://`
+   * URL, not just an empty one — loopback is definitively this machine, the
+   * same reason an AI endpoint on it is carved out. The frontend mirror
+   * accepted `''` and `localhost` only, so it refused first, toasting "Offline
+   * mode is enabled" for a target the backend had already decided never leaves
+   * the machine — and under offline mode no allowlist entry can work around it.
+   */
+  test('offline mode does not refuse a fetch from a file:// remote on loopback', async ({
+    page,
+  }) => {
+    await mockLocalOrigin(page, 'file://127.0.0.1/srv/git/app.git');
+    await setOffline(page, true);
+
+    await fetchButton(page).click();
+
+    await waitForCommand(page, 'fetch');
+    expect((await findCommand(page, 'fetch')).length).toBeGreaterThan(0);
+    await expect(page.locator('.toast.error, .toast.warning')).toHaveCount(0);
+  });
+
   test('an allowlist does not refuse a filesystem remote it cannot name', async ({ page }) => {
     await mockLocalOrigin(page);
     await setAllowlist(page, ['github.com']);
@@ -115,6 +136,21 @@ test.describe('a remote on this machine is not a network operation', () => {
     // A UNC path is SMB: it does leave the machine, so offline mode keeps
     // refusing it.
     await mockLocalOrigin(page, '//fileserver/share/repo.git');
+    await setOffline(page, true);
+
+    await fetchButton(page).click();
+
+    await expect(page.locator('.toast.warning, .toast.error').first()).toContainText(
+      'Offline mode',
+    );
+    expect(await findCommand(page, 'fetch')).toHaveLength(0);
+  });
+
+  test('the loopback carve-out needs a real .localhost suffix', async ({ page }) => {
+    // `localhost.evil.test` is another machine, and the backend gate says so
+    // too — the carve-out matches `localhost`, `*.localhost` and the loopback
+    // literals, never a host that merely starts with one.
+    await mockLocalOrigin(page, 'file://localhost.evil.test/share/repo.git');
     await setOffline(page, true);
 
     await fetchButton(page).click();

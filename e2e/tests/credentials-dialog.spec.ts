@@ -350,6 +350,43 @@ test.describe('Credentials Dialog - testing a remote', () => {
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
   });
 
+  test('an scp-form remote with a ~ login is an ssh remote, not a local path', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [
+        { name: 'origin', url: '~deploy@git.example.test:team/app.git', pushUrl: null },
+      ],
+      test_credentials: {
+        // What the backend sends now that the dialog asks the GATE's parse
+        // which strings are local: `~deploy@host:path` is the scp-like ssh
+        // form git reads it as, so it resolves a host and the ssh probe runs.
+        // The dialog's own private parse called anything starting with `~` a
+        // path, so a working ssh remote came back "No Credentials Needed — a
+        // local repository does not authenticate", with its credential test
+        // silently never run — while offline mode, judging the same remote
+        // through the gate, refused it as something that leaves the machine.
+        success: false,
+        host: 'git.example.test',
+        protocol: 'ssh',
+        username: null,
+        message: 'Permission denied (publickey).',
+      },
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('SSH Authentication Failed');
+    await expect(result).toContainText('Host: git.example.test');
+    await expect(result).toContainText('Protocol: ssh');
+    await expect(result, 'an ssh remote is not a local repository').not.toContainText(
+      'No Credentials Needed',
+    );
+    await expect(result, 'a host is not a path').not.toContainText('Path:');
+    await expect(result).toHaveClass(/\berror\b/);
+  });
+
   test('a missing https credential is still reported as a failure', async ({ page }) => {
     await injectCommandMock(page, {
       get_credential_helpers: [],

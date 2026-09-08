@@ -701,11 +701,21 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
     // that appears nowhere in their config, while the SAME repository spelled
     // `file:///srv/git/repo.git` was correctly told nothing is stored for it.
     //
+    // WHICH strings are paths is `security::is_local_target`'s answer, not a
+    // second parse of this question: the gate uses it to decide that a target
+    // never leaves the machine, and a private copy here disagreed with it in
+    // both directions. `\\server\share\repo.git` and `//server/share/repo.git`
+    // are SMB and `~deploy@host:team/app.git` is an scp-form ssh remote — the
+    // gate refuses all three under offline mode as things that DO leave the
+    // machine, while this dialog called them local repositories that "do not
+    // authenticate", and silently skipped the ssh probe for a working ssh
+    // remote. One string, one answer.
+    //
     // The GATE is untouched: `parse_target` is still the one parse the
     // allowlist and the destination share, and it still resolves these to the
     // host it always did. This is what the DIALOG reports, and it must not
     // name a value the user cannot find anywhere.
-    if is_local_path(trimmed_url) {
+    if crate::services::security::is_local_target(trimmed_url) {
         return CredentialTarget {
             protocol: "file".to_string(),
             ssh_destination: trimmed_url.to_string(),
@@ -716,14 +726,15 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
     }
 
     let Some(target) = crate::services::security::parse_target(remote_url) else {
-        // Nothing a URL parser recognises as `[user@]host` — `file://`, whose
-        // URLs carry no host at all. Report it as typed rather than invent a
-        // host for it, and keep the scheme the user wrote: substituting `https`
-        // reported a `file://` remote as "No credentials found ... Protocol:
-        // https" under a protocol it does not use, and the dialog reads the
-        // protocol reported here to decide whether a missing credential is a
-        // fault at all — so the one transport that stores nothing could never
-        // reach the branch that says so.
+        // Nothing a URL parser recognises as `[user@]host`, and not a place on
+        // this machine either — a remote too malformed for either half to make
+        // sense of. Report it as typed rather than invent a host for it, and
+        // keep the scheme the user wrote: substituting `https` reported a
+        // scheme-carrying remote as "No credentials found ... Protocol: https"
+        // under a protocol it does not use, and the dialog reads the protocol
+        // reported here to decide whether a missing credential is a fault at
+        // all — so a transport that stores nothing could never reach the
+        // branch that says so.
         //
         // The GATE is untouched by this: `parse_target` above is still the one
         // parse the allowlist and the destination share, and a host-less remote
@@ -757,36 +768,6 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
         port: target.port,
         resolved: true,
     }
-}
-
-/// Whether a remote names a path on this machine rather than something to
-/// connect to.
-///
-/// The scheme-less forms git leaves in `remote.<name>.url` after cloning a
-/// local repository: an absolute path, a `~` path, a path relative to the
-/// superproject (`../sibling.git` — how a relative submodule remote is
-/// written), a Windows drive path and a UNC share. A remote that carries a
-/// scheme is never one of these: `file://` already keeps its own scheme
-/// through the unresolved branch above.
-///
-/// No hostname begins with `/`, `.` or `~`, so those cost nothing. The drive
-/// letter needs its separator, though — without it the single-letter host and
-/// port form `x:22` reads as a drive.
-fn is_local_path(remote_url: &str) -> bool {
-    if url_scheme(remote_url).is_some() {
-        return false;
-    }
-    if remote_url.starts_with('/')
-        || remote_url.starts_with('.')
-        || remote_url.starts_with('~')
-        || remote_url.starts_with("\\\\")
-    {
-        return true;
-    }
-    let bytes = remote_url.as_bytes();
-    bytes.first().is_some_and(u8::is_ascii_alphabetic)
-        && bytes.get(1) == Some(&b':')
-        && matches!(bytes.get(2), Some(b'/') | Some(b'\\'))
 }
 
 /// The scheme a remote string carries, if it carries one at all.
@@ -1267,12 +1248,80 @@ mod tests {
             ".",
             "C:\\repos\\x.git",
             "c:/repos/x.git",
-            "\\\\server\\share\\repo.git",
         ] {
             let target = credential_target(url);
             assert_eq!(target.protocol, "file", "{url} is a local path");
             assert_eq!(target.display_host, url, "{url} is reported as typed");
             assert!(!target.resolved, "{url} names no host to contact");
+        }
+    }
+
+    /// ...and a remote that only LOOKS like a path is reported as the host it
+    /// reaches, because that is what the gate says about it.
+    ///
+    /// This dialog used to answer "is this a path?" with a parse of its own,
+    /// and it disagreed with `security::is_local_target` — the gate's answer —
+    /// in the direction that hides a real transport. A UNC share is SMB and an
+    /// scp-form remote is ssh; both leave the machine, and offline mode refuses
+    /// both. The dialog called all three local repositories that "do not
+    /// authenticate, so nothing is stored", so the same remote was a network
+    /// host with offline mode on and a local path with it off — and the ssh
+    /// probe, the whole point of testing an ssh remote, was silently skipped.
+    #[test]
+    fn a_remote_that_only_looks_like_a_path_is_reported_as_the_host_it_reaches() {
+        for url in ["\\\\server\\share\\repo.git", "//fileserver/share/repo.git"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "https", "{url} is SMB, not a local path");
+            assert!(target.resolved, "{url} names a host to contact");
+            assert!(
+                !target.display_host.contains('/') && !target.display_host.contains('\\'),
+                "{url} reports a host, not the path: {}",
+                target.display_host
+            );
+        }
+
+        // scp-form ssh, `~` login and all: the probe must run for it.
+        let target = credential_target("~deploy@git.example.test:team/app.git");
+        assert_eq!(target.protocol, "ssh");
+        assert!(target.resolved, "the ssh probe is gated on `resolved`");
+        assert_eq!(target.display_host, "git.example.test");
+        assert_eq!(target.ssh_destination, "~deploy@git.example.test");
+    }
+
+    /// The dialog and the gate now answer the one question once.
+    ///
+    /// Whatever the gate calls local, the dialog reports as a path with no host
+    /// to contact; whatever the gate says leaves the machine, the dialog
+    /// resolves to the host it reaches. (Not a biconditional on `protocol`
+    /// alone: `file://server/share` keeps its `file` scheme while resolving a
+    /// host, which is exactly the case the gate refuses.)
+    #[test]
+    fn the_dialog_and_the_gate_agree_about_what_is_local() {
+        for url in [
+            "/srv/git/repo.git",
+            "~/repos/x.git",
+            "../sibling.git",
+            ".",
+            "C:\\repos\\x.git",
+            "file:///srv/git/repo.git",
+            "file://localhost/srv/git/repo.git",
+            "\\\\server\\share\\repo.git",
+            "//fileserver/share/repo.git",
+            "file://server/share/repo.git",
+            "~deploy@git.example.test:team/app.git",
+            "https://github.com/o/r.git",
+            "git@github.com:o/r.git",
+        ] {
+            let target = credential_target(url);
+            let local = crate::services::security::is_local_target(url);
+            assert_eq!(
+                !target.resolved && target.protocol == "file",
+                local,
+                "{url}: the dialog and the gate must not disagree about this"
+            );
+            if local {
+                assert_eq!(target.display_host, url, "{url} is reported as typed");
+            }
         }
     }
 

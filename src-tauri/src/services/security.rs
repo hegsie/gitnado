@@ -536,10 +536,13 @@ fn is_loopback_host(host: &str) -> bool {
 ///
 /// - a UNC path (`\\server\share`, and its `//server/share` spelling), which
 ///   is SMB;
-/// - `file://host/path` with a host component — git hands it to the transport
-///   with that host, and on Windows it is the UNC form again. Only an empty
-///   host (`file:///…`, and `file://localhost/…`, which the URL spec folds to
-///   the same thing) is this machine;
+/// - `file://host/path` naming ANOTHER machine — git hands it to the transport
+///   with that host, and on Windows it is the UNC form again. This machine is
+///   an empty host (`file:///…`, and `file://localhost/…`, which the URL spec
+///   folds to the same thing) and every host [`is_loopback_host`] recognises —
+///   `file://127.0.0.1/…`, `file://[::1]/…`, `file://build.localhost/…` — which
+///   is the same carve-out an AI endpoint on loopback already gets, for the
+///   same reason: loopback is definitively this machine;
 /// - anything [`scp_like_host`] recognises, so `~user@host:repo.git` is read as
 ///   the ssh remote git would read it rather than as a `~` path;
 /// - anything else carrying a scheme, so a path with a URL embedded in it
@@ -550,7 +553,7 @@ fn is_loopback_host(host: &str) -> bool {
 /// OS mount table. The kernel, not this app, does that I/O, and git opens no
 /// socket for it; the same is already true of every local operation the gate
 /// permits.
-fn is_local_target(target: &str) -> bool {
+pub(crate) fn is_local_target(target: &str) -> bool {
     let trimmed = target.trim();
     if trimmed.is_empty() {
         return false;
@@ -574,6 +577,10 @@ fn is_local_target(target: &str) -> bool {
         return false;
     }
     trimmed.starts_with('/')
+        // `.` and `..` are `./` and `../` without the separator — the spelling
+        // `git remote add local .` leaves behind.
+        || trimmed == "."
+        || trimmed == ".."
         || trimmed.starts_with("./")
         || trimmed.starts_with("../")
         || trimmed.starts_with(".\\")
@@ -1072,8 +1079,10 @@ mod tests {
             // UNC — SMB, in both spellings.
             r"\\server\share\repo.git",
             "//server/share/repo.git",
-            // a `file://` URL WITH a host component
+            // a `file://` URL whose host is another machine
             "file://server/share/repo.git",
+            // the loopback carve-out needs a real `.localhost` suffix
+            "file://localhost.evil.test/share/repo.git",
             // git reads this as an ssh remote on `host`, not as a `~` path
             "~user@host:repo.git",
             // ordinary remotes
@@ -1095,8 +1104,20 @@ mod tests {
             "~/backups/app.git",
             r"C:\repos\app.git",
             "C:/repos/app.git",
+            // `.` and `..` are the separator-less spelling of `./` and `../`.
+            ".",
+            "..",
             "file:///srv/git/app.git",
             "file://localhost/srv/git/app.git",
+            // ...and every other loopback host, which is this machine too. The
+            // frontend mirror accepted only the two above, so it toasted
+            // "Offline mode is enabled" for a target this gate had already
+            // decided never leaves the machine — with no allowlist entry able
+            // to work around it under offline mode.
+            "file://127.0.0.1/srv/git/app.git",
+            "file://127.1.2.3/srv/git/app.git",
+            "file://[::1]/srv/git/app.git",
+            "file://build.localhost/srv/git/app.git",
         ] {
             assert!(is_local_target(target), "{target} never leaves the machine");
         }
