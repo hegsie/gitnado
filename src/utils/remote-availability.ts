@@ -33,8 +33,10 @@
  * `git.service`'s fetch/pull/push that is not the runner has to do the same.
  */
 
+import { showToast } from '../services/notification.service.ts';
 import { dialogs } from '../stores/dialog.store.ts';
-import type { ToastAction } from '../stores/ui.store.ts';
+import { repositoryStore } from '../stores/repository.store.ts';
+import { uiStore, type ToastAction } from '../stores/ui.store.ts';
 
 /**
  * A repository as these buttons see it.
@@ -92,6 +94,12 @@ export function noRemoteButtonLabel(action: string): string {
  */
 export const NO_REMOTE_MESSAGE = 'No remote configured for this repository — add one first.';
 
+/** Last path segment, so a message names the repository the user knows. */
+function repositoryLabel(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
 /**
  * The remedy the message names, as something the user can actually press.
  *
@@ -100,15 +108,70 @@ export const NO_REMOTE_MESSAGE = 'No remote configured for this repository — a
  * native Repository menu too, but the toast is where the user IS when they are
  * told to add a remote, so it carries the route as well.
  *
- * The dialog is bound to the ACTIVE repository, so a refusal pinned to some
- * other repository (a pull suggested for the repo a push was rejected from,
- * say) must not offer it — it would open the wrong repository's remotes.
+ * `repoPath` is the repository the refusal was ABOUT, and the check that it is
+ * still the active one is re-made HERE, when the button is pressed — not once,
+ * where the toast is built. The dialog is bound to whatever app-shell has
+ * active at render time, and this toast lives five seconds: deciding at
+ * creation time that the repository was active left two ways to open the wrong
+ * one. Open a second repository while the toast is up and the button opened
+ * THAT repository's remotes; close the last tab while it is up and the button
+ * armed a repo-scoped dialog with nothing to bind to, which then sprang up
+ * over the next repository opened (the failure `DIALOG_REGISTRY` describes).
+ *
+ * Neither case returns in silence — the user pressed a button and is owed an
+ * answer, so it says which repository the remedy belongs to.
  */
-export function addRemoteToastAction(): ToastAction {
+export function addRemoteToastAction(repoPath: string): ToastAction {
   return {
     label: 'Add a remote…',
     callback: () => {
-      dialogs.open('remotes');
+      const state = repositoryStore.getState();
+      if (state.getActiveRepository()?.repository.path === repoPath) {
+        dialogs.open('remotes');
+        return;
+      }
+      // Named the way the tab names it where the repository is still open, and
+      // by its folder where it is not — a bare path in a toast is unreadable.
+      const stillOpen = state.openRepositories.find((r) => r.repository.path === repoPath);
+      const name = stillOpen?.repository.name ?? repositoryLabel(repoPath);
+      showToast(
+        stillOpen
+          ? `Switch to ${name} to add its remote.`
+          : `${name} is no longer open — reopen it to add a remote.`,
+        'warning',
+      );
     },
   };
+}
+
+/**
+ * Say the refusal, once, with the remedy where it can be offered.
+ *
+ * Every surface that refuses says it through here, so the wording, the
+ * de-duplication and the decision to offer the remedy cannot drift apart the
+ * way the rule itself once did. The runner had all three; the toolbar's and
+ * the dashboard's copies of the same message had only the wording.
+ *
+ * One toast per burst, not one per ask: `keyboardService` has no `e.repeat`
+ * guard, so HOLDING Ctrl+Shift+F asks many times a second and every ask is
+ * refused (unlike the busy case, where the first one wins the lock). While the
+ * refusal is still on screen, saying it again adds nothing — and that is as
+ * true of the three buttons, whose identical message would stack up to three
+ * deep in the render/click race window.
+ *
+ * The remedy is only offered when the refused repository IS the active one:
+ * `handlePull` can carry a path pinned from a push-rejection suggestion, and a
+ * button that cannot lead anywhere useful is worse than no button at all.
+ * Whether it still leads anywhere is re-checked when it is pressed — see
+ * `addRemoteToastAction`.
+ */
+export function showNoRemoteToast(repoPath: string): void {
+  if (uiStore.getState().toasts.some((t) => t.message === NO_REMOTE_MESSAGE)) return;
+  const isActive = repositoryStore.getState().getActiveRepository()?.repository.path === repoPath;
+  showToast(
+    NO_REMOTE_MESSAGE,
+    'warning',
+    5000,
+    isActive ? addRemoteToastAction(repoPath) : undefined,
+  );
 }

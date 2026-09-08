@@ -279,6 +279,11 @@ describe('dashboard remote operations', () => {
     // Only reachable in the race window between a render and the click — the
     // remote removed from another surface — but a silent return there looks
     // like a dead button, exactly as the toolbar's own handler says.
+    //
+    // Said through the shared `showNoRemoteToast`, so the answer is on screen
+    // for all three without three identical warnings stacking up: the same
+    // once-per-burst rule the shortcuts already had, which these three copies
+    // of the message did not.
     const el = await dashboard([]);
     uiStore.setState({ toasts: [] });
 
@@ -292,11 +297,23 @@ describe('dashboard remote operations', () => {
     ).to.equal(false);
     expect(progressService.getOperations(), 'and no progress row is opened').to.have.lengthOf(0);
     const toasts = uiStore.getState().toasts;
-    expect(toasts, 'each click is answered').to.have.lengthOf(3);
-    for (const toast of toasts) {
-      expect(toast.type).to.equal('warning');
-      expect(toast.message).to.contain('No remote configured');
-    }
+    expect(toasts, 'the refusal is on screen, once').to.have.lengthOf(1);
+    expect(toasts[0].type).to.equal('warning');
+    expect(toasts[0].message).to.contain('No remote configured');
+  });
+
+  it('says it again once the refusal has gone from the screen', async () => {
+    // Guards the test above: a rule that answered only the FIRST click ever
+    // would pass it, and leave the second click looking dead.
+    const el = await dashboard([]);
+    uiStore.setState({ toasts: [] });
+
+    await (el as any).handleFetch();
+    uiStore.setState({ toasts: [] });
+    await (el as any).handlePush();
+
+    expect(uiStore.getState().toasts, 'a fresh gesture is answered').to.have.lengthOf(1);
+    expect(uiStore.getState().toasts[0].message).to.contain('No remote configured');
   });
 
   it('leaves the buttons available while the remotes have not been read', async () => {
@@ -328,6 +345,43 @@ describe('dashboard remote operations', () => {
     toast!.action!.callback();
     expect(dialogs.isOpen('remotes'), 'and it opens the Remotes dialog').to.equal(true);
     dialogs.close('remotes');
+  });
+
+  it('does not open the remotes of a repository opened while the offer is up', async () => {
+    // The toast outlives the state that raised it: the dialog it opens is
+    // bound to whatever app-shell has ACTIVE when it renders, so the check
+    // has to be re-made when the button is pressed, not when it is built.
+    const el = await dashboard([]);
+    uiStore.setState({ toasts: [] });
+    dialogs.close('remotes');
+
+    await (el as any).handleFetch();
+    const toast = uiStore.getState().toasts.at(-1);
+    expect(toast?.action?.label, 'the remedy is offered').to.contain('Add a remote');
+
+    repositoryStore.setState({
+      openRepositories: [
+        ...repositoryStore.getState().openRepositories,
+        {
+          repository: { ...REPO, path: '/repo/b', name: 'repo-b' },
+          branches: [],
+          currentBranch: null,
+          remotes: [],
+          remotesLoaded: true,
+          tags: [],
+          stashes: [],
+        },
+      ] as any,
+      activeIndex: 1,
+    } as any);
+
+    toast!.action!.callback();
+
+    expect(dialogs.isOpen('remotes'), 'no dialog on the wrong repository').to.equal(false);
+    expect(
+      uiStore.getState().toasts.at(-1)?.message,
+      'and the press is answered, not swallowed',
+    ).to.contain('Switch to repo-a');
   });
 
   it('leaves the buttons available once a remote exists', async () => {

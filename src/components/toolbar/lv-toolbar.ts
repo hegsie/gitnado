@@ -30,10 +30,9 @@ import type { LvSearchBar, SearchFilter } from './lv-search-bar.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
 import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
 import {
-  addRemoteToastAction,
   knownToHaveNoRemote,
   noRemoteButtonLabel,
-  NO_REMOTE_MESSAGE,
+  showNoRemoteToast,
 } from '../../utils/remote-availability.ts';
 import { runningRemoteOperation } from '../../services/remote-operations.service.ts';
 
@@ -890,10 +889,13 @@ export class LvToolbar extends LitElement {
       return;
     }
     if (knownToHaveNoRemote(repo)) {
-      // Carrying the route to the remedy the message names — this surface is
-      // always the active repository, so the Remotes dialog it opens is this
-      // repository's.
-      showToast(NO_REMOTE_MESSAGE, 'warning', 5000, addRemoteToastAction());
+      // Said through the shared helper, so this surface refuses in the same
+      // words, with the same once-per-burst de-duplication and the same
+      // remedy button as the runner every other route goes through. The
+      // repository it names is this one — the toolbar always shows the active
+      // tab — but it is passed rather than assumed, because the button is
+      // pressed later than it is built.
+      showNoRemoteToast(repo.repository.path);
       return;
     }
     this.dispatchEvent(

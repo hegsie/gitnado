@@ -666,6 +666,65 @@ describe('remote operations runner', () => {
       expect(dialogs.isOpen('remotes'), 'and it opens the Remotes dialog').to.equal(true);
     });
 
+    it('does not open another repository opened while the offer is on screen', async () => {
+      // The toast lives five seconds and the Remotes dialog is bound to
+      // whatever app-shell has ACTIVE when it renders, so deciding at
+      // toast-creation time that this repository was active was not enough:
+      // open a second repository while the refusal is up, press the button,
+      // and the dialog came up on the OTHER repository's remotes — the one
+      // thing the offer exists not to do.
+      await runFetch(REPO);
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast?.action?.label, 'the remedy is offered').to.contain('Add a remote');
+
+      // A second repository is opened, and becomes the active tab.
+      repositoryStore.setState({
+        openRepositories: [
+          ...repositoryStore.getState().openRepositories,
+          {
+            repository: { path: '/repo/b', name: 'b', isValid: true, isBare: false },
+            branches: [],
+            currentBranch: null,
+            remotes: [],
+            remotesLoaded: true,
+            tags: [],
+            stashes: [],
+          },
+        ],
+        activeIndex: 1,
+      } as never);
+
+      toast!.action!.callback();
+
+      expect(dialogs.isOpen('remotes'), 'no dialog on the wrong repository').to.equal(false);
+      expect(
+        uiStore.getState().toasts.at(-1)?.message,
+        'and the press is answered, not swallowed',
+      ).to.contain('Switch to a');
+    });
+
+    it('does not arm the dialog after the last repository tab closes', async () => {
+      // `remotes` is repo-scoped: app-shell sweeps the repo-scoped dialogs
+      // shut when the last tab goes, INSIDE the store subscription — which
+      // ran before this press, not after. So opening it here only set a flag
+      // nothing would clear, and `lv-remote-dialog` was reconstructed `?open`
+      // over the next repository the user opened.
+      await runFetch(REPO);
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast?.action?.label, 'the remedy is offered').to.contain('Add a remote');
+
+      closeRepos();
+      toast!.action!.callback();
+
+      expect(dialogs.isOpen('remotes'), 'nothing is armed for the next repository').to.equal(
+        false,
+      );
+      expect(
+        uiStore.getState().toasts.at(-1)?.message,
+        'and the press is answered, not swallowed',
+      ).to.contain('no longer open');
+    });
+
     it('does not offer it for a repository that is not the active tab', async () => {
       // `handlePull` can carry a path pinned from a push-rejection toast, and
       // the Remotes dialog is bound to the ACTIVE repository — offering the

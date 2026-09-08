@@ -906,6 +906,8 @@ export class AppShell extends LitElement {
   private staleRepoPaths = new Set<string>();
   // Debounce timers for background tab-badge refreshes, keyed by repo path
   private badgeHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Debounce timers for re-reading a repo's remotes after a config change
+  private remotesReloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // Last auto-fetch interval applied to the backend (settings subscription
   // must only restart timers when THIS value actually changes)
   /** Repos with a window-focus fetch already running. */
@@ -1188,6 +1190,18 @@ export class AppShell extends LitElement {
     if (event.eventType === 'refs-changed') {
       this.handleRefsChanged();
     }
+    // `.git/config` changed under us — most importantly, a remote added or
+    // removed from a terminal. `remotes` in the store is what greys out
+    // Fetch/Pull/Push on both button surfaces and what the runner REFUSES on,
+    // and its other writers are a refresh (which the Remotes dialog asks for)
+    // and tab activation. Neither fires for the repository the user is looking
+    // at, so `git remote add origin …` left all five surfaces still insisting
+    // the repository had none — while the refusal's own "Add a remote…" button
+    // opened a dialog that listed it. A background repo self-heals through
+    // `staleRepoPaths`; the active one, the common case, did not.
+    if (event.eventType === 'config-changed') {
+      this.scheduleRemotesReload(event.repoPath);
+    }
   };
 
   // Per-path monotonic sequence for badge hydration: a superseded hydration
@@ -1223,6 +1237,11 @@ export class AppShell extends LitElement {
     if (pendingHydration) {
       clearTimeout(pendingHydration);
       this.badgeHydrationTimers.delete(path);
+    }
+    const pendingRemotesReload = this.remotesReloadTimers.get(path);
+    if (pendingRemotesReload) {
+      clearTimeout(pendingRemotesReload);
+      this.remotesReloadTimers.delete(path);
     }
   }
 
@@ -1402,6 +1421,34 @@ export class AppShell extends LitElement {
           this.enqueueBadgeHydration(repoPath);
         }
       }, 1000)
+    );
+  }
+
+  /**
+   * Re-read a repository's remotes after its `.git/config` changed.
+   *
+   * Debounced like the badge hydration above and for the same reason: git
+   * rewrites `.git/config` for a great many operations, and this is the
+   * narrowest possible answer to one — a single local `get_remotes`, not a
+   * `handleRefresh` that would re-read the repository, the graph and the
+   * search index on every `git config` line the user types. The other
+   * config-dependent state (branch upstreams, identity) already rides in on
+   * the `refs-changed` refresh those operations also produce.
+   *
+   * Leading call suppressed, trailing call kept, so a burst of writes settles
+   * into one read; the repo may have been closed by the time it fires, which
+   * `watchedRepoPaths` is the check for.
+   */
+  private scheduleRemotesReload(repoPath: string): void {
+    if (this.remotesReloadTimers.has(repoPath)) return;
+    this.remotesReloadTimers.set(
+      repoPath,
+      setTimeout(() => {
+        this.remotesReloadTimers.delete(repoPath);
+        if (this.watchedRepoPaths.has(repoPath)) {
+          void this.loadRepositoryRemotes(repoPath);
+        }
+      }, 300)
     );
   }
 
@@ -2075,6 +2122,10 @@ export class AppShell extends LitElement {
       clearTimeout(timer);
     }
     this.badgeHydrationTimers.clear();
+    for (const timer of this.remotesReloadTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.remotesReloadTimers.clear();
     // Tear down per-repo backend services so a remount (hot reload, tests)
     // doesn't leave orphaned watchers, auto-fetch tasks, commit indexes, or
     // in-flight embedding builds running. Uses the exact same teardown as
@@ -4627,12 +4678,13 @@ export class AppShell extends LitElement {
       }
       // Remotes are repository state a refresh must RE-READ, not a fact loaded
       // once per tab. The store's `remotes` is what greys out Fetch/Pull/Push
-      // on both surfaces and what the runner refuses on, and its only other
-      // writers run on tab activation and on session restore — so adding the
-      // first remote in the Remotes dialog (which asks for exactly this
-      // refresh, via `remotes-changed`) left every remote surface still
-      // insisting the repository had none, and removing the last one left them
-      // all bright, ending in git's own "remote 'origin' does not exist".
+      // on both surfaces and what the runner refuses on, and its other writers
+      // run on tab activation, on session restore and on the `config-changed`
+      // watcher tick — so adding the first remote in the Remotes dialog (which
+      // asks for exactly this refresh, via `remotes-changed`) left every remote
+      // surface still insisting the repository had none, and removing the last
+      // one left them all bright, ending in git's own "remote 'origin' does
+      // not exist".
       // Path-keyed and pinned like the rest of this method, so a tab switch
       // mid-refresh writes the result to the repository it was read from.
       if (refreshingPath) {
