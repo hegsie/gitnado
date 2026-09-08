@@ -271,8 +271,16 @@ pub(crate) fn resolve_lfs_endpoint(
 /// sends a single ref, and that endpoint is chosen by the same committed
 /// `.lfsconfig` as a download's. Called by every push-class command after
 /// its own remote gate; `remote` is the destination that gate just judged.
-/// A repository with no LFS filter in force uploads nothing and is waved
-/// through without opening anything further.
+///
+/// A push is waved through only when NOTHING names an LFS endpoint and no LFS
+/// filter is in force. `.gitattributes` alone is not the test: a repository can
+/// hold committed LFS pointers with no filter rule left in the tree, and
+/// `.lfsconfig` naming an `lfs.url` is itself evidence of LFS use — so waving
+/// the push through on the filter alone skipped the one endpoint this guard
+/// exists to judge, exactly where it differs from the git remote the push gate
+/// already judged. The endpoint is resolved first for that reason; when one is
+/// resolvable it is judged whether or not a filter is in force, and a repository
+/// with neither pays nothing beyond the resolution.
 ///
 /// Shaped exactly like `security::guard_remote_for`, and for the same reason:
 /// offline mode used to answer here BEFORE the endpoint was resolved
@@ -288,9 +296,6 @@ pub(crate) fn guard_lfs_upload(path: &str, remote: Option<&str>) -> Result<()> {
         return Ok(());
     }
     let repo_path = Path::new(path);
-    if !is_lfs_enabled(repo_path) {
-        return Ok(());
-    }
     // The hook is handed the remote git resolved for the push, so with none
     // named the destination is the push remote, not git-lfs's own default.
     let push_remote = match remote {
@@ -301,6 +306,13 @@ pub(crate) fn guard_lfs_upload(path: &str, remote: Option<&str>) -> Result<()> {
         }
     };
     let endpoint = resolve_lfs_endpoint(repo_path, LfsOperation::Upload, Some(&push_remote));
+    // Nothing to contact and no filter in force: this push uploads no LFS
+    // object, and refusing on a target that does not exist would refuse every
+    // push in every repository — which is the defect this guard's shape was
+    // rewritten to stop.
+    if endpoint.is_none() && !is_lfs_enabled(repo_path) {
+        return Ok(());
+    }
     crate::services::security::check(&settings, endpoint.as_deref())
 }
 
@@ -1934,7 +1946,16 @@ mod tests {
 
     /// A push in an LFS repository uploads through the pre-push hook to the
     /// endpoint a committed `.lfsconfig` chose — so the push gate has to see
-    /// it. A repository with no LFS filter uploads nothing and is left alone.
+    /// it, WHETHER OR NOT a filter rule is in force.
+    ///
+    /// This used to wave the no-filter case through, and asserted that as
+    /// intended: "nothing would be uploaded, nothing refused". Both halves of
+    /// that are wrong. `.gitattributes` governs which NEW files are converted
+    /// to pointers, not which existing pointers the pre-push hook uploads, so a
+    /// repository can hold committed pointers with no rule left in the tree —
+    /// and the rule is committed too, so the same person who chose the hostile
+    /// endpoint chooses whether the rule is there. An `lfs.pushurl` naming
+    /// another host is itself the evidence that matters.
     #[test]
     fn guard_lfs_upload_judges_the_upload_endpoint_of_an_lfs_repository() {
         let repo = TestRepo::with_initial_commit();
@@ -1948,10 +1969,13 @@ mod tests {
         );
         let _guard = test_support::allowlist(&["github.com"]);
 
-        // No LFS filter in force: nothing would be uploaded, nothing refused.
-        assert_not_blocked(
-            &guard_lfs_upload(&repo.path_str(), Some("origin")),
-            "a push in a repository without LFS",
+        // No LFS filter in force, and the endpoint still names a host the
+        // allowlist does not.
+        let message = blocked_message(guard_lfs_upload(&repo.path_str(), Some("origin")));
+        assert!(
+            message.contains("evil.example.net"),
+            "an explicit lfs.pushurl is judged with no filter rule in force; got: {}",
+            message
         );
 
         repo.create_file(
@@ -1960,6 +1984,21 @@ mod tests {
         );
         let message = blocked_message(guard_lfs_upload(&repo.path_str(), Some("origin")));
         assert!(message.contains("evil.example.net"), "got: {}", message);
+    }
+
+    /// The other half of that rule: with nothing naming an LFS endpoint the
+    /// guard judges what the push gate in front of it already judged, so it
+    /// never becomes the one thing that refuses a permitted push.
+    #[test]
+    fn guard_lfs_upload_adds_no_refusal_of_its_own_without_an_lfs_endpoint() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("backup", "/mnt/usb/app.git");
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        assert_not_blocked(
+            &guard_lfs_upload(&repo.path_str(), Some("backup")),
+            "a push to a path on this machine, in a repository with no LFS at all",
+        );
     }
 
     /// Offline mode answered here BEFORE the endpoint was resolved
@@ -1981,10 +2020,13 @@ mod tests {
             &guard_lfs_upload(&repo.path_str(), Some("backup")),
             "a push in a repository with no LFS filter in force",
         );
-        assert_not_blocked(
-            &guard_lfs_upload(&repo.path_str(), Some("origin")),
-            "a repository with no LFS filter uploads nothing, wherever it pushes",
-        );
+        // Deliberately NOT asserted here: that a push to `origin` is waved
+        // through by this guard. With nothing naming an LFS endpoint the guard
+        // judges the push destination itself, so for a destination offline mode
+        // refuses it agrees with the push gate rather than disagreeing — and
+        // asserting otherwise pinned "this guard alone permits a push that is
+        // refused anyway", which is not a property worth having and is what hid
+        // an explicit `lfs.pushurl` from it.
     }
 
     /// ...and in an LFS repository offline mode judges the ENDPOINT, so a
