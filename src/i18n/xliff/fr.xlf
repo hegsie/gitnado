@@ -692,6 +692,10 @@
 <trans-unit id="sde169a28c0b76e74">
   <source>Not Supported</source>
   <target>Non pris en charge</target></trans-unit>
+<trans-unit id="s4795644f9fe85a17">
+  <source>(Not checked - not in your remote allowlist)</source>
+  <target>(Non vérifié - absent de votre liste des distants autorisés)</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
