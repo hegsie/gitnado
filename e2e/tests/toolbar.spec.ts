@@ -799,6 +799,33 @@ test.describe('Toolbar Remote Operations', () => {
     await expect(remoteButton(page, 'push')).toBeEnabled();
   });
 
+  test('a push the BACKEND gate refuses says so instead of vanishing', async ({ page }) => {
+    // The backend refuses pushes the frontend gate cannot see: `remote.rs`
+    // runs `guard_lfs_upload` on every push, judging the LFS UPLOAD endpoint
+    // that a committed `.lfsconfig` chooses — a target nothing on the frontend
+    // ever resolves. That refusal comes back as `BLOCKED`, which the runner
+    // suppresses on the understanding that the gate already explained itself.
+    // It had not: the row appeared, the row vanished, and nothing was said.
+    await setupOpenRepository(page, withAheadBehind(2, 0));
+    await startCommandCapture(page);
+    await injectCommandError(
+      page,
+      'push',
+      'Remote "https://lfs.evil.test/repo" is not in your allowlist',
+      'BLOCKED'
+    );
+
+    await remoteButton(page, 'push').click();
+    await waitForCommand(page, 'push');
+
+    const toast = page.locator('.toast').first();
+    await expect(toast).toBeVisible();
+    await expect(toast, 'the backend reason reaches the user').toContainText('lfs.evil.test');
+    // And the button comes back rather than being left mid-operation.
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(remoteButton(page, 'push')).toBeEnabled();
+  });
+
   test('a running fetch disables the toolbar trio and says which operation holds them', async ({
     page,
   }) => {
@@ -826,10 +853,30 @@ test.describe('Toolbar Remote Operations', () => {
       await expect(remoteButton(page, op)).toHaveAttribute('title', /a fetch is already running/);
     }
 
-    // A second gesture is not silently swallowed: the button refuses the click
-    // outright rather than sending a command that dies inside the runner.
-    await fetchButton.click({ force: true });
+    // A second gesture that LANDS ANYWAY.
+    //
+    // `click({ force: true })` on a disabled <button> is not a click at all —
+    // Chromium never dispatches one, force or no force — so the assertion
+    // that used to stand here was decided by the single real click above and
+    // held with `?disabled` and the runner's coalescing both deleted. The
+    // sibling spec had already written this down (remote-operations.spec.ts,
+    // "a click that lands anyway"); this one was not brought along.
+    // `dispatchEvent` IS the click: the race window between a render and the
+    // button going grey.
+    await fetchButton.dispatchEvent('click');
+    // Push, from the same greyed-out trio, is what makes the absences below
+    // real. The runner refuses a second FETCH silently by design (holding
+    // Ctrl+Shift+F repeats, and one toast per repeat would bury the screen),
+    // so a swallowed fetch has no outcome to settle on; a push while a fetch
+    // holds the repository is refused WITH a message, and both gestures have
+    // been processed end to end once that message is on screen.
+    await remoteButton(page, 'push').dispatchEvent('click');
+    await expect(page.locator('.toast')).toContainText(/Another operation is already running/i);
+
     expect((await findCommand(page, 'fetch')).length, 'one fetch, not two').toBe(1);
+    expect((await findCommand(page, 'push')).length, 'and no push behind it').toBe(0);
+    // One row, not a second "Fetching from remote..." stacked on the first.
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(1);
   });
 
   test('a failed toolbar fetch is reported and the button comes back', async ({ page }) => {
