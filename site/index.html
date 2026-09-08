@@ -64,7 +64,7 @@
     .eyebrow { display: inline-block; color: var(--teal); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: 12px; margin-bottom: 14px; }
     h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.08; margin: 0 0 18px; letter-spacing: -.02em; }
     .lede { font-size: 19px; color: var(--muted); margin: 0 0 28px; max-width: 34em; }
-    .hero-art img { width: 100%; max-width: 360px; display: block; margin: 0 auto; filter: drop-shadow(0 30px 60px rgba(0, 0, 0, .45)); }
+    .hero-art img { width: 100%; max-width: 360px; height: auto; aspect-ratio: 1 / 1; display: block; margin: 0 auto; filter: drop-shadow(0 30px 60px rgba(0, 0, 0, .45)); }
 
     .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
     .btn {
@@ -169,7 +169,7 @@
           <p class="version-note" id="version-note"><a href="https://github.com/hegsie/gitnado/releases">All releases</a></p>
         </div>
         <div class="hero-art">
-          <img src="assets/icon-256.png" srcset="assets/icon-256.png 256w" alt="Gitnado icon: a tornado made of git branches" width="256" height="256">
+          <img src="assets/icon-512.png" srcset="assets/icon-256.png 256w, assets/icon-512.png 512w" sizes="(max-width: 860px) 260px, 360px" alt="Gitnado icon: a tornado made of git branches" width="512" height="512">
         </div>
       </div>
     </section>
