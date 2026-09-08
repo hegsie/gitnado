@@ -62,6 +62,16 @@
 //! Reads that DO come through here (because they share a helper with a write)
 //! are filtered out by [`is_read_only_form`] instead, so a `git worktree list`
 //! never masquerades as an executed operation.
+//!
+//! The NUMBERS the two paragraphs above state — the six spawns, the four of
+//! them that write, the three whose builders escape their function — are read
+//! back out of this prose by
+//! `test_a_bare_git_command_site_can_never_reach_the_panel` and pinned to what
+//! the code does. Keyed on the file and the form alone, an exemption also
+//! covers the NEXT spawn added to that file in that form, and those are the
+//! files where such a spawn gets written: a seventh bare command in
+//! `merge.rs`, or a fourth escaping builder, has to be justified by editing
+//! the sentence that exempts it, not merely written.
 
 use std::ffi::OsStr;
 use std::io;
@@ -818,6 +828,49 @@ mod tests {
         /// ends without one, and its arguments may be built out of this
         /// function's sight.
         terminated: bool,
+        /// Whether an argument was DROPPED because a macro assembles it, so
+        /// `argv` is incomplete. When the macro could be the subcommand the
+        /// site counts as unterminated instead (see above), but a macro AFTER
+        /// a literal subcommand still hides the FORM — and the form is what
+        /// [`is_read_only_form`] judges, so a `git remote <format!(…)>` would
+        /// read as the argument-less listing.
+        unread_argument: bool,
+    }
+
+    /// The last path segment of a site's file, e.g. `merge.rs`.
+    ///
+    /// The exemptions below are keyed on this and must compare it WHOLE:
+    /// `ends_with("merge.rs")` also matches `auto_merge.rs`, and
+    /// `contains("search.rs")` also matches `advanced_search.rs`, so a suffix
+    /// test hands a brand-new file another file's exemption.
+    fn file_name(path: &str) -> &str {
+        path.rsplit('/').next().expect("a file name")
+    }
+
+    /// A count the module header spells out in words — the `SIX` in "spawns
+    /// SIX bare commands" — read out of the prose that justifies an exemption
+    /// rather than duplicated here as a magic number.
+    ///
+    /// Every exemption below is capped by one of these. Keyed on file and form
+    /// alone, an exemption silently covers the NEXT spawn added to that file
+    /// in that form — and it is exactly the file where such a spawn gets
+    /// written. Capped by the header's own count, adding one means editing the
+    /// sentence that claims the exemption is safe.
+    fn declared_count(header: &str, phrase: &str) -> Option<usize> {
+        const WORDS: [&str; 11] = [
+            "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        ];
+        // Read as prose, not line by line: rustfmt wraps these sentences, and
+        // "spawns SIX bare commands" is split across two `//!` lines.
+        let prose = header
+            .lines()
+            .map(|line| line.trim_start_matches("//!").trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        prose
+            .split_once(phrase)
+            .and_then(|(before, _)| before.split_whitespace().next_back())
+            .and_then(|word| WORDS.iter().position(|w| w.eq_ignore_ascii_case(word)))
     }
 
     /// Every production `Command::new("git")` under `src/`.
@@ -861,9 +914,15 @@ mod tests {
 
             // rustfmt puts a top-level test module and its closing brace at
             // column 0, which tells test scaffolding apart from production.
+            // The `#[cfg(test)]` above it is what makes it scaffolding at all:
+            // a module that merely happens to be CALLED `tests` is compiled
+            // into the shipped binary, so skipping it on the name alone hides
+            // a production spawn. All 116 of this crate's test modules carry
+            // the attribute on the line directly above.
             let mut in_tests = false;
             for (index, line) in lines.iter().enumerate() {
-                if *line == "mod tests {" {
+                if *line == "mod tests {" && index > 0 && lines[index - 1].trim() == "#[cfg(test)]"
+                {
                     in_tests = true;
                     continue;
                 }
@@ -934,6 +993,8 @@ mod tests {
                 // Set when an argument is assembled by a macro, so its value
                 // cannot be read from the source at all.
                 let mut opaque_argument = false;
+                // Set whenever such an argument is dropped, wherever it sits.
+                let mut unread_argument = false;
                 for (offset, text) in lines.iter().skip(index).enumerate() {
                     if offset > function_end {
                         break;
@@ -976,12 +1037,14 @@ mod tests {
                                 // a TEMPLATE, not an argument word, and the
                                 // real value is built at runtime. That only
                                 // makes the site unjudgeable when it could BE
-                                // the subcommand — a macro AFTER a literal
-                                // subcommand (`log --format=…` then
-                                // `format!("-{}", n)`) hides nothing.
+                                // the subcommand; after a literal subcommand
+                                // (`log --format=…` then `format!("-{}", n)`)
+                                // only the FORM goes unread — which still
+                                // matters wherever the verdict turns on it.
                                 if !argv.iter().any(|token| !token.starts_with('-')) {
                                     opaque_argument = true;
                                 }
+                                unread_argument = true;
                                 continue;
                             }
                             argv.extend(
@@ -1010,6 +1073,7 @@ mod tests {
                     line: index + 1,
                     argv,
                     terminated: terminated && !opaque_argument,
+                    unread_argument,
                 });
             }
         }
@@ -1034,13 +1098,7 @@ mod tests {
 
         let mut found: Vec<String> = sites
             .iter()
-            .map(|site| {
-                site.file
-                    .rsplit('/')
-                    .next()
-                    .expect("a file name")
-                    .to_string()
-            })
+            .map(|site| file_name(&site.file).to_string())
             .collect();
         found.sort();
         found.dedup();
@@ -1057,7 +1115,9 @@ mod tests {
             if index % 2 == 0 || !token.ends_with(".rs") {
                 continue;
             }
-            if !sites.iter().any(|site| site.file.ends_with(token)) {
+            // Whole name, not a suffix: `advanced_search.rs` must not stand
+            // in for the header's `search.rs`.
+            if !sites.iter().any(|site| file_name(&site.file) == token) {
                 assert!(
                     !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("src/commands")
@@ -1116,7 +1176,18 @@ mod tests {
                     .collect();
                 ("merge.rs", forms)
             });
-        let mut exception_seen = false;
+        // File AND form are still not enough: `merge.rs` is precisely the file
+        // where the NEXT bare `git rebase` or `git worktree` gets written, and
+        // a fifth one inherited this exemption in silence. So the header's own
+        // COUNTS cap it — the six spawns the paragraph credits to
+        // `preview_rebase`, and the four of them it calls writes.
+        let declared_spawns = declared_count(&header, " bare commands");
+        let declared_writes = declared_count(&header, " that write belong on");
+        let mut exempted = 0usize;
+        // The other exemption — a builder that leaves its function unread — is
+        // capped the same way, by the count its own sentence states.
+        let declared_unreadable = declared_count(&header, " spawns run outside");
+        let mut unreadable = 0usize;
 
         let sites = bare_git_command_sites();
         assert!(
@@ -1138,12 +1209,17 @@ mod tests {
                 // Exempted by a DEDICATED sentence, not by the header naming
                 // the file somewhere: every bare-`Command` file is named in
                 // the header by construction, so that test was no test at all.
+                // The name has to appear WHOLE and quoted. Matched as a bare
+                // substring, the sentence naming `advanced_search.rs` also
+                // acknowledged `search.rs` — a file holding six builders of
+                // the same shape, one refactor from escaping their functions —
+                // and exempted it from this test entirely.
                 let acknowledged = header
                     .split("hands it to `execute_git_log`")
                     .next()
                     .is_some_and(|before| {
                         before.rsplit("//!").next().is_some_and(|sentence| {
-                            sentence.contains(site.file.rsplit('/').next().unwrap())
+                            sentence.contains(&format!("`{}`", file_name(&site.file)))
                         })
                     })
                     && header.contains("hands it to `execute_git_log`");
@@ -1155,6 +1231,7 @@ mod tests {
                      this file in the header's own sentence about builders that escape.",
                     site.file, site.line
                 );
+                unreadable += 1;
                 continue;
             }
 
@@ -1182,12 +1259,47 @@ mod tests {
             let subcommand = site.argv[position].clone();
             let rest: Vec<String> = site.argv[position + 1..].to_vec();
             if is_read_only_form(&subcommand, &rest) {
+                // `is_read_only_form` judges the FORM, so it may only be
+                // trusted when the form was actually read. A macro argument is
+                // dropped from `argv`, and dropping one is enough to turn
+                // `git remote add <name> <url>` into the argument-less listing
+                // or `git archive --output=<file>` into the stdout stream.
+                assert!(
+                    !site.unread_argument,
+                    "{}:{} reads as a read-only `{subcommand}` ({:?}) only because an argument \
+                     built by a macro could not be read. Pass literal arguments so the form can \
+                     be judged.",
+                    site.file, site.line, site.argv
+                );
+                // `argv` is the literals in SOURCE order, which is not always
+                // the order git sees: a builder that adds `list` in one branch
+                // and `push` in the other reads as the listing, and a logged
+                // word passed as a global option's value (`--exec-path
+                // archive`) is picked up before the real subcommand. So the
+                // read that clears this site is only trustworthy while nothing
+                // after it is a logged mutating form either.
+                let shadowed = rest.iter().enumerate().find_map(|(at, token)| {
+                    (LOGGED_SUBCOMMANDS.contains(&token.as_str())
+                        && !is_read_only_form(token, &rest[at + 1..]))
+                    .then_some(token)
+                });
+                assert!(
+                    shadowed.is_none(),
+                    "{}:{} reads as a read-only `{subcommand}` ({:?}), but `{}` later in the \
+                     same builder is a logged mutating form. The scan cannot tell which of them \
+                     runs - assemble the arguments in one order, or route the mutating form \
+                     through create_command.",
+                    site.file,
+                    site.line,
+                    site.argv,
+                    shadowed.map(String::as_str).unwrap_or_default()
+                );
                 continue;
             }
 
             if let Some((file, allowed)) = exception.as_ref() {
-                if site.file.ends_with(file) && allowed.contains(&subcommand) {
-                    exception_seen = true;
+                if file_name(&site.file) == *file && allowed.contains(&subcommand) {
+                    exempted += 1;
                     continue;
                 }
             }
@@ -1204,13 +1316,49 @@ mod tests {
 
         // And the declared exception must still BE one: if `preview_rebase`
         // moves onto `create_command`, this paragraph has to go with it.
-        if exception.is_some() {
+        if let Some((file, _)) = exception.as_ref() {
             assert!(
-                exception_seen,
+                exempted > 0,
                 "the header still declares merge.rs a real exception, but nothing there runs a \
                  logged mutating form any more - delete that paragraph"
             );
+            // Both counts come out of that paragraph, so widening the
+            // exemption means saying so there. A seventh spawn fails the
+            // first; swapping one of the two reads for another `git worktree`
+            // keeps the total at six and fails the second.
+            let spawns = sites
+                .iter()
+                .filter(|site| file_name(&site.file) == *file)
+                .count();
+            assert_eq!(
+                Some(spawns),
+                declared_spawns,
+                "{file} now holds {spawns} bare git spawns, but the header's exception paragraph \
+                 accounts for {declared_spawns:?}. Route the new one through create_command, or \
+                 say in that paragraph what it is and why it may not be reported."
+            );
+            assert_eq!(
+                Some(exempted),
+                declared_writes,
+                "{exempted} spawns in {file} are exempted as declared writes, but the header \
+                 says {declared_writes:?}. The exemption may not grow without the sentence that \
+                 justifies it growing too."
+            );
         }
+
+        // Same for the sites whose builders the scan cannot follow: the
+        // sentence acknowledging them states how many there are, so a fourth
+        // one in that file is a new unjudged spawn, not a covered one.
+        // `unwrap_or(0)`, so that removing the sentence is only allowed once
+        // no site needs it: with sites still escaping, a deleted or reworded
+        // count reads as zero and fails here.
+        assert_eq!(
+            unreadable,
+            declared_unreadable.unwrap_or(0),
+            "{unreadable} bare spawns hand their builder out of the function (or hide an \
+             argument behind a macro), but the header acknowledges {declared_unreadable:?}. \
+             Assemble and run the new one in the same place, or amend that sentence."
+        );
     }
 
     /// The subcommand has to be found past git's own global options, or a
