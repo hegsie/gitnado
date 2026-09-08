@@ -29,6 +29,11 @@ import type { LvInitDialog } from '../dialogs/lv-init-dialog.ts';
 import type { LvSearchBar, SearchFilter } from './lv-search-bar.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
 import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
+import {
+  hasConfiguredRemote,
+  noRemoteButtonLabel,
+  NO_REMOTE_MESSAGE,
+} from '../../utils/remote-availability.ts';
 import { runningRemoteOperation } from '../../services/remote-operations.service.ts';
 
 /** The three remote operations the toolbar exposes. */
@@ -791,13 +796,11 @@ export class LvToolbar extends LitElement {
     if (!repo) {
       return { disabled: true, idle: false, count: 0, label: `${name} — open a repository first` };
     }
-    if ((repo.remotes ?? []).length === 0) {
-      return {
-        disabled: true,
-        idle: false,
-        count: 0,
-        label: `${name} — this repository has no remote configured`,
-      };
+    // Shared with the context dashboard's copies of these three buttons, so
+    // the two surfaces cannot disagree about whether a repository has anywhere
+    // to fetch from — or about how to say that it has not.
+    if (!hasConfiguredRemote(repo)) {
+      return { disabled: true, idle: false, count: 0, label: noRemoteButtonLabel(name) };
     }
 
     const running = runningRemoteOperation(path);
@@ -881,8 +884,8 @@ export class LvToolbar extends LitElement {
       showToast('Please open a repository first', 'warning');
       return;
     }
-    if ((repo.remotes ?? []).length === 0) {
-      showToast('No remote configured for this repository — add one first.', 'warning');
+    if (!hasConfiguredRemote(repo)) {
+      showToast(NO_REMOTE_MESSAGE, 'warning');
       return;
     }
     this.dispatchEvent(
