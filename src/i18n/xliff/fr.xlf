@@ -696,6 +696,10 @@
   <source>(Not checked - not in your remote allowlist)</source>
   <target>(Non vérifié - absent de votre liste des distants autorisés)</target>
 </trans-unit>
+<trans-unit id="se1b6fbb473670488">
+  <source>(Not checked)</source>
+  <target>(Non vérifié)</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

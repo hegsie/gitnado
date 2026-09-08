@@ -26,7 +26,9 @@ import type { MergeToolInfo, AvailableDiffTool } from '../../services/git.servic
 import { avatarBlockedExplanation, GRAVATAR_HOST } from '../../utils/avatar-policy.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
-import type { AiProviderInfo, AiProviderType } from '../../services/ai.service.ts';
+import { providerNetworkBlockReason } from '../../services/ai.service.ts';
+import type { AiNetworkPolicy, AiProviderInfo, AiProviderType } from '../../services/ai.service.ts';
+import { emitSecuritySettings } from '../../services/security-sync.service.ts';
 import type { SystemCapabilities, ModelEntry, DownloadedModel, DownloadProgress, LocalModelStatus } from '../../services/local-ai.service.ts';
 import type { McpStatus } from '../../services/mcp.service.ts';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -53,10 +55,26 @@ import '../common/lv-toggle.ts';
  * (`lv-pull-request-list`, `lv-account-repo-picker`, `aiBlockedResult` in
  * `ai.service.ts`) and words the second one "remote allowlist", which is what
  * the Security tab calls it; this one now does too.
+ *
+ * It names the policy by RE-EVALUATING the live one against the provider's own
+ * endpoint (`providerNetworkBlockReason`), not by reading a single flag. This
+ * screen is one scrolling page: Security sits directly above AI Features, and
+ * `probed` is a backend answer fetched once while `offlineMode` is a switch the
+ * user can flip in the row above. Pairing the two produced the same complaint
+ * inverted — the instant offline mode went off, a provider still marked
+ * unprobed started blaming a remote allowlist that did not exist. Both halves
+ * now come from one evaluation of one live policy, which is what
+ * `avatarFetchBlockReason` and `aiBlockedResult` already do.
+ *
+ * That leaves a third answer: unprobed, and nothing currently refusing it. That
+ * is the state between flipping the setting and the fresh verdict arriving (see
+ * `refreshProvidersForSecurityChange`), and it says only "(Not checked)" —
+ * naming a policy that is switched off would be the bug again, and calling it
+ * "(Unavailable)" would tell the user their provider is broken.
  */
 export function providerStatusLabel(
   provider: AiProviderInfo,
-  offlineMode: boolean = settingsStore.getState().offlineMode,
+  policy: AiNetworkPolicy = settingsStore.getState(),
 ): string {
   if (provider.available) return msg('(Available)');
   if (provider.requiresApiKey && !provider.hasApiKey) return msg('(API key required)');
@@ -64,9 +82,14 @@ export function providerStatusLabel(
   // field (an older backend) keeps reading "(Unavailable)" instead of claiming
   // nothing was checked.
   if (provider.probed === false) {
-    return offlineMode
-      ? msg('(Not checked - offline)')
-      : msg('(Not checked - not in your remote allowlist)');
+    switch (providerNetworkBlockReason(provider.endpoint, policy)) {
+      case 'offline':
+        return msg('(Not checked - offline)');
+      case 'allowlist':
+        return msg('(Not checked - not in your remote allowlist)');
+      default:
+        return msg('(Not checked)');
+    }
   }
   return msg('(Unavailable)');
 }
@@ -506,6 +529,10 @@ export class LvSettingsDialog extends LitElement {
   private mergeToolWriteToken = 0;
   private diffToolWriteToken = 0;
 
+  /** Same guard for the provider listing, which the security settings can now
+   * re-request while an earlier request is still in flight. */
+  private aiProvidersLoadToken = 0;
+
   private settingsUnsubscribe: (() => void) | null = null;
 
   connectedCallback(): void {
@@ -569,10 +596,17 @@ export class LvSettingsDialog extends LitElement {
   }
 
   private async loadAiProviders(): Promise<void> {
+    const token = ++this.aiProvidersLoadToken;
     const [providersResult, activeResult] = await Promise.all([
       aiService.getAiProviders(),
       aiService.getActiveAiProvider(),
     ]);
+
+    // A later load was started while this one was in flight — a second security
+    // change, or the Refresh button — so that one's answer is the current one
+    // and this reply is stale. Dropping it also covers a dialog that closed
+    // mid-flight: a detached element must not keep rewriting its own state.
+    if (token !== this.aiProvidersLoadToken || !this.isConnected) return;
 
     if (providersResult.success && providersResult.data) {
       this.aiProviders = providersResult.data;
@@ -581,6 +615,33 @@ export class LvSettingsDialog extends LitElement {
     if (activeResult.success && activeResult.data !== undefined) {
       this.activeProvider = activeResult.data;
     }
+  }
+
+  /**
+   * Re-ask the backend for the provider verdicts after a security setting
+   * changed.
+   *
+   * `AiProviderInfo.probed` is the BACKEND's answer, and it is fetched once on
+   * open. Without this, turning offline mode off left every cloud provider
+   * reading "(Not checked)" until the dialog was reopened or the Local
+   * Providers Refresh button was found — the flow dead-ended one row below the
+   * switch the user had just used.
+   *
+   * The security push is awaited FIRST. The backend learns about offline mode
+   * and the allowlist from the `update-security-settings` event app-shell emits
+   * from its store subscription, which is a separate IPC message with no
+   * ordering guarantee against this one; without the push, the refresh could be
+   * answered under the policy the user just changed away from and come back
+   * with the same stale `probed`. The push is idempotent — the Rust side
+   * returns early when the settings it holds already match — and it never
+   * throws.
+   */
+  private async refreshProvidersForSecurityChange(): Promise<void> {
+    await emitSecuritySettings({
+      offlineMode: this.offlineMode,
+      remoteAllowlist: this.remoteAllowlist,
+    });
+    await this.loadAiProviders();
   }
 
   private async handleProviderSelect(providerType: AiProviderType): Promise<void> {
@@ -1081,6 +1142,10 @@ export class LvSettingsDialog extends LitElement {
     // surfaces that cache "is AI available" have to re-ask. They listen for
     // `ai-settings-changed`; nothing listens to `settings-changed` for this.
     window.dispatchEvent(new CustomEvent('ai-settings-changed'));
+    // This screen caches the same answer, in `aiProviders[].probed`. Bound to
+    // `@change`, not `@input`, so this runs once the field is committed — not
+    // once per keystroke.
+    void this.refreshProvidersForSecurityChange();
   }
 
   private handleToggle(setting: string, value: boolean): void {
@@ -1142,6 +1207,8 @@ export class LvSettingsDialog extends LitElement {
     // keep offering a button the gate is now guaranteed to refuse.
     if (setting === 'offlineMode') {
       window.dispatchEvent(new CustomEvent('ai-settings-changed'));
+      // And this screen's own cached copy of that answer.
+      void this.refreshProvidersForSecurityChange();
     }
   }
 
@@ -1512,6 +1579,10 @@ export class LvSettingsDialog extends LitElement {
       // event, so without it they keep showing the pre-reset reason ("offline
       // mode is on") for a setting the reset has just turned off.
       window.dispatchEvent(new CustomEvent('ai-settings-changed'));
+      // Same reason the two handlers that write those settings do it: the
+      // provider labels on this very screen are the backend's answer under the
+      // OLD policy until it is asked again.
+      void this.refreshProvidersForSecurityChange();
       showToast('Settings reset to defaults', 'success');
     } finally {
       this.resetting = false;
@@ -2054,7 +2125,19 @@ export class LvSettingsDialog extends LitElement {
               ${this.aiProviders.map(
                 (p) => html`
                   <option value=${p.providerType} ?selected=${this.activeProvider === p.providerType}>
-                    ${p.name} ${providerStatusLabel(p, this.offlineMode)}
+                    ${p.name}
+                    ${
+                      // This component's own mirrors of the two security
+                      // settings, so a change in the Security section above
+                      // re-renders the list and both halves of the label come
+                      // from the same live policy — the same shape as
+                      // `renderShowAvatarsRow` handing
+                      // `avatarBlockedExplanation` one settings slice.
+                      providerStatusLabel(p, {
+                        offlineMode: this.offlineMode,
+                        remoteAllowlist: this.remoteAllowlist,
+                      })
+                    }
                   </option>
                 `
               )}
