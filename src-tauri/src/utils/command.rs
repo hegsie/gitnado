@@ -1011,6 +1011,18 @@ mod tests {
                 // unreadable word that follows is a path or a config pair —
                 // not an argument whose FORM anything here judges.
                 let mut expects_option_value = false;
+                // Set once a literal has been read that is neither a global
+                // option nor a global option's VALUE — that is, once the
+                // subcommand slot has been filled. Asking `argv` instead
+                // ("does any token not start with `-`?") answered yes for a
+                // global option's value, so `git -c credential.helper=`
+                // followed by a subcommand this scan cannot read counted as a
+                // site whose subcommand HAD been read: the unreadable word was
+                // not treated as opaque and the site passed unjudged while
+                // running whatever that word held. `git_subcommand_at` — this
+                // crate's production answer to the same question — skips those
+                // values, and so does this.
+                let mut subcommand_read = false;
                 // A statement that names the binding may CONTINUE onto chained
                 // lines that do not — `cmd.arg("-C")` then `.arg(&path)` then
                 // `.arg("log")`. Crediting only lines containing the name read
@@ -1066,13 +1078,17 @@ mod tests {
                         for (at, _) in scanned.match_indices(".arg") {
                             let rest = &scanned[at..];
                             let Some(open) = rest.find('(') else { continue };
-                            let Some(close) = rest.find(')') else {
-                                continue;
-                            };
-                            if close < open {
-                                continue;
-                            }
-                            let inside = &rest[open..close];
+                            // A call rustfmt wrapped across lines closes on a
+                            // LATER one, so this line holds none of what it
+                            // passes. Skipping such a call outright counted as
+                            // having READ it: `.arg("remote")` followed by a
+                            // wrapped `.arg(` holding `set-url` left `argv`
+                            // saying `remote` alone — the argument-less listing
+                            // `is_read_only_form` clears. `None` here falls
+                            // into the unreadable-argument branch below with
+                            // every other word this scan cannot make out.
+                            let closed = rest[open..].find(')').map(|at| open + at);
+                            let inside = closed.map_or("", |close| &rest[open..close]);
                             // Anything OUTSIDE this call's string literals: a
                             // macro's name (`format!("{}", sub)`), a variable
                             // (`.arg(&action)`, `.args(&refs)`), or the
@@ -1080,19 +1096,25 @@ mod tests {
                             // &path, "remote", &action])` harvests as its two
                             // literals alone, and the words between them leave
                             // no trace in `argv` at all.
-                            let unread = inside.split('"').step_by(2).any(|outside| {
-                                outside.chars().any(|c| c.is_alphanumeric() || c == '_')
-                            })
-                            // An EMPTY literal is a word passed to git that says
-                            // nothing about what runs, yet it satisfied the "a
-                            // subcommand was read" guard below all on its own —
-                            // leaving the real subcommand free to sit in a
-                            // variable, checked by nothing.
-                            || inside
-                                .split('"')
-                                .skip(1)
-                                .step_by(2)
-                                .any(|token| token.trim().is_empty());
+                            let unread = closed.is_none()
+                                || inside.split('"').step_by(2).any(|outside| {
+                                    outside.chars().any(|c| c.is_alphanumeric() || c == '_')
+                                })
+                                // An EMPTY literal is a word passed to git that
+                                // says nothing about what runs, yet it satisfied
+                                // the "a subcommand was read" guard below all on
+                                // its own — leaving the real subcommand free to
+                                // sit in a variable, checked by nothing. A
+                                // literal holding a BACKSLASH is the same word
+                                // in disguise: the source text is not what git
+                                // receives (`"pu\x73h"` runs `push`), and an
+                                // escaped quote inside one splits this scan's
+                                // tokens somewhere git never would.
+                                || inside
+                                    .split('"')
+                                    .skip(1)
+                                    .step_by(2)
+                                    .any(|token| token.trim().is_empty() || token.contains('\\'));
                             if unread {
                                 // Reading such a word as NO argument is how
                                 // `git remote set-url origin <url>` read as
@@ -1109,9 +1131,7 @@ mod tests {
                                 // written after one is not a global option and
                                 // must not be allowed to forgive the word
                                 // behind it (`remote` `-C` `<action>`).
-                                if expects_option_value
-                                    && !argv.iter().any(|token| !token.starts_with('-'))
-                                {
+                                if expects_option_value && !subcommand_read {
                                     expects_option_value = false;
                                     continue;
                                 }
@@ -1121,23 +1141,32 @@ mod tests {
                                 // --format=…` then `format!("-{}", n)`) only
                                 // the FORM goes unread — which still matters
                                 // wherever the verdict turns on it.
-                                if !argv.iter().any(|token| !token.starts_with('-')) {
+                                if !subcommand_read {
                                     opaque_argument = true;
                                 }
                                 unread_argument = true;
                                 continue;
                             }
-                            argv.extend(
-                                inside
-                                    .split('"')
-                                    .skip(1)
-                                    .step_by(2)
-                                    .filter(|token| *token != "git")
-                                    .map(str::to_string),
-                            );
-                            expects_option_value = argv.last().is_some_and(|token| {
-                                GLOBAL_OPTS_WITH_VALUE.contains(&token.as_str())
-                            });
+                            // One literal at a time, so a global option and
+                            // the value that belongs to it are told apart
+                            // exactly as `git_subcommand_at` tells them apart.
+                            // Reading the whole call at once and then asking
+                            // only what its LAST token was could not do that.
+                            for token in inside
+                                .split('"')
+                                .skip(1)
+                                .step_by(2)
+                                .filter(|token| *token != "git")
+                            {
+                                if expects_option_value {
+                                    expects_option_value = false;
+                                } else if !token.starts_with('-') {
+                                    subcommand_read = true;
+                                } else if GLOBAL_OPTS_WITH_VALUE.contains(&token) {
+                                    expects_option_value = true;
+                                }
+                                argv.push(token.to_string());
+                            }
                         }
                     }
                     if terminator.is_some() && mentions_binding {
