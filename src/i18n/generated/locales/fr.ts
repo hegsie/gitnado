@@ -224,6 +224,7 @@
       's33c1c6766b419d56': `Standard (16 Go+ de RAM)`,
       's3420935f88f459e9': `Échec de l'enregistrement du port MCP`,
       's39e07d32192cd4ee': `Échec de l'arrêt du serveur MCP`,
+      's4795644f9fe85a17': `(Non vérifié - absent de votre liste des distants autorisés)`,
       's4f2af727ff3e16bb': `Échec de l'enregistrement des paramètres MCP`,
       's50b18aabd90ee355': `Échec de l'enregistrement de la clé API`,
       's59af9cc8acfda651': `Ultra-léger (8 Go+ de RAM)`,

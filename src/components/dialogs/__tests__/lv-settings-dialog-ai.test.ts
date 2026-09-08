@@ -59,6 +59,7 @@ const mockInvoke: MockInvoke = async (command: string) => {
 import '../lv-settings-dialog.ts';
 import type { LvSettingsDialog } from '../lv-settings-dialog.ts';
 import { providerStatusLabel } from '../lv-settings-dialog.ts';
+import { settingsStore } from '../../../stores/settings.store.ts';
 import type { AiProviderInfo } from '../../../services/ai.service.ts';
 
 describe('lv-settings-dialog AI events', () => {
@@ -174,6 +175,12 @@ describe('lv-settings-dialog provider test feedback', () => {
  * switch that turns that provider off, and probing it would be an outbound
  * request from the very screen the user opened to stop them. `probed: false`
  * says "not checked", which must not read as "your provider is broken".
+ *
+ * `probed: false` also comes back when offline mode is OFF and the provider's
+ * host is simply not in the remote allowlist (`provider_network_allowed` ->
+ * `security::endpoint_allowed` is false for either policy), so the label has to
+ * name the policy that actually refused rather than always blaming offline
+ * mode — otherwise it sends the user to a switch they never turned on.
  */
 describe('lv-settings-dialog provider status label', () => {
   function provider(overrides: Partial<AiProviderInfo>): AiProviderInfo {
@@ -192,28 +199,65 @@ describe('lv-settings-dialog provider status label', () => {
   }
 
   it('says a provider was not checked rather than calling it unavailable', () => {
-    expect(providerStatusLabel(provider({ probed: false }))).to.equal(
+    expect(providerStatusLabel(provider({ probed: false }), true)).to.equal(
       '(Not checked - offline)',
     );
   });
 
+  it('blames the remote allowlist, not offline mode, when offline mode is off', () => {
+    expect(providerStatusLabel(provider({ probed: false }), false)).to.equal(
+      '(Not checked - not in your remote allowlist)',
+    );
+  });
+
+  it('reads offline mode from the settings store when none is passed', () => {
+    const store = settingsStore.getState();
+    const original = store.offlineMode;
+    try {
+      store.setOfflineMode(true);
+      expect(providerStatusLabel(provider({ probed: false }))).to.equal(
+        '(Not checked - offline)',
+      );
+      settingsStore.getState().setOfflineMode(false);
+      expect(providerStatusLabel(provider({ probed: false }))).to.equal(
+        '(Not checked - not in your remote allowlist)',
+      );
+    } finally {
+      settingsStore.getState().setOfflineMode(original);
+    }
+  });
+
   it('still reports a probed provider as unavailable', () => {
-    expect(providerStatusLabel(provider({ probed: true }))).to.equal('(Unavailable)');
+    for (const offline of [true, false]) {
+      expect(providerStatusLabel(provider({ probed: true }), offline)).to.equal(
+        '(Unavailable)',
+      );
+    }
   });
 
   it('reads as unavailable when the payload has no probed field at all', () => {
     const legacy = provider({}) as Partial<AiProviderInfo>;
     delete legacy.probed;
-    expect(providerStatusLabel(legacy as AiProviderInfo)).to.equal('(Unavailable)');
+    for (const offline of [true, false]) {
+      expect(providerStatusLabel(legacy as AiProviderInfo, offline)).to.equal(
+        '(Unavailable)',
+      );
+    }
   });
 
   it('reports an available provider as available', () => {
-    expect(providerStatusLabel(provider({ available: true }))).to.equal('(Available)');
+    for (const offline of [true, false]) {
+      expect(providerStatusLabel(provider({ available: true }), offline)).to.equal(
+        '(Available)',
+      );
+    }
   });
 
   it('still asks for a missing API key before anything else', () => {
-    expect(
-      providerStatusLabel(provider({ hasApiKey: false, probed: false })),
-    ).to.equal('(API key required)');
+    for (const offline of [true, false]) {
+      expect(
+        providerStatusLabel(provider({ hasApiKey: false, probed: false }), offline),
+      ).to.equal('(API key required)');
+    }
   });
 });

@@ -42,14 +42,32 @@ import '../common/lv-toggle.ts';
  * which is what lets the user get to the switch that turns the cloud provider
  * off — without a request leaving the machine. Calling that "Unavailable"
  * would be telling the user their provider is broken.
+ *
+ * Which of those two policies refused has to be said, not guessed. The backend
+ * sets `probed` from `provider_network_allowed` -> `security::endpoint_allowed`
+ * (`src-tauri/src/services/ai/mod.rs`), which is false for EITHER offline mode
+ * or a remote allowlist that does not name the provider's host — so a label
+ * that always blamed offline mode told a user with offline mode switched off
+ * to go turn off a setting they had never enabled, while the allowlist that
+ * actually refused went unnamed. Every sibling surface splits these two
+ * (`lv-pull-request-list`, `lv-account-repo-picker`, `aiBlockedResult` in
+ * `ai.service.ts`) and words the second one "remote allowlist", which is what
+ * the Security tab calls it; this one now does too.
  */
-export function providerStatusLabel(provider: AiProviderInfo): string {
+export function providerStatusLabel(
+  provider: AiProviderInfo,
+  offlineMode: boolean = settingsStore.getState().offlineMode,
+): string {
   if (provider.available) return msg('(Available)');
   if (provider.requiresApiKey && !provider.hasApiKey) return msg('(API key required)');
   // Compared against `false` rather than truthiness so a payload without the
   // field (an older backend) keeps reading "(Unavailable)" instead of claiming
   // nothing was checked.
-  if (provider.probed === false) return msg('(Not checked - offline)');
+  if (provider.probed === false) {
+    return offlineMode
+      ? msg('(Not checked - offline)')
+      : msg('(Not checked - not in your remote allowlist)');
+  }
   return msg('(Unavailable)');
 }
 
@@ -2036,7 +2054,7 @@ export class LvSettingsDialog extends LitElement {
               ${this.aiProviders.map(
                 (p) => html`
                   <option value=${p.providerType} ?selected=${this.activeProvider === p.providerType}>
-                    ${p.name} ${providerStatusLabel(p)}
+                    ${p.name} ${providerStatusLabel(p, this.offlineMode)}
                   </option>
                 `
               )}
