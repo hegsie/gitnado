@@ -70,6 +70,15 @@ const responses: Record<string, unknown> = {};
         state: 'sweep-state',
       });
     }
+    // A cloud AI provider is SELECTED for the sweep. With NOTHING selected the
+    // AI gate deliberately permits the call: `resolve_provider` on the Rust
+    // side tries the embedded model first and then skips every provider whose
+    // endpoint the security settings forbid, so the fallback cannot leave the
+    // machine, and `guard_ai_request` — which judges only
+    // `active_provider_endpoint()` — refuses nothing up front either. The state
+    // this sweep has to exercise is the one where a cloud provider IS chosen
+    // and the staged diff would really be posted to it.
+    if (command === 'get_active_ai_provider') return Promise.resolve('open_ai');
     return Promise.resolve(null);
   }) as MockInvoke,
   transformCallback: () => 0,

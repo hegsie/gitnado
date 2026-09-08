@@ -135,10 +135,27 @@ const PROVIDER_DEFAULT_ENDPOINTS: Readonly<Record<AiProviderType, string>> = {
   local_inference: '',
 };
 
-/** The refusal an AI call returns, in the shape callers already render. */
+/**
+ * The refusal an AI call returns, in the shape callers already render.
+ *
+ * Always about a provider that is actually CHOSEN: with nothing chosen the
+ * gate permits the call rather than refusing it, because the backend resolves
+ * the fallback provider itself and skips every one the security settings
+ * forbid (see `checkAiNetworkAllowed`). So there is no "no provider selected"
+ * wording here — it would only ever have named a risk that cannot arise.
+ *
+ * Neither branch tells a user of a LOCAL provider to "select a local
+ * provider": that would name the one already selected. Its endpoint is what is
+ * wrong, and the endpoint lives in the AI config file — the app has no control
+ * for it (there is no `set_ai_endpoint` command beside `set_ai_provider` /
+ * `set_ai_api_key` / `set_ai_model`), so naming a Settings field for it sent
+ * the user looking for something that does not exist. Removing the entry from
+ * `ai_config.json` restores the provider's loopback default, which is exactly
+ * what `endpoint_for` falls back to.
+ */
 function aiBlockedResult<T>(
   reason: 'offline' | 'allowlist',
-  provider: AiProviderType | null,
+  provider: AiProviderType,
   /**
    * The endpoint the gate actually judged, so the refusal names the host the
    * request would have reached. Naming the provider's DEFAULT host while the
@@ -147,30 +164,33 @@ function aiBlockedResult<T>(
    */
   endpoint?: string | null,
 ): CommandResult<T> {
-  const name = provider ? getProviderDisplayName(provider) : null;
-  const host = endpoint ?? (provider ? PROVIDER_DEFAULT_ENDPOINTS[provider] : null) ?? null;
+  const name = getProviderDisplayName(provider);
+  const host = endpoint ?? PROVIDER_DEFAULT_ENDPOINTS[provider] ?? null;
+  const local = isLocalAiProvider(provider);
+  /** The one remedy a user of a misconfigured local provider actually has. */
+  const repoint =
+    `point ${name} back at this machine by removing its "endpoint" from ` +
+    'ai_config.json in the app config folder — the app has no setting for it.';
   const message =
     reason === 'offline'
-      ? provider && name
-        ? isLocalAiProvider(provider)
-          ? // A local provider pointed somewhere else. "Select a local
-            // provider" would name the one already selected, so this says what
-            // is actually wrong: its endpoint is not on this machine.
-            `Offline mode is enabled and ${name} is configured to use ` +
-            `${host}, which is not on this machine. Point it back at this ` +
-            'machine in Settings > AI, or turn offline mode off in ' +
-            'Settings > Security.'
-          : `Offline mode is enabled and ${name} is a cloud AI provider. ` +
-            'Turn offline mode off in Settings > Security, or select a local ' +
-            'provider (Ollama, LM Studio or Local AI).'
-        : 'Offline mode is enabled and no AI provider is selected, so this ' +
-          'request could reach a cloud provider. Select a local provider ' +
-          '(Ollama, LM Studio or Local AI) in Settings, or turn offline mode off.'
-      : name
-        ? `${name} (${host}) is not in your remote allowlist. Add it in ` +
-          'Settings > Security, or select a local provider.'
-        : 'A remote allowlist is configured and no AI provider is selected, ' +
-          'so the destination of this request is unknown. Select a provider in Settings.';
+      ? local
+        ? // A local provider pointed somewhere else. "Select a local
+          // provider" would name the one already selected, so this says what
+          // is actually wrong: its endpoint is not on this machine.
+          `Offline mode is enabled and ${name} is configured to use ` +
+          `${host}, which is not on this machine. Turn offline mode off in ` +
+          `Settings > Security, or ${repoint}`
+        : `Offline mode is enabled and ${name} is a cloud AI provider. ` +
+          'Turn offline mode off in Settings > Security, or select a local ' +
+          'provider (Ollama, LM Studio or Local AI).'
+      : local
+        ? // Same split on the allowlist side. This branch used to end in
+          // "select a local provider" while a local provider was selected.
+          `${name} is configured to use ${host}, which is not in your remote ` +
+          `allowlist. Add it in Settings > Security, or ${repoint}`
+        : `${name} (${host}) is not in your remote allowlist. Add it in ` +
+          'Settings > Security, or select a local provider (Ollama, LM Studio ' +
+          'or Local AI).';
 
   // `BLOCKED` is the code the git gate uses, so `isNetworkGateRefusal` and the
   // suggestion service treat an AI refusal exactly like any other.
@@ -210,6 +230,22 @@ async function checkAiNetworkAllowed<T>(
     provider = active.success ? (active.data ?? null) : null;
   }
 
+  // Nothing chosen in Settings, and nothing for this gate to refuse. The
+  // request falls back to whatever is reachable, and `resolve_provider`
+  // (src-tauri/src/services/ai/mod.rs) tries the embedded model first and then
+  // SKIPS every provider whose endpoint the security settings forbid
+  // (`provider_network_allowed`) — so a fallback request can only ever go
+  // somewhere this gate would have allowed anyway. The backend agrees and
+  // refuses nothing up front either: `guard_ai_request` judges only
+  // `active_provider_endpoint()`, which is `None` here.
+  //
+  // Refusing instead broke the local fallback outright. On a fresh install
+  // with Ollama running on loopback and offline mode on, nothing selects a
+  // provider — `set_ai_api_key` auto-selects only when a KEY is stored, and
+  // Ollama and LM Studio need none — so every AI affordance was hidden behind
+  // a refusal naming a cloud risk that could not arise.
+  if (!provider) return null;
+
   // A local provider is NOT waved through on its name. Its requests normally
   // never leave the machine, and the loopback carve-out below permits them for
   // that reason — but the AI config can point Ollama or LM Studio at any host,
@@ -217,20 +253,15 @@ async function checkAiNetworkAllowed<T>(
   // (`guard_ai_request`). Passing on the name permitted exactly what the
   // backend refuses, so the two gates disagreed about one request.
   //
-  // With nothing selected the backend falls back to whatever provider is
-  // reachable, cloud providers included (`resolve_provider` in
-  // src-tauri/src/services/ai/mod.rs), so the destination is genuinely unknown
-  // and the gate refuses rather than waving it through — the same fail-closed
-  // rule the allowlist already applies to a remote whose URL it cannot see.
-  //
   // `resolveProviderEndpoint` returns the empty string when the provider
   // reports NO endpoint (the embedded model) and null when the listing could
   // not be read at all, so `??` falls back only in the second case — an empty
   // endpoint is an answer, and the same answer the backend's `guard_endpoint`
-  // treats as "nothing to reach".
-  const resolved = provider ? await resolveProviderEndpoint(provider) : null;
-  const endpoint =
-    resolved ?? (provider ? (PROVIDER_DEFAULT_ENDPOINTS[provider] ?? null) : null);
+  // treats as "nothing to reach". The second `??` still matters: a provider
+  // this build has never heard of (a newer Rust variant) has no entry in the
+  // default table, and an unknown destination fails closed.
+  const resolved = await resolveProviderEndpoint(provider);
+  const endpoint = resolved ?? (PROVIDER_DEFAULT_ENDPOINTS[provider] ?? null);
   // The same loopback carve-out the backend's `guard_endpoint` makes, applied
   // before the host is judged. This is what keeps a locally hosted model usable
   // with offline mode on, which is the whole point of running one.

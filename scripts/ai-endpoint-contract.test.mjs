@@ -64,6 +64,86 @@ test('reports a backend arm whose endpoint is not a literal', () => {
   assert.deepEqual(unparsed, ['OpenAi']);
 });
 
+test('reads a grouped or-pattern arm as one entry per variant', () => {
+  // The enum already groups variants this way in `requires_api_key`, so
+  // `default_endpoint` may at any point. Read as two entries, not skipped.
+  const { endpoints, unparsed } = extractBackendDefaults(`
+    pub fn default_endpoint(&self) -> &'static str {
+        match self {
+            AiProviderType::Ollama => "http://localhost:11434",
+            AiProviderType::Mistral | AiProviderType::Cohere => "https://api.mistral.ai/v1",
+        }
+    }
+  `);
+  assert.deepEqual(endpoints, {
+    ollama: 'http://localhost:11434',
+    mistral: 'https://api.mistral.ai/v1',
+    cohere: 'https://api.mistral.ai/v1',
+  });
+  assert.deepEqual(unparsed, []);
+});
+
+test('reports every variant of a grouped arm whose endpoint is not a literal', () => {
+  const { endpoints, unparsed } = extractBackendDefaults(`
+    pub fn default_endpoint(&self) -> &'static str {
+        match self {
+            AiProviderType::Ollama => "http://localhost:11434",
+            AiProviderType::Mistral | AiProviderType::Cohere => computed_default(),
+        }
+    }
+  `);
+  assert.deepEqual(Object.keys(endpoints), ['ollama']);
+  assert.deepEqual(unparsed, ['Mistral', 'Cohere']);
+});
+
+test('reports a wildcard arm rather than skipping it', () => {
+  // A `_ =>` arm gives every remaining variant an endpoint no per-variant scan
+  // would ever see. Dropping it left the contract green while a provider was
+  // redirected.
+  const { endpoints, unparsed } = extractBackendDefaults(`
+    pub fn default_endpoint(&self) -> &'static str {
+        match self {
+            AiProviderType::Ollama => "http://localhost:11434",
+            _ => "https://api.evil.test/v1",
+        }
+    }
+  `);
+  assert.deepEqual(Object.keys(endpoints), ['ollama']);
+  assert.deepEqual(unparsed, ['_ => "https://api.evil.test/v1",']);
+});
+
+test('reports a block-bodied arm rather than skipping its contents', () => {
+  const { endpoints, unparsed } = extractBackendDefaults(`
+    pub fn default_endpoint(&self) -> &'static str {
+        match self {
+            AiProviderType::Ollama => "http://localhost:11434",
+            AiProviderType::OpenAi => {
+                OPENAI
+            }
+        }
+    }
+  `);
+  assert.deepEqual(Object.keys(endpoints), ['ollama']);
+  assert.deepEqual(unparsed, ['OpenAi', 'OPENAI']);
+});
+
+test('reports a frontend line that is not a plain key at all', () => {
+  // A spread fills the table from somewhere this module never reads, and a
+  // quoted key is not matched by the entry shapes. Both used to vanish.
+  const { endpoints, unparsed } = extractFrontendDefaults(`
+const PROVIDER_DEFAULT_ENDPOINTS: Readonly<Record<AiProviderType, string>> = {
+  ...OTHER_ENDPOINTS,
+  'open_ai': 'https://api.evil.test/v1',
+  ollama: 'http://localhost:11434',
+};
+  `);
+  assert.deepEqual(Object.keys(endpoints), ['ollama']);
+  assert.deepEqual(unparsed, [
+    '...OTHER_ENDPOINTS,',
+    "'open_ai': 'https://api.evil.test/v1',",
+  ]);
+});
+
 test('reports a frontend entry whose endpoint is not a literal', () => {
   const { endpoints, unparsed } = extractFrontendDefaults(`
 const PROVIDER_DEFAULT_ENDPOINTS: Readonly<Record<AiProviderType, string>> = {
