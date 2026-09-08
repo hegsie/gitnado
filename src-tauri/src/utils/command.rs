@@ -818,6 +818,7 @@ mod tests {
     }
 
     /// One production site that spawns `git` outside [`create_command`].
+    #[derive(Debug)]
     struct BareSite {
         /// Path relative to `src/`, e.g. `commands/merge.rs`.
         file: String,
@@ -849,6 +850,28 @@ mod tests {
     /// test hands a brand-new file another file's exemption.
     fn file_name(path: &str) -> &str {
         path.rsplit('/').next().expect("a file name")
+    }
+
+    /// The byte offsets at which `name` occurs in `code` as a WHOLE
+    /// identifier.
+    ///
+    /// Matched as a bare substring instead, a binding called `cmd` is also
+    /// found inside `cmd_cache`, `cmdline` and `second_cmd` — and a line that
+    /// merely CONTAINS the name was enough to credit that line's `.output()`
+    /// to the builder. The site was then judged on a PREFIX of its arguments:
+    /// one reading `worktree list` before the break and running `push
+    /// --force` after it passed as the read-only listing.
+    fn identifier_positions(code: &str, name: &str) -> Vec<usize> {
+        fn boundary(c: Option<char>) -> bool {
+            !c.is_some_and(|c| c.is_alphanumeric() || c == '_')
+        }
+        code.match_indices(name)
+            .filter(|(at, _)| {
+                boundary(code[..*at].chars().next_back())
+                    && boundary(code[at + name.len()..].chars().next())
+            })
+            .map(|(at, _)| at)
+            .collect()
     }
 
     /// The ONE `//!` paragraph of the header containing `anchor`, or `None`
@@ -909,6 +932,40 @@ mod tests {
             .and_then(|word| WORDS.iter().position(|w| w.eq_ignore_ascii_case(word)))
     }
 
+    /// `line` with its `/* … */` comments removed, honouring one left open by
+    /// an earlier line, plus whether a comment is still open after it.
+    ///
+    /// A `/*` inside a string literal opens nothing — the same quote-parity
+    /// reading the `//` strip uses — so a literal argument that contains one
+    /// is not mistaken for the start of a comment and its own words dropped.
+    fn strip_block_comments(line: &str, open: bool) -> (String, bool) {
+        let mut visible = String::new();
+        let mut rest = line;
+        let mut open = open;
+        loop {
+            if open {
+                match rest.find("*/") {
+                    Some(at) => rest = &rest[at + "*/".len()..],
+                    None => return (visible, true),
+                }
+                open = false;
+                continue;
+            }
+            let Some(at) = rest.find("/*") else {
+                visible.push_str(rest);
+                return (visible, false);
+            };
+            visible.push_str(&rest[..at]);
+            rest = &rest[at + "/*".len()..];
+            if visible.matches('"').count().is_multiple_of(2) {
+                open = true;
+            } else {
+                // Inside a string literal: not a comment, so put it back.
+                visible.push_str("/*");
+            }
+        }
+    }
+
     /// Every production `Command::new("git")` under `src/`.
     ///
     /// Recursive on purpose: an earlier version read only `src/commands/*.rs`,
@@ -946,250 +1003,576 @@ mod tests {
             // own `Command::new(program)` lives here, and that is not the
             // literal being scanned for.
             let source = std::fs::read_to_string(&path).expect("a source file");
-            let lines: Vec<&str> = source.lines().collect();
+            sites.extend(scan_source(&relative, &source));
+        }
+        sites
+    }
 
-            // rustfmt puts a top-level test module and its closing brace at
-            // column 0, which tells test scaffolding apart from production.
-            // The `#[cfg(test)]` above it is what makes it scaffolding at all:
-            // a module that merely happens to be CALLED `tests` is compiled
-            // into the shipped binary, so skipping it on the name alone hides
-            // a production spawn. All 116 of this crate's test modules carry
-            // the attribute on the line directly above.
-            let mut in_tests = false;
-            for (index, line) in lines.iter().enumerate() {
-                if *line == "mod tests {" && index > 0 && lines[index - 1].trim() == "#[cfg(test)]"
-                {
-                    in_tests = true;
-                    continue;
-                }
-                if in_tests {
-                    if *line == "}" {
-                        in_tests = false;
-                    }
-                    continue;
-                }
-                if !line.contains("Command::new(\"git\")") {
-                    continue;
-                }
+    /// The bare `git` spawns in ONE source file.
+    ///
+    /// Split out from the walk above so the SHAPES this scan has to read —
+    /// a call whose parenthesis wrapped, an unrelated statement that merely
+    /// names the binding, a block comment, a spawn inside an `impl`, a test
+    /// module whose brace carries a trailing comment — can be tested
+    /// directly. Read only against the tree, every one of them is judged by
+    /// whatever the tree happens to contain today, and each was a silent
+    /// pass until someone thought to write it out.
+    fn scan_source(relative: &str, source: &str) -> Vec<BareSite> {
+        let lines: Vec<&str> = source.lines().collect();
+        let mut sites = Vec::new();
 
-                // Collect the builder's literals. Two shapes occur, and both
-                // have caught this scanner out. A chained
-                // `let x = Command::new("git").arg(..).output()` ends at the
-                // terminator. A `let mut cmd = Command::new("git");` followed by
-                // separate `cmd.arg(..)` statements does not: reading to a fixed
-                // line count swallowed unrelated literals from whatever followed
-                // (once, strings from `mod tests`), and breaking at the first
-                // `;` stopped before the subcommand — `describe.rs`'s
-                // `cmd.current_dir(&path);` sits between the spawn and its
-                // `cmd.arg("describe")`, so the site was read as taking no
-                // arguments at all and waved through unchecked.
-                //
-                // So: follow the BINDING. Lines that mention it contribute their
-                // literals; anything else is skipped, and the terminator ends it.
-                // Which shape this is: a spawn line that ends the statement is
-                // the `let mut cmd = …;` form and the arguments arrive later
-                // through the binding; anything else is a chain whose own
-                // continuation lines carry them.
-                let binding = line
-                    .trim_end()
-                    .ends_with(';')
-                    .then(|| {
-                        line.split_once("let ")
-                            .map(|(_, rest)| rest.trim_start_matches("mut "))
-                            .and_then(|rest| rest.split_once('='))
-                            .map(|(name, _)| name.trim().to_string())
-                            .filter(|name| {
-                                !name.is_empty()
-                                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                            })
-                    })
-                    .flatten();
-
-                let mut argv: Vec<String> = Vec::new();
-                // Set while the last literal read was a global option that
-                // takes a SEPARATE value (`-C`, `-c`, `--git-dir`, …), so the
-                // unreadable word that follows is a path or a config pair —
-                // not an argument whose FORM anything here judges.
-                let mut expects_option_value = false;
-                // Set once a literal has been read that is neither a global
-                // option nor a global option's VALUE — that is, once the
-                // subcommand slot has been filled. Asking `argv` instead
-                // ("does any token not start with `-`?") answered yes for a
-                // global option's value, so `git -c credential.helper=`
-                // followed by a subcommand this scan cannot read counted as a
-                // site whose subcommand HAD been read: the unreadable word was
-                // not treated as opaque and the site passed unjudged while
-                // running whatever that word held. `git_subcommand_at` — this
-                // crate's production answer to the same question — skips those
-                // values, and so does this.
-                let mut subcommand_read = false;
-                // A statement that names the binding may CONTINUE onto chained
-                // lines that do not — `cmd.arg("-C")` then `.arg(&path)` then
-                // `.arg("log")`. Crediting only lines containing the name read
-                // the first of those and skipped the rest, so nine of this
-                // crate's spawns were judged without their subcommand ever
-                // being seen.
-                let mut in_statement = false;
-                // The window ends at the enclosing function, not after a fixed
-                // line count: three sites hand their builder to a helper, so
-                // the terminator is in another function entirely and a fixed
-                // window ran past the end and collected the NEXT function's
-                // arguments — one command's argv attributed to another site.
-                let function_end = lines
-                    .iter()
-                    .enumerate()
-                    .skip(index)
-                    .find(|(_, text)| *text == &"}")
-                    .map(|(at, _)| at - index)
-                    .unwrap_or(usize::MAX);
-                let mut terminated = false;
-                // Set when an unreadable argument sits where the subcommand
-                // itself could, so nothing about this site can be judged.
-                let mut opaque_argument = false;
-                // Set whenever such an argument is dropped, wherever it sits.
-                let mut unread_argument = false;
-                for (offset, text) in lines.iter().skip(index).enumerate() {
-                    if offset > function_end {
-                        break;
-                    }
-                    // Comments quote argv words too (one file's comment names
-                    // `"push"`), and reading them would fail this check for a
-                    // command that never runs.
-                    let code = match text.split_once("//") {
-                        Some((before, _)) if before.matches('"').count() % 2 == 0 => before,
-                        _ => text,
-                    };
-                    let terminator = [".output()", ".status()", ".spawn("]
+        // rustfmt puts a top-level test module and its closing brace at
+        // column 0, which tells test scaffolding apart from production.
+        // The `#[cfg(test)]` above it is what makes it scaffolding at all:
+        // a module that merely happens to be CALLED `tests` is compiled
+        // into the shipped binary, so skipping it on the name alone hides
+        // a production spawn. All 116 of this crate's test modules carry
+        // the attribute on the line directly above.
+        let mut in_tests = false;
+        for (index, line) in lines.iter().enumerate() {
+            if *line == "mod tests {" && index > 0 && lines[index - 1].trim() == "#[cfg(test)]" {
+                in_tests = true;
+                continue;
+            }
+            if in_tests {
+                // Its closing brace, not the literal line `}`: written
+                // `} // end of tests` the module never closed, and every
+                // production spawn BELOW it in the file was skipped in
+                // silence — the one direction this scan must never fail
+                // in.
+                if line.starts_with('}') {
+                    in_tests = false;
+                }
+                continue;
+            }
+            // `Command::new( "git" )` is the same spawn, and so is one whose
+            // argument rustfmt wrapped onto the next line: matched as one
+            // fixed string, either made the site INVISIBLE rather than merely
+            // unreadable — the one direction this scan must never fail in.
+            // What follows the paren decides, which also reads
+            // `Command::new("git".to_string())`.
+            let spawns_git = line.match_indices("Command::new(").any(|(at, needle)| {
+                let after = line[at + needle.len()..].trim_start();
+                if after.is_empty() {
+                    // Wrapped: the program is the next line's first word.
+                    lines[index + 1..]
                         .iter()
-                        .filter_map(|needle| code.find(needle))
-                        .min();
-                    let mentions_binding = binding
-                        .as_deref()
-                        .is_none_or(|name| offset == 0 || code.contains(name) || in_statement);
-                    in_statement = mentions_binding && !code.trim_end().ends_with(';');
-                    if mentions_binding {
-                        let scanned = &code[..terminator.unwrap_or(code.len())];
-                        // ONLY the literals inside `.arg(`/`.args(`. Harvesting
-                        // every literal on the line let an `.env("LC_ALL", "C")`
-                        // pair, a `.current_dir(…)` or a `format!` template
-                        // satisfy the "has a real argument" guard on its own —
-                        // so a site whose actual arguments the scanner never
-                        // read still looked judged.
-                        for (at, _) in scanned.match_indices(".arg") {
-                            let rest = &scanned[at..];
-                            let Some(open) = rest.find('(') else { continue };
-                            // A call rustfmt wrapped across lines closes on a
-                            // LATER one, so this line holds none of what it
-                            // passes. Skipping such a call outright counted as
-                            // having READ it: `.arg("remote")` followed by a
-                            // wrapped `.arg(` holding `set-url` left `argv`
-                            // saying `remote` alone — the argument-less listing
-                            // `is_read_only_form` clears. `None` here falls
-                            // into the unreadable-argument branch below with
-                            // every other word this scan cannot make out.
-                            let closed = rest[open..].find(')').map(|at| open + at);
-                            let inside = closed.map_or("", |close| &rest[open..close]);
-                            // Anything OUTSIDE this call's string literals: a
-                            // macro's name (`format!("{}", sub)`), a variable
-                            // (`.arg(&action)`, `.args(&refs)`), or the
-                            // variable items of a MIXED array — `.args(["-C",
-                            // &path, "remote", &action])` harvests as its two
-                            // literals alone, and the words between them leave
-                            // no trace in `argv` at all.
-                            let unread = closed.is_none()
-                                || inside.split('"').step_by(2).any(|outside| {
-                                    outside.chars().any(|c| c.is_alphanumeric() || c == '_')
-                                })
-                                // An EMPTY literal is a word passed to git that
-                                // says nothing about what runs, yet it satisfied
-                                // the "a subcommand was read" guard below all on
-                                // its own — leaving the real subcommand free to
-                                // sit in a variable, checked by nothing. A
-                                // literal holding a BACKSLASH is the same word
-                                // in disguise: the source text is not what git
-                                // receives (`"pu\x73h"` runs `push`), and an
-                                // escaped quote inside one splits this scan's
-                                // tokens somewhere git never would.
-                                || inside
-                                    .split('"')
-                                    .skip(1)
-                                    .step_by(2)
-                                    .any(|token| token.trim().is_empty() || token.contains('\\'));
-                            if unread {
-                                // Reading such a word as NO argument is how
-                                // `git remote set-url origin <url>` read as
-                                // the argument-less listing and was waved
-                                // through. Its literals are dropped with it:
-                                // half a call is not a read. The one word that
-                                // is NOT an argument to judge is the VALUE of
-                                // a global option that takes one:
-                                // `.arg("-C")` then `.arg(&path)` names the
-                                // repository, not a form.
-                                //
-                                // Only BEFORE the subcommand: git's global
-                                // options all precede it, so a second `-C`
-                                // written after one is not a global option and
-                                // must not be allowed to forgive the word
-                                // behind it (`remote` `-C` `<action>`).
-                                if expects_option_value && !subcommand_read {
-                                    expects_option_value = false;
-                                    continue;
-                                }
-                                // Unreadable BEFORE any literal subcommand, it
-                                // could BE the subcommand and the site is
-                                // unjudgeable outright; after one (`log
-                                // --format=…` then `format!("-{}", n)`) only
-                                // the FORM goes unread — which still matters
-                                // wherever the verdict turns on it.
-                                if !subcommand_read {
-                                    opaque_argument = true;
-                                }
-                                unread_argument = true;
-                                continue;
-                            }
-                            // One literal at a time, so a global option and
-                            // the value that belongs to it are told apart
-                            // exactly as `git_subcommand_at` tells them apart.
-                            // Reading the whole call at once and then asking
-                            // only what its LAST token was could not do that.
-                            for token in inside
+                        .map(|next| next.trim())
+                        .find(|next| !next.is_empty())
+                        .is_some_and(|next| next.starts_with("\"git\""))
+                } else {
+                    after.starts_with("\"git\"")
+                }
+            });
+            if !spawns_git {
+                continue;
+            }
+
+            // Collect the builder's literals. Two shapes occur, and both
+            // have caught this scanner out. A chained
+            // `let x = Command::new("git").arg(..).output()` ends at the
+            // terminator. A `let mut cmd = Command::new("git");` followed by
+            // separate `cmd.arg(..)` statements does not: reading to a fixed
+            // line count swallowed unrelated literals from whatever followed
+            // (once, strings from `mod tests`), and breaking at the first
+            // `;` stopped before the subcommand — `describe.rs`'s
+            // `cmd.current_dir(&path);` sits between the spawn and its
+            // `cmd.arg("describe")`, so the site was read as taking no
+            // arguments at all and waved through unchecked.
+            //
+            // So: follow the BINDING. Lines that mention it contribute their
+            // literals; anything else is skipped, and the terminator ends it.
+            // Which shape this is: a spawn line that ends the statement is
+            // the `let mut cmd = …;` form and the arguments arrive later
+            // through the binding; anything else is a chain whose own
+            // continuation lines carry them.
+            let binding = line
+                .trim_end()
+                .ends_with(';')
+                .then(|| {
+                    line.split_once("let ")
+                        .map(|(_, rest)| rest.trim_start_matches("mut "))
+                        .and_then(|rest| rest.split_once('='))
+                        .map(|(name, _)| name.trim().to_string())
+                        .filter(|name| {
+                            !name.is_empty()
+                                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        })
+                })
+                .flatten();
+
+            let mut argv: Vec<String> = Vec::new();
+            // Set while the last literal read was a global option that
+            // takes a SEPARATE value (`-C`, `-c`, `--git-dir`, …), so the
+            // unreadable word that follows is a path or a config pair —
+            // not an argument whose FORM anything here judges.
+            let mut expects_option_value = false;
+            // Set once a literal has been read that is neither a global
+            // option nor a global option's VALUE — that is, once the
+            // subcommand slot has been filled. Asking `argv` instead
+            // ("does any token not start with `-`?") answered yes for a
+            // global option's value, so `git -c credential.helper=`
+            // followed by a subcommand this scan cannot read counted as a
+            // site whose subcommand HAD been read: the unreadable word was
+            // not treated as opaque and the site passed unjudged while
+            // running whatever that word held. `git_subcommand_at` — this
+            // crate's production answer to the same question — skips those
+            // values, and so does this.
+            let mut subcommand_read = false;
+            // A statement that names the binding may CONTINUE onto chained
+            // lines that do not — `cmd.arg("-C")` then `.arg(&path)` then
+            // `.arg("log")`. Crediting only lines containing the name read
+            // the first of those and skipped the rest, so nine of this
+            // crate's spawns were judged without their subcommand ever
+            // being seen.
+            let mut in_statement = false;
+            // The window ends at the enclosing block, not after a fixed
+            // line count: three sites hand their builder to a helper, so
+            // the terminator is in another function entirely and a fixed
+            // window ran past the end and collected the NEXT function's
+            // arguments — one command's argv attributed to another site.
+            //
+            // Which brace closes that block is a question about INDENT,
+            // not about column 0. Read as the first line `}` at column
+            // zero, a spawn inside an `impl` ran on past the end of its
+            // own method to the end of the impl: the NEXT method's
+            // `.arg("list")` joined this site's `argv` and its
+            // `cmd.output()` marked this site terminated, so a builder
+            // handed out of its function — which has to be acknowledged
+            // in the header — read as a self-contained `git worktree
+            // list` and passed.
+            let indent = line.len() - line.trim_start().len();
+            let function_end = lines
+                .iter()
+                .enumerate()
+                .skip(index)
+                .find(|(_, text)| {
+                    text.trim_start().starts_with('}')
+                        && text.len() - text.trim_start().len() < indent
+                })
+                .map(|(at, _)| at - index)
+                .unwrap_or(usize::MAX);
+            let mut terminated = false;
+            // Set when an unreadable argument sits where the subcommand
+            // itself could, so nothing about this site can be judged.
+            let mut opaque_argument = false;
+            // Set whenever such an argument is dropped, wherever it sits.
+            let mut unread_argument = false;
+            // Whether a `/* … */` comment opened on an earlier line of
+            // this window and has not closed yet.
+            let mut in_block_comment = false;
+            for (offset, text) in lines.iter().skip(index).enumerate() {
+                if offset > function_end {
+                    break;
+                }
+                // Comments quote argv words too (one file's comment names
+                // `"push"`), and reading them would fail this check for a
+                // command that never runs.
+                //
+                // A `/* … */` comment is the dangerous one, and it was not
+                // stripped at all: unlike `//` it sits in the MIDDLE of a
+                // builder, so a commented-out `/* .arg("list") */` between
+                // `.arg("worktree")` and `.arg("remove")` put a word into
+                // `argv` that git never receives — and `worktree list` is
+                // the read-only form that clears the site. Stripped
+                // first, so a `//` inside one cannot swallow the rest of
+                // the line either.
+                let (visible, still_open) = strip_block_comments(text, in_block_comment);
+                in_block_comment = still_open;
+                let text: &str = &visible;
+                let code = match text.split_once("//") {
+                    Some((before, _)) if before.matches('"').count() % 2 == 0 => before,
+                    _ => text,
+                };
+                let terminator = [".output()", ".status()", ".spawn("]
+                    .iter()
+                    .filter_map(|needle| code.find(needle))
+                    .min();
+                // Every use of the binding on this line, as a whole
+                // identifier (see [`identifier_positions`]).
+                let uses = binding
+                    .as_deref()
+                    .map(|name| identifier_positions(code, name))
+                    .unwrap_or_default();
+                // Whether the PREVIOUS line left its statement open, so
+                // this one continues it. Read before it is overwritten,
+                // because the terminator below asks the same question.
+                let continues = in_statement;
+                let mentions_binding = binding
+                    .as_deref()
+                    .is_none_or(|_| offset == 0 || continues || !uses.is_empty());
+                in_statement = mentions_binding && !code.trim_end().ends_with(';');
+                if mentions_binding {
+                    let scanned = &code[..terminator.unwrap_or(code.len())];
+                    // ONLY the literals inside `.arg(`/`.args(`. Harvesting
+                    // every literal on the line let an `.env("LC_ALL", "C")`
+                    // pair, a `.current_dir(…)` or a `format!` template
+                    // satisfy the "has a real argument" guard on its own —
+                    // so a site whose actual arguments the scanner never
+                    // read still looked judged.
+                    for (at, _) in scanned.match_indices(".arg") {
+                        let rest = &scanned[at..];
+                        // What follows decides whether this is a call at
+                        // all. `.arg(` and `.args(` are; a FIELD of the
+                        // same name (`action.arguments.as_deref()`) is
+                        // not, and reading on to whatever paren came next
+                        // harvested an unrelated call's literals as
+                        // arguments. `.arg` with nothing after it is the
+                        // third case: a call whose parenthesis sits on the
+                        // NEXT line.
+                        let tail = rest[".arg".len()..]
+                            .trim_start_matches(|c: char| c.is_alphanumeric() || c == '_')
+                            .trim_start();
+                        if !tail.is_empty() && !tail.starts_with('(') {
+                            continue;
+                        }
+                        // A call rustfmt wrapped across lines closes on a
+                        // LATER one, and one whose OPENING paren wrapped
+                        // holds none of it either, so this line holds none
+                        // of what it passes. Skipping such a call outright
+                        // counted as having READ it: `.arg("remote")`
+                        // followed by a wrapped `.arg(` holding `set-url`
+                        // left `argv` saying `remote` alone — the
+                        // argument-less listing `is_read_only_form`
+                        // clears. Either `None` here falls into the
+                        // unreadable-argument branch below with every
+                        // other word this scan cannot make out.
+                        let open = tail.starts_with('(').then(|| rest.len() - tail.len());
+                        let closed =
+                            open.and_then(|open| rest[open..].find(')').map(|at| open + at));
+                        let inside = match (open, closed) {
+                            (Some(open), Some(close)) => &rest[open..close],
+                            _ => "",
+                        };
+                        // Anything OUTSIDE this call's string literals: a
+                        // macro's name (`format!("{}", sub)`), a variable
+                        // (`.arg(&action)`, `.args(&refs)`), or the
+                        // variable items of a MIXED array — `.args(["-C",
+                        // &path, "remote", &action])` harvests as its two
+                        // literals alone, and the words between them leave
+                        // no trace in `argv` at all.
+                        let unread = open.is_none()
+                            || closed.is_none()
+                            || inside.split('"').step_by(2).any(|outside| {
+                                outside.chars().any(|c| c.is_alphanumeric() || c == '_')
+                            })
+                            // An EMPTY literal is a word passed to git that
+                            // says nothing about what runs, yet it satisfied
+                            // the "a subcommand was read" guard below all on
+                            // its own — leaving the real subcommand free to
+                            // sit in a variable, checked by nothing. A
+                            // literal holding a BACKSLASH is the same word
+                            // in disguise: the source text is not what git
+                            // receives (`"pu\x73h"` runs `push`), and an
+                            // escaped quote inside one splits this scan's
+                            // tokens somewhere git never would.
+                            || inside
                                 .split('"')
                                 .skip(1)
                                 .step_by(2)
-                                .filter(|token| *token != "git")
-                            {
-                                if expects_option_value {
-                                    expects_option_value = false;
-                                } else if !token.starts_with('-') {
-                                    subcommand_read = true;
-                                } else if GLOBAL_OPTS_WITH_VALUE.contains(&token) {
-                                    expects_option_value = true;
-                                }
-                                argv.push(token.to_string());
+                                .any(|token| token.trim().is_empty() || token.contains('\\'));
+                        if unread {
+                            // Reading such a word as NO argument is how
+                            // `git remote set-url origin <url>` read as
+                            // the argument-less listing and was waved
+                            // through. Its literals are dropped with it:
+                            // half a call is not a read. The one word that
+                            // is NOT an argument to judge is the VALUE of
+                            // a global option that takes one:
+                            // `.arg("-C")` then `.arg(&path)` names the
+                            // repository, not a form.
+                            //
+                            // Only BEFORE the subcommand: git's global
+                            // options all precede it, so a second `-C`
+                            // written after one is not a global option and
+                            // must not be allowed to forgive the word
+                            // behind it (`remote` `-C` `<action>`).
+                            if expects_option_value && !subcommand_read {
+                                expects_option_value = false;
+                                continue;
                             }
+                            // Unreadable BEFORE any literal subcommand, it
+                            // could BE the subcommand and the site is
+                            // unjudgeable outright; after one (`log
+                            // --format=…` then `format!("-{}", n)`) only
+                            // the FORM goes unread — which still matters
+                            // wherever the verdict turns on it.
+                            if !subcommand_read {
+                                opaque_argument = true;
+                            }
+                            unread_argument = true;
+                            continue;
+                        }
+                        // One literal at a time, so a global option and
+                        // the value that belongs to it are told apart
+                        // exactly as `git_subcommand_at` tells them apart.
+                        // Reading the whole call at once and then asking
+                        // only what its LAST token was could not do that.
+                        for token in inside
+                            .split('"')
+                            .skip(1)
+                            .step_by(2)
+                            .filter(|token| *token != "git")
+                        {
+                            if expects_option_value {
+                                expects_option_value = false;
+                            } else if !token.starts_with('-') {
+                                subcommand_read = true;
+                            } else if GLOBAL_OPTS_WITH_VALUE.contains(&token) {
+                                expects_option_value = true;
+                            }
+                            argv.push(token.to_string());
                         }
                     }
-                    if terminator.is_some() && mentions_binding {
-                        terminated = true;
-                        break;
-                    }
-                    // Without a binding there is nothing to follow, so the
-                    // chained shape ends at its own statement.
-                    if binding.is_none() && offset > 0 && code.trim_end().ends_with(';') {
-                        break;
-                    }
                 }
-
-                sites.push(BareSite {
-                    file: relative.clone(),
-                    line: index + 1,
-                    argv,
-                    terminated: terminated && !opaque_argument,
-                    unread_argument,
+                // A terminator ends THIS builder only when it is reached
+                // on a line that continues the builder's OWN statement:
+                // the spawn line, a chained continuation of the line
+                // before it, or a call whose receiver is the binding
+                // (`cmd.output()`). A line that merely names it —
+                // `let cached = wrap(cmd).output();` — runs something
+                // else, and crediting its terminator stopped the read
+                // before the arguments that came after.
+                let terminates = terminator.is_some_and(|terminator| {
+                    binding.as_deref().is_none_or(|name| {
+                        offset == 0
+                            || continues
+                            || uses.iter().any(|at| {
+                                *at < terminator && code[at + name.len()..].starts_with('.')
+                            })
+                    })
                 });
+                if terminates {
+                    terminated = true;
+                    break;
+                }
+                // Without a binding there is nothing to follow, so the
+                // chained shape ends at its own statement.
+                if binding.is_none() && offset > 0 && code.trim_end().ends_with(';') {
+                    break;
+                }
             }
+
+            sites.push(BareSite {
+                file: relative.to_string(),
+                line: index + 1,
+                argv,
+                terminated: terminated && !opaque_argument,
+                unread_argument,
+            });
         }
         sites
+    }
+
+    /// One synthetic source, scanned exactly as a real file is.
+    fn scan(lines: &[&str]) -> Vec<BareSite> {
+        scan_source("commands/probe.rs", &lines.join("\n"))
+    }
+
+    /// These sources are built out of `&str` lines rather than written as raw
+    /// string literals on purpose: a raw string holding a line `}` at column
+    /// zero would end THIS module's own `#[cfg(test)]` skip, and the spawns in
+    /// the tests below it would be scanned as production code.
+    #[test]
+    fn test_the_scan_cannot_read_a_call_whose_parenthesis_wrapped() {
+        // `.arg` with its `(` on the next line passes a word this line does
+        // not hold. Skipped in silence, `git remote set-url` read as the
+        // argument-less listing that `is_read_only_form` clears.
+        let sites = scan(&[
+            "fn f() {",
+            "    let out = Command::new(\"git\")",
+            "        .arg(\"remote\")",
+            "        .arg",
+            "        (\"set-url\")",
+            "        .output();",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, vec!["remote".to_string()]);
+        assert!(
+            sites[0].unread_argument,
+            "a call whose parenthesis wrapped is a word this scan did not read"
+        );
+    }
+
+    #[test]
+    fn test_a_field_named_like_the_call_is_not_a_call() {
+        // `.arg`/`.args` also occur as FIELD names, and reading on to whatever
+        // parenthesis came next then harvested an unrelated call's literal as
+        // an argument: the word `list` here is a lookup KEY, not a word git
+        // receives, and `worktree list` is the read-only form.
+        let sites = scan(&[
+            "fn f() {",
+            "    let mut cmd = Command::new(\"git\");",
+            "    cmd.arg(\"worktree\");",
+            "    cmd.arg(map.arg_index.get(\"list\").unwrap());",
+            "    cmd.arg(\"remove\");",
+            "    cmd.output()",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, args(&["worktree", "remove"]));
+        assert!(
+            sites[0].unread_argument,
+            "the argument itself is a variable, which is a word this scan did not read"
+        );
+    }
+
+    #[test]
+    fn test_a_terminator_on_an_unrelated_statement_does_not_end_the_builder() {
+        // The binding matched as a bare substring, `cmd_probe` counted as
+        // `cmd`: the builder was cut short there and judged on a PREFIX of
+        // its arguments — a read-only `worktree list` that goes on to run
+        // `push --force`.
+        let sites = scan(&[
+            "fn f() {",
+            "    let mut cmd = Command::new(\"git\");",
+            "    cmd.arg(\"worktree\");",
+            "    cmd.arg(\"list\");",
+            "    let cmd_probe = probe().output();",
+            "    cmd.arg(\"push\");",
+            "    cmd.arg(\"--force\");",
+            "    cmd.output()",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(
+            sites[0].argv,
+            args(&["worktree", "list", "push", "--force"])
+        );
+        assert!(sites[0].terminated);
+
+        // Nor does a statement that merely NAMES the binding: the terminator
+        // has to be reached on the builder's own statement.
+        let sites = scan(&[
+            "fn f() {",
+            "    let mut cmd = Command::new(\"git\");",
+            "    cmd.arg(\"worktree\");",
+            "    cmd.arg(\"list\");",
+            "    let cached = wrap(cmd).output();",
+            "    cmd.arg(\"push\");",
+            "    cmd.output()",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, args(&["worktree", "list", "push"]));
+    }
+
+    #[test]
+    fn test_arguments_inside_a_block_comment_are_not_read_as_arguments() {
+        // Unlike `//`, a `/* … */` sits in the MIDDLE of a builder, so a
+        // commented-out argument put a word into `argv` that git never
+        // receives — and `worktree list` is the form that clears the site.
+        let sites = scan(&[
+            "fn f() {",
+            "    let out = Command::new(\"git\")",
+            "        .arg(\"worktree\")",
+            "        /* .arg(\"list\") */",
+            "        .arg(\"remove\")",
+            "        .output();",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, args(&["worktree", "remove"]));
+
+        // The same across lines, and a `/*` INSIDE a literal opens nothing.
+        let sites = scan(&[
+            "fn f() {",
+            "    let out = Command::new(\"git\")",
+            "        .arg(\"worktree\")",
+            "        /* .arg(\"list\")",
+            "           .arg(\"prune\") */",
+            "        .arg(\"--pretty=/*x*/\")",
+            "        .arg(\"remove\")",
+            "        .output();",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(
+            sites[0].argv,
+            args(&["worktree", "--pretty=/*x*/", "remove"])
+        );
+    }
+
+    #[test]
+    fn test_the_window_ends_at_the_method_the_spawn_is_in() {
+        // Ended at the first line `}` at column zero, a spawn inside an
+        // `impl` ran on to the end of the IMPL: the next method's literals
+        // joined this site's `argv` and its terminator marked this site
+        // terminated, so a builder handed out of its function — which the
+        // header has to acknowledge — read as a self-contained `git worktree
+        // list` and passed.
+        let sites = scan(&[
+            "impl Runner {",
+            "    fn build(&self) -> Command {",
+            "        let mut cmd = Command::new(\"git\");",
+            "        cmd.arg(\"worktree\");",
+            "        handoff(cmd)",
+            "    }",
+            "",
+            "    fn unrelated(&self) -> io::Result<Output> {",
+            "        let mut cmd = Command::new(\"true\");",
+            "        cmd.arg(\"list\");",
+            "        cmd.output()",
+            "    }",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, vec!["worktree".to_string()]);
+        assert!(
+            !sites[0].terminated,
+            "this builder leaves its method, so the scan has not read what it runs"
+        );
+    }
+
+    #[test]
+    fn test_a_test_module_closed_with_a_trailing_comment_hides_nothing_below_it() {
+        // The skip ended on the literal line `}`, so `} // end of tests` never
+        // closed it and every production spawn below was skipped in silence.
+        let sites = scan(&[
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn t() {",
+            "        let _ = Command::new(\"git\").arg(\"status\").output();",
+            "    }",
+            "} // end of tests",
+            "",
+            "fn production() {",
+            "    let _ = Command::new(\"git\").arg(\"push\").arg(\"--force\").output();",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, args(&["push", "--force"]));
+    }
+
+    #[test]
+    fn test_a_spawn_written_with_spaces_is_still_a_spawn() {
+        // Matched as one fixed string, a single space made the site INVISIBLE
+        // rather than merely unreadable — the one direction this scan must
+        // never fail in.
+        let sites = scan(&[
+            "fn f() {",
+            "    let out = Command::new( \"git\" )",
+            "        .arg(\"push\")",
+            "        .output();",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, vec!["push".to_string()]);
+
+        // Nor does wrapping the program itself onto the next line hide one.
+        let sites = scan(&[
+            "fn f() {",
+            "    let out = Command::new(",
+            "        \"git\",",
+            "    )",
+            "    .arg(\"push\")",
+            "    .output();",
+            "}",
+        ]);
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].argv, vec!["push".to_string()]);
     }
 
     /// The module header keeps a list of the files that spawn `git` outside
