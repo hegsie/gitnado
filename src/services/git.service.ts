@@ -3780,6 +3780,19 @@ export async function getLfsFiles(
 }
 
 /**
+ * What `get_lfs_endpoint` reports: the URL an LFS transfer will contact, and
+ * where that URL came from. Mirrors `LfsEndpoint` in
+ * `src-tauri/src/commands/lfs.rs`.
+ */
+export interface LfsEndpointInfo {
+  /** The URL (or path) the transfer will contact. */
+  url: string;
+  /** `'config'` for an `lfs.*` key (a committed `.lfsconfig` may set one),
+   * `'remote'` for the git remote's own url falling through verbatim. */
+  kind: 'config' | 'remote';
+}
+
+/**
  * The URL an LFS transfer will contact, for the allowlist.
  *
  * git-lfs does not talk to the git remote: its endpoint comes from `lfs.url`
@@ -3797,21 +3810,54 @@ export async function getLfsFiles(
  * judging the git remote instead of the endpoint the transfer really contacts
  * — in both directions.
  */
-async function resolveLfsEndpoint(repoPath: string): Promise<string | null> {
+async function resolveLfsEndpoint(repoPath: string): Promise<LfsEndpointInfo | null> {
   if (!isNetworkPolicyActive()) return null;
-  const result = await invokeCommand<string | null>('get_lfs_endpoint', { path: repoPath });
+  const result = await invokeCommand<LfsEndpointInfo | null>('get_lfs_endpoint', {
+    path: repoPath,
+  });
   return result.success && result.data ? result.data : null;
+}
+
+/**
+ * Which reading of "a place on this machine" a resolved LFS endpoint is owed.
+ *
+ * `'config'` — an `lfs.url` / `lfs.pushurl` / `remote.<r>.lfs*url` value, which
+ * a COMMITTED `.lfsconfig` may have chosen. It is a URL, not a git remote, so
+ * it takes the strict reading: `evil.example.com/lfs` is an outbound host, not
+ * a path on this disk.
+ *
+ * `'remote'` — the git remote's own url, which git-lfs falls back to verbatim
+ * when nothing names an endpoint. That IS a git remote, so `sub/mybackup.git`
+ * is a repository on this disk and gets the same reading the push gate beside
+ * it already gives the very same string.
+ *
+ * `null` — nothing resolved, so the gate falls back to the git remote and the
+ * backend (which fails closed on an endpoint it cannot see) is the backstop.
+ * The strict reading keeps the two halves agreeing on that refusal.
+ */
+function lfsEndpointTargetKind(endpoint: LfsEndpointInfo | null): NetworkTargetKind {
+  return endpoint?.kind === 'remote' ? 'remote' : 'host';
 }
 
 export async function lfsPull(
   repoPath: string,
 ): Promise<CommandResult<string>> {
   const endpoint = await resolveLfsEndpoint(repoPath);
-  // An LFS endpoint is a URL, not a git remote — the backend judges it with
-  // plain `check` — so it takes the strict reading of "a place on this
-  // machine" even though a repo path was resolved alongside it.
+  // An LFS endpoint is USUALLY a URL rather than a git remote, so it takes the
+  // strict reading — but git-lfs's last resort is the git remote's url
+  // verbatim, and the backend judges that one with `check_remote`. The kind
+  // rides along with the URL so both halves give the same string the same
+  // reading; guessing 'host' for all of them refused a pull against
+  // `sub/mybackup.git`, a repository on this disk.
   if (
-    !await checkNetworkPermission('LFS pull', repoPath, undefined, endpoint, undefined, 'host')
+    !await checkNetworkPermission(
+      'LFS pull',
+      repoPath,
+      undefined,
+      endpoint?.url ?? null,
+      undefined,
+      lfsEndpointTargetKind(endpoint),
+    )
   ) {
     return blockedResult();
   }
@@ -3824,11 +3870,17 @@ export async function lfsFetch(
   refs?: string[],
 ): Promise<CommandResult<string>> {
   const endpoint = await resolveLfsEndpoint(repoPath);
-  // An LFS endpoint is a URL, not a git remote — the backend judges it with
-  // plain `check` — so it takes the strict reading of "a place on this
-  // machine" even though a repo path was resolved alongside it.
+  // See `lfsPull`: the endpoint's provenance chooses the reading, because the
+  // fallback endpoint IS the git remote.
   if (
-    !await checkNetworkPermission('LFS fetch', repoPath, undefined, endpoint, undefined, 'host')
+    !await checkNetworkPermission(
+      'LFS fetch',
+      repoPath,
+      undefined,
+      endpoint?.url ?? null,
+      undefined,
+      lfsEndpointTargetKind(endpoint),
+    )
   ) {
     return blockedResult();
   }

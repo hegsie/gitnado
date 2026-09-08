@@ -878,11 +878,13 @@ describe('network security gate', () => {
     // git-lfs reads `lfs.url` from `.lfsconfig`, a file committed to the
     // repository, before it falls back to the remote — so the host an LFS
     // pull reaches is chosen by whoever pushed the repository.
-    const installLfsEndpoint = (endpoint: string | null) => {
+    const installLfsEndpoint = (endpoint: string | null, kind: 'config' | 'remote' = 'config') => {
       mockInvoke = (command) =>
         Promise.resolve(
           command === 'get_lfs_endpoint'
-            ? endpoint
+            ? endpoint === null
+              ? null
+              : { url: endpoint, kind }
             : command === 'get_fetch_remote'
               ? 'origin'
               : command === 'get_remotes'
@@ -929,6 +931,48 @@ describe('network security gate', () => {
       const result = await lfsPull('/repo');
 
       expect(result.success).to.equal(true);
+    });
+
+    // git-lfs's LAST RESORT is the git remote's url, verbatim — so for a
+    // repository with no `lfs.url` the endpoint IS a git remote, and
+    // `sub/mybackup.git` is a repository on this disk. Judged with the strict
+    // reading its host parsed as `sub`, so this gate refused an LFS pull
+    // against a path the push gate beside it permits, and no allowlist entry
+    // could ever have fixed it.
+    it('permits a bare relative path the git remote fell back to', async () => {
+      installLfsEndpoint('sub/mybackup.git', 'remote');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+
+    it('permits it under offline mode too, and an LFS fetch the same way', async () => {
+      installLfsEndpoint('sub/mybackup.git', 'remote');
+      settingsStore.setState({ offlineMode: true });
+
+      expect((await lfsPull('/repo')).success).to.equal(true);
+      expect((await lfsFetch('/repo', ['main'])).success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_fetch')).to.equal(true);
+    });
+
+    // The other half of the same rule, and why this is a PROVENANCE split
+    // rather than a blanket swap: `.lfsconfig` is committed, so whoever pushed
+    // the repository chooses `lfs.url`, and reading the separator in a
+    // scheme-less endpoint as "a path on this disk" would wave the transfer
+    // through with its host never judged.
+    it('still refuses a scheme-less endpoint that came from .lfsconfig', async () => {
+      installLfsEndpoint('evil.example.com/lfs', 'config');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
     });
 
     it('does not look the endpoint up when no allowlist is configured', async () => {
