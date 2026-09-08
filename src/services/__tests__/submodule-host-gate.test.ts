@@ -386,8 +386,8 @@ describe('the submodule hosts the gate has to check', () => {
     expect(reachedUpdate()).to.equal(false);
   });
 
-  it('offline mode refuses before anything is listed', async () => {
-    mockRepo([]);
+  it('offline mode refuses a submodule that leaves the machine', async () => {
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: 'https://github.com/x/y.git' }]);
     settingsStore.setState({ offlineMode: true });
 
     const result = await updateSubmodules('/repo');
@@ -395,13 +395,51 @@ describe('the submodule hosts the gate has to check', () => {
     expect(result.success).to.equal(false);
     expect(result.error?.code).to.equal('BLOCKED');
     expect(reachedUpdate()).to.equal(false);
-    expect(
-      invokeHistory.some((c) => c.command === 'get_submodules'),
-      'offline mode refuses without looking',
-    ).to.equal(false);
     expect(uiStore.getState().toasts.some((t) => t.message.includes('Offline mode'))).to.equal(
       true,
     );
+  });
+
+  it('offline mode allows a submodule that never leaves the machine', async () => {
+    // Offline mode used to answer before a single submodule url was read, so
+    // the local-target carve-out `checkNetworkAllowed` makes was unreachable:
+    // a submodule on `/srv/git/dep.git` opens no socket, an allowlist permits
+    // updating it (below), and offline mode refused the identical operation.
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: '/srv/git/dep.git' }], '/srv/git/super.git');
+    settingsStore.setState({ offlineMode: true });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success, 'a filesystem submodule opens no socket').to.equal(true);
+    expect(reachedUpdate(), 'update_submodules must be invoked').to.equal(true);
+    expect(
+      uiStore.getState().toasts.some((t) => t.message.includes('Offline mode')),
+      'nothing was refused, so nothing is toasted',
+    ).to.equal(false);
+  });
+
+  it('an allowlist allows the same local submodule offline mode used to refuse', async () => {
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: '/srv/git/dep.git' }], '/srv/git/super.git');
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+    const result = await updateSubmodules('/repo');
+
+    expect(result.success).to.equal(true);
+    expect(reachedUpdate()).to.equal(true);
+  });
+
+  it('adding and updating a local submodule agree with each other', async () => {
+    // The Submodules dialog let the user ADD a submodule on a filesystem path
+    // with offline mode on and then refused to UPDATE it — a dead end inside
+    // one dialog.
+    mockRepo([{ name: 'dep', path: 'vendor/dep', url: '/srv/git/dep.git' }], '/srv/git/super.git');
+    settingsStore.setState({ offlineMode: true });
+
+    const added = await addSubmodule('/repo', '/srv/git/dep.git', 'vendor/dep');
+    const updated = await updateSubmodules('/repo');
+
+    expect(added.success, 'adding a local submodule is permitted offline').to.equal(true);
+    expect(updated.success, 'so updating it must be too').to.equal(true);
   });
 
   it('still asks for the confirm the user turned on, once, and honours a decline', async () => {

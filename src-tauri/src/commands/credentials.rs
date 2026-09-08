@@ -109,6 +109,18 @@ pub struct CredentialTestResult {
     pub username: Option<String>,
     /// Message describing the result
     pub message: String,
+    /// Whether `host` is the remote AS TYPED — a path standing in for a host
+    /// there is none of — rather than a hostname to connect to.
+    ///
+    /// The dialog labels the field "Path" instead of "Host" and says nothing
+    /// is stored for it, and it used to work this out from `protocol == "file"`
+    /// alone. That is not the rule: `file://server/share/repo.git` keeps its
+    /// `file` scheme while resolving a real host, which is exactly the target
+    /// the network gate refuses as one that leaves the machine — and the
+    /// dialog drew it as a local path anyway. Only the backend can tell the
+    /// two apart (`resolved`), so it says so here instead of leaving the
+    /// frontend to guess.
+    pub is_path_target: bool,
 }
 
 /// Available credential helper
@@ -539,6 +551,9 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
     // Worked out from the whole target, before it is taken apart, so the
     // question put to the credential helper is the one the result reports.
     let lookup = credential_lookup_query(&target);
+    // What the dialog needs and cannot work out for itself: whether the `host`
+    // it is about to print is a hostname or the remote as typed.
+    let is_path_target = target.is_path();
     let CredentialTarget {
         protocol,
         display_host: host,
@@ -580,6 +595,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
             protocol,
             username,
             message: message.trim().to_string(),
+            is_path_target,
         })
     } else {
         // For HTTPS, use git credential fill
@@ -633,6 +649,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
             protocol,
             username,
             message,
+            is_path_target,
         })
     }
 }
@@ -668,6 +685,20 @@ struct CredentialTarget {
     /// in for a host it has none of, so an `ssh`-schemed one must never reach
     /// the ssh probe: `ssh -T ssh://` has nothing to connect to.
     resolved: bool,
+}
+
+impl CredentialTarget {
+    /// Whether `display_host` is the remote AS TYPED — a path standing in for a
+    /// host there is none of — rather than a hostname to connect to.
+    ///
+    /// Not `protocol == "file"` on its own: `file://server/share/repo.git`
+    /// keeps its `file` scheme while resolving a real host, and that is
+    /// precisely the target the network gate refuses as one that leaves the
+    /// machine. `resolved` is the half that tells them apart, and it never
+    /// crossed the IPC boundary — so the dialog drew that URL as a local path.
+    fn is_path(&self) -> bool {
+        !self.resolved && self.protocol == "file"
+    }
 }
 
 /// The request written to `git credential fill`'s stdin for a target.
@@ -725,6 +756,33 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
         };
     }
 
+    // A UNC path is the one string the gate calls non-local that git still
+    // opens as a PATH. `is_local_target` excludes it on purpose — SMB puts
+    // bytes on the wire, so offline mode has to go on refusing it — but git
+    // never consults a credential helper for `\\server\share\repo.git`: the OS
+    // redirector opens it, under git's own `file` protocol (the one
+    // `protocol.file.allow` names). Falling through to `parse_target` invented
+    // an https host out of it: the scheme-less fallback parses
+    // `https://\\server\share\repo.git`, WHATWG "special authority ignore
+    // slashes" eats the backslashes, and the dialog reported "host: server,
+    // protocol: https". A working share was drawn in the failure colours, and
+    // where the user really did have an `https://server/…` credential — an
+    // internal Gitea on the same box name — the panel said "Credentials
+    // Working" and offered an Erase button that rejected THAT credential.
+    //
+    // The GATE is untouched: `is_local_target` still refuses UNC under offline
+    // mode, and `parse_target` still resolves it to the host the allowlist has
+    // always judged. This is what the DIALOG reports.
+    if is_unc_path(trimmed_url) {
+        return CredentialTarget {
+            protocol: "file".to_string(),
+            ssh_destination: trimmed_url.to_string(),
+            display_host: trimmed_url.to_string(),
+            port: None,
+            resolved: false,
+        };
+    }
+
     let Some(target) = crate::services::security::parse_target(remote_url) else {
         // Nothing a URL parser recognises as `[user@]host`, and not a place on
         // this machine either — a remote too malformed for either half to make
@@ -768,6 +826,15 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
         port: target.port,
         resolved: true,
     }
+}
+
+/// A UNC path — `\\server\share\repo.git`, and its `//server/share/repo.git`
+/// spelling. The same two prefixes [`crate::services::security::is_local_target`]
+/// excludes, asked here for the opposite reason: not "does it leave the
+/// machine" (it does) but "does git ask a credential helper for it" (it does
+/// not — it is a path).
+fn is_unc_path(target: &str) -> bool {
+    target.starts_with("//") || target.starts_with(r"\\")
 }
 
 /// The scheme a remote string carries, if it carries one at all.
@@ -1261,25 +1328,14 @@ mod tests {
     ///
     /// This dialog used to answer "is this a path?" with a parse of its own,
     /// and it disagreed with `security::is_local_target` — the gate's answer —
-    /// in the direction that hides a real transport. A UNC share is SMB and an
-    /// scp-form remote is ssh; both leave the machine, and offline mode refuses
-    /// both. The dialog called all three local repositories that "do not
-    /// authenticate, so nothing is stored", so the same remote was a network
-    /// host with offline mode on and a local path with it off — and the ssh
-    /// probe, the whole point of testing an ssh remote, was silently skipped.
+    /// in the direction that hides a real transport. An scp-form remote is
+    /// ssh; it leaves the machine, and offline mode refuses it. The dialog
+    /// called it a local repository that "does not authenticate, so nothing is
+    /// stored", so the same remote was a network host with offline mode on and
+    /// a local path with it off — and the ssh probe, the whole point of
+    /// testing an ssh remote, was silently skipped.
     #[test]
     fn a_remote_that_only_looks_like_a_path_is_reported_as_the_host_it_reaches() {
-        for url in ["\\\\server\\share\\repo.git", "//fileserver/share/repo.git"] {
-            let target = credential_target(url);
-            assert_eq!(target.protocol, "https", "{url} is SMB, not a local path");
-            assert!(target.resolved, "{url} names a host to contact");
-            assert!(
-                !target.display_host.contains('/') && !target.display_host.contains('\\'),
-                "{url} reports a host, not the path: {}",
-                target.display_host
-            );
-        }
-
         // scp-form ssh, `~` login and all: the probe must run for it.
         let target = credential_target("~deploy@git.example.test:team/app.git");
         assert_eq!(target.protocol, "ssh");
@@ -1288,13 +1344,57 @@ mod tests {
         assert_eq!(target.ssh_destination, "~deploy@git.example.test");
     }
 
-    /// The dialog and the gate now answer the one question once.
+    /// A UNC share is reported as the path it is — not as an invented https
+    /// host, and above all not as one whose credential the Erase button then
+    /// deletes.
     ///
-    /// Whatever the gate calls local, the dialog reports as a path with no host
-    /// to contact; whatever the gate says leaves the machine, the dialog
-    /// resolves to the host it reaches. (Not a biconditional on `protocol`
-    /// alone: `file://server/share` keeps its `file` scheme while resolving a
-    /// host, which is exactly the case the gate refuses.)
+    /// `is_local_target` excludes UNC on purpose (SMB does leave the machine,
+    /// and offline mode has to go on refusing it), so this fell through to
+    /// `parse_target`, whose scheme-less fallback parses
+    /// `https://\\server\share\repo.git` — WHATWG "special authority ignore
+    /// slashes" eats the backslashes and yields the host `server` under the
+    /// protocol `https`. Both fabricated: git opens a UNC path through the OS
+    /// redirector and asks no credential helper about it at all. A working
+    /// share was drawn as "No Credentials Found", and a user who really did
+    /// have an `https://server/…` credential for an internal host of that name
+    /// was shown "Credentials Working" over an Erase button pointed at it.
+    #[test]
+    fn a_unc_share_is_reported_as_a_path_not_an_invented_https_host() {
+        for url in ["\\\\server\\share\\repo.git", "//fileserver/share/repo.git"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "file", "{url} asks no credential helper");
+            assert_ne!(target.protocol, "https", "{url} is not an https remote");
+            assert!(
+                !target.resolved,
+                "{url} names no host to look a credential up under"
+            );
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+            // The question actually put to `git credential fill`, which is the
+            // one the Erase button then rejects: it must not name a real host.
+            assert_eq!(
+                credential_lookup_query(&target),
+                format!("protocol=file\nhost={url}\n\n")
+            );
+        }
+    }
+
+    /// The dialog and the gate answer their two questions off the ONE parse.
+    ///
+    /// They are not the same question. The gate asks "does this leave the
+    /// machine?"; the dialog asks "would git ask a credential helper about
+    /// it?". Everything the gate calls local answers no to both, and the
+    /// dialog reports it as a path with no host to contact — that direction
+    /// holds without exception, and it is the one that used to fail (a bare
+    /// path was reported as the host `srv`).
+    ///
+    /// UNC is the single case where the two answers part, in the only
+    /// direction they can: SMB puts bytes on the wire, so the gate refuses it
+    /// under offline mode, while git opens it as a path and consults no
+    /// helper — so the dialog must not invent a host for it either.
+    ///
+    /// (Not a biconditional on `protocol` alone in the other direction either:
+    /// `file://server/share` keeps its `file` scheme while resolving a host,
+    /// which is exactly the case the gate refuses.)
     #[test]
     fn the_dialog_and_the_gate_agree_about_what_is_local() {
         for url in [
@@ -1305,8 +1405,6 @@ mod tests {
             "C:\\repos\\x.git",
             "file:///srv/git/repo.git",
             "file://localhost/srv/git/repo.git",
-            "\\\\server\\share\\repo.git",
-            "//fileserver/share/repo.git",
             "file://server/share/repo.git",
             "~deploy@git.example.test:team/app.git",
             "https://github.com/o/r.git",
@@ -1322,6 +1420,21 @@ mod tests {
             if local {
                 assert_eq!(target.display_host, url, "{url} is reported as typed");
             }
+        }
+
+        // The one documented exception, pinned in both directions so neither
+        // half can drift into the other's answer.
+        for url in ["\\\\server\\share\\repo.git", "//fileserver/share/repo.git"] {
+            let target = credential_target(url);
+            assert!(
+                !crate::services::security::is_local_target(url),
+                "{url} is SMB: the gate must go on refusing it under offline mode"
+            );
+            assert!(
+                !target.resolved && target.protocol == "file",
+                "{url} is a path to git: the dialog must not invent a host for it"
+            );
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
         }
     }
 
@@ -1490,6 +1603,67 @@ mod tests {
         assert!(result.success, "got: {:?}", result);
         assert_eq!(result.protocol, "https");
         assert_eq!(result.username.as_deref(), Some("https-user"));
+    }
+
+    /// A UNC share must not find — and must not then OFFER TO ERASE — the
+    /// credential of an unrelated host that happens to share its box name.
+    ///
+    /// `\\\\server\\share\\repo.git` used to be looked up as `protocol=https
+    /// host=server`, so a user with an internal Gitea on `https://server/…`
+    /// was shown "Credentials Working / host: server / protocol: https" for a
+    /// file share — over an Erase button that would have run
+    /// `git credential reject protocol=https host=server` and dropped that
+    /// unrelated entry.
+    #[tokio::test]
+    async fn a_unc_share_does_not_find_the_https_credential_of_a_host_of_that_name() {
+        let repo = repo_with_stored_credentials(&["https://alice:secret@server"]);
+
+        let result = test_credentials(repo.path_str(), "\\\\server\\share\\repo.git".to_string())
+            .await
+            .expect("test_credentials");
+
+        assert!(
+            !result.success,
+            "git asks no credential helper for a UNC path: {:?}",
+            result
+        );
+        assert_eq!(result.username, None, "no credential of another host's");
+        assert_ne!(result.protocol, "https", "the protocol was fabricated");
+        assert_eq!(result.protocol, "file");
+        assert_eq!(result.host, "\\\\server\\share\\repo.git");
+        assert!(result.is_path_target, "the dialog labels this a path");
+    }
+
+    /// `is_path_target` is the backend's answer to a question the frontend
+    /// used to guess at from `protocol` alone.
+    ///
+    /// `file://server/share/repo.git` keeps its `file` scheme while resolving a
+    /// host — the very target the gate refuses under offline mode — and the
+    /// dialog printed "A local repository does not authenticate" for it. A bare
+    /// path and a host-less `file://` URL are the ones that really are paths.
+    #[tokio::test]
+    async fn the_result_says_whether_the_host_it_reports_is_really_a_path() {
+        let repo = repo_with_stored_credentials(&[]);
+
+        for (url, expected) in [
+            ("/srv/git/repo.git", true),
+            ("file:///srv/git/repo.git", true),
+            ("\\\\server\\share\\repo.git", true),
+            ("file://server/share/repo.git", false),
+            ("https://github.com/o/r.git", false),
+        ] {
+            let result = test_credentials(repo.path_str(), url.to_string())
+                .await
+                .expect("test_credentials");
+            assert_eq!(
+                result.is_path_target, expected,
+                "{url}: is_path_target must not be guessed from protocol alone (got {:?})",
+                result
+            );
+            if expected {
+                assert_eq!(result.host, url, "{url} is reported as typed");
+            }
+        }
     }
 
     /// The everyday remote forms still resolve the way they always did.
@@ -1891,6 +2065,7 @@ mod tests {
             protocol: "https".to_string(),
             username: Some("testuser".to_string()),
             message: "Credentials found".to_string(),
+            is_path_target: false,
         };
 
         assert!(result.success);

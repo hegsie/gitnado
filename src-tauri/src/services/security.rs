@@ -1434,6 +1434,18 @@ mod tests {
     async fn offline_mode_refuses_remote_git_operations() {
         let repo = crate::test_utils::TestRepo::with_initial_commit();
         repo.add_remote("origin", "https://github.com/me/app.git");
+        // `update_submodules` is judged on the hosts it will actually contact,
+        // not on the superproject — offline mode answering before anything was
+        // listed is what refused an update of a submodule on a filesystem
+        // path. So the repository needs a submodule that DOES leave the
+        // machine for the refusal below to mean anything.
+        repo.create_commit(
+            "Add .gitmodules",
+            &[(
+                ".gitmodules",
+                "[submodule \"vendor/dep\"]\n\tpath = vendor/dep\n\turl = https://github.com/x/dep.git\n",
+            )],
+        );
         let _guard = test_support::offline();
 
         expect_blocked(

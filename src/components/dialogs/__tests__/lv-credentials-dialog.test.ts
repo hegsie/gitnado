@@ -122,6 +122,7 @@ function testResult(over: Partial<CredentialTestResult>): CredentialTestResult {
     protocol: 'https',
     username: 'someone',
     message: 'Credentials found',
+    isPathTarget: false,
     ...over,
   };
 }
@@ -381,6 +382,7 @@ describe('lv-credentials-dialog credential test result', () => {
       host: 'file:///srv/git/app.git',
       username: null,
       message: 'No credentials found for file:///srv/git/app.git',
+      isPathTarget: true,
     });
     const el = await openTestTab();
     await runTest(el);
@@ -407,6 +409,7 @@ describe('lv-credentials-dialog credential test result', () => {
       host: '/srv/git/repo.git',
       username: null,
       message: 'No credentials found for /srv/git/repo.git',
+      isPathTarget: true,
     });
     const el = await openTestTab();
     await runTest(el);
@@ -419,6 +422,67 @@ describe('lv-credentials-dialog credential test result', () => {
     expect(panelText(el)).to.not.include('no credentials found');
     expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
     expect(offersErase(el), 'a local repository stores no credential').to.be.false;
+  });
+
+  it('reports a UNC share as the path it is, with nothing to erase', async () => {
+    // The backend no longer invents an https host out of a UNC path: git opens
+    // `\\\\server\\share\\repo.git` through the OS redirector and asks no
+    // credential helper about it. It used to arrive here as
+    // `host: 'server', protocol: 'https'`, so a working share was drawn in the
+    // failure colours — and where the user really had a credential for an
+    // internal `https://server/...` host, the panel said "Credentials Working"
+    // over an Erase button that would have deleted that unrelated entry.
+    mockRemotes = [remote('\\\\server\\share\\repo.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'file',
+      host: '\\\\server\\share\\repo.git',
+      username: null,
+      message: 'No credentials found for \\\\server\\share\\repo.git',
+      isPathTarget: true,
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
+    expect(panelText(el)).to.include('path: \\\\server\\share\\repo.git');
+    expect(panelText(el), 'a share path is not a hostname').to.not.include('host:');
+    expect(panelText(el)).to.not.include('no credentials found');
+    // ...and the sentence underneath does not call an SMB share a local
+    // repository — it says the one thing that is true of both.
+    expect(panelText(el)).to.include('filesystem path');
+    expect(panelText(el)).to.not.include('local repository');
+    expect(el.shadowRoot!.querySelector('.test-result')!.className).to.not.match(/\berror\b/);
+    expect(offersErase(el), 'nothing was found, so nothing can be erased').to.be.false;
+  });
+
+  it('does not draw a file:// URL naming another machine as a local path', async () => {
+    // `file://server/share/repo.git` keeps its `file` scheme while resolving a
+    // real host — the target the network gate refuses as one that leaves the
+    // machine. Keying the path branch on `protocol === 'file'` alone told the
+    // user "a local repository does not authenticate" about it, contradicting
+    // the gate that refuses it, and printed the host under a "Path:" label.
+    mockRemotes = [remote('file://server/share/repo.git')];
+    mockTestResult = testResult({
+      success: false,
+      protocol: 'file',
+      host: 'server',
+      username: null,
+      message: 'No credentials found for server',
+      isPathTarget: false,
+    });
+    const el = await openTestTab();
+    await runTest(el);
+
+    expect(panelText(el), 'a resolved host is a host').to.include('host: server');
+    expect(panelText(el), 'and not a path').to.not.include('path:');
+    expect(panelText(el)).to.not.include('filesystem path');
+    // `file://` still stores no credential, so the neutral branch is right —
+    // it just has to name the host rather than call it a local repository.
+    expect(el.shadowRoot!.textContent).to.include('No Credentials Needed');
+    expect(panelText(el)).to.include('file://');
+    expect(panelText(el)).to.include('server');
+    expect(offersErase(el)).to.be.false;
   });
 
   it('offers no erase for a transport that stores no credential', async () => {

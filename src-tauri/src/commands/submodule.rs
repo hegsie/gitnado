@@ -625,22 +625,28 @@ pub async fn update_submodules(
     // to whichever remote happens to be called `origin`.
 
     // `git submodule update` fetches (and clones with --init), so it is gated
-    // like fetch/pull. Offline mode refuses outright, before anything is
-    // opened. Under an allowlist the superproject's own remote is deliberately
-    // NOT checked: it is only where a RELATIVE submodule url resolves to, and
+    // like fetch/pull — on the destinations it actually has. Offline mode used
+    // to refuse HERE, before a single submodule url had been read, so the
+    // local-target carve-out `check` makes could never be reached: a submodule
+    // on `/srv/git/dep.git` opens no socket, an allowlist permits updating it,
+    // and offline mode refused it anyway — stricter than an allowlist for an
+    // identical purely-local operation, and refusing to UPDATE a submodule the
+    // same dialog had just let the user ADD (`add_submodule` guards the url).
+    // The per-submodule guard below applies both policies, and fails closed on
+    // a submodule whose url cannot be read, so nothing is waved through by
+    // deleting the fast path.
+    //
+    // Under an allowlist the superproject's own remote is deliberately NOT
+    // checked: it is only where a RELATIVE submodule url resolves to, and
     // `guard_submodule_url` checks it for exactly those. Checking it for every
     // update refused a local-only superproject — no remotes at all — whose
     // `.gitmodules` named nothing but allowlisted hosts.
-    let settings = crate::services::security::global().snapshot();
-    if settings.offline_mode {
-        crate::services::security::check(&settings, None)?;
-    }
-
-    // ...and then every host it is actually going to contact. The clones and
-    // fetches this spawns go to the urls in `.gitmodules`, which are
-    // repository content and can name any host: an allowlist of `github.com`
-    // on a github.com superproject used to sit there while this reached
-    // gitlab.com. An EMPTY list is not "no submodules": the args builder
+    //
+    // So the guard runs on every host the update is actually going to
+    // contact. The clones and fetches it spawns go to the urls in
+    // `.gitmodules`, which are repository content and can name any host: an
+    // allowlist of `github.com` on a github.com superproject used to sit
+    // there while this reached gitlab.com. An EMPTY list is not "no submodules": the args builder
     // emits a bare `--`, and git then updates every submodule. Treated as
     // `None` here so that case is guarded as the "all of them" it really is.
     let repo_path = Path::new(&path);
@@ -1210,14 +1216,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn offline_mode_refuses_update_submodules_before_anything_is_listed() {
-        // Offline mode is the one policy that refuses without looking: a
-        // superproject with no submodules at all is still refused.
-        let repo = TestRepo::with_initial_commit();
+    async fn offline_mode_refuses_a_submodule_that_leaves_the_machine() {
+        // Offline mode is judged on the destinations the update really has,
+        // exactly as the allowlist is — it used to answer before a single url
+        // had been read.
+        let repo = repo_with_gitmodules(
+            "https://github.com/me/super.git",
+            &[("vendor/dep", "https://github.com/x/y.git")],
+        );
         let _guard = test_support::offline();
 
-        blocked_message(
-            update_submodules(repo.path_str(), None, None, None, None, None, None).await,
+        let message = blocked_message(
+            update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
+        );
+        assert!(
+            message.contains("Offline mode"),
+            "the refusal should say offline mode is on, got: {}",
+            message
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_mode_allows_a_submodule_that_never_leaves_the_machine() {
+        // A submodule on a filesystem path opens no socket, so neither policy
+        // has any business refusing it — and an allowlist does not: it reaches
+        // `check`, which carves local targets out ahead of the offline branch.
+        // Offline mode answered before the url was resolved, so that carve-out
+        // was unreachable and offline mode ended up STRICTER than an allowlist
+        // for an identical purely-local update.
+        let repo =
+            repo_with_gitmodules("/srv/git/super.git", &[("vendor/dep", "/srv/git/dep.git")]);
+        let _guard = test_support::offline();
+
+        assert_not_blocked(
+            &update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
+            "a local submodule url under offline mode",
+        );
+        // The same dialog lets the user ADD that submodule while offline, so
+        // refusing to update it afterwards was a dead end inside one dialog.
+        assert_not_blocked(
+            &add_submodule(
+                repo.path_str(),
+                "/srv/git/dep.git".to_string(),
+                "vendor/other".to_string(),
+                None,
+            )
+            .await,
+            "adding a local submodule under offline mode",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_allowlist_allows_a_submodule_that_never_leaves_the_machine() {
+        // The other half of the comparison above: an allowlist has always
+        // permitted this update, because it reaches `check` and `check` carves
+        // local targets out. Offline mode refusing the identical operation was
+        // the asymmetry.
+        let repo =
+            repo_with_gitmodules("/srv/git/super.git", &[("vendor/dep", "/srv/git/dep.git")]);
+        let _guard = test_support::allowlist(&["github.com"]);
+
+        assert_not_blocked(
+            &update_submodules(repo.path_str(), None, Some(true), None, None, None, None).await,
+            "a local submodule url under an allowlist",
         );
     }
 

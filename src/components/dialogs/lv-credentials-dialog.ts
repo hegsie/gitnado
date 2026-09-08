@@ -642,17 +642,24 @@ export class LvCredentialsDialog extends LitElement {
   }
 
   /**
-   * Whether the reported target names a location on this machine rather than a
-   * host to connect to.
+   * Whether the reported target is a path rather than a host to connect to.
    *
-   * A `file` target has no host to report — a `file://` URL carries none, and a
-   * bare local path (`/srv/git/repo.git`, `C:\repos\x.git`, `../sibling.git`)
-   * is not a host either — so the backend reports the remote AS TYPED. Printed
-   * under a "Host:" label that put a whole URL, or a path, where a hostname
-   * belongs, and left the sentence below it ending in one.
+   * Such a target has no host to report — a host-less `file://` URL carries
+   * none, a bare local path (`/srv/git/repo.git`, `C:\repos\x.git`,
+   * `../sibling.git`) is not a host either, and neither is a UNC share, which
+   * git opens through the OS redirector without ever asking a credential
+   * helper — so the backend reports the remote AS TYPED. Printed under a
+   * "Host:" label that put a whole URL, or a path, where a hostname belongs,
+   * and left the sentence below it ending in one.
+   *
+   * The BACKEND's answer, not `protocol === 'file'`: that read
+   * `file://server/share/repo.git` — which keeps its `file` scheme while
+   * resolving a real host, and which the network gate refuses as a target that
+   * leaves the machine — as a local path. `isPathTarget` carries the
+   * `resolved` half of the rule that never used to cross the IPC boundary.
    */
   private isPathTarget(result: CredentialTestResult): boolean {
-    return result.protocol === 'file';
+    return result.isPathTarget;
   }
 
   /**
@@ -668,7 +675,10 @@ export class LvCredentialsDialog extends LitElement {
   private testResultMessage(result: CredentialTestResult, tone: string): string {
     if (tone !== 'info') return result.message;
     if (this.isPathTarget(result)) {
-      return 'A local repository does not authenticate, so nothing is stored for it.';
+      // Not "a local repository": a UNC share lands here too, and it is not on
+      // this machine — git simply opens it as a path and asks no helper about
+      // it, which is the whole of what this sentence has to say.
+      return 'Git opens this remote as a filesystem path, so there is no credential to store for it.';
     }
     return `${result.protocol}:// remotes do not authenticate, so nothing is stored for ${result.host}.`;
   }
