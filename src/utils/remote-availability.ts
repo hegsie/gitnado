@@ -83,6 +83,23 @@ export function noRemoteButtonLabel(action: string): string {
   return `${action} — this repository has no remote configured`;
 }
 
+/** Last path segment, so a message names the repository the user knows. */
+function repositoryLabel(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
+/**
+ * The repository as the user names it: the name its tab carries while it is
+ * open, and its folder once it is not — a bare path in a toast is unreadable.
+ */
+function repositoryName(repoPath: string): string {
+  const open = repositoryStore
+    .getState()
+    .openRepositories.find((r) => r.repository.path === repoPath);
+  return open?.repository.name ?? repositoryLabel(repoPath);
+}
+
 /**
  * What a refused fetch, pull or push says, wherever it was asked for.
  *
@@ -91,13 +108,15 @@ export function noRemoteButtonLabel(action: string): string {
  * look like a dead button. The keyboard, the command palette and the native
  * menu have no disabled state at all, so for them it is the whole answer —
  * which is why the runner shows it rather than each surface remembering to.
+ *
+ * It NAMES the repository. Not decoration: this refusal carries a remedy
+ * pinned to one repository (`addRemoteToastAction`) and lives five seconds,
+ * so two of them can be on screen at once — one per repository the user
+ * refused on. "this repository" left the two indistinguishable, and left the
+ * user to guess which of the two "Add a remote…" buttons belonged to which.
  */
-export const NO_REMOTE_MESSAGE = 'No remote configured for this repository — add one first.';
-
-/** Last path segment, so a message names the repository the user knows. */
-function repositoryLabel(path: string): string {
-  const segments = path.split(/[\\/]/).filter(Boolean);
-  return segments[segments.length - 1] ?? path;
+export function noRemoteMessage(repoPath: string): string {
+  return `No remote configured for ${repositoryName(repoPath)} — add one first.`;
 }
 
 /**
@@ -130,10 +149,8 @@ export function addRemoteToastAction(repoPath: string): ToastAction {
         dialogs.open('remotes');
         return;
       }
-      // Named the way the tab names it where the repository is still open, and
-      // by its folder where it is not — a bare path in a toast is unreadable.
-      const stillOpen = state.openRepositories.find((r) => r.repository.path === repoPath);
-      const name = stillOpen?.repository.name ?? repositoryLabel(repoPath);
+      const stillOpen = state.openRepositories.some((r) => r.repository.path === repoPath);
+      const name = repositoryName(repoPath);
       showToast(
         stillOpen
           ? `Switch to ${name} to add its remote.`
@@ -145,7 +162,15 @@ export function addRemoteToastAction(repoPath: string): ToastAction {
 }
 
 /**
- * Say the refusal, once, with the remedy where it can be offered.
+ * The refusal each repository currently has ON SCREEN — its toast's id, and
+ * whether that toast carries the remedy. Pruned on every call against the
+ * toasts the store still holds, so it can hold at most one entry per toast.
+ */
+const refusalsOnScreen = new Map<string, { toastId: string; hasRemedy: boolean }>();
+
+/**
+ * Say the refusal, once per repository, with the remedy where it can be
+ * offered.
  *
  * Every surface that refuses says it through here, so the wording, the
  * de-duplication and the decision to offer the remedy cannot drift apart the
@@ -159,19 +184,51 @@ export function addRemoteToastAction(repoPath: string): ToastAction {
  * true of the three buttons, whose identical message would stack up to three
  * deep in the render/click race window.
  *
+ * Per REPOSITORY, though, and keyed by the toast this repository actually has
+ * on screen rather than by the words in it. The two halves of this function
+ * pull in opposite directions otherwise: the message is one sentence every
+ * repository shares, while the remedy above is pinned to ONE. Keyed on the
+ * message, a refusal on the repository the user just switched TO was
+ * discarded as a repeat of the one still showing for the repository they
+ * switched FROM — and the button left on screen led to that other repository.
+ * Two repositories can also share a folder name, so the text cannot be the
+ * key even now that it names one.
+ *
  * The remedy is only offered when the refused repository IS the active one:
  * `handlePull` can carry a path pinned from a push-rejection suggestion, and a
  * button that cannot lead anywhere useful is worse than no button at all.
  * Whether it still leads anywhere is re-checked when it is pressed — see
- * `addRemoteToastAction`.
+ * `addRemoteToastAction`. A standing refusal that was raised WITHOUT the
+ * remedy is replaced rather than repeated once that repository becomes the
+ * active tab: the ask is a fresh gesture, and answering it with a toast that
+ * cannot offer the remedy leaves the user where "add one first" left them.
  */
 export function showNoRemoteToast(repoPath: string): void {
-  if (uiStore.getState().toasts.some((t) => t.message === NO_REMOTE_MESSAGE)) return;
+  // Anything the toast container has since dismissed — by timeout or by the
+  // user — is no longer a refusal on screen, and must not silence the next
+  // gesture.
+  const live = new Set(uiStore.getState().toasts.map((t) => t.id));
+  for (const [path, refusal] of refusalsOnScreen) {
+    if (!live.has(refusal.toastId)) refusalsOnScreen.delete(path);
+  }
+
   const isActive = repositoryStore.getState().getActiveRepository()?.repository.path === repoPath;
+  const standing = refusalsOnScreen.get(repoPath);
+  if (standing) {
+    if (standing.hasRemedy || !isActive) return;
+    uiStore.getState().removeToast(standing.toastId);
+    refusalsOnScreen.delete(repoPath);
+  }
+
   showToast(
-    NO_REMOTE_MESSAGE,
+    noRemoteMessage(repoPath),
     'warning',
     5000,
     isActive ? addRemoteToastAction(repoPath) : undefined,
   );
+  // `addToast` mints the id, so the toast just added is the one the store did
+  // not have a moment ago — found by id rather than by position, so nothing
+  // depends on where it lands in the list.
+  const added = uiStore.getState().toasts.find((t) => !live.has(t.id));
+  if (added) refusalsOnScreen.set(repoPath, { toastId: added.id, hasRemedy: isActive });
 }

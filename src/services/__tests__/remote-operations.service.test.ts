@@ -46,7 +46,7 @@ import { settingsStore } from '../../stores/settings.store.ts';
 import { uiStore } from '../../stores/ui.store.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
 import { dialogs } from '../../stores/dialog.store.ts';
-import { NO_REMOTE_MESSAGE } from '../../utils/remote-availability.ts';
+import { noRemoteMessage } from '../../utils/remote-availability.ts';
 import {
   isRefOpRunning,
   isPushRunning,
@@ -122,19 +122,27 @@ function openRepo(
   options?: { loaded?: boolean },
 ): void {
   repositoryStore.setState({
-    openRepositories: [
-      {
-        repository: { path: REPO, name: 'a', isValid: true, isBare: false },
-        branches: [],
-        currentBranch: null,
-        remotes,
-        remotesLoaded: options?.loaded ?? true,
-        tags: [],
-        stashes: [],
-      },
-    ],
+    openRepositories: [repoEntry(REPO, 'a', remotes, options?.loaded ?? true)],
     activeIndex: 0,
   } as never);
+}
+
+/** One entry of the repository store's `openRepositories`, as a tab holds it. */
+function repoEntry(
+  path: string,
+  name: string,
+  remotes: Array<{ name: string; url: string }>,
+  remotesLoaded = true,
+): unknown {
+  return {
+    repository: { path, name, isValid: true, isBare: false },
+    branches: [],
+    currentBranch: null,
+    remotes,
+    remotesLoaded,
+    tags: [],
+    stashes: [],
+  };
 }
 
 function closeRepos(): void {
@@ -600,7 +608,7 @@ describe('remote operations runner', () => {
 
         expect(counts(kind), 'nothing reaches git').to.equal(0);
         expect(progressMessages(), 'and no cancellable row is opened').to.deep.equal([]);
-        expect(warningToasts(), 'the refusal is user-visible').to.deep.equal([NO_REMOTE_MESSAGE]);
+        expect(warningToasts(), 'the refusal is user-visible').to.deep.equal([noRemoteMessage(REPO)]);
         expect(errorToasts(), "git's own wording never reaches the user").to.deep.equal([]);
       });
     }
@@ -621,7 +629,7 @@ describe('remote operations runner', () => {
       await runFetch(REPO);
       await runFetch(REPO);
 
-      expect(warningToasts()).to.deep.equal([NO_REMOTE_MESSAGE]);
+      expect(warningToasts()).to.deep.equal([noRemoteMessage(REPO)]);
     });
 
     it('says it again once the first refusal has gone from the screen', async () => {
@@ -629,7 +637,7 @@ describe('remote operations runner', () => {
       uiStore.setState({ toasts: [] });
       await runFetch(REPO);
 
-      expect(warningToasts(), 'a fresh gesture is answered').to.deep.equal([NO_REMOTE_MESSAGE]);
+      expect(warningToasts(), 'a fresh gesture is answered').to.deep.equal([noRemoteMessage(REPO)]);
     });
 
     it('lets the operation through as soon as a remote exists', async () => {
@@ -745,6 +753,100 @@ describe('remote operations runner', () => {
 
       expect(counts('fetch')).to.equal(1);
       expect(warningToasts()).to.deep.equal([]);
+    });
+  });
+  /**
+   * TWO repositories with nowhere to fetch, pull or push TO.
+   *
+   * The refusal is de-duplicated so that holding Ctrl+Shift+F says it once
+   * rather than thirty times — but the toast it holds back also carries the
+   * remedy, and that remedy is pinned to ONE repository. A key that cannot
+   * tell two repositories apart therefore answered the SECOND repository's
+   * refusal with the FIRST repository's toast: the second ask vanished, and
+   * the button on screen led to the repository the user had not asked about.
+   *
+   * So the two must agree: one standing refusal PER REPOSITORY, each naming
+   * the repository it is about and carrying only that repository's remedy.
+   */
+  describe('a second repository with no remote', () => {
+    const REPO_B = '/repo/beta';
+
+    /** Both repositories open and answered-for, with `activeIndex` active. */
+    function openBoth(activeIndex: number): void {
+      repositoryStore.setState({
+        openRepositories: [repoEntry(REPO, 'a', []), repoEntry(REPO_B, 'beta', [])],
+        activeIndex,
+      } as never);
+    }
+
+    it('answers a refusal on each repository, once per repository', async () => {
+      openBoth(0);
+
+      // Held down on the first repository: still one answer, not three.
+      await runFetch(REPO);
+      await runFetch(REPO);
+      await runFetch(REPO);
+
+      // The user switches tabs and asks again — a different repository, and
+      // so a refusal of its own rather than one swallowed as a repeat.
+      repositoryStore.setState({ activeIndex: 1 } as never);
+      await runFetch(REPO_B);
+      await runFetch(REPO_B);
+
+      const warnings = warningToasts();
+      expect(warnings, 'one standing refusal per repository').to.have.lengthOf(2);
+      expect(warnings[0], 'and each says which repository it is about').to.not.equal(warnings[1]);
+      expect(warnings[1]).to.contain('beta');
+      expect(counts('fetch'), 'and neither reached git').to.equal(0);
+    });
+
+    it('gives each refusal the remedy for the repository it names', async () => {
+      openBoth(0);
+      await runFetch(REPO);
+      repositoryStore.setState({ activeIndex: 1 } as never);
+      await runFetch(REPO_B);
+
+      const toasts = uiStore.getState().toasts.filter((t) => t.type === 'warning');
+      expect(toasts).to.have.lengthOf(2);
+
+      // The refusal the user is looking at is about the active repository, so
+      // its button opens that repository's remotes.
+      toasts[1].action!.callback();
+      expect(dialogs.isOpen('remotes'), 'the remedy opens the repository it named').to.equal(true);
+      dialogs.close('remotes');
+
+      // The older one is about a repository that is no longer active: it says
+      // so rather than opening the wrong repository's remotes.
+      toasts[0].action!.callback();
+      expect(dialogs.isOpen('remotes'), 'no dialog on the wrong repository').to.equal(false);
+      expect(
+        uiStore.getState().toasts.at(-1)?.message,
+        'and the press is answered, not swallowed',
+      ).to.contain('Switch to a');
+    });
+
+    it('offers the remedy once the repository it refused becomes the active tab', async () => {
+      // A refusal can be raised for a repository that is NOT the active tab —
+      // `handlePull` carries a path pinned from a push-rejection suggestion —
+      // and the remedy is withheld there, because the Remotes dialog binds to
+      // whatever is active. Asking again FROM that repository must not be
+      // silently swallowed as a repeat of the answer that had no remedy.
+      openBoth(1);
+      await runFetch(REPO);
+      expect(
+        uiStore.getState().toasts.at(-1)?.action,
+        'no remedy while it is not the active tab',
+      ).to.equal(undefined);
+
+      repositoryStore.setState({ activeIndex: 0 } as never);
+      await runFetch(REPO);
+
+      const warnings = warningToasts();
+      expect(warnings, 'still one refusal for this repository, not two').to.have.lengthOf(1);
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast?.action?.label, 'now carrying the remedy').to.contain('Add a remote');
+      toast!.action!.callback();
+      expect(dialogs.isOpen('remotes')).to.equal(true);
     });
   });
 });

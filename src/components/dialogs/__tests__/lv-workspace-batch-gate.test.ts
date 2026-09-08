@@ -310,7 +310,7 @@ describe('workspace batch operations and the security gate', () => {
  *
  * Fetch All / Pull All call `git.service` per repository directly rather than
  * going through remote-operations.service's runner, so the refusal every other
- * surface gives ("No remote configured for this repository — add one first.")
+ * surface gives ("No remote configured for <repo> — add one first.")
  * never reached them: the repository was attempted, git answered
  * "remote 'origin' does not exist", and the summary reported it as an
  * unexplained, unnamed failure among however many repositories the workspace
