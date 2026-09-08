@@ -374,6 +374,25 @@ describe('workspace batch operations and a repository with no remote', () => {
     ).to.equal(2);
   });
 
+  it('asks the shared predicate rather than re-stating the rule', async () => {
+    // The rule and its wording live in one module precisely so a sixth copy
+    // cannot appear — and remote-availability's own doc names this batch as a
+    // caller of `hasConfiguredRemote`. It was not one: it re-implemented
+    // "there is at least one remote" inline, which left the shared predicate
+    // with a single caller two lines below itself and the doc untrue.
+    const source = await fetch('/src/components/dialogs/lv-workspace-manager-dialog.ts');
+    expect(source.ok, 'the dialog source is served to the test runner').to.equal(true);
+    const text = await source.text();
+
+    // Asserted as booleans, not with `.to.contain`: a failure there prints the
+    // whole transformed module.
+    expect(text.includes('hasConfiguredRemote'), 'the shared predicate decides it').to.equal(true);
+    expect(
+      /result\.data\.length\s*>\s*0/.test(text),
+      'and the rule is not spelled out again here',
+    ).to.equal(false);
+  });
+
   it('a remote list that cannot be read is not treated as "no remote"', async () => {
     // Unknown is not absent: the operation goes ahead and reports git's own
     // error, exactly as an unreadable repository does elsewhere.

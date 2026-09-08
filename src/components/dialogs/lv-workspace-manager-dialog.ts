@@ -15,6 +15,7 @@ import { workspaceStore } from '../../stores/workspace.store.ts';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import type { Workspace, WorkspaceRepoStatus, WorkspaceSearchResult } from '../../types/git.types.ts';
 import { pushOverlay, removeOverlay, isTopOverlay } from '../../utils/overlay-stack.ts';
+import { hasConfiguredRemote } from '../../utils/remote-availability.ts';
 import { tryAcquireRefOp, releaseRefOp } from '../../utils/ref-lock.ts';
 
 const WORKSPACE_COLORS = [
@@ -945,7 +946,10 @@ export class LvWorkspaceManagerDialog extends LitElement {
   private async workspaceRepoHasRemote(path: string): Promise<boolean> {
     const result = await gitService.getRemotes(path);
     if (!result.success || !result.data) return true;
-    return result.data.length > 0;
+    // Through the shared predicate, not a local `length > 0`: re-stating the
+    // rule here is how a sixth copy of it gets back into the tree, which is
+    // the whole reason it lives in one module.
+    return hasConfiguredRemote({ remotes: result.data });
   }
 
   private async handleFetchAll(): Promise<void> {

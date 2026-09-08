@@ -851,6 +851,34 @@ describe('lv-toolbar repository tabs', () => {
       dialogs.close('remotes');
     });
 
+    it('does not arm the remotes dialog once the tab it belongs to is gone', async () => {
+      // The offer outlives the repository: `remotes` is repo-scoped, and
+      // app-shell sweeps those shut inside the store subscription — which runs
+      // when the tab closes, BEFORE this press. Opening it here only set a
+      // flag nothing would clear, and the dialog sprang up over the next
+      // repository opened.
+      const path = openRemoteRepo({ ahead: 1, behind: 0 });
+      const el = await createToolbar();
+      uiStore.setState({ toasts: [] });
+      dialogs.close('remotes');
+      repositoryStore.getState().updateRepoData(path, { remotes: [] });
+
+      (el as unknown as { handleRemoteAction: (op: string) => void }).handleRemoteAction('push');
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast?.action?.label, 'the remedy is offered').to.contain('Add a remote');
+
+      repositoryStore.getState().reset();
+      toast!.action!.callback();
+
+      expect(dialogs.isOpen('remotes'), 'nothing is armed for the next repository').to.equal(
+        false,
+      );
+      expect(
+        uiStore.getState().toasts.at(-1)?.message,
+        'and the press is answered, not swallowed',
+      ).to.contain('no longer open');
+    });
+
     it('warns instead of failing silently if a click lands with no repository', async () => {
       const el = await createToolbar();
       uiStore.setState({ toasts: [] });

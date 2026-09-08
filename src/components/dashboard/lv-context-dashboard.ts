@@ -34,10 +34,9 @@ import './lv-integration-card.ts';
 import './lv-repository-card.ts';
 import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
 import {
-  addRemoteToastAction,
   knownToHaveNoRemote,
   noRemoteButtonLabel,
-  NO_REMOTE_MESSAGE,
+  showNoRemoteToast,
 } from '../../utils/remote-availability.ts';
 
 const STORAGE_KEY = 'lv-context-dashboard-expanded';
@@ -771,21 +770,21 @@ export class LvContextDashboard extends LitElement {
   private handleFetch(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
-    if (!this.warnIfNoRemote()) return Promise.resolve();
+    if (!this.warnIfNoRemote(repoPath)) return Promise.resolve();
     return runFetch(repoPath);
   }
 
   private handlePull(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
-    if (!this.warnIfNoRemote()) return Promise.resolve();
+    if (!this.warnIfNoRemote(repoPath)) return Promise.resolve();
     return runPull(repoPath);
   }
 
   private handlePush(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
-    if (!this.warnIfNoRemote()) return Promise.resolve();
+    if (!this.warnIfNoRemote(repoPath)) return Promise.resolve();
     return runPush(repoPath);
   }
 
@@ -795,11 +794,14 @@ export class LvContextDashboard extends LitElement {
    * the click — where a silent return would look like a dead button, exactly
    * as the toolbar's own `handleRemoteAction` says.
    */
-  private warnIfNoRemote(): boolean {
+  private warnIfNoRemote(repoPath: string): boolean {
     if (this.hasRemote) return true;
-    // With the route to the remedy the message names: this surface always
-    // shows the active repository, so the Remotes dialog opens on it.
-    showToast(NO_REMOTE_MESSAGE, 'warning', 5000, addRemoteToastAction());
+    // Said through the shared helper, so this surface refuses in the same
+    // words, with the same once-per-burst de-duplication and the same remedy
+    // button as the runner every other route goes through. The path is passed
+    // rather than assumed from the active tab, because the remedy button is
+    // pressed later than it is built.
+    showNoRemoteToast(repoPath);
     return false;
   }
 

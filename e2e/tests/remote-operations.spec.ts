@@ -11,7 +11,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { setupOpenRepository, defaultMockData, withConflicts } from '../fixtures/tauri-mock';
 import { AppPage } from '../pages/app.page';
-import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandHang, emitBackendEvent, waitForCommand, openViaCommandPalette } from '../fixtures/test-helpers';
+import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandHang, injectCommandMock, emitBackendEvent, waitForCommand, openViaCommandPalette } from '../fixtures/test-helpers';
 
 // ============================================================================
 // Helpers
@@ -221,6 +221,38 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     await toast.locator('.toast-action-btn').click();
 
     await expect(page.locator('lv-remote-dialog')).toBeVisible();
+  });
+
+  /**
+   * The remedy applied from OUTSIDE the app.
+   *
+   * `git remote add origin …` in a terminal writes `.git/config`; the backend
+   * watcher classifies that as `config-changed` and emits it. Nothing listened
+   * for it, and the store's `remotes` — what greys these buttons out and what
+   * the runner refuses on — is written only by a refresh and by tab
+   * activation, neither of which fires for the repository already on screen.
+   * So the refusal outlived its own remedy: every surface went on saying there
+   * was no remote while the dialog its toast offers listed one.
+   */
+  test('a remote added outside the app lifts the refusal, on the repo being looked at', async ({
+    page,
+  }) => {
+    await injectCommandMock(page, {
+      get_remotes: [{ name: 'origin', url: 'https://example.test/o/r.git', pushUrl: null }],
+    });
+
+    await emitBackendEvent(page, 'file-change', {
+      repoPath: '/tmp/test-repo',
+      eventType: 'config-changed',
+      paths: [],
+    });
+
+    await expect(page.locator('lv-toolbar').getByRole('button', { name: /Fetch/i })).toBeEnabled();
+    await expect(dashboardButton(page, /Fetch/i)).toBeEnabled();
+    // And the three surfaces that have no button to grey out let it through.
+    await page.keyboard.press('Control+Shift+F');
+    await waitForCommand(page, 'fetch');
+    await expect(page.locator('.toast.warning')).toHaveCount(0);
   });
 
   test('the native Repository menu items refuse instead of running', async ({ page }) => {
