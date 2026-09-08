@@ -89,6 +89,14 @@ function reportResolvedRepository(path: string): void {
 let dropInFlight = false;
 
 /**
+ * How many not-a-repository folders get their own named toast (with their own
+ * scan offer) before the rest are collapsed into a count. Toasts stack upwards
+ * from the bottom-right corner with no scroll of their own, so a drop of a
+ * whole projects folder would otherwise bury the window in them.
+ */
+const MAX_NAMED_SCAN_OFFERS = 4;
+
+/**
  * Open every repository among `paths`, and report everything else.
  *
  * Sequential on purpose: opening repositories concurrently would interleave
@@ -221,17 +229,37 @@ function reportOutcome(outcome: DroppedPathsOutcome): void {
     return;
   }
 
-  showToast(
-    notRepositories.length === 1
-      ? `${baseName(notRepositories[0])} is not a Git repository`
-      : `${notRepositories.length} dropped folders are not Git repositories`,
-    'warning',
-    8000,
-    {
-      label: 'Scan folder',
-      callback: () => offerDirectoryScan(notRepositories[0]),
-    },
-  );
+  // One toast per folder, each naming the folder it is about and offering the
+  // scan for THAT folder. A single toast counting them all ("2 dropped folders
+  // are not Git repositories") could only carry one action, so it announced a
+  // number but acted on one unnamed folder of that number: the user could not
+  // tell which one the button would take, and the others had no way back at all
+  // short of dragging them in again. Per path is also what the failures above
+  // already do.
+  const named = notRepositories.slice(0, MAX_NAMED_SCAN_OFFERS);
+  for (const path of named) {
+    const name = baseName(path);
+    showToast(`${name} is not a Git repository`, 'warning', 8000, {
+      label: `Scan ${name}`,
+      callback: () => offerDirectoryScan(path),
+    });
+  }
+
+  // Past a handful, one toast per folder would fill the window and push the
+  // earlier ones off the top, so the rest are counted instead. The count
+  // carries no action rather than one that reaches a single arbitrary folder of
+  // it — a button that cannot say what it acts on is the very thing this
+  // replaced. Those folders stay reachable by dropping them again.
+  const remaining = notRepositories.length - named.length;
+  if (remaining > 0) {
+    showToast(
+      remaining === 1
+        ? '1 more dropped folder is not a Git repository'
+        : `${remaining} more dropped folders are not Git repositories`,
+      'warning',
+      8000,
+    );
+  }
 }
 
 /** True when the Tauri IPC bridge is present (i.e. not a plain browser). */

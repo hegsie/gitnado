@@ -83,6 +83,14 @@ function toastMessages(): string[] {
   return uiStore.getState().toasts.map((t) => t.message);
 }
 
+/** Collect the paths a scan/init offer was raised for. */
+function captureOffers(): { paths: string[]; stop: () => void } {
+  const paths: string[] = [];
+  const listener = (e: Event) => paths.push((e as CustomEvent<{ path: string }>).detail.path);
+  window.addEventListener(REPOSITORY_SCAN_OFFER_EVENT, listener);
+  return { paths, stop: () => window.removeEventListener(REPOSITORY_SCAN_OFFER_EVENT, listener) };
+}
+
 /** Collect the paths announced as "this dropped folder IS a repository". */
 function captureResolved(): { paths: string[]; stop: () => void } {
   const paths: string[] = [];
@@ -239,31 +247,101 @@ describe('window drop handler', () => {
     expect(messages.some((m) => m.includes('Opened 2 repositories'))).to.equal(true);
     expect(messages.some((m) => m.includes('no longer exists'))).to.equal(true);
     expect(messages.some((m) => m.includes('is a file'))).to.equal(true);
-    expect(messages.some((m) => m.includes('not a Git repository'))).to.equal(true);
+
+    // The one folder that is not a repository still gets the singular message —
+    // and its button names, and reaches, that folder rather than opening a
+    // dialog the user cannot predict.
+    const notRepoToast = uiStore
+      .getState()
+      .toasts.find((t) => t.message.includes('not a Git repository'));
+    expect(notRepoToast?.message).to.equal('beta is not a Git repository');
+    expect(notRepoToast?.action?.label).to.equal('Scan beta');
+    const offers = captureOffers();
+    try {
+      notRepoToast?.action?.callback();
+    } finally {
+      offers.stop();
+    }
+    expect(offers.paths).to.deep.equal(['/repos/beta']);
   });
 
-  it('offers a scan from the toast when several folders are not repositories', async () => {
+  it('names every folder that is not a repository and offers a scan for each', async () => {
+    // One toast counting them all could only carry one action, so it named a
+    // number and acted on one unnamed folder of that number — the user could
+    // not tell which, and the other folder had no route back at all.
     mockClassifications({
-      '/a': classification('/a', { isRepository: false }),
-      '/b': classification('/b', { isRepository: false }),
+      '/work/alpha': classification('/work/alpha', { isRepository: false }),
+      '/work/beta': classification('/work/beta', { isRepository: false }),
     });
 
-    await handleDroppedPaths(['/a', '/b']);
+    await handleDroppedPaths(['/work/alpha', '/work/beta']);
 
     const toasts = uiStore.getState().toasts;
-    expect(toasts.length).to.equal(1);
-    expect(toasts[0].message).to.contain('2 dropped folders');
-    expect(toasts[0].action?.label).to.equal('Scan folder');
+    expect(toasts.length).to.equal(2);
+    expect(toasts.map((t) => t.message)).to.deep.equal([
+      'alpha is not a Git repository',
+      'beta is not a Git repository',
+    ]);
+    expect(toasts.map((t) => t.type)).to.deep.equal(['warning', 'warning']);
+    expect(toasts.map((t) => t.action?.label)).to.deep.equal(['Scan alpha', 'Scan beta']);
 
-    const offers: string[] = [];
-    const listener = (e: Event) => offers.push((e as CustomEvent<{ path: string }>).detail.path);
-    window.addEventListener(REPOSITORY_SCAN_OFFER_EVENT, listener);
+    // Each button reaches the folder it names — including the second one, which
+    // used to be unreachable.
+    const offers = captureOffers();
     try {
+      toasts[1].action?.callback();
       toasts[0].action?.callback();
     } finally {
-      window.removeEventListener(REPOSITORY_SCAN_OFFER_EVENT, listener);
+      offers.stop();
     }
-    expect(offers).to.deep.equal(['/a']);
+    expect(offers.paths).to.deep.equal(['/work/beta', '/work/alpha']);
+  });
+
+  it('counts the folders past the first few instead of burying the window in toasts', async () => {
+    const paths = ['/w/a', '/w/b', '/w/c', '/w/d', '/w/e', '/w/f'];
+    const perPath: Record<string, ReturnType<typeof classification>> = {};
+    for (const path of paths) perPath[path] = classification(path, { isRepository: false });
+    mockClassifications(perPath);
+
+    await handleDroppedPaths(paths);
+
+    const toasts = uiStore.getState().toasts;
+    // Four named, each with its own offer, then a count for the rest.
+    expect(toasts.length).to.equal(5);
+    expect(toasts.slice(0, 4).map((t) => t.action?.label)).to.deep.equal([
+      'Scan a',
+      'Scan b',
+      'Scan c',
+      'Scan d',
+    ]);
+    const summary = toasts[4];
+    expect(summary.message).to.equal('2 more dropped folders are not Git repositories');
+    expect(summary.type).to.equal('warning');
+    // A count of folders it cannot name must not carry a button that acts on
+    // one of them.
+    expect(summary.action).to.equal(undefined);
+
+    const offers = captureOffers();
+    try {
+      toasts[3].action?.callback();
+    } finally {
+      offers.stop();
+    }
+    expect(offers.paths).to.deep.equal(['/w/d']);
+  });
+
+  it('uses the singular wording for a single unnamed leftover folder', async () => {
+    const paths = ['/w/a', '/w/b', '/w/c', '/w/d', '/w/e'];
+    const perPath: Record<string, ReturnType<typeof classification>> = {};
+    for (const path of paths) perPath[path] = classification(path, { isRepository: false });
+    mockClassifications(perPath);
+
+    await handleDroppedPaths(paths);
+
+    const toasts = uiStore.getState().toasts;
+    expect(toasts.length).to.equal(5);
+    expect(toasts[4].message).to.equal('1 more dropped folder is not a Git repository');
+    expect(toasts[4].action).to.equal(undefined);
   });
 
   it('reports a repository that cannot be opened', async () => {
