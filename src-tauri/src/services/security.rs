@@ -392,15 +392,13 @@ fn parse_target_inner(target: &str, bare_host_port: bool) -> Option<RemoteTarget
             // PORT rather than the scp separator: it is what the SSH settings
             // dialog's host field accepts, and dropping the port there sends
             // `ssh -T` to :22 of a server that does not listen on it. It is
-            // read below, exactly as it always was — the HOST is the same
-            // either way, so the allowlist sees no change — and a login says
+            // read as a bare authority — the HOST is the same either way, so
+            // the allowlist sees no change — and a login says
             // it is not that form: `git@host:2222` is the repository `2222`.
             // A caller that holds a REMOTE says so by taking
             // `parse_remote_target`, for which no such form exists at all.
             if bare_host_port && scp.login.is_none() && scp.path.parse::<u16>().is_ok() {
-                if let Some(mut resolved) = parse_url_target(&format!("https://{}", trimmed)) {
-                    resolved.is_ssh = resolved.user.is_some();
-                    resolved.scheme = None;
+                if let Some(resolved) = parse_bare_authority_target(trimmed) {
                     return Some(resolved);
                 }
             }
@@ -415,12 +413,56 @@ fn parse_target_inner(target: &str, bare_host_port: bool) -> Option<RemoteTarget
         // Bare `host`, `host:port` and `user@host` — the forms the SSH settings
         // dialog accepts. Reading them as an https URL is what this gate has
         // always done; a login and no scheme means an ssh destination.
-        let mut resolved = parse_url_target(&format!("https://{}", trimmed))?;
-        resolved.is_ssh = resolved.user.is_some();
-        resolved.scheme = None;
-        return Some(resolved);
+        return parse_bare_authority_target(trimmed);
     }
     parse_url_target(trimmed)
+}
+
+/// The `[user@]host[:port]` of a SCHEME-LESS target, read as a bare authority.
+///
+/// The `https://` is synthesised because `url::Url` needs a scheme; it is
+/// stripped again here, so no caller ever sees it. The parser it is handed to
+/// is a WHATWG implementation, which NORMALIZES AWAY a port equal to the
+/// scheme's default — so `ssh.github.com:443` came back with no port at all,
+/// and `resolve_ssh_target` (which adds `-p` only for a port that is `Some`)
+/// sent `ssh -T` to :22. That is GitHub's own documented workaround for
+/// networks blocking port 22, spelled the same way for `altssh.gitlab.com:443`
+/// and `altssh.bitbucket.org:443`: the app probed the one port the user wrote
+/// 443 to avoid and reported a failed SSH test for a working configuration.
+/// Every other port survived the round trip, which is why 443 was the only one
+/// missing from the differential table. The port is therefore taken from the
+/// string that was actually parsed, not from the synthesised URL.
+fn parse_bare_authority_target(authority: &str) -> Option<RemoteTarget> {
+    let mut resolved = parse_url_target(&format!("https://{}", authority))?;
+    if resolved.port.is_none() {
+        resolved.port = explicit_authority_port(authority);
+    }
+    resolved.is_ssh = resolved.user.is_some();
+    resolved.scheme = None;
+    Some(resolved)
+}
+
+/// The port a scheme-less authority spells out, or `None` when it names none.
+///
+/// Only the authority is read: everything from the first path separator on is
+/// a PATH, where a colon is no port (`a/b:443`). The host may be a bracketed
+/// IPv6 literal, whose own colons are inside the brackets, and a login is not
+/// part of it — the host is what follows the last `@`, which is the same split
+/// `url::Url` makes. Consulted only when the URL parser found no port, so a
+/// string it read a port from keeps that answer.
+fn explicit_authority_port(authority: &str) -> Option<u16> {
+    let host_port = authority
+        .split(['/', '\\', '?', '#'])
+        .next()?
+        .rsplit('@')
+        .next()?;
+    let colon = if host_port.starts_with('[') {
+        let end = host_port.find(']')?;
+        host_port[end..].find(':').map(|i| end + i)?
+    } else {
+        host_port.rfind(':')?
+    };
+    host_port[colon + 1..].parse::<u16>().ok()
 }
 
 /// The `[user@]host[:port]` of a target that carries a scheme.
@@ -1233,6 +1275,67 @@ mod tests {
         );
     }
 
+    /// …including the ONE port a WHATWG URL parser erases.
+    ///
+    /// The scheme-less forms are read by synthesising `https://` and handing
+    /// the result to `url::Url`, which normalizes away a port equal to the
+    /// scheme's default. 443 — and only 443 — therefore came back as no port
+    /// at all, so `resolve_ssh_target` added no `-p` and `ssh -T` went to :22.
+    /// `ssh.github.com:443` is GitHub's own documented workaround for a network
+    /// that blocks port 22; `altssh.gitlab.com:443` and
+    /// `altssh.bitbucket.org:443` are the same shape.
+    #[test]
+    fn a_port_equal_to_the_synthesised_schemes_default_survives() {
+        for host in [
+            "ssh.github.com",
+            "altssh.gitlab.com",
+            "altssh.bitbucket.org",
+            "git.example.test",
+        ] {
+            assert_eq!(
+                parse_target(&format!("{host}:443")).map(|t| (t.host, t.port, t.is_ssh)),
+                Some((host.to_string(), Some(443), false)),
+                "{host}:443"
+            );
+            // The HOST is unchanged, so the allowlist reads it exactly as it
+            // reads the port-less spelling.
+            assert_eq!(target_host(&format!("{host}:443")).as_deref(), Some(host));
+            assert!(check(&settings(false, &[host]), Some(&format!("{host}:443"))).is_ok());
+        }
+
+        // 80 is the other scheme default a synthesised URL could erase, and a
+        // bracketed IPv6 literal reaches the same parse by a different route.
+        assert_eq!(
+            parse_target("git.example.test:80").map(|t| (t.host, t.port)),
+            Some(("git.example.test".to_string(), Some(80)))
+        );
+        assert_eq!(
+            parse_target("[::1]:443").map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("[::1]".to_string(), Some(443), false))
+        );
+        // The one-letter authority is a drive, so it reaches the shared
+        // bare-authority fallback rather than the `host:port` branch — the same
+        // erasure lived there, and `x:22` alone would never have shown it.
+        assert_eq!(
+            parse_target("x:443").map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("x".to_string(), Some(443), false))
+        );
+
+        // None of this moves the REMOTE reading: a remote's colon separates the
+        // host from a PATH, and `443` is a repository name there.
+        assert_eq!(
+            parse_remote_target("ssh.github.com:443").map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("ssh.github.com".to_string(), None, true))
+        );
+        // A login says it is not the host:port form either, exactly as for 2222.
+        assert_eq!(
+            parse_target("git@ssh.github.com:443").map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("ssh.github.com".to_string(), None, true))
+        );
+        // A colon inside a PATH is still no port.
+        assert_eq!(parse_target("./x:443").map(|t| t.port), Some(None));
+    }
+
     /// The whole differential of reading the login as optional, pinned.
     ///
     /// [`is_local_target`] excludes everything [`scp_like_host`] recognises, so
@@ -1306,6 +1409,16 @@ mod tests {
                 Some("host"),
                 Some(("host", Some(22), false)),
             ),
+            // the port a synthesised `https://` used to erase, on both routes
+            // through this parse: the `host:port` branch and the drive
+            // carve-out's bare-authority fallback
+            (
+                "ssh.github.com:443",
+                false,
+                Some("ssh.github.com"),
+                Some(("ssh.github.com", Some(443), false)),
+            ),
+            ("x:443", false, None, Some(("x", Some(443), false))),
             // Paths, in every spelling `is_local_target` accepts. A colon
             // inside one of these is inside the PATH.
             ("/srv/git/x.git", true, None, Some(("srv", None, false))),
@@ -1661,6 +1774,57 @@ mod tests {
                 Some("host"),
                 true,
             ),
+            // The port the synthesised `https://` used to erase, and the reason
+            // this table's every other port survived: a WHATWG URL parser
+            // normalizes away a port equal to the scheme's default. 443 is
+            // GitHub's own documented workaround for a blocked port 22
+            // (`ssh.github.com:443`), so it is the one port that must not be
+            // lost. 80 is the only other scheme default a synthesis could hit.
+            (
+                "ssh.github.com:443",
+                false,
+                false,
+                Some("ssh.github.com"),
+                Some(("ssh.github.com", Some(443), false)),
+                Some(("ssh.github.com", None, true)),
+                Some("ssh.github.com"),
+                Some("ssh.github.com"),
+                true,
+            ),
+            (
+                "host:443",
+                false,
+                false,
+                Some("host"),
+                Some(("host", Some(443), false)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            (
+                "host:80",
+                false,
+                false,
+                Some("host"),
+                Some(("host", Some(80), false)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            // a login still says it is not the host:port form, whatever the port
+            (
+                "git@host:443",
+                false,
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
             // a login says it is not the host:port form
             (
                 "git@host:2222",
@@ -1684,6 +1848,19 @@ mod tests {
                 None,
                 Some(("x", Some(22), false)),
                 Some(("x", Some(22), false)),
+                None,
+                Some("x"),
+                false,
+            ),
+            // …and the same shape on 443, which is where the erasure hid in the
+            // fallback rather than in the `host:port` branch
+            (
+                "x:443",
+                false,
+                false,
+                None,
+                Some(("x", Some(443), false)),
+                Some(("x", Some(443), false)),
                 None,
                 Some("x"),
                 false,
@@ -1717,6 +1894,17 @@ mod tests {
                 false,
                 Some("[::1]"),
                 Some(("[::1]", Some(22), false)),
+                Some(("[::1]", None, true)),
+                Some("[::1]"),
+                Some("[::1]"),
+                true,
+            ),
+            (
+                "[::1]:443",
+                false,
+                false,
+                Some("[::1]"),
+                Some(("[::1]", Some(443), false)),
                 Some(("[::1]", None, true)),
                 Some("[::1]"),
                 Some("[::1]"),
