@@ -301,6 +301,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
         protocol: 'file',
         username: null,
         message: 'No credentials found for file:///srv/git/app.git',
+        isPathTarget: true,
       },
     });
     await openTestTab(page);
@@ -330,6 +331,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
         protocol: 'file',
         username: null,
         message: 'No credentials found for /srv/git/repo.git',
+        isPathTarget: true,
       },
     });
     await openTestTab(page);
@@ -347,6 +349,78 @@ test.describe('Credentials Dialog - testing a remote', () => {
     await expect(result, 'a plain path is not a file:// URL').not.toContainText('file://');
     await expect(result).not.toContainText(/no credentials found/i);
     await expect(result).not.toHaveClass(/\berror\b/);
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
+
+  test('a UNC share is reported as a path, not an invented https host', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [{ name: 'origin', url: '\\\\server\\share\\repo.git', pushUrl: null }],
+      test_credentials: {
+        // What the backend sends now. It used to report `host: 'server',
+        // protocol: 'https'` — both invented by parsing
+        // `https://\\\\server\\share\\repo.git`, whose backslashes the URL
+        // parser eats. git opens a UNC path through the OS redirector and asks
+        // no credential helper about it at all.
+        success: false,
+        host: '\\\\server\\share\\repo.git',
+        protocol: 'file',
+        username: null,
+        message: 'No credentials found for \\\\server\\share\\repo.git',
+        isPathTarget: true,
+      },
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('No Credentials Needed');
+    await expect(result).toContainText('Path: \\\\server\\share\\repo.git');
+    await expect(result, 'a share path is not a hostname').not.toContainText('Host:');
+    await expect(result, 'the protocol was invented too').not.toContainText('Protocol: https');
+    await expect(result).not.toContainText(/no credentials found/i);
+    // Not "a local repository": an SMB share is not on this machine, which is
+    // why offline mode still refuses it.
+    await expect(result).toContainText('filesystem path');
+    await expect(result).not.toContainText('local repository');
+    await expect(result).not.toHaveClass(/\berror\b/);
+    // The one that mattered: erasing here ran `git credential reject
+    // protocol=https host=server`, which would have dropped the credential of
+    // an unrelated internal host that happens to share the box name.
+    await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
+  });
+
+  test('a file:// URL naming another machine is not drawn as a local path', async ({ page }) => {
+    await injectCommandMock(page, {
+      get_credential_helpers: [],
+      get_available_helpers: [],
+      detect_credential_manager: null,
+      get_remotes: [{ name: 'origin', url: 'file://server/share/repo.git', pushUrl: null }],
+      test_credentials: {
+        // `file://server/share/repo.git` keeps its `file` scheme while
+        // RESOLVING a host — the target the network gate refuses as one that
+        // leaves the machine. `isPathTarget` is the half of that rule that
+        // never used to cross the IPC boundary, so the dialog keyed the path
+        // branch on the protocol alone and called this a local repository.
+        success: false,
+        host: 'server',
+        protocol: 'file',
+        username: null,
+        message: 'No credentials found for server',
+        isPathTarget: false,
+      },
+    });
+    await openTestTab(page);
+
+    const result = page.locator('lv-credentials-dialog .test-result');
+    await expect(result).toContainText('Host: server');
+    await expect(result, 'a resolved host is not a path').not.toContainText('Path:');
+    await expect(result).not.toContainText('filesystem path');
+    // `file://` stores no credential either way, so the neutral branch is
+    // right — it just has to name the host instead of the machine it is on.
+    await expect(result).toContainText('No Credentials Needed');
+    await expect(result).toContainText('file:// remotes do not authenticate');
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toHaveCount(0);
   });
 

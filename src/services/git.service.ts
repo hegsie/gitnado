@@ -3253,11 +3253,19 @@ function selectSubmodules(all: Submodule[], submodulePaths?: string[]): Submodul
  * both allowed the update and this half refused it, naming a host the
  * operation never contacts.
  *
- * Offline mode refuses outright, before anything is listed. Under an allowlist
- * the superproject's own remote is deliberately not checked: it is only where
- * a RELATIVE submodule url resolves to, and the backend guards it for exactly
- * those. Checking it for every update refused a local-only superproject — no
- * remotes at all — whose `.gitmodules` named nothing but allowlisted hosts.
+ * Offline mode is judged per submodule, like everything else. It used to
+ * refuse here before anything was listed, so the local-target carve-out
+ * `checkNetworkAllowed` makes could never be reached: a submodule on
+ * `/srv/git/dep.git` opens no socket, an allowlist permits updating it, and
+ * offline mode refused it anyway — stricter than an allowlist for an
+ * identical purely-local operation, and refusing to UPDATE a submodule the
+ * same dialog had just let the user ADD (`addSubmodule` checks the url).
+ *
+ * Under an allowlist the superproject's own remote is deliberately not
+ * checked: it is only where a RELATIVE submodule url resolves to, and the
+ * backend guards it for exactly those. Checking it for every update refused a
+ * local-only superproject — no remotes at all — whose `.gitmodules` named
+ * nothing but allowlisted hosts.
  *
  * Top-level only, on purpose. A NESTED submodule's url lives in its parent's
  * `.gitmodules`, which does not exist until the parent is cloned, so no check
@@ -3278,9 +3286,6 @@ async function checkSubmoduleHostsAllowed(
   init = false,
 ): Promise<boolean> {
   if (!isNetworkPolicyActive()) return true;
-  if (settingsStore.getState().offlineMode) {
-    return (await checkNetworkAllowed(null, undefined)) === null;
-  }
 
   const listed = await getSubmodules(repoPath);
   if (!listed.success || !listed.data) {
@@ -4090,6 +4095,19 @@ export interface CredentialTestResult {
   protocol: string;
   username: string | null;
   message: string;
+  /**
+   * Whether `host` is the remote AS TYPED — a path standing in for a host
+   * there is none of — rather than a hostname to connect to. Mirrors
+   * `CredentialTestResult::is_path_target` in
+   * `src-tauri/src/commands/credentials.rs`.
+   *
+   * The dialog used to answer this from `protocol === 'file'` alone, which is
+   * not the rule: `file://server/share/repo.git` keeps its `file` scheme while
+   * resolving a real host — the very target the network gate refuses as one
+   * that leaves the machine — and was drawn as a local path anyway. Only the
+   * backend knows whether the target resolved.
+   */
+  isPathTarget: boolean;
 }
 
 export interface AvailableHelper {

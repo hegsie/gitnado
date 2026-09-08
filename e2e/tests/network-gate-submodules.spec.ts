@@ -251,6 +251,50 @@ test.describe('Submodule Dialog — the allowlist covers the submodule hosts', (
     await expect(dialog(page).locator('.message.success')).toBeVisible();
   });
 
+  test('offline mode refuses a submodule that leaves the machine', async ({ page }) => {
+    await startCommandCaptureWithMocks(page, {
+      get_remotes: SUPERPROJECT_ON_GITHUB,
+      get_submodules: submoduleRows([
+        { name: 'lib/utils', path: 'lib/utils', url: 'https://github.com/user/utils.git' },
+        { name: 'vendor/plugin', path: 'vendor/plugin', url: 'https://github.com/vendor/plugin.git' },
+      ]),
+      update_submodules: null,
+    });
+    await setSecurity(page, { offlineMode: true });
+    await openSubmoduleDialog(page);
+
+    await updateAllButton(page).click();
+
+    await expect(page.locator('.toast').first()).toContainText('Offline mode');
+    expect(await findCommand(page, 'update_submodules')).toHaveLength(0);
+    await expect(dialog(page).locator('.message.success')).toHaveCount(0);
+  });
+
+  test('offline mode allows a submodule that never leaves the machine', async ({ page }) => {
+    // Offline mode used to answer before a single submodule url was read, so
+    // updating a submodule on a filesystem path — which opens no socket, and
+    // which an allowlist permits — was refused, and the same dialog had just
+    // let the user ADD it.
+    await startCommandCaptureWithMocks(page, {
+      get_remotes: [{ name: 'origin', url: '/srv/git/super.git', pushUrl: null }],
+      get_submodules: submoduleRows([
+        { name: 'lib/utils', path: 'lib/utils', url: '/srv/git/utils.git' },
+        { name: 'vendor/plugin', path: 'vendor/plugin', url: '/srv/git/plugin.git' },
+      ]),
+      update_submodules: null,
+    });
+    await setSecurity(page, { offlineMode: true });
+    await openSubmoduleDialog(page);
+
+    await updateAllButton(page).click();
+
+    await expect
+      .poll(async () => (await findCommand(page, 'update_submodules')).length)
+      .toBeGreaterThan(0);
+    await expect(page.locator('.toast.error')).toHaveCount(0);
+    await expect(dialog(page).locator('.message.success')).toBeVisible();
+  });
+
   test('with no policy in force the update runs as before', async ({ page }) => {
     await startCommandCaptureWithMocks(page, {
       get_remotes: SUPERPROJECT_ON_GITHUB,
