@@ -11,7 +11,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { setupOpenRepository, defaultMockData, withConflicts } from '../fixtures/tauri-mock';
 import { AppPage } from '../pages/app.page';
-import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandHang, emitBackendEvent, waitForCommand } from '../fixtures/test-helpers';
+import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandHang, emitBackendEvent, waitForCommand, openViaCommandPalette } from '../fixtures/test-helpers';
 
 // ============================================================================
 // Helpers
@@ -104,15 +104,20 @@ test.describe('Remote Operation Buttons', () => {
 // ============================================================================
 // A repository with no remote at all
 //
-// Both surfaces are on screen together whenever a repository is open
-// (app-shell renders the toolbar directly above the dashboard). The toolbar
-// disabled its three and explained why; these identical three stayed bright
-// and enabled, opened a cancellable progress row and ended in a red toast
-// carrying git's own wording — a dead end one row below the button that had
-// already said the operation was unavailable.
+// There are FIVE ways to ask for a fetch, a pull or a push: the toolbar's
+// three buttons, the dashboard's three identical copies directly below them,
+// the Ctrl+Shift+F / P / U shortcuts, the command palette's three entries and
+// the native Repository menu. The two button surfaces greyed their copies out
+// and explained why; the three that have no button to grey ran the operation
+// on a freshly `git init`ed folder — a cancellable progress row, then a red
+// toast carrying git's own "remote 'origin' does not exist", a dead end one
+// row below a button that had already said the operation was unavailable.
+//
+// The refusal now lives on the runner all five go through, so every one of
+// them is covered here.
 // ============================================================================
 
-test.describe('Remote buttons with no remote configured', () => {
+test.describe('Fetch, Pull and Push with no remote configured', () => {
   test.beforeEach(async ({ page }) => {
     await setupOpenRepository(page, { remotes: [] });
     await startCommandCaptureWithMocks(page, {
@@ -140,12 +145,106 @@ test.describe('Remote buttons with no remote configured', () => {
     }
   });
 
-  test('no operation can be started, so nothing fails at git', async ({ page }) => {
-    await dashboardButton(page, /Fetch/i).click({ force: true });
+  /**
+   * A click that lands anyway.
+   *
+   * `click({ force: true })` on a disabled <button> is not a click at all —
+   * Chromium never dispatches one, so a test written that way passes with the
+   * guard deleted. `dispatchEvent` is the click itself, which is what the race
+   * window between a render and the button going grey delivers: the remote
+   * removed from another surface a moment before the mouse came down.
+   */
+  test('a click that lands anyway starts nothing and says why', async ({ page }) => {
+    await dashboardButton(page, /Fetch/i).dispatchEvent('click');
 
+    await expect(page.locator('.toast.warning')).toContainText('No remote configured');
     expect(await findCommand(page, 'fetch')).toHaveLength(0);
     await expect(page.locator('.progress-message')).toHaveCount(0);
     await expect(page.locator('.toast.error')).toHaveCount(0);
+  });
+
+  /**
+   * The keyboard, which has no button to grey out.
+   *
+   * Ctrl+Shift+F / P / U reach app-shell's handleFetch/handlePull/handlePush,
+   * the same three the palette and the native menu converge on. Each press
+   * used to reach git.
+   */
+  test('the Ctrl+Shift+F / P / U shortcuts refuse instead of running', async ({ page }) => {
+    await page.keyboard.press('Control+Shift+F');
+    // The toast is the settle point: once it is on screen the press has been
+    // processed end to end, so "no command was sent" is a real absence.
+    await expect(page.locator('.toast.warning')).toContainText('No remote configured');
+    expect(await findCommand(page, 'fetch'), 'no fetch reached git').toHaveLength(0);
+
+    await page.keyboard.press('Control+Shift+P');
+    await page.keyboard.press('Control+Shift+U');
+    await expect(page.locator('.toast.warning')).toContainText('No remote configured');
+    expect(await findCommand(page, 'pull'), 'no pull reached git').toHaveLength(0);
+    expect(await findCommand(page, 'push'), 'no push reached git').toHaveLength(0);
+
+    await expect(page.locator('.progress-message'), 'and no row was opened').toHaveCount(0);
+    await expect(page.locator('.toast.error')).toHaveCount(0);
+  });
+
+  test('a held-down shortcut is answered once, not once per repeat', async ({ page }) => {
+    // keyboardService has no `e.repeat` guard, so holding Ctrl+Shift+F asks
+    // many times a second — and every ask is refused, so one toast per ask
+    // would bury the screen in identical warnings.
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Control+Shift+F');
+
+    await expect(page.locator('.toast.warning')).toHaveCount(1);
+    expect(await findCommand(page, 'fetch')).toHaveLength(0);
+  });
+
+  test('the command palette entries refuse instead of running', async ({ page }) => {
+    await openViaCommandPalette(page, 'Fetch from remote');
+
+    await expect(page.locator('.toast.warning')).toContainText('No remote configured');
+    expect(await findCommand(page, 'fetch')).toHaveLength(0);
+    await expect(page.locator('.progress-message')).toHaveCount(0);
+  });
+
+  test('the native Repository menu items refuse instead of running', async ({ page }) => {
+    // Playwright cannot click a native menu; choosing an item is exactly this
+    // event, carrying the item id (see app-menu.spec.ts).
+    await emitBackendEvent(page, 'app-menu-action', 'push');
+
+    await expect(page.locator('.toast.warning')).toContainText('No remote configured');
+    expect(await findCommand(page, 'push')).toHaveLength(0);
+    await expect(page.locator('.progress-message')).toHaveCount(0);
+  });
+});
+
+/**
+ * Guards the block above: a rule that refused always would pass every one of
+ * those tests. The same three surfaces, on a repository that HAS a remote.
+ */
+test.describe('the same surfaces still work once a remote exists', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupOpenRepository(page);
+    await startCommandCaptureWithMocks(page, { fetch: null, push: null });
+  });
+
+  test('Ctrl+Shift+F fetches', async ({ page }) => {
+    await page.keyboard.press('Control+Shift+F');
+
+    await waitForCommand(page, 'fetch');
+    await expect(page.locator('.toast.warning')).toHaveCount(0);
+  });
+
+  test('the palette entry fetches', async ({ page }) => {
+    await openViaCommandPalette(page, 'Fetch from remote');
+
+    await waitForCommand(page, 'fetch');
+    await expect(page.locator('.toast.warning')).toHaveCount(0);
+  });
+
+  test('the native menu item pushes', async ({ page }) => {
+    await emitBackendEvent(page, 'app-menu-action', 'push');
+
+    await waitForCommand(page, 'push');
+    await expect(page.locator('.toast.warning')).toHaveCount(0);
   });
 });
 
