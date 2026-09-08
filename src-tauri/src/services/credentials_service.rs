@@ -480,23 +480,27 @@ pub fn delete_credentials(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Extract host from a git URL
+/// The host a git URL names — the keyring key every stored HTTPS credential
+/// hangs off.
+///
+/// This is `security::url_host`, not a parse of its own. It used to be one, and
+/// it answered a different question from the gate's for two shapes git reads
+/// unambiguously: splitting on the FIRST `@` OF THE WHOLE STRING made
+/// `gitserver:x@evil.test:y` resolve to `evil.test` — git's answer, and the
+/// gate's, is `gitserver`, because the `@` is inside the PATH — and the
+/// login-less scp form `gitserver:team/app.git` resolved to no host at all, so
+/// a credential could be stored under one key and looked up under another.
+/// Nothing user-facing broke (an ssh remote has no HTTPS credential to find),
+/// which is exactly why it survived three rounds of unifying the other copies:
+/// one string must have one answer here too.
+///
+/// `url_host` lowercases, as hostnames are case-insensitive and the allowlist
+/// has always compared them that way. Both the write (`store_credentials`) and
+/// the read (`get_stored_credentials`) go through this one function, so the two
+/// stay in step; only an entry stored before this change under a mixed-case
+/// host is missed, and it is re-prompted for once.
 fn extract_host(url: &str) -> Option<String> {
-    // Handle SSH URLs like git@github.com:user/repo.git
-    if url.contains('@') && url.contains(':') && !url.contains("://") {
-        let parts: Vec<&str> = url.split('@').collect();
-        if parts.len() >= 2 {
-            let host_part: Vec<&str> = parts[1].split(':').collect();
-            return Some(host_part[0].to_string());
-        }
-    }
-
-    // Handle HTTPS URLs
-    if let Ok(parsed) = url::Url::parse(url) {
-        return parsed.host_str().map(|s| s.to_string());
-    }
-
-    None
+    crate::services::security::url_host(url)
 }
 
 /// Why a transfer callback aborted the transfer.
@@ -958,6 +962,49 @@ mod tests {
     #[test]
     fn test_extract_host_empty_string() {
         assert!(extract_host("").is_none());
+    }
+
+    /// The keyring key is the host the GATE resolved, not a third answer.
+    ///
+    /// `extract_host` used to split on the FIRST `@` of the WHOLE string, so
+    /// `gitserver:x@evil.test:y` — where git, and `security::url_host`, read
+    /// the `@` as part of the PATH — keyed on `evil.test`; and the login-less
+    /// scp form `gitserver:team/app.git` resolved to nothing, so a credential
+    /// could be stored under one key and looked up under another. Nothing
+    /// user-facing broke (an ssh remote has no HTTPS credential to find), which
+    /// is exactly why this copy outlived the others: one string, one answer.
+    #[test]
+    fn extract_host_answers_what_the_gate_answers() {
+        for url in [
+            "https://github.com/user/repo.git",
+            "git@github.com:user/repo.git",
+            "gitserver:team/app.git",
+            "gitserver:x@evil.test:y",
+            "git@github.com:x@evil.test:y",
+            "git@[2001:db8::1]:team/app.git",
+            "https://gitlab.example.com:8443/user/repo.git",
+            "ssh://git@host:2222/team/app.git",
+            "/srv/git/repo.git",
+            "sub/mybackup.git",
+            "not-a-url",
+            "",
+        ] {
+            assert_eq!(
+                extract_host(url),
+                crate::services::security::url_host(url),
+                "{url}: the keyring key must be the gate's host"
+            );
+        }
+        // The two shapes that used to differ, spelled out.
+        assert_eq!(
+            extract_host("gitserver:x@evil.test:y").as_deref(),
+            Some("gitserver"),
+            "the `@` is inside the path"
+        );
+        assert_eq!(
+            extract_host("gitserver:team/app.git").as_deref(),
+            Some("gitserver")
+        );
     }
 
     #[test]

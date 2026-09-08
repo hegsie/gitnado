@@ -151,7 +151,7 @@ test('holdsLock sees TestRepo, test_support guards, and helpers that take them',
 
 test('every gate the scanner looks for exists in security.rs, and TestRepo takes the guard', () => {
   const security = readFileSync(join(REPO_ROOT, 'src-tauri/src/services/security.rs'), 'utf8');
-  for (const gate of ['guard_url', 'guard_remote', 'guard_push_remote', 'guard_endpoint', 'endpoint_allowed', 'check', 'global']) {
+  for (const gate of ['guard_url', 'guard_remote_url', 'guard_remote', 'guard_push_remote', 'guard_endpoint', 'endpoint_allowed', 'check_remote', 'check', 'global']) {
     assert.match(security, new RegExp(`pub fn ${gate}\\(`), `security.rs no longer defines ${gate}`);
   }
   assert.match(security, /pub\(crate\) fn no_policy\(\)/, 'the shared reader guard exists');

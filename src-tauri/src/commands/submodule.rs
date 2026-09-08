@@ -262,14 +262,18 @@ fn is_relative_submodule_url(url: &str) -> bool {
 ///
 /// A RELATIVE url is the one case where the superproject IS the answer: git
 /// resolves it against the superproject's remote, so it lands on the host
-/// `guard_remote` already checked. Handing `../dep.git` to `guard_url`
+/// `guard_remote` already checked. Handing `../dep.git` to `guard_remote_url`
 /// instead would refuse it under any allowlist — the host cannot be parsed out
 /// of it — which would break the perfectly ordinary relative-submodule layout.
+///
+/// Everything else is a url in its own right, and it is a git REMOTE, so it
+/// takes `guard_remote_url` rather than `guard_url`: a submodule pointing at a
+/// bare relative path on this disk opens no socket either.
 fn guard_submodule_url(repo_path: &str, url: &str) -> Result<()> {
     if is_relative_submodule_url(url) {
         return crate::services::security::guard_remote(repo_path, None);
     }
-    crate::services::security::guard_url(url)
+    crate::services::security::guard_remote_url(url)
 }
 
 /// One entry of `.gitmodules`: where the submodule lives and where git will

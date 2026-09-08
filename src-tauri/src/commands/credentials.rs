@@ -543,7 +543,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
     // miss, so "HTTPS stays on this machine" is a property of the user's
     // helper configuration rather than of this command. Under an explicitly
     // configured policy, refusing is the right side to err on.
-    crate::services::security::guard_url(&remote_url)?;
+    crate::services::security::guard_remote_url(&remote_url)?;
 
     let repo_path = Path::new(&path);
 
@@ -746,7 +746,7 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
     // allowlist and the destination share, and it still resolves these to the
     // host it always did. This is what the DIALOG reports, and it must not
     // name a value the user cannot find anywhere.
-    if crate::services::security::is_local_target(trimmed_url) {
+    if crate::services::security::is_local_remote_target(trimmed_url) {
         return CredentialTarget {
             protocol: "file".to_string(),
             ssh_destination: trimmed_url.to_string(),
@@ -783,7 +783,7 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
         };
     }
 
-    let Some(target) = crate::services::security::parse_target(remote_url) else {
+    let Some(target) = crate::services::security::parse_remote_target(remote_url) else {
         // Nothing a URL parser recognises as `[user@]host`, and not a place on
         // this machine either — a remote too malformed for either half to make
         // sense of. Report it as typed rather than invent a host for it, and
@@ -1382,6 +1382,68 @@ mod tests {
             Some(target.display_host.as_str()),
             crate::services::security::url_host("gitserver:team/app.git").as_deref()
         );
+    }
+
+    /// A repository whose NAME parses as a port is still an ssh remote.
+    ///
+    /// `gitserver:2024` is git's scp form: the repository `2024` on the
+    /// `~/.ssh/config` alias `gitserver`, exactly as `git@host:2222` already
+    /// was. `parse_target` read the login-less `host:<u16>` as a PORT — which
+    /// is right for the SSH settings dialog's host field, the only input that
+    /// has that form, and wrong for a remote. `is_ssh` came back false and the
+    /// scheme `None`, so `protocol` became `https` with `resolved` true, and
+    /// the `protocol == "ssh" && resolved` gate skipped the ssh probe: a red
+    /// "No Credentials Found / Protocol: https / Host: gitserver:2024" for a
+    /// working ssh remote — and where an unrelated `https://gitserver:2024`
+    /// credential existed, "Credentials Working" with an Erase button aimed at
+    /// it.
+    #[test]
+    fn a_repository_named_like_a_port_is_probed_over_ssh() {
+        for url in ["gitserver:2024", "git.example.test:8080", "host:22"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "ssh", "{url} is an scp-form ssh remote");
+            assert!(
+                target.resolved,
+                "{url}: the ssh probe is gated on `resolved`"
+            );
+            assert_eq!(target.port, None, "{url}: the colon separates a PATH");
+        }
+        let target = credential_target("gitserver:2024");
+        assert_eq!(target.display_host, "gitserver");
+        assert_eq!(target.ssh_destination, "gitserver");
+        // The GATE is unaffected either way — both readings resolve the same
+        // host, which is all it judges.
+        assert_eq!(
+            crate::services::security::parse_target("gitserver:2024").map(|t| t.host),
+            crate::services::security::parse_remote_target("gitserver:2024").map(|t| t.host),
+        );
+        // ...and the SSH settings dialog's host field keeps its `host:port`
+        // reading, which is the only place that form exists.
+        assert_eq!(
+            crate::services::security::parse_target("gitserver:2024").and_then(|t| t.port),
+            Some(2024)
+        );
+    }
+
+    /// A BARE relative remote is a repository on this disk, not an https host.
+    ///
+    /// `git remote add b2 sub/mybackup.git` is purely local, but
+    /// `is_local_target` — the strict rule, which also judges bare hosts — said
+    /// otherwise, so this fell through to the host branch and the panel drew
+    /// "Host: sub / Protocol: https / No Credentials Found" for a repository on
+    /// the same disk, with no credential anywhere named `sub`.
+    #[test]
+    fn a_bare_relative_remote_is_reported_as_the_path_it_is() {
+        for url in ["sub/mybackup.git", "backups/app.git"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "file", "{url} asks no credential helper");
+            assert!(target.is_path(), "{url} is a path, and the dialog says so");
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+            assert!(!target.resolved, "{url} names no host to contact");
+        }
+        // `mybackup.git` has no separator, so nothing tells it from a bare
+        // host; it keeps the answer it has always had, deliberately.
+        assert!(!credential_target("mybackup.git").is_path());
     }
 
     /// A login the remote DOES name is still the login ssh is given.

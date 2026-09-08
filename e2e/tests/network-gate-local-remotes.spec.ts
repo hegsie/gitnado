@@ -132,6 +132,54 @@ test.describe('a remote on this machine is not a network operation', () => {
     await expect(page.locator('.toast.error')).toHaveCount(0);
   });
 
+  /**
+   * A BARE relative remote — `git init --bare sub/mybackup.git && git remote
+   * add b2 sub/mybackup.git` — is a repository on this disk. git reads it as a
+   * path (`url_is_local_not_ssh`: no colon, so local) and the push opens no
+   * socket, but the gate only recognised a path written with a leading `./`.
+   * Offline mode refused the push, and the allowlist read the host as `sub`, so
+   * the only entry that could permit it was the literal string `sub`.
+   */
+  test('offline mode does not refuse a fetch from a bare relative remote', async ({ page }) => {
+    await mockLocalOrigin(page, 'sub/mybackup.git');
+    await setOffline(page, true);
+
+    await fetchButton(page).click();
+
+    await waitForCommand(page, 'fetch');
+    expect((await findCommand(page, 'fetch')).length).toBeGreaterThan(0);
+    await expect(page.locator('.toast.error, .toast.warning')).toHaveCount(0);
+  });
+
+  test('an allowlist does not refuse a bare relative remote it cannot name', async ({ page }) => {
+    await mockLocalOrigin(page, 'sub/mybackup.git');
+    await setAllowlist(page, ['github.com']);
+
+    await fetchButton(page).click();
+
+    await waitForCommand(page, 'fetch');
+    expect((await findCommand(page, 'fetch')).length).toBeGreaterThan(0);
+    await expect(page.locator('.toast.error')).toHaveCount(0);
+  });
+
+  /**
+   * ...and the carve-out stops where the string stops saying "path". A name
+   * with no separator at all is indistinguishable from a bare host, so it is
+   * still treated as one — `./mybackup.git` is the spelling that says
+   * otherwise, and both gates read it as local.
+   */
+  test('a name with no separator is still treated as a host', async ({ page }) => {
+    await mockLocalOrigin(page, 'mybackup.git');
+    await setOffline(page, true);
+
+    await fetchButton(page).click();
+
+    await expect(page.locator('.toast.warning, .toast.error').first()).toContainText(
+      'Offline mode',
+    );
+    expect(await findCommand(page, 'fetch')).toHaveLength(0);
+  });
+
   test('a remote that only looks local is still refused, and says so', async ({ page }) => {
     // A UNC path is SMB: it does leave the machine, so offline mode keeps
     // refusing it.

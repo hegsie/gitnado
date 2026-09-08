@@ -208,7 +208,7 @@ async fn perform_fetch(
     // Re-checked every cycle, not just when the loop was started: this is a
     // long-lived task, and turning offline mode on mid-session used to leave it
     // fetching every N minutes regardless.
-    if let Err(e) = crate::services::security::guard_url(&expected_remote_url) {
+    if let Err(e) = crate::services::security::guard_remote_url(&expected_remote_url) {
         return Err(e.to_string());
     }
 

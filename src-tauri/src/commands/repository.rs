@@ -637,7 +637,7 @@ pub async fn clone_repository(
     validate_clone_url(&url)?;
     // Offline mode / remote allowlist, enforced backend-side as well as in the
     // frontend gate so a call site that forgets it still cannot reach out.
-    crate::services::security::guard_url(&url)?;
+    crate::services::security::guard_remote_url(&url)?;
     // `--branch` and `--filter` consume the next argv as their value, so a
     // value starting with `-` is not a flag injection today. We reject them
     // anyway as defense in depth: a future refactor toward
