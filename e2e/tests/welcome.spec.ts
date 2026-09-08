@@ -1214,6 +1214,41 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     await expect(page.locator('.toast')).toContainText('permission denied');
     await expect(app.welcomeScreen).toBeVisible();
   });
+
+  test('names each dropped folder that is not a repository and offers a scan for each', async ({
+    page,
+  }) => {
+    // Two folders selected in the file manager and dropped together used to
+    // produce ONE toast — "2 dropped folders are not Git repositories" — whose
+    // single "Scan folder" button acted on a folder it did not name, leaving
+    // the other with no route back at all.
+    await startCommandCaptureWithMocks(page, {
+      classify_repository_path: {
+        path: '/work/alpha',
+        name: 'alpha',
+        exists: true,
+        isDirectory: true,
+        isRepository: false,
+        isBare: false,
+      },
+    });
+
+    await emitDragEvent(page, 'tauri://drag-drop', ['/work/alpha', '/work/beta']);
+
+    await expect(page.locator('.toast')).toHaveCount(2);
+    await expect(page.locator('.toast').nth(0)).toContainText('alpha is not a Git repository');
+    await expect(page.locator('.toast').nth(1)).toContainText('beta is not a Git repository');
+
+    // Each button says which folder it takes — and takes that one.
+    const dialog = page.locator('lv-scan-repositories-dialog');
+    await page.getByRole('button', { name: 'Scan alpha' }).click();
+    await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
+    await expect(dialog.locator('.folder-path')).toHaveText('/work/alpha');
+
+    // And the second folder is still reachable, which is the whole point.
+    await page.getByRole('button', { name: 'Scan beta' }).click();
+    await expect(dialog.locator('.folder-path')).toHaveText('/work/beta');
+  });
 });
 
 /**
