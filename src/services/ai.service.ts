@@ -5,6 +5,8 @@
 
 import { invokeCommand } from './tauri-api.ts';
 import { checkOutboundHostAllowed, isNetworkPolicyActive } from './git.service.ts';
+import { allowlistPermits } from '../utils/avatar-policy.ts';
+import { settingsStore, type SettingsState } from '../stores/settings.store.ts';
 import type { CommandResult } from '../types/api.types.ts';
 
 /**
@@ -321,14 +323,10 @@ async function resolveProviderEndpoint(provider: AiProviderType): Promise<string
 function isLoopbackEndpoint(endpoint: string): boolean {
   const trimmed = endpoint.trim();
   if (!trimmed) return true;
-  let hostname: string;
-  try {
-    hostname = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname;
-  } catch {
-    return false;
-  }
-  // `URL` keeps an IPv6 literal in its brackets; the Rust side strips them too.
-  const host = hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  const host = endpointHost(trimmed);
+  // Unparseable, or a URL with no host at all: not something that can be shown
+  // to stay on this machine, so it does not get the carve-out.
+  if (!host) return false;
   return (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
@@ -336,6 +334,64 @@ function isLoopbackEndpoint(endpoint: string): boolean {
     // 127.0.0.0/8, the whole of it — `is_loopback()` on the Rust side.
     /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
   );
+}
+
+/**
+ * The host an endpoint string names, lower-cased and without IPv6 brackets, or
+ * the empty string when it names none. `URL` keeps an IPv6 literal in its
+ * brackets; the Rust side strips them too.
+ */
+function endpointHost(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return '';
+  try {
+    const { hostname } = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
+    return hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** The security policy that is refusing to reach a provider right now. */
+export type AiProviderBlockReason = 'offline' | 'allowlist';
+
+/** The slice of settings that decides whether a provider may be reached. */
+export type AiNetworkPolicy = Pick<SettingsState, 'offlineMode' | 'remoteAllowlist'>;
+
+/**
+ * Which security policy currently forbids reaching `endpoint`, or `null` when
+ * neither does.
+ *
+ * This is an EXPLAINER, not a gate — `checkAiNetworkAllowed` above is still the
+ * only thing that decides whether a request may go out, and it resolves the
+ * provider's real endpoint over IPC first. This one answers the question the
+ * Settings list has to answer for an already-fetched `AiProviderInfo`: the
+ * backend reports `probed: false` for EITHER policy (`provider_network_allowed`
+ * -> `security::endpoint_allowed`, `src-tauri/src/services/ai/mod.rs`) and
+ * never says which, so the caller has to work it out — and it has to work BOTH
+ * halves out from ONE evaluation of the live settings, the way
+ * `avatarFetchBlockReason` and `aiBlockedResult` do. Pairing a cached backend
+ * verdict with a single live flag is what made the label blame a remote
+ * allowlist the user had never configured the instant offline mode went off.
+ *
+ * Order matches the gate: the loopback carve-out first (a locally hosted model
+ * is neither policy's business), then offline mode, then the allowlist — which
+ * fails CLOSED for an endpoint whose host cannot be read, exactly as
+ * `checkNetworkAllowed` does.
+ */
+export function providerNetworkBlockReason(
+  endpoint: string | null | undefined,
+  policy: AiNetworkPolicy = settingsStore.getState(),
+): AiProviderBlockReason | null {
+  const target = (endpoint ?? '').trim();
+  if (isLoopbackEndpoint(target)) return null;
+  if (policy.offlineMode) return 'offline';
+  // `allowlistPermits` is the shared host-matching rule (an empty list permits
+  // everything, a parent domain permits its subdomains, no substring matches);
+  // it lives beside the avatar policy because that was the first surface to
+  // need it outside the gate, and a second copy of the matching is precisely
+  // how these two came to disagree before.
+  return allowlistPermits(endpointHost(target), policy.remoteAllowlist) ? null : 'allowlist';
 }
 
 /**

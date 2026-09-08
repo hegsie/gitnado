@@ -520,3 +520,114 @@ describe('AI provider network gate', () => {
     expect(all.filter((p) => !aiService.isCloudAiProvider(p))).to.deep.equal(LOCAL_PROVIDERS);
   });
 });
+
+/**
+ * The explainer beside the gate.
+ *
+ * `AiProviderInfo.probed` is false for EITHER policy and the backend never says
+ * which, so Settings has to work it out — and it must work BOTH halves out from
+ * one evaluation of the live settings. Reading one policy from a live flag and
+ * the other by elimination is what made the provider label blame a remote
+ * allowlist the user had never configured the instant offline mode went off.
+ *
+ * This is not a gate and must never be used as one: it judges the endpoint the
+ * listing already reported, where `checkAiNetworkAllowed` resolves it first.
+ */
+describe('providerNetworkBlockReason', () => {
+  const CLOUD = 'https://api.openai.com/v1';
+
+  it('blames offline mode while offline mode is on', () => {
+    expect(
+      aiService.providerNetworkBlockReason(CLOUD, { offlineMode: true, remoteAllowlist: [] }),
+    ).to.equal('offline');
+  });
+
+  // Offline mode first, exactly as the gate orders them: it is the setting the
+  // user has to undo first, and naming the allowlist instead would send them to
+  // a field that would change nothing.
+  it('blames offline mode ahead of the allowlist when both would refuse', () => {
+    expect(
+      aiService.providerNetworkBlockReason(CLOUD, {
+        offlineMode: true,
+        remoteAllowlist: ['github.com'],
+      }),
+    ).to.equal('offline');
+  });
+
+  it('blames the allowlist only when one is configured and excludes the host', () => {
+    expect(
+      aiService.providerNetworkBlockReason(CLOUD, {
+        offlineMode: false,
+        remoteAllowlist: ['github.com'],
+      }),
+    ).to.equal('allowlist');
+    expect(
+      aiService.providerNetworkBlockReason(CLOUD, {
+        offlineMode: false,
+        remoteAllowlist: ['api.openai.com'],
+      }),
+    ).to.equal(null);
+    // A parent domain permits its subdomains, the same rule the gate applies.
+    expect(
+      aiService.providerNetworkBlockReason(CLOUD, {
+        offlineMode: false,
+        remoteAllowlist: ['openai.com'],
+      }),
+    ).to.equal(null);
+    // ...and a look-alike does not pass on a substring.
+    expect(
+      aiService.providerNetworkBlockReason('https://api.openai.com.evil.test/v1', {
+        offlineMode: false,
+        remoteAllowlist: ['openai.com'],
+      }),
+    ).to.equal('allowlist');
+  });
+
+  it('blames neither policy when neither is in force', () => {
+    expect(
+      aiService.providerNetworkBlockReason(CLOUD, { offlineMode: false, remoteAllowlist: [] }),
+    ).to.equal(null);
+  });
+
+  // The same loopback and empty-endpoint carve-outs `guard_endpoint` makes: a
+  // model hosted on this machine opens no socket that leaves it, so neither
+  // setting has anything to say about it.
+  it('never blames a policy for an endpoint that never leaves the machine', () => {
+    const blocking = { offlineMode: true, remoteAllowlist: ['github.com'] };
+    for (const endpoint of ['http://localhost:11434', 'http://127.0.0.1:1234', '', null, undefined]) {
+      expect(aiService.providerNetworkBlockReason(endpoint, blocking)).to.equal(null);
+    }
+  });
+
+  // Fails CLOSED, exactly as `checkNetworkAllowed` does for a destination it
+  // cannot read: an allowlist that cannot see the host must refuse.
+  it('refuses an unreadable endpoint once an allowlist is configured', () => {
+    expect(
+      aiService.providerNetworkBlockReason('https://', {
+        offlineMode: false,
+        remoteAllowlist: ['github.com'],
+      }),
+    ).to.equal('allowlist');
+    // ...and permits it when no allowlist is configured, which is what an
+    // empty list means everywhere else.
+    expect(
+      aiService.providerNetworkBlockReason('https://', {
+        offlineMode: false,
+        remoteAllowlist: [],
+      }),
+    ).to.equal(null);
+  });
+
+  it('reads the live settings store when no policy is passed', () => {
+    settingsStore.setState({ offlineMode: true, remoteAllowlist: [] });
+    try {
+      expect(aiService.providerNetworkBlockReason(CLOUD)).to.equal('offline');
+      settingsStore.setState({ offlineMode: false, remoteAllowlist: ['github.com'] });
+      expect(aiService.providerNetworkBlockReason(CLOUD)).to.equal('allowlist');
+      settingsStore.setState({ offlineMode: false, remoteAllowlist: [] });
+      expect(aiService.providerNetworkBlockReason(CLOUD)).to.equal(null);
+    } finally {
+      settingsStore.setState({ offlineMode: false, remoteAllowlist: [] });
+    }
+  });
+});
