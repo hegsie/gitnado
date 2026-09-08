@@ -1577,9 +1577,15 @@ export async function pushToMultipleRemotes(
   // user is asked once for the whole set. Gating the repository's default
   // remote alone — what this used to do — judged a host the gesture might
   // not even touch, and none of the ones it would.
+  // Resolved whenever ANY policy is in force, exactly as single `push` does:
+  // offline mode judges the target too now, so a `pushurl` that leaves the
+  // machine must not be excused by a local fetch url, and a `pushurl` that
+  // stays on this machine must not be refused because the fetch url is remote.
+  // Reading only the allowlist here made this button disagree with the single
+  // push to the very same remote.
   const remotes = args?.remotes ?? [];
   const pushUrls =
-    args?.path && remotes.length > 0 && settingsStore.getState().remoteAllowlist.length > 0
+    args?.path && remotes.length > 0 && isNetworkPolicyActive()
       ? await Promise.all(remotes.map((name) => resolveRemotePushUrl(args.path, name)))
       : remotes.map(() => null);
   const targets: NetworkRemoteTarget[] = remotes.map((name, i) => ({ name, url: pushUrls[i] }));
@@ -1636,7 +1642,35 @@ export async function pushToMultipleRemotes(
 export async function fetchAllRemotes(
   args: FetchAllRemotesCommand & { silent?: boolean },
 ): Promise<CommandResult<FetchAllResult>> {
-  if (!await checkNetworkPermission('fetch', args?.path ?? null)) {
+  // Every remote in the gesture is gated, exactly as the backend's own guard
+  // does (`fetch_all_remotes` in remote.rs loops `guard_remote` over
+  // `repo.remotes()`), and exactly as this function's two multi-remote
+  // siblings above do. Gating the repository's DEFAULT fetch remote alone —
+  // what this used to do — judged one host out of several: it waved a
+  // github.com remote through because the default one happened to be a USB
+  // disk, and it let a gesture the backend would refuse outright start anyway,
+  // so the user got a red "Fetch all failed" instead of the gate's own
+  // explanation. Only a policy in force needs the extra round trip.
+  let targets: NetworkRemoteTarget[] | undefined;
+  if (args?.path && isNetworkPolicyActive()) {
+    const remotes = await getRemotes(args.path);
+    if (!remotes.success) return { success: false, error: remotes.error };
+    if (!Array.isArray(remotes.data)) {
+      return {
+        success: false,
+        error: { code: 'REMOTE_LIST_FAILED', message: 'Failed to list repository remotes' },
+      };
+    }
+    targets = remotes.data.map((item) => ({ name: item.name, url: item.url }));
+    // An empty list is left as `undefined` so the gate keeps its single-target
+    // behaviour: there is no remote to name, so it resolves nothing, sees no
+    // URL and fails closed — which is what it already did here, and what it
+    // does everywhere else it cannot see a destination. An empty ARRAY would
+    // mean "the hard blocks are settled" (the idiom `updateSubmodules` uses)
+    // and wave an ungated `fetch_all_remotes` straight through.
+    if (targets.length === 0) targets = undefined;
+  }
+  if (!await checkNetworkPermission('fetch', args?.path ?? null, undefined, undefined, targets)) {
     return blockedResult();
   }
   // If no token is provided, try to find one for the repository
@@ -3529,10 +3563,16 @@ export async function getLfsFiles(
  * allowlist waved through a pull that transferred from wherever the
  * repository's own `.lfsconfig` pointed. `null` when nothing names one — the
  * gate then falls back to the remote, and the backend's own check (which
- * fails closed) is the backstop. Only an allowlist needs the lookup.
+ * fails closed) is the backstop.
+ *
+ * Looked up whenever ANY policy is in force, not just an allowlist: offline
+ * mode judges the target too (a `file://` or filesystem LFS endpoint never
+ * leaves the machine), so reading only the allowlist here left offline mode
+ * judging the git remote instead of the endpoint the transfer really contacts
+ * — in both directions.
  */
 async function resolveLfsEndpoint(repoPath: string): Promise<string | null> {
-  if (settingsStore.getState().remoteAllowlist.length === 0) return null;
+  if (!isNetworkPolicyActive()) return null;
   const result = await invokeCommand<string | null>('get_lfs_endpoint', { path: repoPath });
   return result.success && result.data ? result.data : null;
 }
@@ -8442,15 +8482,14 @@ export async function pruneRemoteTrackingBranches(
   repoPath: string,
   remote?: string,
 ): Promise<CommandResult<PruneResult>> {
-  // Offline is settled before the remote list is read, so the user hears
-  // "offline mode is enabled" rather than whatever enumerating the remotes
-  // happens to report. `checkNetworkAllowed` is called for its toast; the
-  // refusal is unconditional.
-  if (settingsStore.getState().offlineMode) {
-    await checkNetworkAllowed(repoPath, remote);
-    return blockedResult();
-  }
-
+  // Offline mode is NOT settled ahead of the remote list. It used to be, and
+  // that refused a prune of a remote living on this machine — the one case
+  // both the backend (`maintenance.rs`) and the allowlist branch below permit,
+  // and it refused it in silence, because `checkNetworkAllowed` returns null
+  // for a local target so no toast fired and the dialogs suppress `BLOCKED`.
+  // The gate below sees every remote WITH its URL and applies the same
+  // local-target carve-out per target, still toasting "Offline mode is
+  // enabled" for the first one that genuinely leaves the machine.
   let targets: string[];
   // The listed remotes already carry their URLs, so the allowlist gate and the
   // token loop below both read them from here instead of resolving each one

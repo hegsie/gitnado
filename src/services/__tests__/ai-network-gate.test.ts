@@ -17,12 +17,19 @@
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 const invoked: string[] = [];
 let activeProvider: string | null = null;
+/**
+ * What `get_ai_providers` reports. The gate reads the ACTIVE provider's real
+ * `endpoint` from here, because the AI config can point any provider at a
+ * corporate gateway or an OpenAI-compatible server on this machine and the
+ * backend gate judges exactly that value.
+ */
+let providerListing: Array<{ providerType: string; endpoint: string }> = [];
 
 (globalThis as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
   invoke: ((command: string) => {
     invoked.push(command);
     if (command === 'get_active_ai_provider') return Promise.resolve(activeProvider);
-    if (command === 'get_ai_providers') return Promise.resolve([]);
+    if (command === 'get_ai_providers') return Promise.resolve(providerListing);
     if (command === 'auto_detect_ai_providers') return Promise.resolve([]);
     if (command === 'is_ai_available') return Promise.resolve(true);
     return Promise.resolve(null);
@@ -108,11 +115,13 @@ async function sweep(provider: AiProviderType | null): Promise<Set<string>> {
 describe('AI provider network gate', () => {
   beforeEach(() => {
     activeProvider = null;
+    providerListing = [];
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
   });
 
   afterEach(() => {
     activeProvider = null;
+    providerListing = [];
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
   });
 
@@ -239,6 +248,94 @@ describe('AI provider network gate', () => {
     await aiService.generateCommitMessage('/repo');
 
     expect(invoked.includes('get_active_ai_provider')).to.equal(false);
+  });
+
+  /**
+   * A provider's endpoint is configurable, and the BACKEND gate judges the
+   * configured value (`guard_ai_request` -> `guard_endpoint(endpoint_for(pt))`
+   * in src-tauri/src/commands/ai.rs). This gate judged a fixed table of
+   * default hosts, so it refused while naming a host the request would never
+   * contact — and offline mode left no workaround at all for a gateway on this
+   * machine, which `resolve_provider` would happily have used.
+   */
+  it('judges a provider on its configured endpoint, not its default host', async () => {
+    settingsStore.setState({ remoteAllowlist: ['gateway.internal'] });
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: 'https://gateway.internal/v1' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success, 'the allowlist names the host this request reaches').to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
+  });
+
+  it('offline mode permits a provider pointed at this machine', async () => {
+    // The same loopback carve-out `guard_endpoint` makes on the Rust side.
+    settingsStore.setState({ offlineMode: true });
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: 'http://localhost:8080/v1' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success, 'an OpenAI-compatible server on localhost opens no outbound socket')
+      .to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
+  });
+
+  it('a configured endpoint that does leave the machine is still refused', async () => {
+    settingsStore.setState({ offlineMode: true });
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: 'https://gateway.example.test/v1' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success).to.equal(false);
+    expect(result.error?.code).to.equal('BLOCKED');
+    expect(invoked.includes('generate_commit_message')).to.equal(false);
+  });
+
+  it('names the endpoint the request would have reached', async () => {
+    // Telling the user to allowlist api.openai.com when the config points at a
+    // gateway sends them to a domain the request never contacts.
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: 'https://gateway.example.test/v1' }];
+
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.error?.message).to.contain('gateway.example.test');
+    expect(result.error?.message).to.not.contain('api.openai.com');
+  });
+
+  it('falls back to the default host when the listing names no endpoint', async () => {
+    // The listing can fail, and a provider can report an empty endpoint. The
+    // gate must still fail closed, on the default host it does know — which is
+    // all it ever had before.
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: '   ' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success).to.equal(false);
+    expect(result.error?.message).to.contain('api.openai.com');
+    expect(invoked.includes('generate_commit_message')).to.equal(false);
+  });
+
+  it('does not list the providers when no policy is in force', async () => {
+    // The endpoint lookup is a round trip; it must not be spent when nothing
+    // could refuse the call anyway.
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: 'https://api.openai.com/v1' }];
+
+    invoked.length = 0;
+    await aiService.generateCommitMessage('/repo');
+
+    expect(invoked.includes('get_ai_providers')).to.equal(false);
   });
 
   it('gates testAiProvider on the provider it is given, not the active one', async () => {

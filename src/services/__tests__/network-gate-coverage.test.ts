@@ -724,6 +724,169 @@ describe('network gate coverage', () => {
   });
 
   /**
+   * The local-target carve-out landed on the paths the review happened to look
+   * at, and not on the ones beside them. Each test below is one of those
+   * neighbours: the same repository, the same setting, two buttons that must
+   * agree — and did not.
+   */
+  it('offline mode permits pruning remotes that live on this machine', async () => {
+    // The offline branch answered ahead of the carve-out AND ahead of the
+    // remote list, so this refused; and because `checkNetworkAllowed` returns
+    // null for a local target, no toast fired and the dialogs suppress
+    // `BLOCKED` — the button did nothing at all, in silence.
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+    responses.get_remotes = [
+      { name: 'backup', url: '/mnt/usb/repo.git', pushUrl: null },
+      { name: 'archive', url: 'file:///srv/git/app.git', pushUrl: null },
+    ];
+
+    invoked.length = 0;
+    const result = await gitService.pruneRemoteTrackingBranches('/repo');
+    expect(
+      invoked.includes('prune_remote_tracking_branches'),
+      'pruning a USB disk contacts nothing',
+    ).to.equal(true);
+    expect(result.success).to.equal(true);
+  });
+
+  it('offline mode still refuses a prune that reaches a remote host', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+    responses.get_remotes = [
+      { name: 'backup', url: '/mnt/usb/repo.git', pushUrl: null },
+      { name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null },
+    ];
+
+    invoked.length = 0;
+    const result = await gitService.pruneRemoteTrackingBranches('/repo');
+    expect(
+      invoked.includes('prune_remote_tracking_branches'),
+      'one remote in the gesture leaves the machine, so the whole gesture is refused',
+    ).to.equal(false);
+    expect(result.success).to.equal(false);
+    expect(result.error?.code).to.equal('BLOCKED');
+  });
+
+  /**
+   * Push-to-multiple resolved its real destinations only under an ALLOWLIST,
+   * where single `push` had already moved to "any policy". So with offline
+   * mode on the two buttons judged different URLs for the same remote, and
+   * disagreed in both directions.
+   */
+  it('a multi-push is judged on each PUSH url under offline mode too', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+    responses.get_remotes = [
+      { name: 'mirror', url: '/mnt/usb/repo.git', pushUrl: 'https://github.com/o/r.git' },
+      { name: 'backup', url: 'https://github.com/o/r.git', pushUrl: '/mnt/usb/repo.git' },
+    ];
+
+    invoked.length = 0;
+    const leaves = await gitService.pushToMultipleRemotes({ path: '/repo', remotes: ['mirror'], force: false, forceWithLease: false, pushTags: false });
+    expect(
+      invoked.includes('push_to_multiple_remotes'),
+      'a local fetch url does not excuse a pushurl that reaches github.com',
+    ).to.equal(false);
+    expect(leaves.success).to.equal(false);
+
+    invoked.length = 0;
+    const stays = await gitService.pushToMultipleRemotes({ path: '/repo', remotes: ['backup'], force: false, forceWithLease: false, pushTags: false });
+    expect(
+      invoked.includes('push_to_multiple_remotes'),
+      'a pushurl on this machine is permitted, exactly as single push permits it',
+    ).to.equal(true);
+    expect(stays.success).to.equal(true);
+
+    // The single-push button on the same two remotes, which must agree.
+    invoked.length = 0;
+    await gitService.push({ path: '/repo', remote: 'mirror' });
+    expect(invoked.includes('push')).to.equal(false);
+    invoked.length = 0;
+    await gitService.push({ path: '/repo', remote: 'backup' });
+    expect(invoked.includes('push')).to.equal(true);
+  });
+
+  /**
+   * The LFS endpoint was resolved only under an allowlist, so offline mode
+   * judged the git remote instead of the `.lfsconfig` endpoint the transfer
+   * really contacts — again in both directions.
+   */
+  it('an LFS transfer is judged on its own endpoint under offline mode too', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    // A remote git remote, an LFS endpoint on this machine.
+    responses.get_remotes = [
+      { name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null },
+    ];
+    responses.get_lfs_endpoint = '/mnt/usb/lfs';
+    invoked.length = 0;
+    const local = await gitService.lfsPull('/repo');
+    expect(invoked.includes('lfs_pull'), 'the transfer never leaves the machine').to.equal(true);
+    expect(local.success).to.equal(true);
+
+    // The mirror image: a local git remote, an LFS endpoint that leaves.
+    responses.get_remotes = [{ name: 'origin', url: '/mnt/usb/repo.git', pushUrl: null }];
+    responses.get_lfs_endpoint = 'https://lfs.example.com/o/r';
+    invoked.length = 0;
+    const remote = await gitService.lfsFetch('/repo');
+    expect(invoked.includes('lfs_fetch'), 'the transfer reaches lfs.example.com').to.equal(false);
+    expect(remote.success).to.equal(false);
+  });
+
+  /**
+   * Fetch-all gated ONE remote — the default fetch remote — while the backend
+   * guards every one of them (`fetch_all_remotes` in remote.rs loops
+   * `guard_remote` over `repo.remotes()`). So the gate whose job is to refuse
+   * before any work starts waved a github.com fetch through, and handed the
+   * user a red backend error in the case it should have explained itself.
+   */
+  it('fetch-all is gated on every remote, not just the default one', async () => {
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+    responses.get_fetch_remote = 'backup';
+    responses.get_remotes = [
+      { name: 'backup', url: '/mnt/usb/repo.git', pushUrl: null },
+      { name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null },
+    ];
+
+    invoked.length = 0;
+    const mixed = await gitService.fetchAllRemotes({ path: '/repo', prune: false, tags: false });
+    expect(
+      invoked.includes('fetch_all_remotes'),
+      'the gesture fetches github.com too, whatever the default remote is',
+    ).to.equal(false);
+    expect(mixed.success).to.equal(false);
+
+    // Every remote on this machine: nothing to refuse.
+    responses.get_remotes = [
+      { name: 'backup', url: '/mnt/usb/repo.git', pushUrl: null },
+      { name: 'archive', url: 'file:///srv/git/app.git', pushUrl: null },
+    ];
+    invoked.length = 0;
+    const allLocal = await gitService.fetchAllRemotes({ path: '/repo', prune: false, tags: false });
+    expect(invoked.includes('fetch_all_remotes'), 'none of these opens a socket').to.equal(true);
+    expect(allLocal.success).to.equal(true);
+  });
+
+  it('an allowlist refuses fetch-all before the backend has to', async () => {
+    settingsStore.setState({
+      offlineMode: false,
+      confirmNetworkOps: false,
+      remoteAllowlist: ['github.com'],
+    });
+    responses.get_fetch_remote = 'origin';
+    responses.get_remotes = [
+      { name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null },
+      { name: 'upstream', url: 'https://gitlab.example/o/r.git', pushUrl: null },
+    ];
+
+    invoked.length = 0;
+    const result = await gitService.fetchAllRemotes({ path: '/repo', prune: false, tags: false });
+    expect(
+      invoked.includes('fetch_all_remotes'),
+      'the backend refuses the whole gesture, so the frontend must explain it first',
+    ).to.equal(false);
+    expect(result.error?.code).to.equal('BLOCKED');
+  });
+
+  /**
    * The dead end this sweep existed to catch and could not see, because
    * oauth.service was not in it: with offline mode on, "Sign in with GitHub"
    * opened the system browser, the user granted their REAL account access, the

@@ -63,14 +63,25 @@ const REPO = {
   cloneFilter: null,
 };
 
-async function dashboard(): Promise<LvContextDashboard> {
+/**
+ * The dashboard under test.
+ *
+ * `remotes` defaults to one, because these three buttons are unavailable
+ * without one — the toolbar's identical copies always said so, and now these
+ * do too. A test about the empty case passes `[]` explicitly.
+ */
+async function dashboard(
+  remotes: Array<{ name: string; url: string }> = [
+    { name: 'origin', url: 'https://example.test/o/r.git' },
+  ],
+): Promise<LvContextDashboard> {
   repositoryStore.setState({
     openRepositories: [
       {
         repository: REPO,
         branches: [],
         currentBranch: null,
-        remotes: [],
+        remotes,
         tags: [],
         stashes: [],
       },
@@ -231,6 +242,66 @@ describe('dashboard remote operations', () => {
       "the user's own offline setting is not a failure",
     ).to.equal(false);
     expect(invoked.some((c) => c.command === 'fetch')).to.equal(false);
+  });
+
+  /**
+   * The toolbar renders the SAME three buttons immediately above these, and
+   * has always disabled them for a repository with no remote — a folder that
+   * has just been `git init`ed. These stayed enabled, so the greyed-out Fetch
+   * with its explanation sat directly on top of a bright, enabled, identical
+   * Fetch that started a cancellable progress row and ended in a red toast
+   * carrying git's own wording.
+   */
+  it('disables its three buttons when the repository has no remote', async () => {
+    const el = await dashboard([]);
+
+    const buttons = Array.from(
+      el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.remote-btn'),
+    );
+    expect(buttons, 'Fetch, Pull and Push').to.have.lengthOf(3);
+    for (const btn of buttons) {
+      expect(btn.disabled, `${btn.textContent?.trim()} is unavailable`).to.equal(true);
+      expect(btn.title, 'and says why, in the toolbar’s words').to.contain(
+        'no remote configured',
+      );
+    }
+  });
+
+  it('starts nothing and says why if a click lands with no remote', async () => {
+    // Only reachable in the race window between a render and the click — the
+    // remote removed from another surface — but a silent return there looks
+    // like a dead button, exactly as the toolbar's own handler says.
+    const el = await dashboard([]);
+    uiStore.setState({ toasts: [] });
+
+    for (const handler of ['handleFetch', 'handlePull', 'handlePush']) {
+      await (el as any)[handler]();
+    }
+
+    expect(
+      invoked.some((c) => ['fetch', 'pull', 'push'].includes(c.command)),
+      'no operation is started',
+    ).to.equal(false);
+    expect(progressService.getOperations(), 'and no progress row is opened').to.have.lengthOf(0);
+    const toasts = uiStore.getState().toasts;
+    expect(toasts, 'each click is answered').to.have.lengthOf(3);
+    for (const toast of toasts) {
+      expect(toast.type).to.equal('warning');
+      expect(toast.message).to.contain('No remote configured');
+    }
+  });
+
+  it('leaves the buttons available once a remote exists', async () => {
+    // Guards the test above: a rule that disabled them always would pass it.
+    const el = await dashboard();
+
+    const buttons = Array.from(
+      el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.remote-btn'),
+    );
+    expect(buttons.some((b) => b.disabled), 'nothing is blocking them').to.equal(false);
+    for (const btn of buttons) {
+      expect(btn.title).to.not.contain('no remote configured');
+    }
   });
 
   it('shows a progress row for the whole operation', async () => {

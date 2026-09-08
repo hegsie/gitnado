@@ -102,6 +102,54 @@ test.describe('Remote Operation Buttons', () => {
 });
 
 // ============================================================================
+// A repository with no remote at all
+//
+// Both surfaces are on screen together whenever a repository is open
+// (app-shell renders the toolbar directly above the dashboard). The toolbar
+// disabled its three and explained why; these identical three stayed bright
+// and enabled, opened a cancellable progress row and ended in a red toast
+// carrying git's own wording — a dead end one row below the button that had
+// already said the operation was unavailable.
+// ============================================================================
+
+test.describe('Remote buttons with no remote configured', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupOpenRepository(page, { remotes: [] });
+    await startCommandCaptureWithMocks(page, {
+      get_remotes: [],
+      fetch: null,
+      pull: null,
+      push: null,
+    });
+  });
+
+  test('all three are disabled and say why', async ({ page }) => {
+    for (const name of [/Fetch/i, /Pull/i, /Push/i]) {
+      const btn = dashboardButton(page, name);
+      await expect(btn).toBeDisabled();
+      await expect(btn).toHaveAttribute('title', /no remote configured/);
+    }
+  });
+
+  test('agrees with the toolbar copy of the same button', async ({ page }) => {
+    // The one place these tests reach across to the toolbar: the finding was
+    // precisely that the two surfaces disagreed about the same repository.
+    for (const name of [/Fetch/i, /Pull/i, /Push/i]) {
+      await expect(page.locator('lv-toolbar').getByRole('button', { name })).toBeDisabled();
+      await expect(dashboardButton(page, name)).toBeDisabled();
+    }
+  });
+
+  test('no operation can be started, so nothing fails at git', async ({ page }) => {
+    await dashboardButton(page, /Fetch/i).click({ force: true });
+
+    expect(await findCommand(page, 'fetch')).toHaveLength(0);
+    await expect(page.locator('.progress-message')).toHaveCount(0);
+    await expect(page.locator('.toast.error')).toHaveCount(0);
+  });
+});
+
+// ============================================================================
 // Ahead/Behind Badge Tests
 // ============================================================================
 

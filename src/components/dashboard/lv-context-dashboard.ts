@@ -33,6 +33,11 @@ import './lv-profile-card.ts';
 import './lv-integration-card.ts';
 import './lv-repository-card.ts';
 import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
+import {
+  hasConfiguredRemote,
+  noRemoteButtonLabel,
+  NO_REMOTE_MESSAGE,
+} from '../../utils/remote-availability.ts';
 
 const STORAGE_KEY = 'lv-context-dashboard-expanded';
 
@@ -720,6 +725,27 @@ export class LvContextDashboard extends LitElement {
   }
 
   /**
+   * Whether this repository has anywhere to fetch, pull or push TO.
+   *
+   * The toolbar renders the SAME three buttons directly above these and has
+   * always disabled them for a repository with no remote — a freshly
+   * `git init`ed folder, say. These three did not, so the greyed-out Fetch
+   * with its explanation sat right on top of an identical, bright, enabled
+   * Fetch that started a progress row and failed with git's own wording. The
+   * rule and its phrasing are shared with the toolbar (remote-availability.ts)
+   * so the two surfaces cannot drift apart again.
+   */
+  private get hasRemote(): boolean {
+    return hasConfiguredRemote(this.activeRepository);
+  }
+
+  /** The tooltip for one of the three buttons, explaining a disabled state the
+   * user would otherwise have to guess at. */
+  private remoteButtonTitle(action: string, whenAvailable: string): string {
+    return this.hasRemote ? whenAvailable : noRemoteButtonLabel(action);
+  }
+
+  /**
    * The three buttons are a call into the shared runner and nothing else.
    *
    * They used to carry their own copy of the whole operation — component-local
@@ -739,19 +765,34 @@ export class LvContextDashboard extends LitElement {
   private handleFetch(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
+    if (!this.warnIfNoRemote()) return Promise.resolve();
     return runFetch(repoPath);
   }
 
   private handlePull(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
+    if (!this.warnIfNoRemote()) return Promise.resolve();
     return runPull(repoPath);
   }
 
   private handlePush(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
+    if (!this.warnIfNoRemote()) return Promise.resolve();
     return runPush(repoPath);
+  }
+
+  /**
+   * True when the operation may go ahead. The three buttons carry `?disabled`
+   * for this, so a click only lands in the race window between a render and
+   * the click — where a silent return would look like a dead button, exactly
+   * as the toolbar's own `handleRemoteAction` says.
+   */
+  private warnIfNoRemote(): boolean {
+    if (this.hasRemote) return true;
+    showToast(NO_REMOTE_MESSAGE, 'warning');
+    return false;
   }
 
   private toggleExpanded(): void {
@@ -1116,9 +1157,9 @@ export class LvContextDashboard extends LitElement {
         <div class="remote-buttons">
           <button
             class="remote-btn ${this.remoteOperation === 'fetch' ? 'loading' : ''}"
-            title="Fetch from remote"
+            title=${this.remoteButtonTitle('Fetch', 'Fetch from remote')}
             @click=${this.handleFetch}
-            ?disabled=${this.isRemoteOperationInProgress}
+            ?disabled=${this.isRemoteOperationInProgress || !this.hasRemote}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
@@ -1131,9 +1172,12 @@ export class LvContextDashboard extends LitElement {
           <div class="remote-btn-wrapper">
             <button
               class="remote-btn ${this.remoteOperation === 'pull' ? 'loading' : ''}"
-              title="Pull from remote${this.behind > 0 ? ` (${this.behind} commits behind)` : ''}"
+              title=${this.remoteButtonTitle(
+                'Pull',
+                `Pull from remote${this.behind > 0 ? ` (${this.behind} commits behind)` : ''}`,
+              )}
               @click=${this.handlePull}
-              ?disabled=${this.isRemoteOperationInProgress || this.lock.busy}
+              ?disabled=${this.isRemoteOperationInProgress || this.lock.busy || !this.hasRemote}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 3v18"></path>
@@ -1146,9 +1190,14 @@ export class LvContextDashboard extends LitElement {
           <div class="remote-btn-wrapper">
             <button
               class="remote-btn ${this.remoteOperation === 'push' ? 'loading' : ''}"
-              title="Push to remote${this.ahead > 0 ? ` (${this.ahead} commits ahead)` : ''}"
+              title=${this.remoteButtonTitle(
+                'Push',
+                `Push to remote${this.ahead > 0 ? ` (${this.ahead} commits ahead)` : ''}`,
+              )}
               @click=${this.handlePush}
-              ?disabled=${this.isRemoteOperationInProgress || isPushRunning(this.activeRepository?.repository.path)}
+              ?disabled=${this.isRemoteOperationInProgress
+                || isPushRunning(this.activeRepository?.repository.path)
+                || !this.hasRemote}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 3v18"></path>

@@ -102,15 +102,13 @@ export function isLocalAiProvider(providerType: AiProviderType): boolean {
 }
 
 /**
- * The API host each cloud provider talks to, so the remote allowlist has a
- * domain to match. Mirrors `AiProviderType::default_endpoint` in
- * `src-tauri/src/services/ai/mod.rs`.
+ * The API host each cloud provider talks to BY DEFAULT. Mirrors
+ * `AiProviderType::default_endpoint` in `src-tauri/src/services/ai/mod.rs`.
  *
- * A provider whose endpoint has been overridden in the AI config is still
- * matched against its default host: the endpoint is not exposed over IPC
- * without a network probe (`get_ai_providers` calls `is_available` on every
- * provider), and probing from inside the gate would be self-defeating. Offline
- * mode — the setting this gate exists for — does not depend on the host at all.
+ * Only the fallback: a provider whose endpoint has been overridden in the AI
+ * config is judged on that endpoint, which is what the request will really
+ * contact — see `resolveProviderEndpoint`. This table is what the gate falls
+ * back to when the provider listing is unavailable or reports no endpoint.
  */
 const CLOUD_PROVIDER_HOSTS: Readonly<Record<string, string>> = {
   open_ai: 'https://api.openai.com',
@@ -123,9 +121,16 @@ const CLOUD_PROVIDER_HOSTS: Readonly<Record<string, string>> = {
 function aiBlockedResult<T>(
   reason: 'offline' | 'allowlist',
   provider: AiProviderType | null,
+  /**
+   * The endpoint the gate actually judged, so the refusal names the host the
+   * request would have reached. Naming the provider's DEFAULT host while the
+   * config points somewhere else told the user to allowlist a domain the
+   * request never contacts.
+   */
+  endpoint?: string | null,
 ): CommandResult<T> {
   const name = provider ? getProviderDisplayName(provider) : null;
-  const host = provider ? CLOUD_PROVIDER_HOSTS[provider] : null;
+  const host = endpoint ?? (provider ? CLOUD_PROVIDER_HOSTS[provider] : null) ?? null;
   const message =
     reason === 'offline'
       ? name
@@ -189,10 +194,74 @@ async function checkAiNetworkAllowed<T>(
   // src-tauri/src/services/ai/mod.rs), so the destination is genuinely unknown
   // and the gate refuses rather than waving it through — the same fail-closed
   // rule the allowlist already applies to a remote whose URL it cannot see.
-  const host = provider ? CLOUD_PROVIDER_HOSTS[provider] : null;
-  const reason = await checkOutboundHostAllowed(host);
+  const endpoint = provider
+    ? ((await resolveProviderEndpoint(provider)) ?? CLOUD_PROVIDER_HOSTS[provider] ?? null)
+    : null;
+  // The same loopback carve-out the backend's `guard_endpoint` makes, applied
+  // before the host is judged.
+  if (endpoint && isLoopbackEndpoint(endpoint)) return null;
+  const reason = await checkOutboundHostAllowed(endpoint);
   if (!reason) return null;
-  return aiBlockedResult<T>(reason === 'allowlist' ? 'allowlist' : 'offline', provider);
+  return aiBlockedResult<T>(reason === 'allowlist' ? 'allowlist' : 'offline', provider, endpoint);
+}
+
+/**
+ * The endpoint the active provider will really be contacted at.
+ *
+ * The AI config can point any provider somewhere else — a corporate gateway,
+ * an OpenAI-compatible server on this machine — and the BACKEND gate judges
+ * exactly that value (`guard_ai_request` -> `guard_endpoint(endpoint_for(pt))`,
+ * `src-tauri/src/commands/ai.rs`). This gate judged the fixed default host
+ * instead, so it refused while naming a host the request would never contact,
+ * and under offline mode a local gateway had no workaround at all even though
+ * `resolve_provider` would have served it.
+ *
+ * `get_ai_providers` reports it: `AiProviderInfo.endpoint` is filled in from
+ * the config, or the provider's default, for every provider unconditionally
+ * (`get_providers_info`, `src-tauri/src/services/ai/mod.rs`). It is also not a
+ * probe in the state this gate runs in: that same function sets `probed` from
+ * `provider_network_allowed` and skips `is_available` / `list_models` entirely
+ * for any provider the security settings forbid reaching. A provider the
+ * policy DOES permit may still be probed — a round trip to a destination
+ * already judged allowed, never a request the policy forbids.
+ *
+ * Null when the listing fails or names no endpoint; the caller then falls back
+ * to the provider's default host, which is all this gate ever had.
+ */
+async function resolveProviderEndpoint(provider: AiProviderType): Promise<string | null> {
+  const listing = await getAiProviders();
+  if (!listing.success || !Array.isArray(listing.data)) return null;
+  const endpoint = listing.data.find((info) => info.providerType === provider)?.endpoint?.trim();
+  return endpoint ? endpoint : null;
+}
+
+/**
+ * An endpoint that never leaves this machine, mirroring `guard_endpoint` in
+ * `src-tauri/src/services/security.rs`: an empty endpoint is the embedded
+ * model, which has none at all, and a loopback host opens no socket that
+ * leaves the machine — so neither offline mode nor a list of remote HOSTS has
+ * anything to say about it. Without this, a provider pointed at an
+ * OpenAI-compatible server on localhost was refused here and permitted there,
+ * which is the two gates disagreeing about one endpoint.
+ */
+function isLoopbackEndpoint(endpoint: string): boolean {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return true;
+  let hostname: string;
+  try {
+    hostname = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname;
+  } catch {
+    return false;
+  }
+  // `URL` keeps an IPv6 literal in its brackets; the Rust side strips them too.
+  const host = hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  return (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '::1' ||
+    // 127.0.0.0/8, the whole of it — `is_loopback()` on the Rust side.
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  );
 }
 
 /**
