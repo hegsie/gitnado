@@ -96,6 +96,32 @@ function remoteReads(): number {
   return invokeCallArgs.filter((c) => c.command === 'get_remotes').length;
 }
 
+/**
+ * Close a tab the way the repository-store subscription does.
+ *
+ * The order matters and is the order of `app-shell.ts:1881-1886`: every path
+ * that is no longer open is torn down FIRST, and only then is
+ * `watchedRepoPaths` replaced with the set that is still open. Nothing else
+ * writes that set, so a test that edits it by hand is not closing a tab — it
+ * is deciding the outcome itself, which is how the pending-read assertion
+ * below used to pass with the teardown's timer cleanup deleted outright.
+ */
+function closeRepoTab(el: AppShell, path: string): void {
+  repositoryStore.setState({
+    openRepositories: repositoryStore
+      .getState()
+      .openRepositories.filter((r) => r.repository.path !== path),
+    activeIndex: -1,
+  } as any);
+  const openPaths = new Set(
+    repositoryStore.getState().openRepositories.map((r) => r.repository.path),
+  );
+  for (const watched of (el as any).watchedRepoPaths as Set<string>) {
+    if (!openPaths.has(watched)) (el as any).teardownRepoServices(watched);
+  }
+  (el as any).watchedRepoPaths = openPaths;
+}
+
 function storedRemotes(): unknown[] {
   return repositoryStore.getState().openRepositories[0]?.remotes ?? [];
 }
@@ -163,15 +189,43 @@ describe('app-shell and a config change under the active repository', () => {
     expect(remoteReads(), 'and read exactly once for the burst').to.equal(1);
   });
 
-  it('does not read the remotes of a repository closed before the read lands', async () => {
+  // Two guards stand between a closed tab and a read it no longer wants:
+  // `teardownRepoServices` cancels the pending timer, and the timer callback
+  // re-checks `watchedRepoPaths` before reading. Either alone hides the loss of
+  // the other, so each is pinned here with the other one out of the way.
+
+  it('cancels the pending remotes read when the tab is closed', async () => {
+    // Drives the real close path, in the real order, so the teardown's timer
+    // cleanup is what decides this — not the test rewriting `watchedRepoPaths`
+    // itself, which the timer callback's own check would then have answered.
     const el = shellWatchingRepo();
 
     configChanged(el);
-    (el as any).teardownRepoServices(REPO);
-    (el as any).watchedRepoPaths.delete(REPO);
+    expect((el as any).remotesReloadTimers.has(REPO), 'a read is pending').to.equal(true);
+
+    closeRepoTab(el, REPO);
+
+    expect(
+      (el as any).remotesReloadTimers.has(REPO),
+      'teardownRepoServices cancels it rather than leaving a timer behind',
+    ).to.equal(false);
+    await settle();
+    expect(remoteReads(), 'the pending read went with the tab').to.equal(0);
+  });
+
+  it('refuses a scheduled read for a repository nobody watches any more', async () => {
+    // The other half, deliberately belt-and-braces: a reload scheduled AFTER
+    // the teardown has run has no timer left for it to cancel. That is a real
+    // arrival order — `teardownRepoServices` asks the backend to stop watching
+    // fire-and-forget, so an event already in flight still lands — and the
+    // callback's own `watchedRepoPaths` check is all that stops it.
+    const el = shellWatchingRepo();
+
+    (el as any).scheduleRemotesReload(REPO);
+    (el as any).watchedRepoPaths = new Set<string>();
     await settle();
 
-    expect(remoteReads(), 'the pending read went with the tab').to.equal(0);
+    expect(remoteReads(), 'a repository nobody watches is not read').to.equal(0);
   });
 
   it('leaves a background repository to the stale-tab path it already had', async () => {
