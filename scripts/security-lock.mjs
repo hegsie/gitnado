@@ -16,7 +16,12 @@
  *
  * This module derives the exposed set from the source instead of trusting
  * each test author to remember:
- *   - the functions that reach the gate, transitively, across the crate; and
+ *   - the gate itself — every `pub fn` of `security.rs` whose body reaches
+ *     `global()`, `check` or `check_remote`, worked out from that file rather
+ *     than from a list kept by hand, so a gate added there cannot be missed;
+ *   - the functions that reach one of those, transitively, across the crate,
+ *     whether the call names the module (`security::guard_url(`) or uses a
+ *     name a `use` statement brought into the file unqualified; and
  *   - every `#[test]` / `#[tokio::test]` whose body (or a helper it calls)
  *     calls one of them.
  * A test in that set has to hold the lock — through `TestRepo`, through a
@@ -30,7 +35,13 @@
  *     method, closure, or function pointer rather than a direct named call;
  *   - a callee whose name is defined in more than one file is only followed
  *     when the call names its module, so an unqualified call to a
- *     same-named function elsewhere in the crate is not followed.
+ *     same-named function elsewhere in the crate is not followed;
+ *   - a gate brought in by a GLOB import (`use ...::security::*`, and the
+ *     `use super::*` of `security.rs`'s own test module) is not resolved, so
+ *     an unqualified call to one there is not followed. Only names a `use`
+ *     spells out — including `use ... as alias` — are;
+ *   - the gate set is derived from `security.rs` alone: a policy reader that
+ *     lives in some other module reaches the crate unseen.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -40,13 +51,16 @@ import { fileURLToPath } from 'node:url';
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const CRATE_SRC = join(REPO_ROOT, 'src-tauri/src');
 
+/** The module that owns the policy; the gate set is derived from it. */
+export const SECURITY_FILE = 'src-tauri/src/services/security.rs';
+
 /**
- * The gate itself: every reader of the global policy in `security.rs`. A body
- * that names one of these (module-qualified, so a local `check` does not
- * count) reaches the gate directly.
+ * The bottom of the gate: the policy readers every other gate is built on.
+ * `global()` hands out the process-wide state; `check` / `check_remote` are
+ * the judgement itself. Anything in `security.rs` that reaches one of these
+ * is a gate, and that is worked out from the source — see `deriveGateNames`.
  */
-export const GATE_PATTERN =
-  /\bsecurity::(?:guard_url|guard_remote_url|guard_remote|guard_push_remote|guard_endpoint|endpoint_allowed|check_remote|check|global)\s*\(/;
+export const GATE_ROOTS = ['global', 'check', 'check_remote'];
 
 /**
  * What holding the lock looks like in a test body. `TestRepo` takes the reader
@@ -178,9 +192,11 @@ export function extractFunctions(source, file) {
       name,
       file,
       line,
+      start,
       body,
       attrs,
       isMethod,
+      isPub: /\bpub\b/.test(match[0]),
       isTest: attrs.some((a) => /^#\[(?:tokio::)?test\b/.test(a)),
     });
     header.lastIndex = open;
@@ -210,6 +226,145 @@ function blockRanges(code, keyword) {
   return ranges;
 }
 
+/** `[open, close]` offsets of every `#[cfg(test)] mod ... { ... }` block. */
+function cfgTestRanges(code) {
+  const ranges = [];
+  const re = /#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{/g;
+  let m;
+  while ((m = re.exec(code)) !== null) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    let j = open;
+    for (; j < code.length; j += 1) {
+      if (code[j] === '{') depth += 1;
+      else if (code[j] === '}') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    ranges.push([open, j]);
+    re.lastIndex = open;
+  }
+  return ranges;
+}
+
+/**
+ * The gate set, read out of `security.rs` instead of listed by hand.
+ *
+ * Seeded with [`GATE_ROOTS`] and grown transitively: any function of the
+ * module whose body calls one of them is itself a policy reader. The exported
+ * (`pub` / `pub(crate)`) free functions of that closure are what the rest of
+ * the crate can reach, and are what this returns — so a NEW gate written in
+ * `security.rs` is part of the set the moment it is written, with nothing to
+ * remember to add anywhere.
+ *
+ * `#[cfg(test)] mod` bodies are excluded: `test_support`'s guards call
+ * `global()` to PIN a policy rather than to read one, and they are what
+ * holding the lock looks like, not what reaching the gate looks like.
+ */
+export function deriveGateNames(source, file = SECURITY_FILE) {
+  const code = stripNonCode(source);
+  const testRanges = cfgTestRanges(code);
+  const inTest = (offset) => testRanges.some(([from, to]) => offset > from && offset < to);
+  const fns = extractFunctions(source, file).filter((fn) => !inTest(fn.start));
+  const reached = new Set(GATE_ROOTS.filter((root) => fns.some((fn) => fn.name === root)));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const fn of fns) {
+      if (reached.has(fn.name)) continue;
+      const calls = /(\.)?(?:[A-Za-z_]\w*::)?([A-Za-z_]\w*)\s*(?:::<[^>]*>\s*)?\(/g;
+      let m;
+      while ((m = calls.exec(fn.body)) !== null) {
+        if (m[1] === '.') continue; // a method call is never one of these free fns
+        if (!reached.has(m[2])) continue;
+        reached.add(fn.name);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return new Set(
+    fns.filter((fn) => fn.isPub && !fn.isMethod && reached.has(fn.name)).map((fn) => fn.name)
+  );
+}
+
+/**
+ * The gate itself: every reader of the global policy exported by
+ * `security.rs`, derived from that file.
+ */
+export const GATE_NAMES = deriveGateNames(readFileSync(join(REPO_ROOT, SECURITY_FILE), 'utf8'));
+
+/** The gate named through its module (`security::guard_url(`) or an alias of it. */
+export function gatePattern(names = GATE_NAMES, modules = ['security']) {
+  return new RegExp(`\\b(?:${[...modules].join('|')})::(?:${[...names].join('|')})\\s*\\(`);
+}
+
+/**
+ * A body that names the gate module-qualified reaches the gate directly. Kept
+ * for callers with no file context; [`gatePatternFor`] also sees the names a
+ * file's `use` statements let it call unqualified.
+ */
+export const GATE_PATTERN = gatePattern();
+
+/** Split a `use` brace group on its top-level commas. */
+function splitUseGroup(group) {
+  const items = [];
+  let depth = 0;
+  let current = '';
+  for (const c of group) {
+    if (c === '{') depth += 1;
+    else if (c === '}') depth -= 1;
+    if (c === ',' && depth === 0) {
+      items.push(current);
+      current = '';
+    } else current = `${current}${c}`;
+  }
+  items.push(current);
+  return items;
+}
+
+/**
+ * What a file's `use` statements let it call the gate by.
+ *
+ * Returns the gate names it can call UNQUALIFIED (`use ...::security::
+ * guard_remote_url;`, and whatever an `as` renamed them to) and the module
+ * names it can qualify with (`security`, plus any `use ...::security as sec`).
+ * A glob (`use ...::security::*`) names nothing and is a declared blind spot.
+ */
+export function importedGateNames(source, names = GATE_NAMES) {
+  const code = stripNonCode(source);
+  const direct = new Set();
+  const modules = new Set(['security']);
+  const useStatements = /\buse\s+([^;{]*(?:\{[^;]*\})?[^;]*);/g;
+  let m;
+  while ((m = useStatements.exec(code)) !== null) {
+    const body = m[1].replace(/\s+/g, ' ').trim();
+    const alias = body.match(/(?:^|::)security as (\w+)$/);
+    if (alias) {
+      modules.add(alias[1]);
+      continue;
+    }
+    const braced = body.match(/(?:^|::)security::\{(.*)\}$/);
+    const single = body.match(/(?:^|::)security::(\w+(?: as \w+)?)$/);
+    if (!braced && !single) continue;
+    for (const raw of braced ? splitUseGroup(braced[1]) : [single[1]]) {
+      const item = raw.trim().match(/^(\w+)(?: as (\w+))?$/);
+      if (item && names.has(item[1])) direct.add(item[2] ?? item[1]);
+    }
+  }
+  return { direct, modules };
+}
+
+/** Everything `file` can spell the gate as, as one pattern. */
+export function gatePatternFor(source, names = GATE_NAMES) {
+  const { direct, modules } = importedGateNames(source, names);
+  const alternatives = [gatePattern(names, modules).source];
+  // Not after `.` or `::`: a method or another module's same-named function.
+  if (direct.size > 0) alternatives.push(`(?:^|[^\\w:.])(?:${[...direct].join('|')})\\s*\\(`);
+  return new RegExp(alternatives.join('|'));
+}
+
 /**
  * The functions of the crate that reach the gate, transitively: those whose
  * body names the gate, then those that call one of them, until nothing new.
@@ -217,9 +372,17 @@ function blockRanges(code, keyword) {
  * A callee is followed by its bare name when only one function in the crate
  * has that name; otherwise only a module-qualified call (`tags::push_tag(`)
  * or a call from the file that defines it is followed.
+ *
+ * `sourcesByFile` supplies each file's text so its `use` statements can be
+ * read; without it only module-qualified calls to the gate are seen.
  */
-export function gatedFunctions(fnsByFile) {
+export function gatedFunctions(fnsByFile, sourcesByFile = new Map()) {
   const all = [...fnsByFile.values()].flat();
+  const gateIn = new Map();
+  for (const file of fnsByFile.keys()) {
+    const source = sourcesByFile.get(file);
+    gateIn.set(file, source === undefined ? GATE_PATTERN : gatePatternFor(source));
+  }
   const byName = new Map();
   for (const fn of all) {
     if (!byName.has(fn.name)) byName.set(fn.name, []);
@@ -227,7 +390,11 @@ export function gatedFunctions(fnsByFile) {
   }
   const key = (fn) => `${fn.file}::${fn.name}`;
   const gated = new Map();
-  for (const fn of all) if (GATE_PATTERN.test(fn.body)) gated.set(key(fn), { fn, via: 'the gate itself' });
+  for (const fn of all) {
+    if ((gateIn.get(fn.file) ?? GATE_PATTERN).test(fn.body)) {
+      gated.set(key(fn), { fn, via: 'the gate itself' });
+    }
+  }
 
   let changed = true;
   while (changed) {
@@ -314,10 +481,13 @@ export function holdsLock(fn, fnsInFile, seen = new Set(), lockPattern = LOCK_PA
  */
 export function findUnlockedTests(files = listRustFiles(), lockPattern = LOCK_PATTERN) {
   const fnsByFile = new Map();
+  const sourcesByFile = new Map();
   for (const file of files) {
-    fnsByFile.set(file, extractFunctions(readFileSync(join(REPO_ROOT, file), 'utf8'), file));
+    const source = readFileSync(join(REPO_ROOT, file), 'utf8');
+    sourcesByFile.set(file, source);
+    fnsByFile.set(file, extractFunctions(source, file));
   }
-  const gated = gatedFunctions(fnsByFile);
+  const gated = gatedFunctions(fnsByFile, sourcesByFile);
   const byName = new Map();
   for (const fn of [...fnsByFile.values()].flat()) {
     if (!byName.has(fn.name)) byName.set(fn.name, []);

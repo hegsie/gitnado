@@ -36,6 +36,14 @@
  * it go out with offline mode on, and reported green. The two sets are now
  * required to PARTITION every command the sweep reaches, so a command nobody
  * has classified fails the suite instead of being ignored by it.
+ *
+ * That partition is taken under EVERY policy the sweep runs under, not just a
+ * permissive one. The gate makes round trips of its own only while a policy is
+ * in force — `get_lfs_endpoint` resolves the URL an LFS transfer will really
+ * contact before judging it — and a partition test that ran with
+ * `isNetworkPolicyActive()` false never reached them, so those calls were
+ * exactly the ones it could not have classified. Both sweeps visit the same
+ * command set now.
  */
 
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
@@ -287,7 +295,12 @@ const LOCAL_COMMANDS = new Set([
   'get_file_path_for_copy', 'get_git_config', 'get_gitattributes', 'get_gitflow_config',
   'get_gitignore', 'get_gitignore_templates', 'get_global_account', 'get_global_accounts',
   'get_global_accounts_by_type', 'get_gpg_config', 'get_gpg_keys', 'get_hook', 'get_hooks',
-  'get_image_versions', 'get_lfs_files', 'get_lfs_status', 'get_line_ending_config',
+  // `get_lfs_endpoint` reads `lfs.url` / `.lfsconfig` / the remote out of the
+  // local git config so the gate can judge the URL a transfer will really
+  // contact. It is a config read, and the gate makes it BEFORE deciding — so
+  // gating it would deadlock the decision on itself.
+  'get_image_versions', 'get_lfs_endpoint', 'get_lfs_files', 'get_lfs_status',
+  'get_line_ending_config',
   'get_merge_tool_config', 'get_migration_backup_info', 'get_note', 'get_notes',
   'get_notes_refs', 'get_pack_info', 'get_pr_template_content', 'get_pr_templates',
   'get_profile_preferred_account', 'get_profiles', 'get_profiles_config',
@@ -574,25 +587,38 @@ describe('network gate coverage', () => {
     // classification nobody has made: put it in NETWORK_COMMANDS (and gate it,
     // or the offline assertion above fails) or in LOCAL_COMMANDS (a claim that
     // it never leaves the machine).
-    settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+    //
+    // Swept under BOTH policies, because the two visit different commands. The
+    // gate's own round trips — `get_lfs_endpoint`, and the same shape for any
+    // future one — happen only while `isNetworkPolicyActive()` is true, so a
+    // partition taken with no policy in force skipped precisely the calls the
+    // offline sweep above makes. That is the hole `get_commit_status` came
+    // through, one level up.
+    const policies = [
+      { label: 'offline mode on', state: { offlineMode: true, remoteAllowlist: [] } },
+      { label: 'no policy in force', state: { offlineMode: false, remoteAllowlist: [] } },
+    ];
 
-    const unclassified = new Set<string>();
-    for (const { fn, args } of sweptCallables()) {
-      invoked.length = 0;
-      try {
-        await fn(...args);
-      } catch {
-        /* a rejected call still reveals what it invoked */
-      }
-      for (const command of invoked) {
-        if (!NETWORK_COMMANDS.has(command) && !LOCAL_COMMANDS.has(command)) {
-          unclassified.add(command);
+    const unclassified = new Map<string, string>();
+    for (const policy of policies) {
+      settingsStore.setState({ confirmNetworkOps: false, ...policy.state });
+      for (const { fn, args } of sweptCallables()) {
+        invoked.length = 0;
+        try {
+          await fn(...args);
+        } catch {
+          /* a rejected call still reveals what it invoked */
+        }
+        for (const command of invoked) {
+          if (!NETWORK_COMMANDS.has(command) && !LOCAL_COMMANDS.has(command)) {
+            if (!unclassified.has(command)) unclassified.set(command, policy.label);
+          }
         }
       }
     }
 
     expect(
-      [...unclassified].sort(),
+      [...unclassified].sort().map(([command, policy]) => `${command} (reached with ${policy})`),
       'classify these as network or local — an unclassified command is one the offline sweep ignores',
     ).to.deep.equal([]);
   });

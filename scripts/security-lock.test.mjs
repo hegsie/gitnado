@@ -22,16 +22,37 @@ import { test } from 'node:test';
 
 import {
   AMBIGUOUS_METHOD_NAMES,
+  GATE_NAMES,
   GATE_PATTERN,
   LOCK_PATTERN,
   REPO_ROOT,
+  SECURITY_FILE,
+  deriveGateNames,
   extractFunctions,
   findUnlockedTests,
   formatUnlocked,
+  gatePatternFor,
   gatedFunctions,
   holdsLock,
+  importedGateNames,
   stripNonCode,
 } from './security-lock.mjs';
+
+/**
+ * The gates this suite knows about by name. Asserted against the set derived
+ * from `security.rs` below, so the list cannot silently fall behind the file.
+ */
+const KNOWN_GATES = [
+  'check',
+  'check_remote',
+  'endpoint_allowed',
+  'global',
+  'guard_endpoint',
+  'guard_push_remote',
+  'guard_remote',
+  'guard_remote_url',
+  'guard_url',
+];
 
 // ---------------------------------------------------------------------------
 // The scanner itself
@@ -83,6 +104,77 @@ test('extractFunctions finds tests, helpers, methods and their attributes', () =
   assert.equal(named.helper.isTest, false);
   assert.equal(named.a_test.line, 15);
   assert.match(named.command.body, GATE_PATTERN);
+});
+
+test('deriveGateNames reads the gate set out of security.rs, new gates included', () => {
+  const source = `
+    pub fn global() -> &'static SecurityState { &GLOBAL }
+    pub fn check(s: &S, t: Option<&str>) -> Result<()> { check_target(s, t, is_local) }
+    fn check_target(s: &S, t: Option<&str>, f: fn(&str) -> bool) -> Result<()> { Ok(()) }
+    pub fn guard_url(url: &str) -> Result<()> { check(&global().snapshot(), Some(url)) }
+    pub fn guard_ghost_url(url: &str) -> Result<()> { check(&global().snapshot(), Some(url)) }
+    fn private_reader() -> bool { global().snapshot().offline_mode }
+    pub fn url_host(url: &str) -> Option<String> { parse_url_target(url) }
+    impl SecurityState { pub fn snapshot(&self) -> SecuritySettings { self.inner.clone() } }
+    #[cfg(test)]
+    pub(crate) mod test_support {
+        pub(crate) fn no_policy() -> Guard { global().set(Default::default()); Guard }
+    }
+  `;
+  const derived = deriveGateNames(source, 'security.rs');
+  assert.deepEqual(
+    [...derived].sort(),
+    ['check', 'global', 'guard_ghost_url', 'guard_url'],
+    'a new pub fn that reaches check/global is a gate without being listed anywhere'
+  );
+  assert.ok(!derived.has('private_reader'), 'a private reader is not reachable from the crate');
+  assert.ok(!derived.has('no_policy'), 'test_support pins a policy; it is the lock, not the gate');
+  assert.ok(!derived.has('url_host'), 'a function that never reaches the policy is not a gate');
+  assert.ok(!derived.has('snapshot'), 'a method of SecurityState is not an exported gate');
+});
+
+test('importedGateNames resolves the names a use statement brings in', () => {
+  const braced = importedGateNames(
+    'use crate::services::security::{guard_remote_url, test_support::no_policy, url_host};'
+  );
+  assert.deepEqual([...braced.direct], ['guard_remote_url']);
+  const single = importedGateNames('use crate::services::security::guard_url;');
+  assert.deepEqual([...single.direct], ['guard_url']);
+  const renamed = importedGateNames('use crate::services::security::guard_url as gu;');
+  assert.deepEqual([...renamed.direct], ['gu']);
+  const moduleAlias = importedGateNames('use crate::services::security as sec;');
+  assert.deepEqual([...moduleAlias.modules].sort(), ['sec', 'security']);
+  const glob = importedGateNames('use crate::services::security::*;');
+  assert.deepEqual([...glob.direct], [], 'a glob import is a declared blind spot');
+  const commented = importedGateNames('// use crate::services::security::guard_url;');
+  assert.deepEqual([...commented.direct], [], 'a commented-out import imports nothing');
+});
+
+test('gatePatternFor sees an imported gate called unqualified, and only that call', () => {
+  const source = 'use crate::services::security::guard_remote_url;';
+  const pattern = gatePatternFor(source);
+  assert.match('{ guard_remote_url("https://h/r.git").unwrap(); }', pattern);
+  assert.match('{ security::guard_url("u")?; }', pattern);
+  assert.doesNotMatch('{ other::guard_remote_url("u")?; }', pattern, 'another module of that name');
+  assert.doesNotMatch('{ self.guard_remote_url("u")?; }', pattern, 'a method of that name');
+  assert.doesNotMatch('{ guard_url("u")?; }', gatePatternFor(''), 'not imported, not in scope');
+});
+
+test('gatedFunctions follows an unqualified call to a gate the file imports', () => {
+  const file = 'src-tauri/src/commands/tags.rs';
+  const source = `
+    use crate::services::security::guard_remote_url;
+    #[test]
+    fn unqualified_imported_gate() { guard_remote_url("https://github.com/o/r.git").unwrap(); }
+  `;
+  const fns = extractFunctions(source, file);
+  const withSource = gatedFunctions(new Map([[file, fns]]), new Map([[file, source]]));
+  assert.ok(withSource.has(`${file}::unqualified_imported_gate`));
+  const withoutSource = gatedFunctions(new Map([[file, fns]]));
+  assert.ok(
+    !withoutSource.has(`${file}::unqualified_imported_gate`),
+    'the module-qualified pattern alone cannot see it'
+  );
 });
 
 test('gatedFunctions follows calls transitively, by name rules', () => {
@@ -149,11 +241,18 @@ test('holdsLock sees TestRepo, test_support guards, and helpers that take them',
 // The crate
 // ---------------------------------------------------------------------------
 
-test('every gate the scanner looks for exists in security.rs, and TestRepo takes the guard', () => {
-  const security = readFileSync(join(REPO_ROOT, 'src-tauri/src/services/security.rs'), 'utf8');
-  for (const gate of ['guard_url', 'guard_remote_url', 'guard_remote', 'guard_push_remote', 'guard_endpoint', 'endpoint_allowed', 'check_remote', 'check', 'global']) {
+test('the gate set matches security.rs exactly, and TestRepo takes the guard', () => {
+  const security = readFileSync(join(REPO_ROOT, SECURITY_FILE), 'utf8');
+  for (const gate of KNOWN_GATES) {
     assert.match(security, new RegExp(`pub fn ${gate}\\(`), `security.rs no longer defines ${gate}`);
   }
+  // Not just "each named gate still exists" — the set is derived from the
+  // file, so a policy reader added there and named nowhere fails this too.
+  assert.deepEqual(
+    [...GATE_NAMES].sort(),
+    KNOWN_GATES,
+    'security.rs exports a policy reader this suite does not name (or no longer exports one)'
+  );
   assert.match(security, /pub\(crate\) fn no_policy\(\)/, 'the shared reader guard exists');
   const testUtils = readFileSync(join(REPO_ROOT, 'src-tauri/src/test_utils.rs'), 'utf8');
   assert.match(testUtils, /test_support::no_policy\(\)/, 'TestRepo takes the reader guard');
