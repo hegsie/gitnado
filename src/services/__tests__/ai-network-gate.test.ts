@@ -310,13 +310,13 @@ describe('AI provider network gate', () => {
     expect(result.error?.message).to.not.contain('api.openai.com');
   });
 
-  it('falls back to the default host when the listing names no endpoint', async () => {
-    // The listing can fail, and a provider can report an empty endpoint. The
-    // gate must still fail closed, on the default host it does know — which is
+  it('falls back to the default endpoint when the listing cannot be read', async () => {
+    // The listing can fail, and it can omit a provider. Either way the gate
+    // must still fail closed, on the default endpoint it does know — which is
     // all it ever had before.
     settingsStore.setState({ remoteAllowlist: ['github.com'] });
     activeProvider = 'open_ai';
-    providerListing = [{ providerType: 'open_ai', endpoint: '   ' }];
+    providerListing = [];
 
     invoked.length = 0;
     const result = await aiService.generateCommitMessage('/repo');
@@ -324,6 +324,81 @@ describe('AI provider network gate', () => {
     expect(result.success).to.equal(false);
     expect(result.error?.message).to.contain('api.openai.com');
     expect(invoked.includes('generate_commit_message')).to.equal(false);
+  });
+
+  it('treats an endpoint the backend calls none as none too', async () => {
+    // `endpoint_for` returns the configured value when there is one, and
+    // `guard_endpoint` permits an empty one — "nothing to reach". Falling back
+    // to the default host here instead would refuse a request the backend
+    // permits, which is the two gates disagreeing about one endpoint.
+    settingsStore.setState({ remoteAllowlist: ['github.com'] });
+    activeProvider = 'open_ai';
+    providerListing = [{ providerType: 'open_ai', endpoint: '   ' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success, 'an empty endpoint reaches nothing').to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
+  });
+
+  /**
+   * A local provider is permitted because its ENDPOINT is on this machine, not
+   * because of its name. The gate used to return early on the name, so an
+   * Ollama or LM Studio endpoint pointed at a corporate gateway was permitted
+   * here and refused by the backend, which judges the endpoint with no
+   * per-provider carve-out at all (`guard_ai_request` ->
+   * `guard_endpoint(active_provider_endpoint())`).
+   */
+  it('refuses a local provider pointed off this machine', async () => {
+    settingsStore.setState({ offlineMode: true });
+    activeProvider = 'ollama';
+    providerListing = [{ providerType: 'ollama', endpoint: 'https://ollama.corp.example' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success, 'this Ollama is not on this machine').to.equal(false);
+    expect(result.error?.code).to.equal('BLOCKED');
+    expect(invoked.includes('generate_commit_message')).to.equal(false);
+  });
+
+  it('says what is actually wrong when a local provider points elsewhere', async () => {
+    // "Select a local provider" would name the one already selected.
+    settingsStore.setState({ offlineMode: true });
+    activeProvider = 'ollama';
+    providerListing = [{ providerType: 'ollama', endpoint: 'https://ollama.corp.example' }];
+
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.error?.message).to.contain('ollama.corp.example');
+    expect(result.error?.message).to.not.contain('is a cloud AI provider');
+  });
+
+  it('judges a local provider against the allowlist on its endpoint', async () => {
+    settingsStore.setState({ remoteAllowlist: ['ollama.corp.example'] });
+    activeProvider = 'ollama';
+    providerListing = [{ providerType: 'ollama', endpoint: 'https://ollama.corp.example' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success, 'the allowlist names the host this request reaches')
+      .to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
+  });
+
+  it('still permits a local provider on its own loopback endpoint', async () => {
+    // The guard against a rule that refuses every local provider.
+    settingsStore.setState({ offlineMode: true });
+    activeProvider = 'ollama';
+    providerListing = [{ providerType: 'ollama', endpoint: 'http://localhost:11434' }];
+
+    invoked.length = 0;
+    const result = await aiService.generateCommitMessage('/repo');
+
+    expect(result.success, 'Ollama on localhost opens no outbound socket').to.not.equal(false);
+    expect(invoked.includes('generate_commit_message')).to.equal(true);
   });
 
   it('does not list the providers when no policy is in force', async () => {

@@ -84,6 +84,11 @@ const CLOUD_PROVIDERS: ReadonlySet<AiProviderType> = new Set<AiProviderType>([
  * older frontend, say — and waves its requests through while offline mode is
  * on. Every other unknown destination in this gate fails closed; this one
  * failed open.
+ *
+ * The gate no longer decides anything on this set: a local provider is
+ * permitted because its ENDPOINT is on this machine, not because of its name
+ * (see `checkAiNetworkAllowed`). It still tells the refusal message which of
+ * two things to say, and it is what Settings uses to group the providers.
  */
 const LOCAL_PROVIDERS: ReadonlySet<AiProviderType> = new Set<AiProviderType>([
   'ollama',
@@ -102,19 +107,32 @@ export function isLocalAiProvider(providerType: AiProviderType): boolean {
 }
 
 /**
- * The API host each cloud provider talks to BY DEFAULT. Mirrors
- * `AiProviderType::default_endpoint` in `src-tauri/src/services/ai/mod.rs`.
+ * The endpoint each provider talks to BY DEFAULT. Mirrors
+ * `AiProviderType::default_endpoint` in `src-tauri/src/services/ai/mod.rs`
+ * value for value, LOCAL PROVIDERS INCLUDED — a local provider's default is a
+ * loopback URL, and `local_inference` is the embedded model, which has no
+ * endpoint at all.
  *
  * Only the fallback: a provider whose endpoint has been overridden in the AI
  * config is judged on that endpoint, which is what the request will really
  * contact — see `resolveProviderEndpoint`. This table is what the gate falls
- * back to when the provider listing is unavailable or reports no endpoint.
+ * back to when the provider listing is unavailable.
+ *
+ * It covers every provider rather than only the cloud ones because the gate no
+ * longer waves a local provider through on its NAME: the AI config can point
+ * Ollama at a corporate gateway, and the backend judges that endpoint
+ * (`guard_ai_request` -> `guard_endpoint(active_provider_endpoint())`, which
+ * has no per-provider carve-out at all). A name-based pass here permitted what
+ * the backend refuses.
  */
-const CLOUD_PROVIDER_HOSTS: Readonly<Record<string, string>> = {
-  open_ai: 'https://api.openai.com',
+const PROVIDER_DEFAULT_ENDPOINTS: Readonly<Record<AiProviderType, string>> = {
+  ollama: 'http://localhost:11434',
+  lm_studio: 'http://localhost:1234/v1',
+  open_ai: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
   github_copilot: 'https://models.inference.ai.azure.com',
   google_gemini: 'https://generativelanguage.googleapis.com',
+  local_inference: '',
 };
 
 /** The refusal an AI call returns, in the shape callers already render. */
@@ -130,13 +148,21 @@ function aiBlockedResult<T>(
   endpoint?: string | null,
 ): CommandResult<T> {
   const name = provider ? getProviderDisplayName(provider) : null;
-  const host = endpoint ?? (provider ? CLOUD_PROVIDER_HOSTS[provider] : null) ?? null;
+  const host = endpoint ?? (provider ? PROVIDER_DEFAULT_ENDPOINTS[provider] : null) ?? null;
   const message =
     reason === 'offline'
-      ? name
-        ? `Offline mode is enabled and ${name} is a cloud AI provider. ` +
-          'Turn offline mode off in Settings > Security, or select a local ' +
-          'provider (Ollama, LM Studio or Local AI).'
+      ? provider && name
+        ? isLocalAiProvider(provider)
+          ? // A local provider pointed somewhere else. "Select a local
+            // provider" would name the one already selected, so this says what
+            // is actually wrong: its endpoint is not on this machine.
+            `Offline mode is enabled and ${name} is configured to use ` +
+            `${host}, which is not on this machine. Point it back at this ` +
+            'machine in Settings > AI, or turn offline mode off in ' +
+            'Settings > Security.'
+          : `Offline mode is enabled and ${name} is a cloud AI provider. ` +
+            'Turn offline mode off in Settings > Security, or select a local ' +
+            'provider (Ollama, LM Studio or Local AI).'
         : 'Offline mode is enabled and no AI provider is selected, so this ' +
           'request could reach a cloud provider. Select a local provider ' +
           '(Ollama, LM Studio or Local AI) in Settings, or turn offline mode off.'
@@ -184,22 +210,31 @@ async function checkAiNetworkAllowed<T>(
     provider = active.success ? (active.data ?? null) : null;
   }
 
-  // Local providers never leave the machine, so no policy applies to them. A
-  // provider this build does not RECOGNISE is not one of them, and falls
-  // through to the fail-closed branch below.
-  if (provider && isLocalAiProvider(provider)) return null;
-
+  // A local provider is NOT waved through on its name. Its requests normally
+  // never leave the machine, and the loopback carve-out below permits them for
+  // that reason — but the AI config can point Ollama or LM Studio at any host,
+  // and the backend judges the endpoint with no per-provider exception
+  // (`guard_ai_request`). Passing on the name permitted exactly what the
+  // backend refuses, so the two gates disagreed about one request.
+  //
   // With nothing selected the backend falls back to whatever provider is
   // reachable, cloud providers included (`resolve_provider` in
   // src-tauri/src/services/ai/mod.rs), so the destination is genuinely unknown
   // and the gate refuses rather than waving it through — the same fail-closed
   // rule the allowlist already applies to a remote whose URL it cannot see.
-  const endpoint = provider
-    ? ((await resolveProviderEndpoint(provider)) ?? CLOUD_PROVIDER_HOSTS[provider] ?? null)
-    : null;
+  //
+  // `resolveProviderEndpoint` returns the empty string when the provider
+  // reports NO endpoint (the embedded model) and null when the listing could
+  // not be read at all, so `??` falls back only in the second case — an empty
+  // endpoint is an answer, and the same answer the backend's `guard_endpoint`
+  // treats as "nothing to reach".
+  const resolved = provider ? await resolveProviderEndpoint(provider) : null;
+  const endpoint =
+    resolved ?? (provider ? (PROVIDER_DEFAULT_ENDPOINTS[provider] ?? null) : null);
   // The same loopback carve-out the backend's `guard_endpoint` makes, applied
-  // before the host is judged.
-  if (endpoint && isLoopbackEndpoint(endpoint)) return null;
+  // before the host is judged. This is what keeps a locally hosted model usable
+  // with offline mode on, which is the whole point of running one.
+  if (endpoint !== null && isLoopbackEndpoint(endpoint)) return null;
   const reason = await checkOutboundHostAllowed(endpoint);
   if (!reason) return null;
   return aiBlockedResult<T>(reason === 'allowlist' ? 'allowlist' : 'offline', provider, endpoint);
@@ -225,14 +260,22 @@ async function checkAiNetworkAllowed<T>(
  * policy DOES permit may still be probed — a round trip to a destination
  * already judged allowed, never a request the policy forbids.
  *
- * Null when the listing fails or names no endpoint; the caller then falls back
- * to the provider's default host, which is all this gate ever had.
+ * Returns the empty string when the provider reports NO endpoint at all (the
+ * embedded model), which is an answer and matches the empty-endpoint carve-out
+ * `guard_endpoint` makes. Returns null only when the listing could not be read
+ * or does not mention the provider; the caller then falls back to
+ * [`PROVIDER_DEFAULT_ENDPOINTS`], which is all this gate ever had.
  */
 async function resolveProviderEndpoint(provider: AiProviderType): Promise<string | null> {
   const listing = await getAiProviders();
   if (!listing.success || !Array.isArray(listing.data)) return null;
-  const endpoint = listing.data.find((info) => info.providerType === provider)?.endpoint?.trim();
-  return endpoint ? endpoint : null;
+  const info = listing.data.find((entry) => entry.providerType === provider);
+  // Absent from the listing is "unknown", the same as no listing at all. An
+  // entry whose endpoint is empty is an ANSWER — the embedded model has none —
+  // so it is returned as `''` rather than collapsed into null, which would send
+  // the caller to the default table for a provider that just told it the truth.
+  if (!info) return null;
+  return info.endpoint?.trim() ?? '';
 }
 
 /**
