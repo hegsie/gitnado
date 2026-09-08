@@ -46,7 +46,7 @@ export const CRATE_SRC = join(REPO_ROOT, 'src-tauri/src');
  * count) reaches the gate directly.
  */
 export const GATE_PATTERN =
-  /\bsecurity::(?:guard_url|guard_remote|guard_push_remote|guard_endpoint|endpoint_allowed|check|global)\s*\(/;
+  /\bsecurity::(?:guard_url|guard_remote_url|guard_remote|guard_push_remote|guard_endpoint|endpoint_allowed|check_remote|check|global)\s*\(/;
 
 /**
  * What holding the lock looks like in a test body. `TestRepo` takes the reader

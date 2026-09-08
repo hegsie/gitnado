@@ -24,7 +24,7 @@ pub async fn start_auto_fetch(
     // only point at which the user's answer is still cheap. The loop itself
     // re-checks (services/autofetch_service.rs) because settings can change
     // while it runs.
-    crate::services::security::guard_url(&remote_url)?;
+    crate::services::security::guard_remote_url(&remote_url)?;
 
     let mut service = state.write().await;
     service.start(path, interval_minutes, remote, remote_url, token, app);

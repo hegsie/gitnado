@@ -352,7 +352,39 @@ pub struct RemoteTarget {
 
 /// Resolve `target` the way [`check`] judges it — the same rule, with the rest
 /// of the answer the callers need to contact it.
+///
+/// This is the reading for a string that may be an SSH DESTINATION rather than
+/// a git remote — the Settings > SSH host field, which is the only input in the
+/// app that accepts the scheme-less `host:port` form. git has no such REMOTE
+/// form, so a caller holding a remote must take [`parse_remote_target`]
+/// instead. The two answer the same HOST for every string; only the port, the
+/// scheme and `is_ssh` can differ, and only for a login-less `host:<u16>`.
 pub fn parse_target(target: &str) -> Option<RemoteTarget> {
+    parse_target_inner(target, true)
+}
+
+/// [`parse_target`] for a string the caller knows is a git REMOTE.
+///
+/// The colon of a scheme-less remote separates the host from the PATH, whatever
+/// that path looks like: `gitserver:2024` is the repository `2024` on the
+/// `~/.ssh/config` alias `gitserver`, exactly as `git@host:2222` already was.
+/// Reading it as port 2024 made it a login-less target with no scheme, so
+/// `credential_target` called it `https` and `resolved`, the `protocol == "ssh"
+/// && resolved` guard skipped the ssh probe, and the dialog drew a red "No
+/// Credentials Found / Protocol: https / Host: gitserver:2024" for a working
+/// ssh remote — or, where an unrelated `https://gitserver:2024` credential
+/// existed, "Credentials Working" with an Erase button pointed at it.
+///
+/// The GATE is unaffected either way: both readings resolve the host
+/// `gitserver`, which is the only part [`check`] judges.
+pub fn parse_remote_target(target: &str) -> Option<RemoteTarget> {
+    parse_target_inner(target, false)
+}
+
+/// `bare_host_port` says which question is being asked of a login-less
+/// `host:<u16>`: the SSH host field's `host:port` (true), or a repository whose
+/// name happens to parse as a number (false). Nothing else differs.
+fn parse_target_inner(target: &str, bare_host_port: bool) -> Option<RemoteTarget> {
     let trimmed = target.trim();
     if !trimmed.contains("://") {
         if let Some(scp) = split_scp_like(trimmed) {
@@ -363,7 +395,9 @@ pub fn parse_target(target: &str) -> Option<RemoteTarget> {
             // read below, exactly as it always was — the HOST is the same
             // either way, so the allowlist sees no change — and a login says
             // it is not that form: `git@host:2222` is the repository `2222`.
-            if scp.login.is_none() && scp.path.parse::<u16>().is_ok() {
+            // A caller that holds a REMOTE says so by taking
+            // `parse_remote_target`, for which no such form exists at all.
+            if bare_host_port && scp.login.is_none() && scp.path.parse::<u16>().is_ok() {
                 if let Some(mut resolved) = parse_url_target(&format!("https://{}", trimmed)) {
                     resolved.is_ssh = resolved.user.is_some();
                     resolved.scheme = None;
@@ -438,11 +472,28 @@ pub fn host_allowed(host: &str, allowlist: &[String]) -> bool {
 
 /// The core check. `target` is the URL (or bare host) the operation will
 /// contact; `None` means the caller could not work one out.
+///
+/// This is the reading for a target that may be a bare host or a scheme-less
+/// endpoint. A caller holding a git REMOTE takes [`check_remote`], which adds
+/// the one carve-out only a remote can claim — see [`is_local_remote_target`].
 pub fn check(settings: &SecuritySettings, target: Option<&str>) -> Result<()> {
+    check_target(settings, target, is_local_target)
+}
+
+/// [`check`] for a target the caller knows is a git REMOTE.
+pub fn check_remote(settings: &SecuritySettings, target: Option<&str>) -> Result<()> {
+    check_target(settings, target, is_local_remote_target)
+}
+
+fn check_target(
+    settings: &SecuritySettings,
+    target: Option<&str>,
+    is_local: fn(&str) -> bool,
+) -> Result<()> {
     // A filesystem remote never leaves the machine, so neither setting applies
     // — the same carve-out `is_loopback_host` makes for an endpoint, and ahead
     // of the offline branch for the same reason.
-    if target.is_some_and(is_local_target) {
+    if target.is_some_and(is_local) {
         return Ok(());
     }
     if settings.offline_mode {
@@ -477,6 +528,18 @@ pub fn check(settings: &SecuritySettings, target: Option<&str>) -> Result<()> {
 /// bare host — clone, `add_submodule`, a provider's API base.
 pub fn guard_url(url: &str) -> Result<()> {
     check(&global().snapshot(), Some(url))
+}
+
+/// [`guard_url`] for a URL the caller knows is a git REMOTE — a clone URL, a
+/// submodule url, the auto-fetch loop's resolved remote, the remote the
+/// credentials dialog is testing.
+///
+/// Same rule, plus the bare relative path only a remote can be
+/// ([`is_local_remote_target`]). Splitting the two is what keeps that carve-out
+/// off a scheme-less endpoint or provider instance URL, where it would fail
+/// open.
+pub fn guard_remote_url(url: &str) -> Result<()> {
+    check_remote(&global().snapshot(), Some(url))
 }
 
 /// Guard an operation against a remote of `repo_path`.
@@ -514,7 +577,7 @@ fn guard_remote_for(repo_path: &str, remote: Option<&str>, for_push: bool) -> Re
     // it — the lookup is a local config read, and only on a path a policy is
     // in force on.
     let url = resolve_remote_url(repo_path, remote, for_push);
-    check(&settings, url.as_deref())
+    check_remote(&settings, url.as_deref())
 }
 
 /// The URL an operation against `remote` will contact.
@@ -619,6 +682,16 @@ fn is_loopback_host(host: &str) -> bool {
 /// OS mount table. The kernel, not this app, does that I/O, and git opens no
 /// socket for it; the same is already true of every local operation the gate
 /// permits.
+///
+/// A BARE relative path (`sub/mybackup.git`, with no leading `./`) is excluded
+/// here too, and that is deliberate rather than an oversight: this function
+/// also judges strings that are not remotes at all — a bare host, a scheme-less
+/// AI endpoint or provider instance URL — where reading a separator as "this is
+/// a path" would wave an outbound request through unjudged. A caller that KNOWS
+/// it holds a git remote takes [`is_local_remote_target`], which adds it.
+///
+/// The frontend mirror is `isLocalTarget` in `src/services/git.service.ts`; any
+/// change to either half has to move both.
 pub(crate) fn is_local_target(target: &str) -> bool {
     let trimmed = target.trim();
     if trimmed.is_empty() {
@@ -653,6 +726,62 @@ pub(crate) fn is_local_target(target: &str) -> bool {
         || trimmed.starts_with("..\\")
         || trimmed.starts_with('~')
         || is_windows_drive_path(trimmed)
+}
+
+/// [`is_local_target`] for a string the caller knows is a git REMOTE: the same
+/// rule, plus the BARE relative path only a remote can be.
+///
+/// `git init --bare sub/mybackup.git && git remote add b2 sub/mybackup.git` is
+/// purely local — git's `url_is_local_not_ssh` (`connect.c`) reads a target with
+/// no colon, or with a slash before its colon, as a path, and the push that
+/// follows opens no socket. [`is_local_target`] refuses it, so offline mode
+/// blocked a push that never leaves the machine, the allowlist read the host as
+/// `sub` (the only workaround being to allowlist the literal string `sub`), and
+/// the credentials dialog drew "Host: sub / Protocol: https / No Credentials
+/// Found" for a repository on the same disk.
+///
+/// WHY THIS IS A SECOND FUNCTION rather than a widening of the first: the rule
+/// is only safe where the string is known to be a remote. [`is_local_target`]
+/// is also asked about a bare host (`checkOutboundHostAllowed("api.github.com")`,
+/// the SSH settings host field, [`guard_endpoint`]) and about a scheme-less
+/// endpoint or provider instance URL — `gitlab.example.com/gitlab`, which the
+/// GitLab dialog's free-text instance field accepts and `providerApiHost` hands
+/// straight to the gate. Calling THAT local would fail OPEN: the request would
+/// be waved through as "never leaves the machine" and its host never judged. A
+/// bare host carries no separator; a scheme-less instance URL with a path
+/// segment does. So the separator rule lives here, behind a caller that has
+/// said which question it is asking.
+///
+/// `mybackup.git` — no separator at all — stays NON-local even here, and is
+/// pinned that way: nothing in that string tells it apart from a bare host, so
+/// reading it as a path would wave a bare host through with its host never
+/// judged. A user who wants it treated as local writes `./mybackup.git`, which
+/// git accepts and both halves already read that way.
+///
+/// The frontend mirror is `isLocalRemoteTarget` in
+/// `src/services/git.service.ts`; any change to either half has to move both.
+pub(crate) fn is_local_remote_target(target: &str) -> bool {
+    is_local_target(target) || is_bare_relative_path(target)
+}
+
+/// A relative path written without a `./` — `sub/mybackup.git`, `sub\backup`.
+///
+/// Everything [`is_local_target`] excludes is excluded here first, and for the
+/// same reasons: a UNC path is SMB, a scheme is the URL parser's business, and
+/// the scp-like form is an ssh remote whose colon comes BEFORE any separator.
+/// What is left carrying a separator is a path relative to the working
+/// directory, which is what git makes of it.
+fn is_bare_relative_path(target: &str) -> bool {
+    let trimmed = target.trim();
+    if trimmed.starts_with("//") || trimmed.starts_with(r"\\") {
+        return false;
+    }
+    // `file://…` is caught by the scheme test, and [`is_local_target`] has
+    // already given it the answer its host deserves.
+    if trimmed.contains("://") || scp_like_host(trimmed).is_some() {
+        return false;
+    }
+    trimmed.contains('/') || trimmed.contains('\\')
 }
 
 /// `C:\repos\app.git` / `C:/repos/app.git`.
@@ -1234,6 +1363,564 @@ mod tests {
         }
     }
 
+    /// EVERY target shape, through EVERY parse that survives.
+    ///
+    /// This area produced a finding in eight consecutive review rounds, each
+    /// time for a spelling the previous fix's list did not include — a bare
+    /// relative remote, a login-less scp remote, a bracketed IPv6 literal, an
+    /// `@` inside a path, a repository whose name parses as a port. The cause
+    /// was never one bad rule; it was several rules answering "what kind of
+    /// target is this string" independently, so a fix to one left the others
+    /// behind. This table is the countermeasure: one row per shape, one column
+    /// per parse, so a change that moves any of them has to say here what it
+    /// did to all the rest.
+    ///
+    /// Two parses answering the SAME question differently on any row is a bug.
+    /// Where two answers differ on purpose the row carries the reason, and
+    /// there are exactly three such places:
+    ///
+    /// - [`is_local_target`] vs [`is_local_remote_target`], which differ only
+    ///   for a bare relative path, because only a caller holding a git remote
+    ///   can know that `sub/x.git` is a path and not `host/path`;
+    /// - [`parse_target`] vs [`parse_remote_target`], which differ only for a
+    ///   login-less `host:<u16>`, because only the SSH settings host field has
+    ///   a `host:port` form at all. The HOST never differs, so the gate cannot;
+    /// - [`url_host`] vs [`target_host`], which differ only where a string
+    ///   names no host: `url_host` declines, `target_host` applies the
+    ///   bare-authority fallback [`check`] needs. Every row where `url_host`
+    ///   answers at all, `target_host` answers the same.
+    ///
+    /// The frontend mirrors — `isLocalTarget`, `isLocalRemoteTarget`,
+    /// `scpLikeHost`, `cloneUrlHost` and `looksLikeUrl` in
+    /// `src/services/git.service.ts` — are pinned to the same rows by
+    /// `src/services/__tests__/target-parse-differential.test.ts`.
+    #[test]
+    fn every_target_shape_through_every_parse() {
+        // target, is_local_target, is_local_remote_target, scp_like_host,
+        // parse_target, parse_remote_target, url_host, target_host,
+        // looks_like_url.
+        #[allow(clippy::type_complexity)]
+        let rows: &[(
+            &str,
+            bool,
+            bool,
+            Option<&str>,
+            Option<(&str, Option<u16>, bool)>,
+            Option<(&str, Option<u16>, bool)>,
+            Option<&str>,
+            Option<&str>,
+            bool,
+        )] = &[
+            // absolute path
+            (
+                "/srv/git/x.git",
+                true,
+                true,
+                None,
+                Some(("srv", None, false)),
+                Some(("srv", None, false)),
+                None,
+                Some("srv"),
+                false,
+            ),
+            (
+                "./x.git",
+                true,
+                true,
+                None,
+                Some((".", None, false)),
+                Some((".", None, false)),
+                None,
+                Some("."),
+                false,
+            ),
+            (
+                "../x.git",
+                true,
+                true,
+                None,
+                Some(("..", None, false)),
+                Some(("..", None, false)),
+                None,
+                Some(".."),
+                false,
+            ),
+            // `git remote add local .`
+            (
+                ".",
+                true,
+                true,
+                None,
+                Some((".", None, false)),
+                Some((".", None, false)),
+                None,
+                Some("."),
+                false,
+            ),
+            (
+                "..",
+                true,
+                true,
+                None,
+                Some(("..", None, false)),
+                Some(("..", None, false)),
+                None,
+                Some(".."),
+                false,
+            ),
+            // a colon INSIDE a path
+            (
+                ".\\x:y",
+                true,
+                true,
+                None,
+                Some((".", None, false)),
+                Some((".", None, false)),
+                None,
+                Some("."),
+                false,
+            ),
+            (
+                "~/x.git",
+                true,
+                true,
+                None,
+                Some(("~", None, false)),
+                Some(("~", None, false)),
+                None,
+                Some("~"),
+                false,
+            ),
+            // no separator: indistinguishable from a bare host, so NOT local even for a
+            // remote. `./mybackup.git` is the spelling that says otherwise.
+            (
+                "mybackup.git",
+                false,
+                false,
+                None,
+                Some(("mybackup.git", None, false)),
+                Some(("mybackup.git", None, false)),
+                None,
+                Some("mybackup.git"),
+                false,
+            ),
+            // the bare relative remote: local as a REMOTE, not as a bare host
+            (
+                "sub/mybackup.git",
+                false,
+                true,
+                None,
+                Some(("sub", None, false)),
+                Some(("sub", None, false)),
+                None,
+                Some("sub"),
+                false,
+            ),
+            (
+                "sub\\mybackup.git",
+                false,
+                true,
+                None,
+                Some(("sub", None, false)),
+                Some(("sub", None, false)),
+                None,
+                Some("sub"),
+                false,
+            ),
+            // a scheme-less provider instance URL has the same SHAPE as the row above,
+            // which is why the widened rule is asked for by the caller and never
+            // applied to a bare host or an endpoint.
+            (
+                "gitlab.example.com/gitlab",
+                false,
+                true,
+                None,
+                Some(("gitlab.example.com", None, false)),
+                Some(("gitlab.example.com", None, false)),
+                None,
+                Some("gitlab.example.com"),
+                false,
+            ),
+            // Windows drive
+            (
+                "C:\\repos\\x.git",
+                true,
+                true,
+                None,
+                Some(("c", None, false)),
+                Some(("c", None, false)),
+                None,
+                Some("c"),
+                false,
+            ),
+            (
+                "C:/repos/x.git",
+                true,
+                true,
+                None,
+                Some(("c", None, false)),
+                Some(("c", None, false)),
+                None,
+                Some("c"),
+                false,
+            ),
+            // a one-letter authority with no login is a drive, and `x` is no path
+            ("c:x", false, false, None, None, None, None, None, false),
+            // UNC is SMB
+            (
+                "\\\\server\\share\\x",
+                false,
+                false,
+                None,
+                Some(("server", None, false)),
+                Some(("server", None, false)),
+                None,
+                Some("server"),
+                false,
+            ),
+            (
+                "//server/share/x",
+                false,
+                false,
+                None,
+                Some(("server", None, false)),
+                Some(("server", None, false)),
+                None,
+                Some("server"),
+                false,
+            ),
+            // scp, with a login
+            (
+                "git@host:x",
+                false,
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            (
+                "deploy@host:x",
+                false,
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            // a `~` does not make an scp remote a path
+            (
+                "~deploy@host:x",
+                false,
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            // scp with the login left to ~/.ssh/config
+            (
+                "gitserver:team/app.git",
+                false,
+                false,
+                Some("gitserver"),
+                Some(("gitserver", None, true)),
+                Some(("gitserver", None, true)),
+                Some("gitserver"),
+                Some("gitserver"),
+                true,
+            ),
+            // THE one shape the two parses answer differently, on purpose: the SSH
+            // settings host field means port 2024, a git remote means the repository
+            // `2024`. The HOST — all the gate reads — is the same either way.
+            (
+                "gitserver:2024",
+                false,
+                false,
+                Some("gitserver"),
+                Some(("gitserver", Some(2024), false)),
+                Some(("gitserver", None, true)),
+                Some("gitserver"),
+                Some("gitserver"),
+                true,
+            ),
+            (
+                "host:22",
+                false,
+                false,
+                Some("host"),
+                Some(("host", Some(22), false)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            // a login says it is not the host:port form
+            (
+                "git@host:2222",
+                false,
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+                Some(("host", None, true)),
+                Some("host"),
+                Some("host"),
+                true,
+            ),
+            // the drive carve-out puts this past `split_scp_like` and into the shared
+            // bare-authority fallback, so the remote reading cannot tell it from a
+            // port either. Not a remote anyone writes, and the dialog prints it as
+            // typed; pinned so a future change to the carve-out is noticed here.
+            (
+                "x:22",
+                false,
+                false,
+                None,
+                Some(("x", Some(22), false)),
+                Some(("x", Some(22), false)),
+                None,
+                Some("x"),
+                false,
+            ),
+            // bracketed IPv6
+            (
+                "[::1]:x",
+                false,
+                false,
+                Some("[::1]"),
+                Some(("[::1]", None, true)),
+                Some(("[::1]", None, true)),
+                Some("[::1]"),
+                Some("[::1]"),
+                true,
+            ),
+            (
+                "git@[::1]:x",
+                false,
+                false,
+                Some("[::1]"),
+                Some(("[::1]", None, true)),
+                Some(("[::1]", None, true)),
+                Some("[::1]"),
+                Some("[::1]"),
+                true,
+            ),
+            (
+                "[::1]:22",
+                false,
+                false,
+                Some("[::1]"),
+                Some(("[::1]", Some(22), false)),
+                Some(("[::1]", None, true)),
+                Some("[::1]"),
+                Some("[::1]"),
+                true,
+            ),
+            // the `@` is in the PATH — every parse must say `gitserver`
+            (
+                "gitserver:x@evil.test:y",
+                false,
+                false,
+                Some("gitserver"),
+                Some(("gitserver", None, true)),
+                Some(("gitserver", None, true)),
+                Some("gitserver"),
+                Some("gitserver"),
+                true,
+            ),
+            (
+                "git@github.com:x@evil.test:y",
+                false,
+                false,
+                Some("github.com"),
+                Some(("github.com", None, true)),
+                Some(("github.com", None, true)),
+                Some("github.com"),
+                Some("github.com"),
+                true,
+            ),
+            // schemes
+            (
+                "https://h/x",
+                false,
+                false,
+                None,
+                Some(("h", None, false)),
+                Some(("h", None, false)),
+                Some("h"),
+                Some("h"),
+                true,
+            ),
+            (
+                "http://h:8443/x",
+                false,
+                false,
+                None,
+                Some(("h", Some(8443), false)),
+                Some(("h", Some(8443), false)),
+                Some("h"),
+                Some("h"),
+                true,
+            ),
+            (
+                "git://h/x",
+                false,
+                false,
+                None,
+                Some(("h", None, false)),
+                Some(("h", None, false)),
+                Some("h"),
+                Some("h"),
+                true,
+            ),
+            (
+                "ssh://h/x",
+                false,
+                false,
+                None,
+                Some(("h", None, true)),
+                Some(("h", None, true)),
+                Some("h"),
+                Some("h"),
+                true,
+            ),
+            (
+                "ssh://git@h:2222/x",
+                false,
+                false,
+                None,
+                Some(("h", Some(2222), true)),
+                Some(("h", Some(2222), true)),
+                Some("h"),
+                Some("h"),
+                true,
+            ),
+            // host-less file:// is this machine
+            ("file:///x", true, true, None, None, None, None, None, true),
+            (
+                "file://localhost/x",
+                true,
+                true,
+                None,
+                None,
+                None,
+                None,
+                None,
+                true,
+            ),
+            // …another machine is not
+            (
+                "file://server/share/x",
+                false,
+                false,
+                None,
+                Some(("server", None, false)),
+                Some(("server", None, false)),
+                Some("server"),
+                Some("server"),
+                true,
+            ),
+            // bare hosts, which is why the separator rule cannot be unconditional
+            (
+                "api.github.com",
+                false,
+                false,
+                None,
+                Some(("api.github.com", None, false)),
+                Some(("api.github.com", None, false)),
+                None,
+                Some("api.github.com"),
+                false,
+            ),
+            (
+                "git@github.com",
+                false,
+                false,
+                None,
+                Some(("github.com", None, true)),
+                Some(("github.com", None, true)),
+                None,
+                Some("github.com"),
+                false,
+            ),
+            // the host is after the `@`, not before it
+            (
+                "github.com@evil.test",
+                false,
+                false,
+                None,
+                Some(("evil.test", None, true)),
+                Some(("evil.test", None, true)),
+                None,
+                Some("evil.test"),
+                false,
+            ),
+            // forms git does not accept
+            ("@host:x", false, false, None, None, None, None, None, false),
+            ("x@:y", false, false, None, None, None, None, None, false),
+            ("ssh://", false, false, None, None, None, None, None, true),
+            ("", false, false, None, None, None, None, None, false),
+        ];
+
+        let owned = |v: Option<(&str, Option<u16>, bool)>| {
+            v.map(|(host, port, is_ssh)| (host.to_string(), port, is_ssh))
+        };
+        for &(target, local, local_remote, scp, parsed, parsed_remote, uh, th, lu) in rows {
+            assert_eq!(is_local_target(target), local, "{target}: is_local_target");
+            assert_eq!(
+                is_local_remote_target(target),
+                local_remote,
+                "{target}: is_local_remote_target"
+            );
+            assert_eq!(
+                scp_like_host(target).as_deref(),
+                scp,
+                "{target}: scp_like_host"
+            );
+            assert_eq!(
+                parse_target(target).map(|t| (t.host, t.port, t.is_ssh)),
+                owned(parsed),
+                "{target}: parse_target"
+            );
+            assert_eq!(
+                parse_remote_target(target).map(|t| (t.host, t.port, t.is_ssh)),
+                owned(parsed_remote),
+                "{target}: parse_remote_target"
+            );
+            assert_eq!(url_host(target).as_deref(), uh, "{target}: url_host");
+            assert_eq!(target_host(target).as_deref(), th, "{target}: target_host");
+            assert_eq!(looks_like_url(target), lu, "{target}: looks_like_url");
+            // `url_host` and `target_host` are allowed to differ only by the
+            // bare-authority fallback: where the first answers, the second must
+            // answer the same.
+            if let Some(host) = url_host(target) {
+                assert_eq!(
+                    target_host(target),
+                    Some(host),
+                    "{target}: url_host and target_host disagree"
+                );
+            }
+            // The two local rules may differ only in the widening direction.
+            assert!(
+                !local || local_remote,
+                "{target}: is_local_remote_target must never narrow is_local_target"
+            );
+            // The two parses may differ in port/scheme/is_ssh, never in HOST —
+            // that is what keeps the gate single-parse.
+            assert_eq!(
+                parse_target(target).map(|t| t.host),
+                parse_remote_target(target).map(|t| t.host),
+                "{target}: the two parses disagree about the HOST"
+            );
+        }
+    }
+
     #[test]
     fn scp_like_host_is_lowercased() {
         assert_eq!(
@@ -1470,6 +2157,60 @@ mod tests {
             Some("file:///srv/git/app.git")
         )
         .is_ok());
+    }
+
+    /// A BARE relative remote is a place on this machine, and a push to it
+    /// opens no socket.
+    ///
+    /// `git init --bare sub/mybackup.git && git remote add b2 sub/mybackup.git`
+    /// is an ordinary local backup remote, and git reads it as a path (no
+    /// colon, so `url_is_local_not_ssh` says local). Offline mode refused the
+    /// push anyway, and the allowlist read the host as `sub` — so the only
+    /// workaround was to allowlist the literal string `sub`.
+    ///
+    /// The carve-out is asked for by the caller, because the same SHAPE is a
+    /// scheme-less provider instance URL when the string is not a remote. The
+    /// second half of each pair is what keeps that from failing open.
+    #[test]
+    fn offline_mode_permits_a_bare_relative_remote_but_not_a_bare_endpoint() {
+        for remote in ["sub/mybackup.git", "backups/app.git", r"sub\mybackup.git"] {
+            assert!(
+                check_remote(&settings(true, &[]), Some(remote)).is_ok(),
+                "{remote} never leaves the machine"
+            );
+            assert!(
+                check_remote(&settings(false, &["github.com"]), Some(remote)).is_ok(),
+                "{remote} is no host for an allowlist to judge"
+            );
+        }
+        // ...and the same shape read as a host is still judged as one: a
+        // scheme-less instance URL with a path segment must not be waved
+        // through as "a place on this machine".
+        assert!(check(&settings(true, &[]), Some("gitlab.example.com/gitlab")).is_err());
+        assert!(check(
+            &settings(false, &["github.com"]),
+            Some("gitlab.example.com/gitlab")
+        )
+        .is_err());
+        assert!(check(
+            &settings(false, &["gitlab.example.com"]),
+            Some("gitlab.example.com/gitlab")
+        )
+        .is_ok());
+    }
+
+    /// End to end, on a real repository: the remote git would push to.
+    #[test]
+    fn a_bare_relative_remote_is_permitted_while_offline_end_to_end() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        repo.add_remote("b2", "sub/mybackup.git");
+        let _guard = test_support::offline();
+
+        assert!(guard_remote(&repo.path_str(), Some("b2")).is_ok());
+        assert!(guard_push_remote(&repo.path_str(), Some("b2")).is_ok());
+        assert!(guard_remote_url("sub/mybackup.git").is_ok());
+        // The endpoint-flavoured guard is unchanged, and still refuses.
+        assert!(guard_url("sub/mybackup.git").is_err());
     }
 
     #[test]
