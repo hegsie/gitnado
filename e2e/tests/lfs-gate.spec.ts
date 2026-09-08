@@ -44,8 +44,15 @@ async function setAllowlist(page: Page, domains: string[]): Promise<void> {
 
 const HOSTILE_ENDPOINT = 'https://evil.example.net/o/r.git/info/lfs';
 
+/**
+ * What `get_lfs_endpoint` reports: the endpoint URL and where it came from.
+ * `'config'` is an `lfs.url` a committed `.lfsconfig` may have set; `'remote'`
+ * is the git remote's own url, which git-lfs falls back to verbatim.
+ */
+type EndpointKind = 'config' | 'remote';
+
 /** An LFS-enabled repository whose git remote is on github.com. */
-function lfsRepositoryMocks(endpoint: string | null) {
+function lfsRepositoryMocks(endpoint: string | null, kind: EndpointKind = 'config') {
   return {
     get_lfs_status: {
       installed: true,
@@ -58,7 +65,7 @@ function lfsRepositoryMocks(endpoint: string | null) {
     get_lfs_files: [{ path: 'art/logo.psd', oid: 'abc', size: 1024, downloaded: false }],
     get_remotes: [{ name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null }],
     get_fetch_remote: 'origin',
-    get_lfs_endpoint: endpoint,
+    get_lfs_endpoint: endpoint === null ? null : { url: endpoint, kind },
     lfs_pull: 'Downloading LFS objects: 1 of 1',
   };
 }
@@ -102,6 +109,51 @@ test.describe('LFS transfers are gated on the LFS endpoint', () => {
     await expect(page.locator('lv-lfs-dialog .message.success')).toContainText(
       'LFS files pulled successfully'
     );
+  });
+
+  /**
+   * git-lfs's LAST RESORT is the git remote's url, verbatim — so for a
+   * repository with no `lfs.url` the endpoint IS a git remote, and
+   * `sub/mybackup.git` (`git init --bare sub/mybackup.git`) is a repository on
+   * this disk. Judged with the strict reading its host parsed as `sub`, so the
+   * dialog's Pull was refused with "not in your allowlist" naming a string no
+   * allowlist entry could ever match — while Push, one gate over, went
+   * through.
+   */
+  test('Pull goes through to a bare relative path the git remote fell back to', async ({
+    page,
+  }) => {
+    await startCommandCaptureWithMocks(page, lfsRepositoryMocks('sub/mybackup.git', 'remote'));
+    await setAllowlist(page, ['github.com']);
+    await openLfsDialog(page);
+
+    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+
+    await waitForCommand(page, 'lfs_pull');
+    await expect(page.locator('lv-lfs-dialog .message.success')).toContainText(
+      'LFS files pulled successfully'
+    );
+    await expect(page.locator('.toast')).toHaveCount(0);
+  });
+
+  /**
+   * The other half of that rule: a COMMITTED `.lfsconfig` may name a
+   * scheme-less endpoint, and reading its separator as "a path on this disk"
+   * would wave the transfer through with its host never judged. Provenance,
+   * not a blanket swap.
+   */
+  test('a scheme-less endpoint from .lfsconfig is still refused', async ({ page }) => {
+    await startCommandCaptureWithMocks(page, lfsRepositoryMocks('evil.example.com/lfs', 'config'));
+    await setAllowlist(page, ['github.com']);
+    await openLfsDialog(page);
+
+    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+
+    const toast = page.locator('.toast');
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText('not in your allowlist');
+    await expect(toast).toContainText('evil.example.com');
+    expect(await findCommand(page, 'lfs_pull')).toHaveLength(0);
   });
 
   test('with no endpoint of its own the git remote is judged, as before', async ({ page }) => {

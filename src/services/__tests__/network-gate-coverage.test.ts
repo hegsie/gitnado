@@ -884,7 +884,7 @@ describe('network gate coverage', () => {
     responses.get_remotes = [
       { name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null },
     ];
-    responses.get_lfs_endpoint = '/mnt/usb/lfs';
+    responses.get_lfs_endpoint = { url: '/mnt/usb/lfs', kind: 'config' };
     invoked.length = 0;
     const local = await gitService.lfsPull('/repo');
     expect(invoked.includes('lfs_pull'), 'the transfer never leaves the machine').to.equal(true);
@@ -892,7 +892,7 @@ describe('network gate coverage', () => {
 
     // The mirror image: a local git remote, an LFS endpoint that leaves.
     responses.get_remotes = [{ name: 'origin', url: '/mnt/usb/repo.git', pushUrl: null }];
-    responses.get_lfs_endpoint = 'https://lfs.example.com/o/r';
+    responses.get_lfs_endpoint = { url: 'https://lfs.example.com/o/r', kind: 'config' };
     invoked.length = 0;
     const remote = await gitService.lfsFetch('/repo');
     expect(invoked.includes('lfs_fetch'), 'the transfer reaches lfs.example.com').to.equal(false);
