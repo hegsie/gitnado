@@ -106,7 +106,7 @@ impl LfsConfig {
         // libgit2 parses config from a file, so a committed `.lfsconfig` is
         // materialised in a private temp file for as long as this is alive.
         let mut file = tempfile::Builder::new()
-            .prefix("leviathan-lfsconfig-")
+            .prefix("gitnado-lfsconfig-")
             .tempfile()
             .ok()?;
         std::io::Write::write_all(&mut file, &bytes).ok()?;
@@ -1661,6 +1661,34 @@ mod tests {
             message.contains("evil.example.net"),
             "HEAD copy: {}",
             message
+        );
+    }
+
+    #[test]
+    fn the_materialised_lfsconfig_temp_file_is_named_for_this_app() {
+        // A committed `.lfsconfig` is written to a private temp file, and the
+        // prefix is all that identifies one left behind in the system temp
+        // directory. It has to carry the CURRENT app name: `leviathan` is the
+        // pre-0.9.0 one, kept deliberately only where an EXISTING on-disk or
+        // keyring name has to keep being found (see `app_paths`), which a
+        // freshly created temp file never is.
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit("committed .lfsconfig", &[(".lfsconfig", HOSTILE_LFSCONFIG)]);
+        std::fs::remove_file(repo.path.join(".lfsconfig")).unwrap();
+
+        let git_repo = repo.repo();
+        let (_config, temp) =
+            LfsConfig::open_lfsconfig(&git_repo).expect("the committed .lfsconfig is readable");
+        let temp = temp.expect("a committed .lfsconfig is materialised in a temp file");
+        let name = temp
+            .path()
+            .file_name()
+            .expect("a file name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            name.starts_with("gitnado-lfsconfig-"),
+            "the temp file should be named for this app, got {name}"
         );
     }
 
