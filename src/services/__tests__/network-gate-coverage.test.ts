@@ -685,12 +685,45 @@ describe('network gate coverage', () => {
     ).to.equal(true);
   });
 
-  it('a remote that only looks local is still refused', async () => {
-    // The exclusions: a UNC path is SMB, and a `file://` URL WITH a host is
-    // handed to the transport with that host. Both leave the machine.
+  /**
+   * The `file://` half of the carve-out, in the spellings the backend gate
+   * already permits. `is_local_target` accepts every LOOPBACK host — loopback
+   * is definitively this machine, which is why an AI endpoint on it is carved
+   * out too — while this mirror accepted an empty host and `localhost` only.
+   * So the backend decided `file://127.0.0.1/…` never leaves the machine and
+   * this half refused it first with "Offline mode is enabled", and under
+   * offline mode no allowlist entry can work around that.
+   */
+  it('offline mode permits a file:// remote on loopback', async () => {
     settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
 
-    for (const url of ['//server/share/repo.git', 'file://server/share/repo.git']) {
+    for (const url of [
+      'file://127.0.0.1/srv/git/app.git',
+      'file://[::1]/srv/git/app.git',
+      'file://build.localhost/srv/git/app.git',
+    ]) {
+      responses.get_remotes = [{ name: 'loop', url, pushUrl: null }];
+      invoked.length = 0;
+      await gitService.push({ path: '/repo', remote: 'loop' });
+      expect(invoked.includes('push'), `${url} is this machine`).to.equal(true);
+
+      invoked.length = 0;
+      await gitService.fetch({ path: '/repo', remote: 'loop' });
+      expect(invoked.includes('fetch'), `${url} opens no socket off this box`).to.equal(true);
+    }
+  });
+
+  it('a remote that only looks local is still refused', async () => {
+    // The exclusions: a UNC path is SMB, and a `file://` URL whose host is
+    // another machine is handed to the transport with that host. `.localhost`
+    // has to be a real suffix, so `localhost.evil.test` is another machine.
+    settingsStore.setState({ offlineMode: true, confirmNetworkOps: false, remoteAllowlist: [] });
+
+    for (const url of [
+      '//server/share/repo.git',
+      'file://server/share/repo.git',
+      'file://localhost.evil.test/share/repo.git',
+    ]) {
       responses.get_remotes = [{ name: 'smb', url, pushUrl: null }];
       invoked.length = 0;
       const result = await gitService.push({ path: '/repo', remote: 'smb' });

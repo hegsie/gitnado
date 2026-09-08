@@ -90,8 +90,8 @@ async function resolveRemotePushUrl(repoPath: string, remote?: string): Promise<
  * allowlist read `/mnt/usb/repo.git` as the host `mnt`.
  *
  * Deliberately EXCLUDED, because they do leave the machine: a UNC path
- * (`\\server\share`, and its `//server/share` spelling), a `file://` URL that
- * carries a host, anything in the scp-like `user@host:path` form (so
+ * (`\\server\share`, and its `//server/share` spelling), a `file://` URL whose
+ * host is ANOTHER machine, anything in the scp-like `user@host:path` form (so
  * `~user@host:repo.git` is read as the ssh remote git reads it), and anything
  * else carrying a scheme, so a path with a URL embedded in it cannot smuggle
  * one past this. A path that is really a network MOUNT is not excluded —
@@ -105,9 +105,12 @@ function isLocalTarget(target: string): boolean {
   if (/^file:\/\//i.test(trimmed)) {
     try {
       const host = new URL(trimmed).hostname;
-      // The URL spec folds `file://localhost/…` to an empty host; anything
-      // else names another machine.
-      return host === '' || host === 'localhost';
+      // The URL spec folds `file://localhost/…` to an empty host. Anything
+      // else on LOOPBACK is this machine too — `is_local_target` says so, and
+      // refusing here what the backend gate permits would toast "Offline mode
+      // is enabled" for a target that opens no socket off this box, with no
+      // allowlist entry able to work around it.
+      return host === '' || isLoopbackHost(host);
     } catch {
       return false;
     }
@@ -118,6 +121,10 @@ function isLocalTarget(target: string): boolean {
   }
   return (
     trimmed.startsWith('/') ||
+    // `.` and `..` are `./` and `../` without the separator — the spelling
+    // `git remote add local .` leaves behind.
+    trimmed === '.' ||
+    trimmed === '..' ||
     trimmed.startsWith('./') ||
     trimmed.startsWith('../') ||
     trimmed.startsWith('.\\') ||
@@ -125,6 +132,23 @@ function isLocalTarget(target: string): boolean {
     trimmed.startsWith('~') ||
     /^[A-Za-z]:[\\/]/.test(trimmed)
   );
+}
+
+/**
+ * Whether a host is the machine itself. Mirrors `is_loopback_host` in
+ * `src-tauri/src/services/security.rs`.
+ *
+ * Only reached with a host `new URL()` already produced, and the WHATWG parser
+ * canonicalises both literal families first — `[0:0:0:0:0:0:0:1]` comes back
+ * `[::1]` and `127.1` comes back `127.0.0.1` — so matching the canonical forms
+ * is the same rule Rust's `IpAddr::is_loopback` applies to the same string. The
+ * `.localhost` suffix is required, so `localhost.evil.test` does not match.
+ */
+function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (bare === 'localhost' || bare.endsWith('.localhost') || bare === '::1') return true;
+  const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(bare);
+  return octets !== null && octets[1] === '127' && octets.slice(1).every((o) => Number(o) <= 255);
 }
 
 async function checkNetworkAllowed(

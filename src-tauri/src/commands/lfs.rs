@@ -273,10 +273,19 @@ pub(crate) fn resolve_lfs_endpoint(
 /// its own remote gate; `remote` is the destination that gate just judged.
 /// A repository with no LFS filter in force uploads nothing and is waved
 /// through without opening anything further.
+///
+/// Shaped exactly like `security::guard_remote_for`, and for the same reason:
+/// offline mode used to answer here BEFORE the endpoint was resolved
+/// (`check(&settings, None)`), so with offline mode on this refused every push
+/// in every repository — LFS or not — after each push path's own remote gate
+/// had already permitted it. A push to `/mnt/usb/app.git` was refused by this
+/// guard alone, and a local `lfs.url` could never take the local-target
+/// carve-out `check` makes. Only a path with a policy in force pays for the
+/// resolution.
 pub(crate) fn guard_lfs_upload(path: &str, remote: Option<&str>) -> Result<()> {
     let settings = crate::services::security::global().snapshot();
-    if settings.offline_mode || settings.remote_allowlist.is_empty() {
-        return crate::services::security::check(&settings, None);
+    if !settings.offline_mode && settings.remote_allowlist.is_empty() {
+        return Ok(());
     }
     let repo_path = Path::new(path);
     if !is_lfs_enabled(repo_path) {
@@ -298,13 +307,20 @@ pub(crate) fn guard_lfs_upload(path: &str, remote: Option<&str>) -> Result<()> {
 /// The offline/allowlist gate for an LFS transfer, judged on the endpoint
 /// git-lfs will contact rather than on the git remote.
 ///
-/// Offline mode and an empty allowlist are decided before the repository is
-/// opened, exactly as `guard_remote` does; only a configured allowlist pays
-/// for the resolution.
+/// Nothing is resolved until a policy is in force, exactly as
+/// `security::guard_remote_for` does — and then the endpoint IS resolved, even
+/// under offline mode. Answering `check(&settings, None)` there refused a
+/// transfer to a local `lfs.url` (`/srv/lfs`, `file:///…`) that opens no
+/// socket, which is the one thing the local-target carve-out exists to stop.
+///
+/// Unlike [`guard_lfs_upload`] this does NOT wave through a repository with no
+/// LFS filter in force: this is the ONLY gate on `lfs_pull`/`lfs_fetch`, which
+/// the user invoked as LFS transfers, and a repository can hold LFS pointers
+/// that `is_lfs_enabled` does not see. There is no second gate behind it.
 fn guard_lfs_transfer(path: &str) -> Result<()> {
     let settings = crate::services::security::global().snapshot();
-    if settings.offline_mode || settings.remote_allowlist.is_empty() {
-        return crate::services::security::check(&settings, None);
+    if !settings.offline_mode && settings.remote_allowlist.is_empty() {
+        return Ok(());
     }
     let endpoint = resolve_lfs_endpoint(Path::new(path), LfsOperation::Download, None);
     crate::services::security::check(&settings, endpoint.as_deref())
@@ -1944,5 +1960,88 @@ mod tests {
         );
         let message = blocked_message(guard_lfs_upload(&repo.path_str(), Some("origin")));
         assert!(message.contains("evil.example.net"), "got: {}", message);
+    }
+
+    /// Offline mode answered here BEFORE the endpoint was resolved
+    /// (`check(&settings, None)`), so this guard refused EVERY push, in every
+    /// repository, LFS or not — and it runs on every push path AFTER that
+    /// path's own remote gate has already permitted the destination. With
+    /// offline mode on and `remote.backup.url = /mnt/usb/app.git` the frontend
+    /// permitted the push, `guard_push_remote` permitted it, and then this
+    /// refused it with "Offline mode is enabled": exactly the refusal the
+    /// local-target carve-out exists to remove.
+    #[test]
+    fn offline_mode_does_not_refuse_a_push_that_uploads_no_lfs_object() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("backup", "/mnt/usb/app.git");
+        repo.add_remote("origin", "https://github.com/o/r.git");
+        let _guard = test_support::offline();
+
+        assert_not_blocked(
+            &guard_lfs_upload(&repo.path_str(), Some("backup")),
+            "a push in a repository with no LFS filter in force",
+        );
+        assert_not_blocked(
+            &guard_lfs_upload(&repo.path_str(), Some("origin")),
+            "a repository with no LFS filter uploads nothing, wherever it pushes",
+        );
+    }
+
+    /// ...and in an LFS repository offline mode judges the ENDPOINT, so a
+    /// local one is permitted and one that leaves the machine is not.
+    #[test]
+    fn offline_mode_judges_the_lfs_endpoint_it_would_reach() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("backup", "/mnt/usb/app.git");
+        repo.create_file(
+            ".gitattributes",
+            "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        );
+        let _guard = test_support::offline();
+
+        let set_lfs_url = |value: &str| {
+            repo.repo()
+                .config()
+                .unwrap()
+                .set_str("lfs.url", value)
+                .unwrap();
+        };
+
+        set_lfs_url("/mnt/usb/app.git/lfs");
+        assert_not_blocked(
+            &guard_lfs_upload(&repo.path_str(), Some("backup")),
+            "an LFS upload to a path on this machine",
+        );
+        assert_not_blocked(
+            &guard_lfs_transfer(&repo.path_str()),
+            "an LFS download from a path on this machine",
+        );
+
+        set_lfs_url("https://lfs.example.net/o/r");
+        assert!(
+            blocked_message(guard_lfs_upload(&repo.path_str(), Some("backup")))
+                .contains("Offline mode"),
+            "an endpoint that leaves the machine is still refused"
+        );
+        assert!(
+            blocked_message(guard_lfs_transfer(&repo.path_str())).contains("Offline mode"),
+            "an endpoint that leaves the machine is still refused"
+        );
+    }
+
+    /// An LFS transfer the user asked for is the only gate on `lfs_pull` /
+    /// `lfs_fetch`, so — unlike a push, which has its own remote gate in front
+    /// of it — it is NOT waved through for a repository whose `.gitattributes`
+    /// names no filter. It resolves the endpoint and judges that.
+    #[test]
+    fn an_lfs_transfer_is_gated_even_without_a_tracked_pattern() {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://lfs.example.net/o/r.git");
+        let _guard = test_support::offline();
+
+        assert!(
+            blocked_message(guard_lfs_transfer(&repo.path_str())).contains("Offline mode"),
+            "an explicit LFS transfer to another machine is refused"
+        );
     }
 }
