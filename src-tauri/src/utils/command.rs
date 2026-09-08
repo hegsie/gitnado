@@ -42,8 +42,10 @@
 //! `<repo>/.git/worktrees/`. Two mutate only the throwaway tree: the ghost
 //! `git rebase` and, on failure, `git rebase --abort` (which parses nothing —
 //! `let _ = …output()`), both `-C <the temp checkout>`. The remaining two are
-//! reads of that same temp tree, `git diff --name-only --diff-filter=U -z` and
-//! `git log --oneline`, and neither subcommand is in [`LOGGED_SUBCOMMANDS`].
+//! reads, and they read DIFFERENT trees: `git diff --name-only
+//! --diff-filter=U -z` asks the temp checkout which paths are unmerged, while
+//! `git log --oneline` counts `{onto}..HEAD` in the USER'S repository. Neither
+//! subcommand is in [`LOGGED_SUBCOMMANDS`].
 //!
 //! The four that write belong on [`create_command`]. They are still bare only
 //! because the command has no caller today — `previewRebase` in
@@ -828,12 +830,14 @@ mod tests {
         /// ends without one, and its arguments may be built out of this
         /// function's sight.
         terminated: bool,
-        /// Whether an argument was DROPPED because a macro assembles it, so
-        /// `argv` is incomplete. When the macro could be the subcommand the
-        /// site counts as unterminated instead (see above), but a macro AFTER
-        /// a literal subcommand still hides the FORM — and the form is what
-        /// [`is_read_only_form`] judges, so a `git remote <format!(…)>` would
-        /// read as the argument-less listing.
+        /// Whether an argument was DROPPED because the source does not spell
+        /// it out — a macro assembles it (`format!("{}", sub)`) or, far
+        /// commoner, it is a variable (`.arg(&action)`, `.args(&refs)`) — so
+        /// `argv` is incomplete. When such a word could be the subcommand the
+        /// site counts as unterminated instead (see above), but one AFTER a
+        /// literal subcommand still hides the FORM — and the form is what
+        /// [`is_read_only_form`] judges, so a `git remote <action>` would read
+        /// as the argument-less listing.
         unread_argument: bool,
     }
 
@@ -847,6 +851,29 @@ mod tests {
         path.rsplit('/').next().expect("a file name")
     }
 
+    /// The ONE `//!` paragraph of the header containing `anchor`, or `None`
+    /// when the anchor is absent or occurs more than once.
+    ///
+    /// Both the exempted FORMS and the counts that cap them are read out of
+    /// the paragraph that GRANTS the exemption, so the two are scoped
+    /// identically. Read out of the whole header instead, the FIRST occurrence
+    /// of a phrase wins, and a paragraph of unrelated narrative added anywhere
+    /// above it ("historically these files held seven bare commands, of which
+    /// five that write belong on the wrapper") raised every cap without
+    /// touching a single word of the sentence that claims the exemption is
+    /// safe. Refusing an ambiguous anchor rather than picking the first is
+    /// what makes that edit fail here instead of passing.
+    fn header_paragraph<'a>(header: &'a str, anchor: &str) -> Option<&'a str> {
+        const BREAK: &str = "\n//!\n";
+        let at = header.find(anchor)?;
+        if header[at + anchor.len()..].contains(anchor) {
+            return None;
+        }
+        let start = header[..at].rfind(BREAK).map_or(0, |b| b + BREAK.len());
+        let end = header[at..].find(BREAK).map_or(header.len(), |b| at + b);
+        Some(&header[start..end])
+    }
+
     /// A count the module header spells out in words — the `SIX` in "spawns
     /// SIX bare commands" — read out of the prose that justifies an exemption
     /// rather than duplicated here as a magic number.
@@ -856,20 +883,29 @@ mod tests {
     /// in that form — and it is exactly the file where such a spawn gets
     /// written. Capped by the header's own count, adding one means editing the
     /// sentence that claims the exemption is safe.
-    fn declared_count(header: &str, phrase: &str) -> Option<usize> {
+    ///
+    /// `scope` is that sentence's own paragraph (see [`header_paragraph`]),
+    /// never the whole header, and the phrase must occur EXACTLY ONCE inside
+    /// it: an ambiguous read returns `None`, which fails every assertion that
+    /// uses it rather than quietly taking whichever number came first.
+    fn declared_count(scope: &str, phrase: &str) -> Option<usize> {
         const WORDS: [&str; 11] = [
             "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
         ];
         // Read as prose, not line by line: rustfmt wraps these sentences, and
         // "spawns SIX bare commands" is split across two `//!` lines.
-        let prose = header
+        let prose = scope
             .lines()
             .map(|line| line.trim_start_matches("//!").trim())
             .collect::<Vec<_>>()
             .join(" ");
-        prose
-            .split_once(phrase)
-            .and_then(|(before, _)| before.split_whitespace().next_back())
+        let (before, after) = prose.split_once(phrase)?;
+        if after.contains(phrase) {
+            return None;
+        }
+        before
+            .split_whitespace()
+            .next_back()
             .and_then(|word| WORDS.iter().position(|w| w.eq_ignore_ascii_case(word)))
     }
 
@@ -970,6 +1006,11 @@ mod tests {
                     .flatten();
 
                 let mut argv: Vec<String> = Vec::new();
+                // Set while the last literal read was a global option that
+                // takes a SEPARATE value (`-C`, `-c`, `--git-dir`, …), so the
+                // unreadable word that follows is a path or a config pair —
+                // not an argument whose FORM anything here judges.
+                let mut expects_option_value = false;
                 // A statement that names the binding may CONTINUE onto chained
                 // lines that do not — `cmd.arg("-C")` then `.arg(&path)` then
                 // `.arg("log")`. Crediting only lines containing the name read
@@ -990,8 +1031,8 @@ mod tests {
                     .map(|(at, _)| at - index)
                     .unwrap_or(usize::MAX);
                 let mut terminated = false;
-                // Set when an argument is assembled by a macro, so its value
-                // cannot be read from the source at all.
+                // Set when an unreadable argument sits where the subcommand
+                // itself could, so nothing about this site can be judged.
                 let mut opaque_argument = false;
                 // Set whenever such an argument is dropped, wherever it sits.
                 let mut unread_argument = false;
@@ -1032,15 +1073,54 @@ mod tests {
                                 continue;
                             }
                             let inside = &rest[open..close];
-                            if inside.contains('!') {
-                                // A macro: `format!("{}", sub)`. Its literal is
-                                // a TEMPLATE, not an argument word, and the
-                                // real value is built at runtime. That only
-                                // makes the site unjudgeable when it could BE
-                                // the subcommand; after a literal subcommand
-                                // (`log --format=…` then `format!("-{}", n)`)
-                                // only the FORM goes unread — which still
-                                // matters wherever the verdict turns on it.
+                            // Anything OUTSIDE this call's string literals: a
+                            // macro's name (`format!("{}", sub)`), a variable
+                            // (`.arg(&action)`, `.args(&refs)`), or the
+                            // variable items of a MIXED array — `.args(["-C",
+                            // &path, "remote", &action])` harvests as its two
+                            // literals alone, and the words between them leave
+                            // no trace in `argv` at all.
+                            let unread = inside.split('"').step_by(2).any(|outside| {
+                                outside.chars().any(|c| c.is_alphanumeric() || c == '_')
+                            })
+                            // An EMPTY literal is a word passed to git that says
+                            // nothing about what runs, yet it satisfied the "a
+                            // subcommand was read" guard below all on its own —
+                            // leaving the real subcommand free to sit in a
+                            // variable, checked by nothing.
+                            || inside
+                                .split('"')
+                                .skip(1)
+                                .step_by(2)
+                                .any(|token| token.trim().is_empty());
+                            if unread {
+                                // Reading such a word as NO argument is how
+                                // `git remote set-url origin <url>` read as
+                                // the argument-less listing and was waved
+                                // through. Its literals are dropped with it:
+                                // half a call is not a read. The one word that
+                                // is NOT an argument to judge is the VALUE of
+                                // a global option that takes one:
+                                // `.arg("-C")` then `.arg(&path)` names the
+                                // repository, not a form.
+                                //
+                                // Only BEFORE the subcommand: git's global
+                                // options all precede it, so a second `-C`
+                                // written after one is not a global option and
+                                // must not be allowed to forgive the word
+                                // behind it (`remote` `-C` `<action>`).
+                                if expects_option_value
+                                    && !argv.iter().any(|token| !token.starts_with('-'))
+                                {
+                                    expects_option_value = false;
+                                    continue;
+                                }
+                                // Unreadable BEFORE any literal subcommand, it
+                                // could BE the subcommand and the site is
+                                // unjudgeable outright; after one (`log
+                                // --format=…` then `format!("-{}", n)`) only
+                                // the FORM goes unread — which still matters
+                                // wherever the verdict turns on it.
                                 if !argv.iter().any(|token| !token.starts_with('-')) {
                                     opaque_argument = true;
                                 }
@@ -1055,6 +1135,9 @@ mod tests {
                                     .filter(|token| *token != "git")
                                     .map(str::to_string),
                             );
+                            expects_option_value = argv.last().is_some_and(|token| {
+                                GLOBAL_OPTS_WITH_VALUE.contains(&token.as_str())
+                            });
                         }
                     }
                     if terminator.is_some() && mentions_binding {
@@ -1154,39 +1237,44 @@ mod tests {
         // different mutating spawn added to that same file is NOT exempt, and
         // deleting the paragraph fails this test instead of widening it.
         let header = module_header();
-        // The exempted FORMS are read out of the paragraph too, not just the
+        // ONE paragraph, not the rest of the header: reading on meant an
+        // innocent edit to a later paragraph could add a form here and
+        // silently widen the exemption. `header_paragraph` also refuses an
+        // anchor that occurs twice, so the paragraph cannot be impersonated.
+        let exception_paragraph = header_paragraph(&header, "`merge.rs` is a real exception");
+        // The exempted FORMS are read out of that paragraph, not just the
         // file: every ``git <subcommand>`` it quotes. A file-wide exemption hid
         // the ghost `git rebase` from this test entirely, which is exactly the
         // shape it exists to catch.
-        let exception = header
-            .split("`merge.rs` is a real exception")
-            .nth(1)
-            // ONE paragraph, not the rest of the header: reading on meant an
-            // innocent edit to a later paragraph could add a form here and
-            // silently widen the exemption.
-            .and_then(|rest| rest.split("\n//!\n").next())
-            .map(|paragraph| {
-                let forms: Vec<String> = paragraph
-                    .split('`')
-                    .skip(1)
-                    .step_by(2)
-                    .filter_map(|quoted| quoted.strip_prefix("git "))
-                    .filter_map(|rest| rest.split_whitespace().next())
-                    .map(str::to_string)
-                    .collect();
-                ("merge.rs", forms)
-            });
+        let exception = exception_paragraph.map(|paragraph| {
+            let forms: Vec<String> = paragraph
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter_map(|quoted| quoted.strip_prefix("git "))
+                .filter_map(|rest| rest.split_whitespace().next())
+                .map(str::to_string)
+                .collect();
+            ("merge.rs", forms)
+        });
         // File AND form are still not enough: `merge.rs` is precisely the file
         // where the NEXT bare `git rebase` or `git worktree` gets written, and
         // a fifth one inherited this exemption in silence. So the header's own
         // COUNTS cap it — the six spawns the paragraph credits to
         // `preview_rebase`, and the four of them it calls writes.
-        let declared_spawns = declared_count(&header, " bare commands");
-        let declared_writes = declared_count(&header, " that write belong on");
+        // Each count comes out of the paragraph that states it — the spawn
+        // count out of the very paragraph the FORMS above come from — so a
+        // number can only be raised by editing the sentence that grants the
+        // exemption it caps.
+        let declared_spawns =
+            exception_paragraph.and_then(|paragraph| declared_count(paragraph, " bare commands"));
+        let declared_writes = header_paragraph(&header, " that write belong on")
+            .and_then(|paragraph| declared_count(paragraph, " that write belong on"));
         let mut exempted = 0usize;
         // The other exemption — a builder that leaves its function unread — is
         // capped the same way, by the count its own sentence states.
-        let declared_unreadable = declared_count(&header, " spawns run outside");
+        let declared_unreadable = header_paragraph(&header, " spawns run outside")
+            .and_then(|paragraph| declared_count(paragraph, " spawns run outside"));
         let mut unreadable = 0usize;
 
         let sites = bare_git_command_sites();
@@ -1225,10 +1313,11 @@ mod tests {
                     && header.contains("hands it to `execute_git_log`");
                 assert!(
                     acknowledged,
-                    "{}:{}: this spawn's builder leaves the function before it runs (or an \
-                     argument is built by a macro), so the scan cannot read what it runs. Run \
-                     the builder where it is assembled, use literal arguments, or acknowledge \
-                     this file in the header's own sentence about builders that escape.",
+                    "{}:{}: this spawn's builder leaves the function before it runs (or the \
+                     subcommand itself is not a literal), so the scan cannot read what it \
+                     runs. Run the builder where it is assembled, use literal arguments, or \
+                     acknowledge this file in the header's own sentence about builders that \
+                     escape.",
                     site.file, site.line
                 );
                 unreadable += 1;
@@ -1260,15 +1349,17 @@ mod tests {
             let rest: Vec<String> = site.argv[position + 1..].to_vec();
             if is_read_only_form(&subcommand, &rest) {
                 // `is_read_only_form` judges the FORM, so it may only be
-                // trusted when the form was actually read. A macro argument is
+                // trusted when the form was actually read. An argument the
+                // source does not spell out — a macro, or a variable — is
                 // dropped from `argv`, and dropping one is enough to turn
-                // `git remote add <name> <url>` into the argument-less listing
-                // or `git archive --output=<file>` into the stdout stream.
+                // `git remote set-url origin <url>` into the argument-less
+                // listing or `git archive --output=<file>` into the stdout
+                // stream.
                 assert!(
                     !site.unread_argument,
                     "{}:{} reads as a read-only `{subcommand}` ({:?}) only because an argument \
-                     built by a macro could not be read. Pass literal arguments so the form can \
-                     be judged.",
+                     the source does not spell out (a macro, or a variable) could not be read. \
+                     Pass literal arguments so the form can be judged.",
                     site.file, site.line, site.argv
                 );
                 // `argv` is the literals in SOURCE order, which is not always
@@ -1355,9 +1446,10 @@ mod tests {
         assert_eq!(
             unreadable,
             declared_unreadable.unwrap_or(0),
-            "{unreadable} bare spawns hand their builder out of the function (or hide an \
-             argument behind a macro), but the header acknowledges {declared_unreadable:?}. \
-             Assemble and run the new one in the same place, or amend that sentence."
+            "{unreadable} bare spawns hand their builder out of the function (or hide the \
+             subcommand behind a non-literal argument), but the header acknowledges \
+             {declared_unreadable:?}. Assemble and run the new one in the same place, or amend \
+             that sentence."
         );
     }
 
