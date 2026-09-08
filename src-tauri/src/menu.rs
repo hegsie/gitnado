@@ -1,7 +1,8 @@
 //! Native application menu bar.
 //!
 //! Most of Gitnado's feature set (clean, bisect, worktrees, submodules, LFS,
-//! hooks, git configuration, repository health, .gitignore/.gitattributes) was
+//! hooks, remotes, git configuration, repository health,
+//! .gitignore/.gitattributes) was
 //! reachable only by typing into the command palette. A desktop app is expected
 //! to show those commands — and the keys that trigger them — in a menu bar.
 //!
@@ -103,6 +104,12 @@ pub const APP_MENU: &[MenuSection] = &[
             repo_item("fetch", "Fetch"),
             repo_item("pull", "Pull"),
             repo_item("push", "Push"),
+            MenuEntry::Separator,
+            // The three above are refused outright for a repository with no
+            // remote, and that refusal tells the user to add one — so the
+            // dialog that adds one belongs beside them, not only in the
+            // command palette, which is where it used to live alone.
+            repo_item("remotes", "Remotes…"),
             MenuEntry::Separator,
             repo_item("clean", "Clean Working Directory…"),
             repo_item("bisect", "Bisect…"),
@@ -410,6 +417,7 @@ mod tests {
             "fetch",
             "pull",
             "push",
+            "remotes",
             "clean",
             "bisect",
             "worktrees",

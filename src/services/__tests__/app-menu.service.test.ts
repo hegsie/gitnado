@@ -117,6 +117,7 @@ describe('app-menu service', () => {
         'fetch',
         'pull',
         'push',
+        'remotes',
         'clean',
         'bisect',
         'worktrees',

@@ -45,6 +45,7 @@ import type { LvContextDashboard } from '../lv-context-dashboard.ts';
 import { repositoryStore } from '../../../stores/repository.store.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
 import { uiStore } from '../../../stores/ui.store.ts';
+import { dialogs } from '../../../stores/dialog.store.ts';
 import { progressService } from '../../../services/progress.service.ts';
 import { runFetch } from '../../../services/remote-operations.service.ts';
 import { resetRefOpLocks } from '../../../utils/ref-lock.ts';
@@ -69,11 +70,17 @@ const REPO = {
  * `remotes` defaults to one, because these three buttons are unavailable
  * without one — the toolbar's identical copies always said so, and now these
  * do too. A test about the empty case passes `[]` explicitly.
+ *
+ * `remotesLoaded` says those remotes are an ANSWER from git rather than the
+ * empty list the store seeds a tab with, which is what these buttons key off:
+ * see `knownToHaveNoRemote`. `loaded: false` is the "nobody has asked yet"
+ * case.
  */
 async function dashboard(
   remotes: Array<{ name: string; url: string }> = [
     { name: 'origin', url: 'https://example.test/o/r.git' },
   ],
+  options: { loaded?: boolean } = {},
 ): Promise<LvContextDashboard> {
   repositoryStore.setState({
     openRepositories: [
@@ -82,6 +89,7 @@ async function dashboard(
         branches: [],
         currentBranch: null,
         remotes,
+        remotesLoaded: options.loaded ?? true,
         tags: [],
         stashes: [],
       },
@@ -289,6 +297,37 @@ describe('dashboard remote operations', () => {
       expect(toast.type).to.equal('warning');
       expect(toast.message).to.contain('No remote configured');
     }
+  });
+
+  it('leaves the buttons available while the remotes have not been read', async () => {
+    // The store seeds `remotes: []` on every tab it opens, before anything has
+    // asked git. Reading that seed as an answer greyed these three out on
+    // every freshly opened repository until `get_remotes` came back.
+    const el = await dashboard([], { loaded: false });
+
+    const buttons = Array.from(
+      el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.remote-btn'),
+    );
+    expect(buttons, 'Fetch, Pull and Push').to.have.lengthOf(3);
+    for (const btn of buttons) {
+      expect(btn.disabled, `${btn.textContent?.trim()} is still offered`).to.equal(false);
+    }
+  });
+
+  it('offers the way to add a remote beside the refusal', async () => {
+    // The message says "add one first"; the Remotes dialog it means was
+    // reachable only by knowing the command palette carries it.
+    const el = await dashboard([]);
+    uiStore.setState({ toasts: [] });
+    dialogs.close('remotes');
+
+    await (el as any).handleFetch();
+
+    const toast = uiStore.getState().toasts.at(-1);
+    expect(toast?.action?.label).to.contain('Add a remote');
+    toast!.action!.callback();
+    expect(dialogs.isOpen('remotes'), 'and it opens the Remotes dialog').to.equal(true);
+    dialogs.close('remotes');
   });
 
   it('leaves the buttons available once a remote exists', async () => {

@@ -126,6 +126,12 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
       pull: null,
       push: null,
     });
+    // An empty list is only an ANSWER once `get_remotes` has come back: the
+    // store seeds every tab with one before anything asks, and "not read yet"
+    // must not be read as "no remote". The button going grey is that answer
+    // landing, so settling on it here is what stops the presses below from
+    // racing the round trip.
+    await expect(page.locator('lv-toolbar').getByRole('button', { name: /Fetch/i })).toBeDisabled();
   });
 
   test('all three are disabled and say why', async ({ page }) => {
@@ -203,6 +209,18 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     await expect(page.locator('.toast.warning')).toContainText('No remote configured');
     expect(await findCommand(page, 'fetch')).toHaveLength(0);
     await expect(page.locator('.progress-message')).toHaveCount(0);
+  });
+
+  test('the refusal carries the way to do what it asks', async ({ page }) => {
+    // "add one first" named a remedy whose only route was knowing that the
+    // command palette carries "Manage remotes".
+    await page.keyboard.press('Control+Shift+F');
+
+    const toast = page.locator('.toast.warning');
+    await expect(toast).toContainText('No remote configured');
+    await toast.locator('.toast-action-btn').click();
+
+    await expect(page.locator('lv-remote-dialog')).toBeVisible();
   });
 
   test('the native Repository menu items refuse instead of running', async ({ page }) => {
@@ -1233,5 +1251,131 @@ test.describe('Cancelling a remote operation', () => {
     await expect(row).toContainText('40%');
     await expect(row).toContainText('400 / 1,000 objects');
     await expect(row).toContainText('1.00 MiB');
+  });
+});
+
+
+/**
+ * The remote the refusal asks for, actually added.
+ *
+ * `remotes` in the repository store is what greys the three buttons out and
+ * what the runner refuses on, and it used to be written only when a tab was
+ * activated or a session restored. So a user could do exactly what the refusal
+ * told them to — add a remote in the Remotes dialog — and every surface in the
+ * app went on insisting the repository had none until they closed and reopened
+ * the tab. Removing the last remote had the mirror problem: the buttons stayed
+ * bright and the operation ended in git's own "remote 'origin' does not
+ * exist", the dead end the refusal exists to remove.
+ */
+test.describe('remotes added and removed through the Remotes dialog', () => {
+  const ORIGIN = { name: 'origin', url: 'https://example.test/o/r.git', pushUrl: null };
+
+  /**
+   * A `get_remotes` that answers with what has actually been added or removed,
+   * so the dialog's own add/remove is what gives this repository a remote —
+   * seeding the store field directly is exactly what hid this bug.
+   */
+  async function statefulRemotes(
+    page: Page,
+    initial: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    await page.evaluate((seed) => {
+      const internals = (window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+      }).__TAURI_INTERNALS__;
+      const inner = internals.invoke;
+      let remotes = [...seed];
+      internals.invoke = async (command: string, args?: unknown) => {
+        if (command === 'get_remotes' || command === 'add_remote' || command === 'remove_remote') {
+          const captured = (window as unknown as {
+            __INVOKED_COMMANDS__?: { command: string; args: unknown }[];
+          }).__INVOKED_COMMANDS__;
+          if (captured) captured.push({ command, args });
+          const a = (args ?? {}) as { name?: string; url?: string };
+          if (command === 'add_remote') {
+            remotes = [...remotes, { name: a.name, url: a.url, pushUrl: null }];
+            return null;
+          }
+          if (command === 'remove_remote') {
+            remotes = remotes.filter((r) => (r as { name?: string }).name !== a.name);
+            return null;
+          }
+          return remotes;
+        }
+        return inner(command, args);
+      };
+    }, initial);
+  }
+
+  function toolbarFetch(page: Page) {
+    return page.locator('lv-toolbar').getByRole('button', { name: /Fetch/i });
+  }
+
+  async function openRemotesDialog(page: Page): Promise<void> {
+    await openViaCommandPalette(page, 'Manage remotes');
+    await page.locator('lv-remote-dialog').waitFor({ state: 'visible' });
+  }
+
+  async function closeRemotesDialog(page: Page): Promise<void> {
+    await page.locator('lv-remote-dialog .close-btn').click();
+    await expect(page.locator('lv-remote-dialog')).toBeHidden();
+  }
+
+  test('adding the first remote makes Fetch work, with no reopening', async ({ page }) => {
+    await setupOpenRepository(page, { remotes: [] });
+    await startCommandCaptureWithMocks(page, { fetch: null, pull: null, push: null });
+    await statefulRemotes(page, []);
+
+    await expect(toolbarFetch(page), 'nowhere to fetch from, to begin with').toBeDisabled();
+
+    await openRemotesDialog(page);
+    const dialog = page.locator('lv-remote-dialog');
+    await dialog.getByRole('button', { name: /add remote/i }).click();
+    await dialog.locator('input').first().fill('origin');
+    await dialog.locator('input').nth(1).fill('https://example.test/o/r.git');
+    await dialog.getByRole('button', { name: /^save$/i }).click();
+    await waitForCommand(page, 'add_remote');
+    await closeRemotesDialog(page);
+
+    await expect(toolbarFetch(page), 'the surfaces agree the remote exists').toBeEnabled();
+    await expect(toolbarFetch(page)).toHaveAttribute('title', /Fetch from remote/);
+    await expect(
+      page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i }),
+    ).toBeEnabled();
+
+    // And the shortcut, which has no button to grey out, really fetches now.
+    await page.keyboard.press('Control+Shift+F');
+    await waitForCommand(page, 'fetch');
+    await expect(page.locator('.toast.warning')).toHaveCount(0);
+  });
+
+  test('removing the last remote puts the refusal back', async ({ page }) => {
+    await setupOpenRepository(page);
+    await startCommandCaptureWithMocks(page, {
+      fetch: null,
+      'plugin:dialog|confirm': true,
+      'plugin:dialog|ask': true,
+    });
+    await statefulRemotes(page, [ORIGIN]);
+
+    await expect(toolbarFetch(page)).toBeEnabled();
+
+    await openRemotesDialog(page);
+    const dialog = page.locator('lv-remote-dialog');
+    await dialog
+      .locator('button[title*="Delete"], button[title*="Remove"], button[aria-label*="delete"]')
+      .first()
+      .click();
+    await waitForCommand(page, 'remove_remote');
+    await closeRemotesDialog(page);
+
+    await expect(toolbarFetch(page), 'and the buttons stop offering it').toBeDisabled();
+    await expect(toolbarFetch(page)).toHaveAttribute('title', /no remote configured/);
+
+    // The shortcut is refused in the app's own words rather than by git.
+    await page.keyboard.press('Control+Shift+F');
+    await expect(page.locator('.toast.warning')).toContainText('No remote configured');
+    expect(await findCommand(page, 'fetch'), 'nothing reached git').toHaveLength(0);
+    await expect(page.locator('.toast.error')).toHaveCount(0);
   });
 });

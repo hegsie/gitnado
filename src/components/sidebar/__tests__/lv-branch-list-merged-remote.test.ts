@@ -30,6 +30,8 @@ const invokeCalls: Array<{ command: string; args?: unknown }> = [];
 import { expect, fixture, html } from '@open-wc/testing';
 import type { LvBranchList } from '../lv-branch-list.ts';
 import '../lv-branch-list.ts';
+import { repositoryStore } from '../../../stores/repository.store.ts';
+import type { Repository } from '../../../types/git.types.ts';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const REPO_PATH = '/test/repo';
@@ -335,5 +337,91 @@ describe('lv-branch-list remote-branch operations use the full ref', () => {
 
     const call = invokeCalls.find((c) => c.command === 'merge');
     expect((call!.args as { sourceRef: string }).sourceRef).to.equal('feature/x');
+  });
+});
+
+/**
+ * The remotes this panel loads are STORE data too.
+ *
+ * Every `loadBranches()` asks git for the remotes (remote branches are grouped
+ * by them) and used to drop the answer on the floor — while the store field it
+ * would have filled, the one that decides whether Fetch/Pull/Push are offered
+ * at all, had a single writer that runs only when a tab is activated.
+ */
+describe('lv-branch-list mirrors the remotes it loads', () => {
+  const ORIGIN = { name: 'origin', url: 'https://example.test/o/r.git', pushUrl: null };
+
+  function openRepo(): void {
+    repositoryStore.getState().addRepository({
+      path: REPO_PATH,
+      name: 'repo',
+      isValid: true,
+      isBare: false,
+      headRef: 'refs/heads/main',
+      detachedHeadOid: null,
+      state: 'clean',
+      isShallow: false,
+      isPartialClone: false,
+      cloneFilter: null,
+    } satisfies Repository);
+  }
+
+  function storedRepo() {
+    return repositoryStore.getState().openRepositories[0];
+  }
+
+  async function mount(remotes: () => Promise<unknown>): Promise<LvBranchList> {
+    mockInvoke = (command: string) => {
+      if (command === 'get_branches') return Promise.resolve([]);
+      if (command === 'get_remotes') return remotes();
+      if (command === 'get_hidden_branches') return Promise.resolve([]);
+      if (command === 'get_branch_sort_mode') return Promise.resolve('name');
+      if (command === 'get_cleanup_candidates') return Promise.resolve([]);
+      return Promise.resolve(null);
+    };
+    const el = await fixture<LvBranchList>(
+      html`<lv-branch-list .repositoryPath=${REPO_PATH}></lv-branch-list>`,
+    );
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 0));
+    await el.updateComplete;
+    return el;
+  }
+
+  beforeEach(() => {
+    repositoryStore.getState().reset();
+  });
+
+  afterEach(() => {
+    repositoryStore.getState().reset();
+  });
+
+  it('writes them into the open repository instead of discarding them', async () => {
+    openRepo();
+
+    await mount(() => Promise.resolve([ORIGIN]));
+
+    expect(storedRepo().remotes, 'the answer reached the store').to.have.lengthOf(1);
+    expect(storedRepo().remotesLoaded, 'and counts as an answer').to.equal(true);
+  });
+
+  it('records an empty answer as an answer', async () => {
+    openRepo();
+
+    await mount(() => Promise.resolve([]));
+
+    expect(storedRepo().remotes).to.deep.equal([]);
+    expect(storedRepo().remotesLoaded).to.equal(true);
+  });
+
+  it('leaves the store alone when the read fails', async () => {
+    // A failed read is not "no remotes": writing an empty list here would tell
+    // every remote surface the repository has nowhere to push.
+    openRepo();
+    repositoryStore.getState().updateRepoData(REPO_PATH, { remotes: [ORIGIN] });
+
+    await mount(() => Promise.reject(new Error('cannot read config')));
+
+    expect(storedRepo().remotes, 'the last known answer survives').to.have.lengthOf(1);
   });
 });

@@ -30,7 +30,8 @@ import type { LvSearchBar, SearchFilter } from './lv-search-bar.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
 import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
 import {
-  hasConfiguredRemote,
+  addRemoteToastAction,
+  knownToHaveNoRemote,
   noRemoteButtonLabel,
   NO_REMOTE_MESSAGE,
 } from '../../utils/remote-availability.ts';
@@ -799,7 +800,11 @@ export class LvToolbar extends LitElement {
     // Shared with the context dashboard's copies of these three buttons, so
     // the two surfaces cannot disagree about whether a repository has anywhere
     // to fetch from — or about how to say that it has not.
-    if (!hasConfiguredRemote(repo)) {
+    // Only once the remotes have actually been READ: `remotes: []` is also
+    // what the store holds for the moment between opening the tab and
+    // `get_remotes` answering, and greying the three buttons out over that
+    // gap told every freshly opened repository it had no remote.
+    if (knownToHaveNoRemote(repo)) {
       return { disabled: true, idle: false, count: 0, label: noRemoteButtonLabel(name) };
     }
 
@@ -884,8 +889,11 @@ export class LvToolbar extends LitElement {
       showToast('Please open a repository first', 'warning');
       return;
     }
-    if (!hasConfiguredRemote(repo)) {
-      showToast(NO_REMOTE_MESSAGE, 'warning');
+    if (knownToHaveNoRemote(repo)) {
+      // Carrying the route to the remedy the message names — this surface is
+      // always the active repository, so the Remotes dialog it opens is this
+      // repository's.
+      showToast(NO_REMOTE_MESSAGE, 'warning', 5000, addRemoteToastAction());
       return;
     }
     this.dispatchEvent(

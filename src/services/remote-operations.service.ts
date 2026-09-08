@@ -50,7 +50,11 @@ import { showErrorWithSuggestion } from './error-suggestion.service.ts';
 import { showToast } from './notification.service.ts';
 import { repositoryStore } from '../stores/repository.store.ts';
 import { uiStore } from '../stores/ui.store.ts';
-import { hasConfiguredRemote, NO_REMOTE_MESSAGE } from '../utils/remote-availability.ts';
+import {
+  addRemoteToastAction,
+  knownToHaveNoRemote,
+  NO_REMOTE_MESSAGE,
+} from '../utils/remote-availability.ts';
 import {
   tryAcquirePush,
   releasePush,
@@ -216,26 +220,41 @@ function claimLocks(
  * carries a pinned path from the push-rejection suggestion toast, and every
  * one of these operations can outlive a tab switch.
  *
- * A path that is not open is left alone. Nothing is known about the remotes of
- * a repository the app has not loaded, and refusing on an absence would turn
- * "not loaded yet" into "no remote" — so the rule is only ever applied to a
- * repository whose remotes have actually been read.
+ * A path that is not open is left alone, and so is one whose remotes have not
+ * been READ yet: nothing is known about the remotes of a repository the app
+ * has not asked git about, and refusing on an absence would turn "not loaded
+ * yet" into "no remote". `remotesLoaded` is what distinguishes the two — the
+ * store seeds `remotes: []` on every tab it opens, so the value alone cannot
+ * (`knownToHaveNoRemote`).
+ *
+ * That the store's copy is kept CURRENT is the other half: the field is
+ * rewritten by `app-shell`'s `handleRefresh`, which every remote change goes
+ * through (the Remotes dialog's add/rename/remove all raise `remotes-changed`,
+ * which app-shell answers with a refresh). Without that, adding the remote
+ * this refusal asks for would leave the refusal in force.
  *
  * Returns true when the operation must not start; the caller has already been
  * told why.
  */
 function refuseWithoutRemote(repoPath: string): boolean {
-  const repo = repositoryStore
-    .getState()
-    .openRepositories.find((r) => r.repository.path === repoPath);
-  if (!repo || hasConfiguredRemote(repo)) return false;
+  const state = repositoryStore.getState();
+  const repo = state.openRepositories.find((r) => r.repository.path === repoPath);
+  if (!knownToHaveNoRemote(repo)) return false;
 
   // One toast per burst, not one per key repeat: `keyboardService` has no
   // `e.repeat` guard, so HOLDING Ctrl+Shift+F asks many times a second and
   // every ask is refused (unlike the busy case, where the first one wins the
   // lock). While the refusal is still on screen, saying it again adds nothing.
   const showing = uiStore.getState().toasts.some((t) => t.message === NO_REMOTE_MESSAGE);
-  if (!showing) showToast(NO_REMOTE_MESSAGE, 'warning');
+  if (!showing) {
+    // The Remotes dialog is bound to the ACTIVE repository, so the route to
+    // the remedy is only offered when the refused repository IS the active one
+    // — `handlePull` can carry a path pinned from a push-rejection suggestion,
+    // and opening some other repository's remotes would be worse than not
+    // offering the button at all.
+    const isActive = state.getActiveRepository()?.repository.path === repoPath;
+    showToast(NO_REMOTE_MESSAGE, 'warning', 5000, isActive ? addRemoteToastAction() : undefined);
+  }
   return true;
 }
 
