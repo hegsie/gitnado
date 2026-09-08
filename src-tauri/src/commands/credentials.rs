@@ -817,11 +817,21 @@ fn credential_target(remote_url: &str) -> CredentialTarget {
     } else {
         target.scheme.unwrap_or_else(|| "https".to_string())
     };
-    let login = target.user.as_deref().unwrap_or("git");
+    // A remote that names no login is handed to `ssh` as the BARE host, which
+    // is what git does with it: `ssh` then applies the `User` its own config
+    // has for that host. Substituting `git` probed a different account than the
+    // remote authenticates as — and the remote whose login lives in
+    // `~/.ssh/config` rather than in the URL (`gitserver:team/app.git`, the
+    // scp-like form with the login left off) is exactly the one that has none
+    // to read here.
+    let ssh_destination = match target.user.as_deref() {
+        Some(login) => format!("{}@{}", login, target.host),
+        None => target.host.clone(),
+    };
 
     CredentialTarget {
         protocol,
-        ssh_destination: format!("{}@{}", login, target.host),
+        ssh_destination,
         display_host,
         port: target.port,
         resolved: true,
@@ -1344,6 +1354,45 @@ mod tests {
         assert_eq!(target.ssh_destination, "~deploy@git.example.test");
     }
 
+    /// A remote whose login lives in `~/.ssh/config` is ssh, and is probed as
+    /// the bare host.
+    ///
+    /// `gitserver:team/app.git` is git's scp form with the login left off —
+    /// what a `Host` alias leaves behind. `parse_target` did not recognise it,
+    /// so this fell to the malformed branch: no `://` meant `url_scheme` found
+    /// nothing and `https` was substituted, `resolved` stayed false, and the
+    /// `protocol == "ssh" && resolved` gate skipped the ssh probe entirely.
+    /// `git credential fill` was asked `protocol=https host=gitserver:team/app.git`
+    /// and the panel drew a red ✗ "No Credentials Found" over "Protocol: https"
+    /// for a remote that works.
+    #[test]
+    fn an_scp_remote_with_no_login_is_probed_over_ssh_as_the_bare_host() {
+        let target = credential_target("gitserver:team/app.git");
+        assert_eq!(target.protocol, "ssh");
+        assert!(target.resolved, "the ssh probe is gated on `resolved`");
+        assert!(!target.is_path(), "an ssh remote is not a local path");
+        assert_eq!(target.display_host, "gitserver");
+        // The BARE host: with no login named, `ssh gitserver` applies the
+        // `User` that `~/.ssh/config` has for the alias — the account git
+        // itself will use. `git@gitserver` probes a different one.
+        assert_eq!(target.ssh_destination, "gitserver");
+        assert_eq!(target.port, None);
+        // ...and the destination is the host the gate judged, as ever.
+        assert_eq!(
+            Some(target.display_host.as_str()),
+            crate::services::security::url_host("gitserver:team/app.git").as_deref()
+        );
+    }
+
+    /// A login the remote DOES name is still the login ssh is given.
+    #[test]
+    fn a_named_login_still_reaches_the_ssh_probe() {
+        assert_eq!(
+            credential_target("deploy@gitserver:team/app.git").ssh_destination,
+            "deploy@gitserver"
+        );
+    }
+
     /// A UNC share is reported as the path it is — not as an invented https
     /// host, and above all not as one whose credential the Erase button then
     /// deletes.
@@ -1407,6 +1456,8 @@ mod tests {
             "file://localhost/srv/git/repo.git",
             "file://server/share/repo.git",
             "~deploy@git.example.test:team/app.git",
+            // ...and the same form with the login left to `~/.ssh/config`.
+            "gitserver:team/app.git",
             "https://github.com/o/r.git",
             "git@github.com:o/r.git",
         ] {
