@@ -27,6 +27,32 @@ function dashboardButton(page: import('@playwright/test').Page, name: RegExp) {
   return page.locator('lv-context-dashboard').getByRole('button', { name });
 }
 
+/**
+ * Open a SECOND repository and make it the active tab, the way the welcome
+ * screen and the session restore do — through the repository store.
+ */
+async function addRepo(page: Page, path: string, name: string): Promise<void> {
+  await page.evaluate(
+    ({ path, name }) => {
+      const stores = (window as unknown as Record<string, unknown>).__GITNADO_STORES__ as {
+        repositoryStore: { getState: () => { addRepository: (repo: unknown) => void } };
+      };
+      stores.repositoryStore.getState().addRepository({
+        path,
+        name,
+        isValid: true,
+        isBare: false,
+        headRef: 'main',
+        state: 'clean',
+        isShallow: false,
+        isPartialClone: false,
+        cloneFilter: null,
+      });
+    },
+    { path, name }
+  );
+}
+
 // ============================================================================
 // Helper function to create branches with ahead/behind status
 // ============================================================================
@@ -263,6 +289,47 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     await expect(page.locator('.toast.warning')).toContainText('No remote configured');
     expect(await findCommand(page, 'push')).toHaveLength(0);
     await expect(page.locator('.progress-message')).toHaveCount(0);
+  });
+
+  /**
+   * TWO repositories with no remote, refused one after the other.
+   *
+   * The refusal is said once per burst so that a held-down Ctrl+Shift+F does
+   * not bury the screen — but it also carries a button pinned to ONE
+   * repository. Held back on the words alone, the second repository's refusal
+   * was discarded as a repeat of the first's, and the button still on screen
+   * belonged to the repository the user had switched away from: pressing it
+   * offered to add a remote to the wrong one.
+   */
+  test('a refusal on a second repository is not answered with the first one’s remedy', async ({
+    page,
+  }) => {
+    const warnings = page.locator('.toast.warning');
+
+    // The race window between a render and the click — the click the disabled
+    // button never dispatches, which is why this is `dispatchEvent`.
+    await dashboardButton(page, /Fetch/i).dispatchEvent('click');
+    await expect(warnings).toHaveCount(1);
+    await expect(warnings.first(), 'the refusal names its repository').toContainText('test-repo');
+
+    // A second repository, with no remote either, becomes the active tab
+    // while the first refusal is still on screen.
+    await addRepo(page, '/tmp/other-repo', 'other-repo');
+    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute(
+      'title',
+      '/tmp/other-repo'
+    );
+    await expect(dashboardButton(page, /Fetch/i)).toBeDisabled();
+
+    await dashboardButton(page, /Fetch/i).dispatchEvent('click');
+
+    await expect(warnings, 'the second repository is answered too').toHaveCount(2);
+    await expect(warnings.nth(1)).toContainText('other-repo');
+    expect(await findCommand(page, 'fetch'), 'and neither reached git').toHaveLength(0);
+
+    // The remedy beside it belongs to the repository it names.
+    await warnings.nth(1).locator('.toast-action-btn').click();
+    await expect(page.locator('lv-remote-dialog')).toBeVisible();
   });
 });
 

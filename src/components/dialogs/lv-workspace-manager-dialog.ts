@@ -934,8 +934,8 @@ export class LvWorkspaceManagerDialog extends LitElement {
    * summary instead of a toast per repo — so they do not inherit its refusal
    * and have to ask for themselves. Without it a workspace holding one
    * remoteless repository reported an unexplained, unnamed failure for it,
-   * while the very same repository said "No remote configured for this
-   * repository — add one first." from the toolbar.
+   * while the very same repository said "No remote configured for <repo> —
+   * add one first." from the toolbar.
    *
    * `get_remotes` is a local read (no network), and it runs immediately before
    * a network call this repository would otherwise fail.
