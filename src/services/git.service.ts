@@ -76,6 +76,66 @@ async function resolveRemotePushUrl(repoPath: string, remote?: string): Promise<
  * Returns null when allowed, or the reason it was refused.
  */
 /**
+ * The host of a scp-like `[user@]host:path` target, or null when the string is
+ * not that form.
+ *
+ * Mirrors `split_scp_like` / `scp_like_host` in
+ * `src-tauri/src/services/security.rs`, bracketed IPv6 literal included; any
+ * change to either half has to move both, exactly as `isLocalTarget` and
+ * `is_local_target` already do.
+ *
+ * git (`connect.c`, `url_is_local_not_ssh`) reads a target as scp-like as soon
+ * as a colon comes before any slash, and the LOGIN IS OPTIONAL:
+ * `gitserver:team/app.git` is an ssh remote, and it is the spelling an
+ * `~/.ssh/config` `Host` alias leaves behind. Requiring `user@` here resolved
+ * that remote to no host at all, so the gate refused every fetch, pull and push
+ * to it — `Remote "gitserver:team/app.git" is not in your allowlist`, with no
+ * entry that could ever have named it.
+ *
+ * Three guards keep the widened form off what is not a remote at all:
+ *
+ * - the login is read only from AHEAD of the separating colon, so the `@` in
+ *   `gitserver:x@evil.test:y` belongs to the PATH — git reads that as the path
+ *   `x@evil.test:y` on `gitserver`, and so does the backend half;
+ * - neither separator may appear in the host, so `./x:y` and `.\x:y` stay
+ *   relative paths;
+ * - with no login to say otherwise, a one-letter authority is a Windows drive
+ *   (`C:\repos\app.git`, `c:x`), which git carves out too.
+ */
+function scpLikeHost(value: string): string | null {
+  const trimmed = value.trim();
+  // Step for step the same walk as `split_scp_like`, rather than one regex
+  // that has to be read twice to see that it agrees with it: the two halves
+  // have to answer alike for every string, and a backtracking alternation
+  // quietly did not (`x@:y` matched the host `x@` here while the Rust half
+  // declined it).
+  const delimiter = /[@:/]/.exec(trimmed);
+  let login: string | null = null;
+  let rest = trimmed;
+  if (delimiter && delimiter[0] === '@') {
+    // `@host:path` names an empty login: not a form git accepts.
+    if (delimiter.index === 0) return null;
+    login = trimmed.slice(0, delimiter.index);
+    rest = trimmed.slice(delimiter.index + 1);
+  }
+  // A bracketed IPv6 literal carries colons of its own; only one AFTER the
+  // closing bracket separates the host from the path.
+  let colon: number;
+  if (rest.startsWith('[')) {
+    const close = rest.indexOf(']');
+    if (close < 0) return null;
+    colon = rest.indexOf(':', close);
+  } else {
+    colon = rest.indexOf(':');
+  }
+  if (colon <= 0) return null;
+  const host = rest.slice(0, colon);
+  if (host.includes('/') || host.includes('\\')) return null;
+  if (login === null && /^[A-Za-z]$/.test(host)) return null;
+  return host.toLowerCase();
+}
+
+/**
  * Whether a target is a place on THIS machine — a filesystem path or a
  * host-less `file://` URL.
  *
@@ -116,7 +176,7 @@ function isLocalTarget(target: string): boolean {
     }
   }
   // A scheme, or the scp-like form, means a transport — never a path.
-  if (trimmed.includes('://') || /^[^@/]+@(\[[^\]/]+\]|[^:/\[][^:/]*):/.test(trimmed)) {
+  if (trimmed.includes('://') || scpLikeHost(trimmed) !== null) {
     return false;
   }
   return (
@@ -590,7 +650,8 @@ export async function openRepository(
 /**
  * Host of a clone URL. Covers the forms the clone dialog accepts:
  * `https://host/path`, `ssh://git@host/path`, and the scp-like
- * `git@host:owner/repo.git`.
+ * `[user@]host:owner/repo.git` — whose login `scpLikeHost` reads as optional,
+ * because git does.
  *
  * Matching on the host — not on a substring of the whole URL, as this used to —
  * keeps a stored token off a look-alike host (`github.com.example.net`) and off
@@ -611,8 +672,7 @@ function cloneUrlHost(url: string): string | null {
     // from path. The unbracketed alternative refuses a leading `[` so a
     // half-written literal falls through to the caller's `https://` fallback
     // rather than being read as a host that is not one.
-    const scpLike = /^[^@/]+@(\[[^\]/]+\]|[^:/[][^:/]*):/.exec(trimmed);
-    return scpLike ? scpLike[1].toLowerCase() : null;
+    return scpLikeHost(trimmed);
   }
   try {
     return new URL(trimmed).hostname.toLowerCase();

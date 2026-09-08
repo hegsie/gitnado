@@ -288,6 +288,84 @@ describe('network security gate', () => {
       expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
     });
 
+    // git's scp-like form is `[user@]host:path` and the LOGIN IS OPTIONAL —
+    // `gitserver:team/app.git` is an ssh remote, and it is what an
+    // `~/.ssh/config` `Host` alias leaves in the config. Requiring the `@`
+    // read no host at all here, so every fetch, pull and push to that remote
+    // was refused with `Remote "gitserver:team/app.git" is not in your
+    // allowlist` — naming a remote no entry the user could write would ever
+    // have covered.
+    it('matches an scp-form remote whose login is left to ~/.ssh/config', async () => {
+      mockRemotes('gitserver:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['gitserver'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'the allowlist names this exact host').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    it('still refuses a login-less scp remote that is not on the list', async () => {
+      mockRemotes('gitserver:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['elsewhere.test'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'a host the list does not name').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+    });
+
+    // ...and the `@` AFTER the separating colon belongs to the PATH, exactly as
+    // git reads it: `gitserver:x@evil.test:y` is the path `x@evil.test:y` on
+    // `gitserver`. Reading the first `@` in the whole string judged the host
+    // `evil.test`, which git never contacts — the login-less spelling of the
+    // smuggling case the `git@github.com:x@evil.test:y` tests already pin.
+    it('reads a login-less scp remote whose PATH contains an @ on its own host', async () => {
+      mockRemotes('gitserver:x@evil.test:y');
+      settingsStore.setState({ remoteAllowlist: ['evil.test'] });
+
+      const refused = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(refused.success, 'evil.test is in the path, not the host').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+
+      settingsStore.setState({ remoteAllowlist: ['gitserver'] });
+      const allowed = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(allowed.success, 'gitserver is the host git contacts').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    // Widening the scp form necessarily narrows what counts as a PATH — the
+    // gate skips both settings for anything that never leaves the machine, and
+    // a Windows drive or a relative path must not be dragged out of that
+    // carve-out by the change above.
+    it('leaves a Windows drive path and a relative path local', async () => {
+      settingsStore.setState({ offlineMode: true });
+
+      for (const url of ['C:\\repos\\app.git', 'C:/repos/app.git', './sub/repo.git', '.\\x:y']) {
+        mockRemotes(url);
+        invokeHistory.length = 0;
+
+        const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+        expect(result.success, `${url} never leaves the machine`).to.not.equal(false);
+        expect(invokeHistory.some((c) => c.command === 'fetch'), url).to.equal(true);
+      }
+    });
+
+    // ...while the alias remote itself DOES leave the machine, so offline mode
+    // goes on refusing it.
+    it('still blocks a login-less scp remote under offline mode', async () => {
+      mockRemotes('gitserver:team/app.git');
+      settingsStore.setState({ offlineMode: true });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success).to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+    });
+
     it('still refuses a bracketed IPv6 remote that is not on the list', async () => {
       mockRemotes('git@[2001:db8::2]:team/app.git');
       settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });

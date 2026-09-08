@@ -218,7 +218,7 @@ pub fn global() -> &'static SecurityState {
 /// Host of a URL, covering the forms git accepts.
 ///
 /// Mirrors `cloneUrlHost` in `src/services/git.service.ts`: `https://host/path`,
-/// `ssh://git@host/path`, and the scheme-less scp-like `git@host:owner/repo.git`
+/// `ssh://git@host/path`, and the scheme-less scp-like `[user@]host:owner/repo.git`
 /// that no URL parser accepts. Matching on the HOST rather than on a substring
 /// of the whole URL is the point — `https://github.com.evil.test/x.git`
 /// literally contains `github.com`.
@@ -230,31 +230,70 @@ pub fn url_host(url: &str) -> Option<String> {
     parse_url_target(trimmed).map(|target| target.host)
 }
 
-/// `user@host:path` — the scp-like form. The frontend's
-/// `/^[^@\/]+@(\[[^\]\/]+\]|[^:\/\[][^:\/]*):/` is the same rule, bracketed
-/// IPv6 literal included.
+/// `[user@]host:path` — the scp-like form. The frontend's `scpLikeHost` is the
+/// same rule, bracketed IPv6 literal included.
 ///
-/// That parenthesis used to read `([^:\/]+)` there, and the comment here
-/// claimed it "declines rather than mis-reads" the bracketed form. It did not:
-/// it stopped at the first colon INSIDE the literal, so
-/// `git@[2001:db8::1]:team/app.git` resolved to `[2001` while this half
-/// resolved the whole `[2001:db8::1]`. The two gates then disagreed in the
-/// direction that cannot be worked around — the backend allowed the remote and
-/// the frontend refused it first, naming a remote the allowlist did name, and
-/// no entry could make it pass. Any change to either half has to move both.
+/// Its parenthesis used to read `([^:\/]+)`, and the comment here claimed it
+/// "declines rather than mis-reads" the bracketed form. It did not: it stopped
+/// at the first colon INSIDE the literal, so `git@[2001:db8::1]:team/app.git`
+/// resolved to `[2001` while this half resolved the whole `[2001:db8::1]`. The
+/// two gates then disagreed in the direction that cannot be worked around — the
+/// backend allowed the remote and the frontend refused it first, naming a
+/// remote the allowlist did name, and no entry could make it pass. Any change
+/// to either half has to move both.
 ///
-/// The host is the one after the FIRST `@` and before the FIRST `:`, which is
-/// how git reads this form: `git@github.com:x@evil.test:y` is the path
-/// `x@evil.test:y` on `github.com`, not a repository on `evil.test`.
+/// The login is OPTIONAL, exactly as it is to git: `gitserver:team/app.git` is
+/// an ssh remote, and it is the spelling an `~/.ssh/config` `Host` alias leaves
+/// behind. Requiring it resolved that remote to no host at all — no allowlist
+/// entry could ever permit it, and the credentials dialog reported a working
+/// ssh remote as a broken https one.
 fn scp_like_host(value: &str) -> Option<String> {
-    let at = value.find('@')?;
-    if at == 0 {
+    split_scp_like(value).map(|scp| scp.host.to_lowercase())
+}
+
+/// The parts of an scp-like target, split the way git splits it.
+struct ScpLike<'a> {
+    /// The login named ahead of the host, if the target names one at all.
+    login: Option<&'a str>,
+    /// The host, as written.
+    host: &'a str,
+    /// Everything after the separating colon: the repository PATH, never a
+    /// port — `git@host:2222` is the repository `2222`, not port 2222.
+    path: &'a str,
+}
+
+/// Split `[user@]host:path`, or `None` when `value` is not that form.
+///
+/// git (`connect.c`, `url_is_local_not_ssh`) reads a target as scp-like as soon
+/// as a colon comes before any slash, with the `user@` optional and a Windows
+/// drive letter carved out. That is the rule here, with two guards of its own:
+///
+/// - the login is looked for only AHEAD of the separating colon, because that
+///   is where git looks. `git@github.com:x@evil.test:y` is the path
+///   `x@evil.test:y` on `github.com`, not a repository on `evil.test`; taking
+///   the first `@` in the whole string read the same trick spelled without a
+///   login (`gitserver:x@evil.test:y`) as `evil.test`, a host the gate would
+///   then judge instead of the one git contacts;
+/// - a separator inside the host means the colon is inside a PATH, in either
+///   spelling — `./x:y` and `.\x:y` stay paths.
+fn split_scp_like(value: &str) -> Option<ScpLike<'_>> {
+    // A scheme is not a login-less authority. Every caller checks for one
+    // ahead of this and takes the URL parser instead, so this only ever keeps
+    // the answer honest for a caller that does not: with the login optional,
+    // the first colon of `https://h/x` would otherwise make `https` its host.
+    if value.contains("://") {
         return None;
     }
-    if value[..at].contains('/') {
-        return None;
-    }
-    let rest = &value[at + 1..];
+    let (login, rest) = match value.find(['@', ':', '/']) {
+        Some(at) if value.as_bytes()[at] == b'@' => {
+            if at == 0 {
+                // `@host:path` names an empty login: not a form git accepts.
+                return None;
+            }
+            (Some(&value[..at]), &value[at + 1..])
+        }
+        _ => (None, value),
+    };
     // A bracketed IPv6 literal carries colons of its own; only one AFTER the
     // closing bracket separates the host from the path.
     let colon = if rest.starts_with('[') {
@@ -267,10 +306,20 @@ fn scp_like_host(value: &str) -> Option<String> {
         return None;
     }
     let host = &rest[..colon];
-    if host.contains('/') {
+    if host.contains('/') || host.contains('\\') {
         return None;
     }
-    Some(host.to_lowercase())
+    // With no login to say otherwise, a one-letter authority is a Windows drive
+    // — `C:\repos\app.git`, `C:/repos/app.git`, `c:x` — and git carves the
+    // same one out. `git@c:x` keeps its host: a login says a host precedes it.
+    if login.is_none() && host.len() == 1 && host.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some(ScpLike {
+        login,
+        host,
+        path: &rest[colon + 1..],
+    })
 }
 
 /// Where a remote URL points: the login it names, the host, and the port.
@@ -295,7 +344,9 @@ pub struct RemoteTarget {
     /// The URL's scheme, lowercased. `None` for the scheme-less forms.
     pub scheme: Option<String>,
     /// Whether git would reach this remote over ssh: an `ssh://`/`git+ssh://`
-    /// URL, or one of the scheme-less forms that carry a login.
+    /// URL, the scp-like `[user@]host:path` (whose login is optional — a
+    /// `~/.ssh/config` alias leaves `gitserver:team/app.git` behind), or a
+    /// scheme-less `user@host` whose login says the same thing.
     pub is_ssh: bool,
 }
 
@@ -304,11 +355,24 @@ pub struct RemoteTarget {
 pub fn parse_target(target: &str) -> Option<RemoteTarget> {
     let trimmed = target.trim();
     if !trimmed.contains("://") {
-        if let Some(host) = scp_like_host(trimmed) {
-            let user = &trimmed[..trimmed.find('@').unwrap_or(0)];
+        if let Some(scp) = split_scp_like(trimmed) {
+            // `host:port` is the one scheme-less spelling whose colon is a
+            // PORT rather than the scp separator: it is what the SSH settings
+            // dialog's host field accepts, and dropping the port there sends
+            // `ssh -T` to :22 of a server that does not listen on it. It is
+            // read below, exactly as it always was — the HOST is the same
+            // either way, so the allowlist sees no change — and a login says
+            // it is not that form: `git@host:2222` is the repository `2222`.
+            if scp.login.is_none() && scp.path.parse::<u16>().is_ok() {
+                if let Some(mut resolved) = parse_url_target(&format!("https://{}", trimmed)) {
+                    resolved.is_ssh = resolved.user.is_some();
+                    resolved.scheme = None;
+                    return Some(resolved);
+                }
+            }
             return Some(RemoteTarget {
-                user: (!user.is_empty()).then(|| user.to_string()),
-                host,
+                user: scp.login.map(|login| login.to_string()),
+                host: scp.host.to_lowercase(),
                 port: None,
                 scheme: None,
                 is_ssh: true,
@@ -544,7 +608,9 @@ fn is_loopback_host(host: &str) -> bool {
 ///   is the same carve-out an AI endpoint on loopback already gets, for the
 ///   same reason: loopback is definitively this machine;
 /// - anything [`scp_like_host`] recognises, so `~user@host:repo.git` is read as
-///   the ssh remote git would read it rather than as a `~` path;
+///   the ssh remote git would read it rather than as a `~` path — and so is
+///   `gitserver:team/app.git`, whose login an `~/.ssh/config` `Host` alias
+///   supplies rather than the URL;
 /// - anything else carrying a scheme, so a path with a URL embedded in it
 ///   cannot smuggle one past this.
 ///
@@ -940,6 +1006,232 @@ mod tests {
             Some("git@[2001:db8::2]:team/app.git")
         )
         .is_err());
+    }
+
+    /// git's scp-like form is `[user@]host:path`, and the LOGIN IS OPTIONAL:
+    /// `gitserver:team/app.git` is an ssh remote on `gitserver`, and it is the
+    /// spelling an `~/.ssh/config` `Host` alias leaves behind — very common on
+    /// a corporate host. Requiring the `@` resolved it to no host at all, so
+    /// the allowlist branch was never even reached.
+    #[test]
+    fn an_scp_remote_that_names_no_login_still_yields_its_host() {
+        assert_eq!(
+            url_host("gitserver:team/app.git").as_deref(),
+            Some("gitserver")
+        );
+        assert_eq!(
+            parse_target("gitserver:team/app.git").map(|t| (t.user, t.host, t.port, t.is_ssh)),
+            Some((None, "gitserver".to_string(), None, true)),
+            "no login is not the login `git`: ssh reads that from its own config"
+        );
+    }
+
+    /// ...so an allowlist entry naming that host permits it, and one that does
+    /// not refuses it BY NAME. Neither could happen before: `target_host`
+    /// yielded nothing, and the gate said "Could not determine the remote URL,
+    /// and an allowlist is configured" — a refusal no entry could work around.
+    #[test]
+    fn an_allowlist_entry_permits_an_scp_remote_that_names_no_login() {
+        assert!(check(
+            &settings(false, &["gitserver"]),
+            Some("gitserver:team/app.git")
+        )
+        .is_ok());
+        let message = blocked(check(
+            &settings(false, &["elsewhere.test"]),
+            Some("gitserver:team/app.git"),
+        ));
+        assert!(message.contains("is not in your allowlist"), "{message}");
+        assert!(message.contains("gitserver"), "{message}");
+    }
+
+    /// ...and it is still a remote that LEAVES the machine, so offline mode
+    /// goes on refusing it. Widening the scp form necessarily narrows what
+    /// counts as a path, and this is the direction that must not move.
+    #[test]
+    fn an_scp_remote_that_names_no_login_is_not_a_path() {
+        assert!(!is_local_target("gitserver:team/app.git"));
+        let message = blocked(check(&settings(true, &[]), Some("gitserver:team/app.git")));
+        assert!(message.contains("Offline mode"), "{message}");
+    }
+
+    /// The `@` AFTER the separating colon belongs to the PATH.
+    ///
+    /// git reads `gitserver:x@evil.test:y` as the path `x@evil.test:y` on
+    /// `gitserver` — the colon comes first — so the login has to be looked for
+    /// ahead of that colon. Taking the first `@` in the whole string judged
+    /// (and, through `parse_target`, would have contacted) `evil.test`: the
+    /// login-less spelling of the smuggling case `git@github.com:x@evil.test:y`
+    /// is already pinned for.
+    #[test]
+    fn the_login_is_read_from_ahead_of_the_separating_colon() {
+        let url = "gitserver:x@evil.test:y";
+        assert_eq!(url_host(url).as_deref(), Some("gitserver"));
+        assert_eq!(
+            parse_target(url).map(|t| (t.user, t.host)),
+            Some((None, "gitserver".to_string()))
+        );
+        assert!(check(&settings(false, &["gitserver"]), Some(url)).is_ok());
+        assert!(check(&settings(false, &["evil.test"]), Some(url)).is_err());
+    }
+
+    /// `host:port` is the one scheme-less form whose colon is a PORT — the SSH
+    /// settings dialog's host field accepts it, and `resolve_ssh_target` reads
+    /// the port straight off this parse for `ssh -p`. Letting the widened scp
+    /// branch swallow it would have dropped the port silently, and probed :22
+    /// of a server that does not listen there.
+    #[test]
+    fn a_bare_host_and_port_keeps_its_port() {
+        assert_eq!(
+            parse_target("git.example.test:2222").map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("git.example.test".to_string(), Some(2222), false))
+        );
+        // The HOST is the same either way, so the allowlist reads it alike.
+        assert_eq!(
+            target_host("git.example.test:2222").as_deref(),
+            Some("git.example.test")
+        );
+        assert!(check(
+            &settings(false, &["git.example.test"]),
+            Some("git.example.test:2222")
+        )
+        .is_ok());
+        // A login says it is not that form: `git@host:2222` is the repository
+        // `2222`, which is how git reads it and how this half always has.
+        assert_eq!(
+            parse_target("git@git.example.test:2222").map(|t| (t.host, t.port, t.is_ssh)),
+            Some(("git.example.test".to_string(), None, true))
+        );
+    }
+
+    /// The whole differential of reading the login as optional, pinned.
+    ///
+    /// [`is_local_target`] excludes everything [`scp_like_host`] recognises, so
+    /// widening the scp form necessarily narrows what counts as a filesystem
+    /// path and as a Windows drive. Every row is one verdict from each of the
+    /// three, and the frontend mirror (`scpLikeHost` in
+    /// `src/services/git.service.ts`) answers the same for all of them.
+    #[test]
+    fn widening_the_scp_form_leaves_paths_and_drives_alone() {
+        for (target, local, scp, parsed) in [
+            // The finding, and its neighbours that already worked.
+            (
+                "gitserver:team/app.git",
+                false,
+                Some("gitserver"),
+                Some(("gitserver", None, true)),
+            ),
+            (
+                "server.example.com:repo.git",
+                false,
+                Some("server.example.com"),
+                Some(("server.example.com", None, true)),
+            ),
+            (
+                "git@host:x",
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+            ),
+            (
+                "deploy@host:x",
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+            ),
+            (
+                "~deploy@host:x",
+                false,
+                Some("host"),
+                Some(("host", None, true)),
+            ),
+            (
+                "git@github.com:x@evil.test:y",
+                false,
+                Some("github.com"),
+                Some(("github.com", None, true)),
+            ),
+            (
+                "gitserver:x@evil.test:y",
+                false,
+                Some("gitserver"),
+                Some(("gitserver", None, true)),
+            ),
+            // Bracketed IPv6, with and without a login.
+            ("[::1]:x", false, Some("[::1]"), Some(("[::1]", None, true))),
+            (
+                "git@[::1]:x",
+                false,
+                Some("[::1]"),
+                Some(("[::1]", None, true)),
+            ),
+            // Windows drives: a one-letter authority with no login is a drive,
+            // not a host — and `x:22` is a host, because a port is not a path.
+            (r"C:\repos\x.git", true, None, Some(("c", None, false))),
+            ("C:/repos/x.git", true, None, Some(("c", None, false))),
+            ("c:x", false, None, None),
+            ("x:22", false, None, Some(("x", Some(22), false))),
+            (
+                "host:22",
+                false,
+                Some("host"),
+                Some(("host", Some(22), false)),
+            ),
+            // Paths, in every spelling `is_local_target` accepts. A colon
+            // inside one of these is inside the PATH.
+            ("/srv/git/x.git", true, None, Some(("srv", None, false))),
+            ("./x.git", true, None, Some((".", None, false))),
+            ("../x.git", true, None, Some(("..", None, false))),
+            ("~/x.git", true, None, Some(("~", None, false))),
+            (".", true, None, Some((".", None, false))),
+            ("..", true, None, Some(("..", None, false))),
+            (r".\x:y", true, None, Some((".", None, false))),
+            (
+                "mybackup.git",
+                false,
+                None,
+                Some(("mybackup.git", None, false)),
+            ),
+            // UNC is not a path to this gate: SMB leaves the machine.
+            (
+                r"\\server\share\x",
+                false,
+                None,
+                Some(("server", None, false)),
+            ),
+            (
+                "//server/share/x",
+                false,
+                None,
+                Some(("server", None, false)),
+            ),
+            // Anything carrying a scheme is the URL parser's business.
+            ("file:///x", true, None, None),
+            ("file://localhost/x", true, None, None),
+            (
+                "file://server/share/x",
+                false,
+                None,
+                Some(("server", None, false)),
+            ),
+            ("https://h/x", false, None, Some(("h", None, false))),
+            ("ssh://h/x", false, None, Some(("h", None, true))),
+            // Neither half is a form git accepts.
+            ("@host:x", false, None, None),
+            ("x@:y", false, None, None),
+        ] {
+            assert_eq!(is_local_target(target), local, "{target}: is_local_target");
+            assert_eq!(
+                scp_like_host(target).as_deref(),
+                scp,
+                "{target}: scp_like_host"
+            );
+            assert_eq!(
+                parse_target(target).map(|t| (t.host, t.port, t.is_ssh)),
+                parsed.map(|(host, port, is_ssh)| (host.to_string(), port, is_ssh)),
+                "{target}: parse_target"
+            );
+        }
     }
 
     #[test]
