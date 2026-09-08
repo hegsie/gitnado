@@ -1647,6 +1647,19 @@ export async function push(
         "error",
       );
     }
+  } else {
+    // The silent branch hands the result to a caller that treats `BLOCKED` as
+    // "the gate already explained itself" and says nothing — true when the
+    // frontend gate refused above (it toasted, and returned before reaching
+    // here), false when only the BACKEND did. And the backend really does
+    // refuse pushes this gate cannot: `remote.rs::push` also runs
+    // `guard_lfs_upload`, which judges the LFS UPLOAD endpoint
+    // (`lfs.pushurl`, a committed `.lfsconfig` can set it to any host) — a
+    // target nothing on this side ever resolves. Without this the user
+    // watched "Pushing to remote…" appear and vanish with nothing said,
+    // while the very same repository pushed as a TAG explained itself,
+    // because `pushTag` has always wrapped.
+    surfaceBackendRefusal(result);
   }
   return result;
 }
@@ -1716,6 +1729,12 @@ export async function pushToMultipleRemotes(
         "error",
       );
     }
+  } else {
+    // Identical gap to single `push`, through the identical backend guard:
+    // `guard_push_destinations` runs `guard_lfs_upload` for every destination
+    // (remote.rs), so a `.lfsconfig` pointing off the allowlist refuses the
+    // whole gesture on a target this side never resolved.
+    surfaceBackendRefusal(result);
   }
   return result;
 }

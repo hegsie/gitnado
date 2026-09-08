@@ -45,6 +45,7 @@ import {
   testCredentials,
 } from '../git.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
+import { uiStore } from '../../stores/ui.store.ts';
 
 /** Every export that reaches a remote, and the Tauri command it must not send. */
 const NETWORK_OPERATIONS: Array<{ name: string; command: string; run: () => Promise<unknown> }> = [
@@ -1037,6 +1038,142 @@ describe('network security gate', () => {
         invokeHistory.some((c) => c.command === 'get_remotes'),
         'the common path pays no extra round trip',
       ).to.equal(false);
+    });
+  });
+
+  describe('a push refusal only the backend could make is still told to the user', () => {
+    /**
+     * `remote.rs::push` runs `guard_lfs_upload` after the frontend gate has
+     * already permitted the push: it judges the LFS UPLOAD endpoint
+     * (`lfs.pushurl`, which a committed `.lfsconfig` chooses), and nothing on
+     * this side resolves that — `resolveLfsEndpoint` asks for the DOWNLOAD
+     * endpoint and only `lfsPull`/`lfsFetch` call it. So the backend can refuse
+     * a push this gate waved through, and every silent consumer
+     * (`remote-operations.service.ts`, the force push in `app-shell.ts`)
+     * swallows `BLOCKED` on the understanding that the gate already explained
+     * itself. It had not. The row appeared, the row vanished, nothing was said.
+     */
+    const BACKEND_REASON = 'Remote "https://lfs.evil.test/repo" is not in your allowlist';
+
+    /** Everything resolves to an ALLOWED host, so only the backend refuses. */
+    function backendRefusesPush(command: string): void {
+      mockInvoke = (invoked) => {
+        if (invoked === command) {
+          return Promise.reject({ code: 'BLOCKED', message: BACKEND_REASON });
+        }
+        if (invoked === 'get_push_remote') return Promise.resolve('origin');
+        if (invoked === 'get_remotes') {
+          return Promise.resolve([
+            { name: 'origin', url: ALLOWED_URL, fetchUrl: ALLOWED_URL, pushUrl: ALLOWED_URL },
+          ]);
+        }
+        return Promise.resolve(null);
+      };
+    }
+
+    beforeEach(() => {
+      uiStore.setState({ toasts: [] });
+    });
+
+    afterEach(() => {
+      uiStore.setState({ toasts: [] });
+    });
+
+    it('toasts the backend reason for a silent push', async () => {
+      backendRefusesPush('push');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code, 'the code the consumers suppress').to.equal('BLOCKED');
+      const toasts = uiStore.getState().toasts;
+      expect(
+        toasts.some((t) => t.message.includes('lfs.evil.test') && t.type === 'error'),
+        'the backend reason must reach the user',
+      ).to.equal(true);
+    });
+
+    it('toasts the backend reason for a silent multi-remote push', async () => {
+      backendRefusesPush('push_to_multiple_remotes');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await pushToMultipleRemotes({
+        path: '/repo',
+        remotes: ['origin'],
+        force: false,
+        forceWithLease: false,
+        pushTags: false,
+        silent: true,
+      });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(
+        uiStore.getState().toasts.some((t) => t.message.includes('lfs.evil.test')),
+      ).to.equal(true);
+    });
+
+    it('says it once when the FRONTEND gate is the half that refused', async () => {
+      // The frontend refusal toasts and returns before `invokeCommand`, so the
+      // wrapper cannot double up. Pinned, because a second stacked message on
+      // one click is the failure mode the silent branch exists to avoid.
+      mockInvoke = (invoked) =>
+        Promise.resolve(
+          invoked === 'get_push_remote'
+            ? 'origin'
+            : invoked === 'get_remotes'
+              ? [
+                  {
+                    name: 'origin',
+                    url: 'https://evil.test/x.git',
+                    pushUrl: 'https://evil.test/x.git',
+                  },
+                ]
+              : null,
+        );
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'push')).to.equal(false);
+      expect(uiStore.getState().toasts.length, 'exactly one refusal message').to.equal(1);
+    });
+
+    it('leaves an ordinary silent push failure to the caller that owns the message', async () => {
+      // Only `BLOCKED` is the silent-consumer blind spot. A rejected push has
+      // always been reported by `runRemoteOperation` through the suggestion
+      // service, and toasting it here too would stack two on one click.
+      mockInvoke = (invoked) => {
+        if (invoked === 'push') {
+          return Promise.reject({ code: 'PUSH_REJECTED', message: 'non-fast-forward' });
+        }
+        if (invoked === 'get_push_remote') return Promise.resolve('origin');
+        if (invoked === 'get_remotes') {
+          return Promise.resolve([
+            { name: 'origin', url: ALLOWED_URL, fetchUrl: ALLOWED_URL, pushUrl: ALLOWED_URL },
+          ]);
+        }
+        return Promise.resolve(null);
+      };
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.error?.code).to.equal('PUSH_REJECTED');
+      expect(uiStore.getState().toasts, 'the silent contract still holds').to.deep.equal([]);
+    });
+
+    it('does not double-toast a non-silent push', async () => {
+      backendRefusesPush('push');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      await push({ path: '/repo' });
+
+      const toasts = uiStore.getState().toasts;
+      expect(toasts.length, 'the non-silent branch already prints the reason').to.equal(1);
+      expect(toasts[0].message).to.contain('lfs.evil.test');
     });
   });
 
