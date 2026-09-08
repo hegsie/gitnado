@@ -1698,12 +1698,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn offline_mode_refuses_before_any_resolution() {
+    async fn offline_mode_refuses_a_transfer_whose_endpoint_cannot_be_resolved() {
         let _guard = test_support::offline();
 
-        // Not a repository at all: a gate that resolved first would fail on
-        // the missing repo (or worse, open it); offline mode must answer
-        // before anything is looked at.
+        // `guard_lfs_transfer` DOES resolve under offline mode, deliberately:
+        // answering `check(&settings, None)` ahead of the lookup refused a
+        // transfer to a local `lfs.url` (`/srv/lfs`, `file:///…`) that opens
+        // no socket, which is the one thing the local-target carve-out exists
+        // to stop. So this test does NOT say offline mode answers before
+        // anything is looked at — "restoring" that would reinstate the defect
+        // the guard's shape was rewritten to fix. It pins the other half of
+        // that design: a resolution yielding NOTHING fails closed. Not a
+        // repository at all, so no endpoint resolves, no local-target
+        // carve-out applies, and offline mode refuses.
         let result = lfs_pull("/definitely/not/a/repository".to_string(), None).await;
         blocked_message(result);
         let result = lfs_fetch("/definitely/not/a/repository".to_string(), None, None).await;
