@@ -102,10 +102,24 @@ const ROWS: Row[] = [
   { target: "host:22", local: false, localRemote: false, host: "host" },
   { target: "git@host:2222", local: false, localRemote: false, host: "host" },
   { target: "x:22", local: false, localRemote: false, host: "x" },
+  // Port 443, GitHub's own documented workaround for a network that blocks
+  // port 22 (`ssh.github.com:443`, and the same spelling for
+  // `altssh.gitlab.com` and `altssh.bitbucket.org`). The backend used to read
+  // these with NO port at all: it rebuilt a scheme-less target through a
+  // synthesised `https://` URL, and a WHATWG URL parser normalizes away a port
+  // equal to the scheme's default — so 443 was the one port `ssh -T` never
+  // received. This half judges only the HOST, which never differed; the port
+  // column that catches it lives in the backend table these rows mirror.
+  { target: "ssh.github.com:443", local: false, localRemote: false, host: "ssh.github.com" },
+  { target: "host:443", local: false, localRemote: false, host: "host" },
+  { target: "host:80", local: false, localRemote: false, host: "host" },
+  { target: "git@host:443", local: false, localRemote: false, host: "host" },
+  { target: "x:443", local: false, localRemote: false, host: "x" },
   // bracketed IPv6, read whole
   { target: "[::1]:x", local: false, localRemote: false, host: "[::1]" },
   { target: "git@[::1]:x", local: false, localRemote: false, host: "[::1]" },
   { target: "[::1]:22", local: false, localRemote: false, host: "[::1]" },
+  { target: "[::1]:443", local: false, localRemote: false, host: "[::1]" },
   // the `@` is in the PATH
   { target: "gitserver:x@evil.test:y", local: false, localRemote: false, host: "gitserver" },
   { target: "git@github.com:x@evil.test:y", local: false, localRemote: false, host: "github.com" },

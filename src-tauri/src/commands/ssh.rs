@@ -353,14 +353,37 @@ fn ssh_test_succeeded(message: &str, expected_pattern: &str, status_success: boo
         || status_success
 }
 
+/// The exact argument list `ssh` is invoked with for a connection test.
+///
+/// Built in one place so a test can read it: the port reaches ssh ONLY through
+/// `-p`, and a target whose port went missing probes :22 with nothing in the
+/// invocation to show for it.
+fn ssh_probe_args(target: &SshTarget) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-T",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+    ]
+    .iter()
+    .map(|arg| arg.to_string())
+    .collect();
+    if let Some(port) = &target.port {
+        args.push("-p".to_string());
+        args.push(port.clone());
+    }
+    args.push(target.ssh_host.clone());
+    args
+}
+
 /// Test SSH connection to a host
 #[command]
 pub async fn test_ssh_connection(host: String) -> Result<SshTestResult> {
-    let SshTarget {
-        ssh_host,
-        port,
-        expected_pattern,
-    } = resolve_ssh_target(&host);
+    let target = resolve_ssh_target(&host);
+    let expected_pattern = target.expected_pattern;
 
     // Offline mode / remote allowlist. `ssh -T git@github.com` is an outbound
     // connection, and the frontend gate already checks this command against the
@@ -369,20 +392,8 @@ pub async fn test_ssh_connection(host: String) -> Result<SshTestResult> {
 
     // Run ssh -T to test connection
     let mut command = create_command("ssh");
-    command.args([
-        "-T",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=10",
-    ]);
-    if let Some(port) = &port {
-        command.args(["-p", port]);
-    }
     let output = command
-        .arg(&ssh_host)
+        .args(ssh_probe_args(&target))
         .output()
         .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run ssh: {}", e)))?;
 
@@ -620,6 +631,79 @@ mod tests {
         let v6 = resolve_ssh_target("ssh://git@[2001:db8::1]:2222/owner/repo.git");
         assert_eq!(v6.ssh_host, "git@[2001:db8::1]");
         assert_eq!(v6.port.as_deref(), Some("2222"));
+    }
+
+    /// Port 443 has to reach `ssh` like any other port.
+    ///
+    /// `ssh.github.com:443` is GitHub's own documented workaround for a network
+    /// that blocks port 22, and `altssh.gitlab.com:443` /
+    /// `altssh.bitbucket.org:443` are the same shape. The parse rebuilt the
+    /// target through a synthesised `https://` URL, and a WHATWG URL parser
+    /// normalizes away a port equal to the scheme's default — so 443, and only
+    /// 443, came back as no port at all, `-p` was never added, and `ssh -T`
+    /// probed :22: the one port the user typed 443 to avoid. The panel then
+    /// reported a failed SSH test for a configuration that works.
+    #[test]
+    fn test_host_field_port_443_reaches_ssh() {
+        for (input, ssh_host) in [
+            ("ssh.github.com:443", "git@ssh.github.com"),
+            ("altssh.gitlab.com:443", "git@altssh.gitlab.com"),
+            ("altssh.bitbucket.org:443", "git@altssh.bitbucket.org"),
+            ("git.example.com:443", "git@git.example.com"),
+            ("[::1]:443", "git@[::1]"),
+        ] {
+            let target = resolve_ssh_target(input);
+            assert_eq!(target.ssh_host, ssh_host, "destination for {}", input);
+            assert_eq!(target.port.as_deref(), Some("443"), "port for {}", input);
+
+            let args = ssh_probe_args(&target);
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["-p".to_string(), "443".to_string()]),
+                "{} must be probed with -p 443, got {:?}",
+                input,
+                args
+            );
+            assert_eq!(
+                args.last().map(String::as_str),
+                Some(ssh_host),
+                "the destination is the last argument for {}",
+                input
+            );
+        }
+
+        // The canonical banner still applies: `ssh.github.com` is one of the
+        // hosts with a known greeting, and the port does not change that.
+        assert_eq!(
+            resolve_ssh_target("ssh.github.com:443").expected_pattern,
+            "successfully authenticated"
+        );
+    }
+
+    /// A target with no port gets no `-p`, and any other port is passed through
+    /// — the control for the 443 case above.
+    #[test]
+    fn test_ssh_probe_args_carry_only_a_port_that_was_given() {
+        let bare = ssh_probe_args(&resolve_ssh_target("github.com"));
+        assert!(
+            !bare.iter().any(|arg| arg == "-p"),
+            "no port was given, so ssh must be left to its default: {:?}",
+            bare
+        );
+        assert_eq!(bare.last().map(String::as_str), Some("git@github.com"));
+
+        let ported = ssh_probe_args(&resolve_ssh_target("git.example.com:2222"));
+        assert!(
+            ported
+                .windows(2)
+                .any(|pair| pair == ["-p".to_string(), "2222".to_string()]),
+            "{:?}",
+            ported
+        );
+
+        // An scp-form remote's path is not a port, so it adds no `-p`.
+        let scp = ssh_probe_args(&resolve_ssh_target("git@git.example.com:owner/repo.git"));
+        assert!(!scp.iter().any(|arg| arg == "-p"), "{:?}", scp);
     }
 
     /// The host handed to `ssh` must be the host the allowlist judged.
