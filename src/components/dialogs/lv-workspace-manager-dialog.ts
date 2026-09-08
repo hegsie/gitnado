@@ -924,6 +924,30 @@ export class LvWorkspaceManagerDialog extends LitElement {
     this.statusLoading = false;
   }
 
+  /**
+   * Whether this repository has anywhere to fetch or pull FROM.
+   *
+   * These two loops are the one route to fetch and pull that does NOT go
+   * through remote-operations.service's runner — deliberately, since they run
+   * over repositories that need not be open in a tab and answer with one
+   * summary instead of a toast per repo — so they do not inherit its refusal
+   * and have to ask for themselves. Without it a workspace holding one
+   * remoteless repository reported an unexplained, unnamed failure for it,
+   * while the very same repository said "No remote configured for this
+   * repository — add one first." from the toolbar.
+   *
+   * `get_remotes` is a local read (no network), and it runs immediately before
+   * a network call this repository would otherwise fail.
+   *
+   * A read that FAILS is not "no remote": the operation goes ahead and reports
+   * its own error, exactly as an unreadable repository does elsewhere.
+   */
+  private async workspaceRepoHasRemote(path: string): Promise<boolean> {
+    const result = await gitService.getRemotes(path);
+    if (!result.success || !result.data) return true;
+    return result.data.length > 0;
+  }
+
   private async handleFetchAll(): Promise<void> {
     const ws = this.selectedWorkspace;
     if (!ws) return;
@@ -939,11 +963,19 @@ export class LvWorkspaceManagerDialog extends LitElement {
     // summary that now reads as fully accounted-for (succeeded/failed/skipped)
     // still didn't add up to the workspace size.
     let unavailableCount = 0;
+    // Repos with nowhere to fetch FROM. Named, not just counted: "1 failed"
+    // with no repo and no reason was the whole complaint.
+    const noRemote: string[] = [];
 
     for (const repo of ws.repositories) {
       const status = this.repoStatuses.get(repo.path);
       if (status && (!status.exists || !status.isValidRepo)) {
         unavailableCount++;
+        continue;
+      }
+
+      if (!(await this.workspaceRepoHasRemote(repo.path))) {
+        noRemote.push(repo.name);
         continue;
       }
 
@@ -961,9 +993,12 @@ export class LvWorkspaceManagerDialog extends LitElement {
     showToast(
       `Fetch all: ${successCount} succeeded` +
         (failCount > 0 ? `, ${failCount} failed` : '') +
+        (noRemote.length > 0
+          ? `, ${noRemote.length} with no remote configured (${noRemote.join(', ')})`
+          : '') +
         (skippedCount > 0 ? `, ${skippedCount} skipped by security settings` : '') +
         (unavailableCount > 0 ? `, ${unavailableCount} unavailable` : ''),
-      failCount > 0 || unavailableCount > 0
+      failCount > 0 || unavailableCount > 0 || noRemote.length > 0
         ? 'warning'
         : skippedCount > 0
           ? 'info'
@@ -991,12 +1026,21 @@ export class LvWorkspaceManagerDialog extends LitElement {
     // still didn't add up to the workspace size.
     // Repos skipped because another operation held their working-tree lock.
     const busy: string[] = [];
+    // Repos with nowhere to pull FROM, named like the rest of this summary.
+    const noRemote: string[] = [];
     let unavailableCount = 0;
 
     for (const repo of ws.repositories) {
       const status = this.repoStatuses.get(repo.path);
       if (status && (!status.exists || !status.isValidRepo)) {
         unavailableCount++;
+        continue;
+      }
+
+      // Before the working-tree lock: a repository that cannot pull at all
+      // must not take a lock other operations then wait behind.
+      if (!(await this.workspaceRepoHasRemote(repo.path))) {
+        noRemote.push(repo.name);
         continue;
       }
 
@@ -1043,6 +1087,9 @@ export class LvWorkspaceManagerDialog extends LitElement {
           ? `, ${conflicted.length} need conflict resolution (${conflicted.join(', ')})`
           : '') +
         (failCount > 0 ? `, ${failCount} failed (${failed.join(', ')})` : '') +
+        (noRemote.length > 0
+          ? `, ${noRemote.length} with no remote configured (${noRemote.join(', ')})`
+          : '') +
         (skippedCount > 0 ? `, ${skippedCount} skipped by security settings` : '') +
         // Named, not just counted: a repo skipped because something else was
         // running in it did NOT pull, and a summary that stays silent about it
@@ -1051,7 +1098,11 @@ export class LvWorkspaceManagerDialog extends LitElement {
           ? `, ${busy.length} busy with another operation (${busy.join(', ')})`
           : '') +
         (unavailableCount > 0 ? `, ${unavailableCount} unavailable` : ''),
-      failCount > 0 || conflicted.length > 0 || unavailableCount > 0 || busy.length > 0
+      failCount > 0 ||
+      conflicted.length > 0 ||
+      unavailableCount > 0 ||
+      busy.length > 0 ||
+      noRemote.length > 0
         ? 'warning'
         : skippedCount > 0
           ? 'info'

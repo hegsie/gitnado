@@ -45,6 +45,7 @@ import { progressService } from '../progress.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 import { uiStore } from '../../stores/ui.store.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
+import { dialogs } from '../../stores/dialog.store.ts';
 import { NO_REMOTE_MESSAGE } from '../../utils/remote-availability.ts';
 import {
   isRefOpRunning,
@@ -109,8 +110,17 @@ function warningToasts(): string[] {
  * so a test about a repository with no remote has to open one — the rest of
  * this file drives a path the store has never heard of, which the runner
  * deliberately leaves alone.
+ *
+ * `loaded` is whether those remotes are an ANSWER from git. The store seeds
+ * every new tab with an empty list before anything has asked, so the default
+ * here is `true`: a test that passes `[]` means "asked, and there are none".
+ * Pass `false` for the other case — asked nothing yet — which the runner must
+ * treat like a repository it has never heard of.
  */
-function openRepo(remotes: Array<{ name: string; url: string }>): void {
+function openRepo(
+  remotes: Array<{ name: string; url: string }>,
+  options?: { loaded?: boolean },
+): void {
   repositoryStore.setState({
     openRepositories: [
       {
@@ -118,6 +128,7 @@ function openRepo(remotes: Array<{ name: string; url: string }>): void {
         branches: [],
         currentBranch: null,
         remotes,
+        remotesLoaded: options?.loaded ?? true,
         tags: [],
         stashes: [],
       },
@@ -137,12 +148,14 @@ describe('remote operations runner', () => {
     parked = new Map();
     resetRefOpLocks();
     uiStore.setState({ toasts: [] });
+    dialogs.reset();
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
   });
 
   afterEach(() => {
     resetRefOpLocks();
     closeRepos();
+    dialogs.reset();
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
   });
 
@@ -627,6 +640,41 @@ describe('remote operations runner', () => {
 
       expect(counts('fetch')).to.equal(1);
       expect(warningToasts()).to.deep.equal([]);
+    });
+
+    it('leaves a repository whose remotes have not been read alone', async () => {
+      // The store seeds `remotes: []` the moment a tab is opened, which is the
+      // same value a genuinely remoteless repository ends up with. Refusing on
+      // the seed told every freshly opened or cloned repository it had nowhere
+      // to fetch from until `get_remotes` came back.
+      openRepo([], { loaded: false });
+
+      await runFetch(REPO);
+
+      expect(counts('fetch'), 'the operation goes ahead').to.equal(1);
+      expect(warningToasts()).to.deep.equal([]);
+    });
+
+    it('offers the way to add one beside the refusal', async () => {
+      // "add one first" was a dead end: the Remotes dialog was reachable only
+      // by knowing the command palette carries it.
+      await runFetch(REPO);
+
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast?.action?.label, 'the remedy is offered').to.contain('Add a remote');
+      toast!.action!.callback();
+      expect(dialogs.isOpen('remotes'), 'and it opens the Remotes dialog').to.equal(true);
+    });
+
+    it('does not offer it for a repository that is not the active tab', async () => {
+      // `handlePull` can carry a path pinned from a push-rejection toast, and
+      // the Remotes dialog is bound to the ACTIVE repository — offering the
+      // button there would open the wrong repository's remotes.
+      repositoryStore.setState({ activeIndex: -1 } as never);
+
+      await runFetch(REPO);
+
+      expect(uiStore.getState().toasts.at(-1)?.action).to.equal(undefined);
     });
 
     it('leaves a repository the app has not opened alone', async () => {

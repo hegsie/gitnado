@@ -14,6 +14,16 @@ let failureFor: Map<string, { code: string; message: string }> = new Map();
 /** confirm() resolves to (message-dialog result === okLabel); the default is 'Ok'. */
 let confirmAnswer = 'Cancel';
 const dialogMessages: string[] = [];
+/**
+ * What `get_remotes` answers per repository path.
+ *
+ * The batch loops are the one route to fetch and pull that does not go through
+ * remote-operations.service's runner, so they ask this for themselves before
+ * starting a network call the repository cannot possibly complete. The default
+ * is one remote, so every other test in this file behaves as it always did.
+ */
+let remotesByPath = new Map<string, unknown[]>();
+const ONE_REMOTE = [{ name: 'origin', url: 'https://example.test/o/r.git', pushUrl: null }];
 
 (globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {
   invoke: (command: string, args?: unknown) => {
@@ -28,6 +38,10 @@ const dialogMessages: string[] = [];
       return Promise.reject({ code: 'COMMAND_ERROR', message: 'remote hung up' });
     }
     if (command === 'get_workspaces') return Promise.resolve([]);
+    if (command === 'get_remotes') {
+      const path = String((args as { path?: string })?.path ?? '');
+      return Promise.resolve(remotesByPath.get(path) ?? ONE_REMOTE);
+    }
     return Promise.resolve(null);
   },
   transformCallback: () => 0,
@@ -155,6 +169,7 @@ describe('workspace batch operations and the security gate', () => {
     invoked.length = 0;
     failCommands = new Set();
     failureFor = new Map();
+    remotesByPath = new Map();
     uiStore.setState({ toasts: [] });
     settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
   });
@@ -287,5 +302,88 @@ describe('workspace batch operations and the security gate', () => {
     const summary = uiStore.getState().toasts.map((t) => t.message).join(' | ');
     expect(summary, 'the summary adds up to the workspace size').to.contain('2 unavailable');
     expect(summary).to.contain('1 succeeded');
+  });
+});
+
+/**
+ * A repository in the workspace with no remote at all.
+ *
+ * Fetch All / Pull All call `git.service` per repository directly rather than
+ * going through remote-operations.service's runner, so the refusal every other
+ * surface gives ("No remote configured for this repository — add one first.")
+ * never reached them: the repository was attempted, git answered
+ * "remote 'origin' does not exist", and the summary reported it as an
+ * unexplained, unnamed failure among however many repositories the workspace
+ * holds.
+ */
+describe('workspace batch operations and a repository with no remote', () => {
+  beforeEach(() => {
+    invoked.length = 0;
+    failCommands = new Set();
+    failureFor = new Map();
+    remotesByPath = new Map([['/repo/two', []]]);
+    uiStore.setState({ toasts: [] });
+    settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+  });
+
+  afterEach(() => {
+    remotesByPath = new Map();
+    settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+  });
+
+  function summary(): string {
+    return uiStore.getState().toasts.map((t) => t.message).join(' | ');
+  }
+
+  function fetchedPaths(): string[] {
+    return invoked
+      .filter((c) => c.command === 'fetch')
+      .map((c) => String((c.args as { path?: string })?.path ?? ''));
+  }
+
+  it('names it in the Fetch All summary instead of counting it as a failure', async () => {
+    const el = await dialogWithWorkspace();
+
+    await (el as any).handleFetchAll();
+
+    expect(summary(), 'the repository is named and the reason given').to.contain(
+      'no remote configured (two)',
+    );
+    expect(summary(), 'and not reported as something that went wrong').to.not.contain('failed');
+    expect(summary()).to.contain('2 succeeded');
+  });
+
+  it('does not start a fetch it can only fail, and still fetches the rest', async () => {
+    const el = await dialogWithWorkspace();
+
+    await (el as any).handleFetchAll();
+
+    expect(fetchedPaths()).to.deep.equal(['/repo/one', '/repo/three']);
+  });
+
+  it('Pull All says the same thing, in its own summary', async () => {
+    const el = await dialogWithWorkspace();
+
+    await (el as any).handlePullAll();
+
+    expect(summary()).to.contain('no remote configured (two)');
+    expect(summary()).to.not.contain('failed');
+    expect(
+      invoked.filter((c) => c.command === 'pull').length,
+      'the remoteless repo is not pulled',
+    ).to.equal(2);
+  });
+
+  it('a remote list that cannot be read is not treated as "no remote"', async () => {
+    // Unknown is not absent: the operation goes ahead and reports git's own
+    // error, exactly as an unreadable repository does elsewhere.
+    const el = await dialogWithWorkspace();
+    remotesByPath = new Map();
+    failureFor = new Map([['get_remotes', { code: 'COMMAND_ERROR', message: 'cannot read' }]]);
+
+    await (el as any).handleFetchAll();
+
+    expect(summary()).to.not.contain('no remote configured');
+    expect(fetchedPaths(), 'every repository is still attempted').to.have.lengthOf(3);
   });
 });

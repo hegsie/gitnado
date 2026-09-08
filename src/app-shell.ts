@@ -1887,8 +1887,10 @@ export class AppShell extends LitElement {
             // Indexes build lazily on first activation of a tab
             this.ensureRepoIndexes(newActiveRepo.repository.path);
           }
-          // Load remotes if not already loaded
-          if (!newActiveRepo.remotes || newActiveRepo.remotes.length === 0) {
+          // Load remotes if they have never been read for this tab (the store
+          // seeds an empty list), or if the last read found none — a remote
+          // may have been added from outside the app since.
+          if (!newActiveRepo.remotesLoaded || newActiveRepo.remotes.length === 0) {
             this.loadRepositoryRemotes(newActiveRepo.repository.path);
           }
           // If this repo changed while it was a background tab, its store
@@ -4623,6 +4625,19 @@ export class AppShell extends LitElement {
           showToast(result.error?.message ?? 'Failed to refresh repository', 'error');
         }
       }
+      // Remotes are repository state a refresh must RE-READ, not a fact loaded
+      // once per tab. The store's `remotes` is what greys out Fetch/Pull/Push
+      // on both surfaces and what the runner refuses on, and its only other
+      // writers run on tab activation and on session restore — so adding the
+      // first remote in the Remotes dialog (which asks for exactly this
+      // refresh, via `remotes-changed`) left every remote surface still
+      // insisting the repository had none, and removing the last one left them
+      // all bright, ending in git's own "remote 'origin' does not exist".
+      // Path-keyed and pinned like the rest of this method, so a tab switch
+      // mid-refresh writes the result to the repository it was read from.
+      if (refreshingPath) {
+        await this.loadRepositoryRemotes(refreshingPath);
+      }
       // Trigger refresh of the graph
       this.graphCanvas?.refresh?.();
       // Refresh search indexes incrementally
@@ -5349,6 +5364,11 @@ export class AppShell extends LitElement {
   private async loadRepositoryRemotes(repoPath: string): Promise<void> {
     try {
       const remotesResult = await gitService.getRemotes(repoPath);
+      // Only a successful read is written, so a failed one leaves
+      // `remotesLoaded` false rather than recording "no remotes": the
+      // no-remote rule refuses on a KNOWN absence, and a repository whose
+      // remotes could not be read must keep its buttons and fall back to
+      // git's own error rather than be told it has nowhere to push.
       if (remotesResult.success && remotesResult.data) {
         repositoryStore.getState().updateRepoData(repoPath, { remotes: remotesResult.data });
       }

@@ -1203,4 +1203,162 @@ describe('app-shell remote-operation feedback', () => {
       }
     });
   });
+
+  /**
+   * A remote added — or removed — while the repository is open.
+   *
+   * The store's `remotes` is what greys out Fetch/Pull/Push on both surfaces
+   * and what the runner refuses on, and it used to be written only when a tab
+   * was activated or a session restored. So the user could do exactly what the
+   * refusal told them to — add a remote in the Remotes dialog — and every
+   * remote surface went on insisting the repository had none until they closed
+   * and reopened the tab. The mirror was worse: removing the last remote left
+   * the buttons bright and the operation ended in git's own
+   * "remote 'origin' does not exist".
+   *
+   * The dialog raises `remotes-changed` and app-shell answers with
+   * handleRefresh(), so that refresh is where the remotes are re-read.
+   */
+  describe('remotes changing while the repository is open', () => {
+    const ORIGIN = { name: 'origin', url: 'https://example.test/o/r.git', pushUrl: null };
+    let remotesOnDisk: Array<Record<string, unknown>> = [];
+
+    async function mountOnRepo(): Promise<AppShell> {
+      for (const cmd of ['get_stashes', 'get_tags', 'get_status', 'get_branches']) {
+        if (!mockResponses[cmd]) mockResponses[cmd] = () => [];
+      }
+      mockResponses['get_remotes'] = () => remotesOnDisk;
+      mockResponses['open_repository'] = () => mockRepo('/repo/one', 'one');
+      const el = createAppShell();
+      document.body.appendChild(el);
+      await (el as any).updateComplete;
+      repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
+      await (el as any).updateComplete;
+      return el;
+    }
+
+    /** The dialog's own event, dispatched from the element that listens for it. */
+    async function remotesChanged(el: AppShell): Promise<void> {
+      const dialog = el.shadowRoot!.querySelector('lv-remote-dialog');
+      expect(dialog, 'the Remotes dialog is mounted for the open repository').to.exist;
+      dialog!.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
+    }
+
+    function fetchButton(el: AppShell): HTMLButtonElement | null {
+      return (
+        el.shadowRoot!
+          .querySelector('lv-toolbar')!
+          .shadowRoot!.querySelector('.remote-btn.fetch') as HTMLButtonElement | null
+      );
+    }
+
+    function storedRemotes(): unknown[] {
+      return (
+        repositoryStore
+          .getState()
+          .openRepositories.find((r) => r.repository.path === '/repo/one')?.remotes ?? []
+      );
+    }
+
+    it('adding the first remote makes Fetch available, without reopening the tab', async () => {
+      remotesOnDisk = [];
+      const el = await mountOnRepo();
+      try {
+        await waitUntil(() => fetchButton(el)?.disabled === true, 'Fetch starts unavailable');
+        expect(fetchButton(el)!.title).to.contain('no remote configured');
+
+        // The user does exactly what the refusal told them to.
+        remotesOnDisk = [ORIGIN];
+        await remotesChanged(el);
+
+        await waitUntil(() => storedRemotes().length === 1, 'the store learns about the remote');
+        await waitUntil(() => fetchButton(el)?.disabled === false, 'and Fetch becomes available');
+        expect(fetchButton(el)!.title, 'the refusal is gone from the tooltip too').to.not.contain(
+          'no remote configured',
+        );
+      } finally {
+        el.remove();
+      }
+    });
+
+    it('the shortcut works too, instead of still being refused', async () => {
+      remotesOnDisk = [];
+      const el = await mountOnRepo();
+      try {
+        await waitUntil(() => fetchButton(el)?.disabled === true, 'Fetch starts unavailable');
+        remotesOnDisk = [ORIGIN];
+        await remotesChanged(el);
+        await waitUntil(() => storedRemotes().length === 1, 'the store learns about the remote');
+
+        uiStore.setState({ toasts: [] });
+        invokeCallArgs.length = 0;
+        await (el as any).handleFetch();
+
+        expect(
+          invokeCallArgs.some((c) => c.command === 'fetch'),
+          'the fetch reaches git',
+        ).to.equal(true);
+        expect(
+          uiStore.getState().toasts.map((t) => t.message).join(' | '),
+        ).to.not.contain('No remote configured');
+      } finally {
+        el.remove();
+      }
+    });
+
+    it('removing the last remote puts the refusal back', async () => {
+      remotesOnDisk = [ORIGIN];
+      const el = await mountOnRepo();
+      try {
+        await waitUntil(() => fetchButton(el)?.disabled === false, 'Fetch starts available');
+
+        remotesOnDisk = [];
+        await remotesChanged(el);
+
+        await waitUntil(() => storedRemotes().length === 0, 'the store learns the remote is gone');
+        await waitUntil(() => fetchButton(el)?.disabled === true, 'and Fetch goes unavailable');
+        expect(fetchButton(el)!.title).to.contain('no remote configured');
+      } finally {
+        el.remove();
+      }
+    });
+
+    it('the refresh itself re-reads them, with no panel mounted to do it', async () => {
+      // The branch list also mirrors the remotes it loads, so a mounted shell
+      // would pass this whichever writer did the work. handleRefresh is the
+      // one every state-modifying operation goes through — including the one
+      // the Remotes dialog asks for — so it must not depend on which panels
+      // happen to be on screen.
+      remotesOnDisk = [ORIGIN];
+      mockResponses['get_remotes'] = () => remotesOnDisk;
+      mockResponses['open_repository'] = () => mockRepo('/repo/one', 'one');
+      repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
+      const el = createAppShell();
+      (el as any).activeRepository = repositoryStore.getState().getActiveRepository();
+
+      await (el as any).handleRefresh();
+
+      expect(storedRemotes(), 'the refresh wrote what git answered').to.have.lengthOf(1);
+    });
+
+    it('a repository whose remotes cannot be read keeps its buttons', async () => {
+      // "Could not read" is not "has none": the operation goes ahead and
+      // reports git's own error rather than being refused on an absence.
+      remotesOnDisk = [ORIGIN];
+      const el = await mountOnRepo();
+      try {
+        await waitUntil(() => fetchButton(el)?.disabled === false, 'Fetch starts available');
+        failures['get_remotes'] = { code: 'COMMAND_ERROR', message: 'cannot read config' };
+
+        await remotesChanged(el);
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(fetchButton(el)!.disabled, 'still available').to.equal(false);
+        expect(storedRemotes(), 'and the last known answer is untouched').to.have.lengthOf(1);
+      } finally {
+        delete failures['get_remotes'];
+        el.remove();
+      }
+    });
+  });
 });

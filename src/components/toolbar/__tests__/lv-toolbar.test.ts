@@ -21,6 +21,7 @@ import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvToolbar } from '../lv-toolbar.ts';
 import '../lv-toolbar.ts';
 import { repositoryStore, uiStore } from '../../../stores/index.ts';
+import { dialogs } from '../../../stores/dialog.store.ts';
 import type { Repository, Branch, Remote, StatusEntry } from '../../../types/git.types.ts';
 import {
   resetRefOpLocks,
@@ -627,6 +628,9 @@ describe('lv-toolbar repository tabs', () => {
     it('disables all three when the repository has no remote', async () => {
       repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
       repositoryStore.getState().updateRepoData('/repo/one', {
+        // git ANSWERED: there are none. The empty seed the store starts a tab
+        // with is a different case, covered below.
+        remotes: [],
         currentBranch: mockBranch({ ahead: 1, behind: 1 }),
       });
       const el = await createToolbar();
@@ -635,6 +639,25 @@ describe('lv-toolbar repository tabs', () => {
         const btn = remoteBtn(el, op);
         expect(btn.disabled, `${op} disabled`).to.be.true;
         expect(btn.title).to.contain('no remote configured');
+      }
+    });
+
+    it('leaves all three available while the remotes have not been read yet', async () => {
+      // A tab is opened with `remotes: []` before anything has asked git, and
+      // that is the same value a genuinely remoteless repository ends up with.
+      // Reading the seed as an answer greyed the three buttons out — and
+      // refused the shortcuts — on every freshly opened or cloned repository
+      // until `get_remotes` came back.
+      repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
+      repositoryStore.getState().updateRepoData('/repo/one', {
+        currentBranch: mockBranch({ ahead: 1, behind: 1 }),
+      });
+      const el = await createToolbar();
+
+      for (const op of ['fetch', 'pull', 'push'] as const) {
+        const btn = remoteBtn(el, op);
+        expect(btn.disabled, `${op} is not refused on an unread collection`).to.be.false;
+        expect(btn.title).to.not.contain('no remote configured');
       }
     });
 
@@ -821,6 +844,11 @@ describe('lv-toolbar repository tabs', () => {
       const toast = uiStore.getState().toasts.at(-1);
       expect(toast, 'a warning is shown').to.exist;
       expect(toast!.message).to.contain('No remote configured');
+      // "add one first" has to be reachable from where the user is told it.
+      expect(toast!.action?.label, 'with the way to add one').to.contain('Add a remote');
+      toast!.action!.callback();
+      expect(dialogs.isOpen('remotes'), 'which opens the Remotes dialog').to.equal(true);
+      dialogs.close('remotes');
     });
 
     it('warns instead of failing silently if a click lands with no repository', async () => {
@@ -992,10 +1020,12 @@ describe('lv-toolbar tabs for a repo missing its collections', () => {
     expect(el.shadowRoot!.querySelector('.provider-icon')).to.equal(null);
     expect(el.shadowRoot!.querySelector('.tab-dirty')).to.equal(null);
     // The remote buttons read the same collection and must degrade the same
-    // way: no remote means the operation is unavailable, not a crash.
+    // way: a collection that is missing is one nobody has READ, so the button
+    // stays available — git's own error is the fallback — rather than telling
+    // the user this repository has no remote. What it must never do is crash.
     const fetchBtn = el.shadowRoot!.querySelector('.remote-btn.fetch') as HTMLButtonElement | null;
     expect(fetchBtn, 'the fetch button is rendered').to.not.equal(null);
-    expect(fetchBtn!.disabled, 'no remote means fetch is unavailable').to.be.true;
+    expect(fetchBtn!.disabled, 'unread is not the same as absent').to.be.false;
     expect(fetchBtn!.getAttribute('title')).to.match(/remote/i);
   });
 });

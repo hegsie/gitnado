@@ -972,7 +972,7 @@ export class LvBranchList extends LitElement {
     this.error = null;
 
     try {
-      const [branchesResult, , cleanupResult] = await Promise.all([
+      const [branchesResult, remotesResult, cleanupResult] = await Promise.all([
         gitService.getBranches(loadedPath),
         gitService.getRemotes(loadedPath),
         // The staleDays argument is what makes the badge and the cleanup
@@ -1011,6 +1011,11 @@ export class LvBranchList extends LitElement {
       repositoryStore.getState().updateRepoData(loadedPath, {
         branches,
         currentBranch: branches.find((b) => b.isHead) ?? null,
+        // The remotes this load already asked for, mirrored instead of
+        // discarded: the same store field decides whether Fetch/Pull/Push are
+        // available, and a failed read is left out rather than written as an
+        // empty list, so "could not read" never becomes "has no remote".
+        ...(remotesResult.success && remotesResult.data ? { remotes: remotesResult.data } : {}),
       });
 
       if (!isCurrent) return;

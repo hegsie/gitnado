@@ -13,6 +13,20 @@ export interface OpenRepository {
   branches: Branch[];
   currentBranch: Branch | null;
   remotes: Remote[];
+  /**
+   * Whether `remotes` above is an ANSWER or just the empty seed.
+   *
+   * A newly opened tab starts with `remotes: []` before anything has asked
+   * git, which is the same value a repository with no remote at all ends up
+   * with — so "no remote configured", the rule that greys out Fetch/Pull/Push
+   * and refuses the shortcut, could not tell the two apart and briefly
+   * asserted it about every repository the app had only just opened.
+   *
+   * Set by `updateRepoData` for any write that carries a real `remotes` list,
+   * so a reader cannot mistake "not read yet" for "read, and empty" and no
+   * writer has to remember to set it.
+   */
+  remotesLoaded?: boolean;
   tags: Tag[];
   stashes: Stash[];
   status: StatusEntry[];
@@ -99,7 +113,9 @@ const createEmptyRepoData = (repo: Repository): OpenRepository => ({
   repository: repo,
   branches: [],
   currentBranch: null,
+  // Seeded, NOT read: see `remotesLoaded`.
   remotes: [],
+  remotesLoaded: false,
   tags: [],
   stashes: [],
   status: [],
@@ -223,7 +239,17 @@ export const repositoryStore = createStore<RepositoryState>()(
           );
           if (index < 0) return state;
           const newRepos = [...state.openRepositories];
-          newRepos[index] = { ...newRepos[index], ...data };
+          // A write that carries a real `remotes` list is an answer from git,
+          // so it also settles "have this repository's remotes been read?" —
+          // marked here rather than at each writer, because a writer that
+          // forgot would leave the value indistinguishable from the empty seed
+          // and the no-remote rule would go on refusing a repository that has
+          // one.
+          newRepos[index] = {
+            ...newRepos[index],
+            ...data,
+            ...(data.remotes != null ? { remotesLoaded: true } : {}),
+          };
           return { openRepositories: newRepos };
         });
       },

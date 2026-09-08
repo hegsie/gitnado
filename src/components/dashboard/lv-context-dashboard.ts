@@ -34,7 +34,8 @@ import './lv-integration-card.ts';
 import './lv-repository-card.ts';
 import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
 import {
-  hasConfiguredRemote,
+  addRemoteToastAction,
+  knownToHaveNoRemote,
   noRemoteButtonLabel,
   NO_REMOTE_MESSAGE,
 } from '../../utils/remote-availability.ts';
@@ -734,9 +735,14 @@ export class LvContextDashboard extends LitElement {
    * Fetch that started a progress row and failed with git's own wording. The
    * rule and its phrasing are shared with the toolbar (remote-availability.ts)
    * so the two surfaces cannot drift apart again.
+   *
+   * "Has one" until the remotes have actually been read: the store seeds an
+   * empty list on every tab it opens, and treating that as an answer greyed
+   * the three buttons out on every freshly opened repository until
+   * `get_remotes` came back.
    */
   private get hasRemote(): boolean {
-    return hasConfiguredRemote(this.activeRepository);
+    return !knownToHaveNoRemote(this.activeRepository);
   }
 
   /** The tooltip for one of the three buttons, explaining a disabled state the
@@ -791,7 +797,9 @@ export class LvContextDashboard extends LitElement {
    */
   private warnIfNoRemote(): boolean {
     if (this.hasRemote) return true;
-    showToast(NO_REMOTE_MESSAGE, 'warning');
+    // With the route to the remedy the message names: this surface always
+    // shows the active repository, so the Remotes dialog opens on it.
+    showToast(NO_REMOTE_MESSAGE, 'warning', 5000, addRemoteToastAction());
     return false;
   }
 

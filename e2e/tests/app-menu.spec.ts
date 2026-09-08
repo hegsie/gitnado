@@ -53,6 +53,16 @@ test.describe('Application menu — with a repository open', () => {
     await expect(page.locator('lv-clean-dialog .title')).toContainText('Clean Working Directory');
   });
 
+  test('Repository ▸ Remotes opens the remotes dialog', async ({ page }) => {
+    // Fetch, Pull and Push are refused outright for a repository with no
+    // remote, and the refusal says "add one first" — but the dialog that adds
+    // one was reachable only from the command palette, so the remedy had no
+    // route for anyone who did not already know it was there.
+    await chooseMenuItem(page, 'remotes');
+
+    await expect(page.locator('lv-remote-dialog')).toBeVisible();
+  });
+
   test('View ▸ Command Palette opens the palette', async ({ page }) => {
     await chooseMenuItem(page, 'command-palette');
 
@@ -125,6 +135,7 @@ test.describe('Application menu — enabled state follows the open repository', 
 
     const items = await lastMenuSync(page);
     expect(items.find((i) => i.id === 'fetch')?.enabled).toBe(true);
+    expect(items.find((i) => i.id === 'remotes')?.enabled).toBe(true);
     expect(items.find((i) => i.id === 'repository-health')?.enabled).toBe(true);
     expect(items.find((i) => i.id === 'close-repository-tab')?.enabled).toBe(true);
   });
