@@ -49,7 +49,8 @@ jobs:
         run: |
           # --with-deps runs apt-get update; drop the runner image's third-party
           # apt sources first, which have broken it before (index hash mismatches).
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/google-chrome.list
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
+          sudo grep -ls 'dl.google.com' /etc/apt/sources.list.d/* | xargs -r sudo rm -f
           npx playwright install --with-deps chromium
 
       - name: Run E2E tests
@@ -121,7 +122,8 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/google-chrome.list
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
+          sudo grep -ls 'dl.google.com' /etc/apt/sources.list.d/* | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
