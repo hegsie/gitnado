@@ -439,6 +439,7 @@ describe('CanvasRenderer merge edge dashing', () => {
       ],
       range: { startRow: 0, endRow: 2, startLane: 0, endLane: 1 },
       offsetX: 20,
+      scrollLeft: 0,
       offsetY: 20,
       refsByCommit: {},
       authorEmails: {},
@@ -632,6 +633,278 @@ describe('CanvasRenderer commit-size node scaling', () => {
     const internals = renderer as unknown as NodeRadiusInternals;
 
     expect(internals.getNodeRadius('missing')).to.equal(6);
+    renderer.destroy();
+  });
+});
+
+describe('CanvasRenderer graph column', () => {
+  const LANE = 16;
+  const PADDING = 20;
+
+  function makeWideRenderer(
+    canvasWidth: number,
+    config: Record<string, unknown> = {}
+  ): CanvasRenderer {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = 300;
+    return new CanvasRenderer(canvas, { laneWidth: LANE, ...config });
+  }
+
+  it('hugs the lanes of a narrow graph', () => {
+    const renderer = makeWideRenderer(1200);
+    const column = renderer.getGraphColumnLayout(2, PADDING);
+
+    expect(column.width).to.equal(3 * LANE);
+    expect(column.maxScrollLeft).to.equal(0);
+    renderer.destroy();
+  });
+
+  it('caps a wide graph at a share of the canvas by default', () => {
+    const renderer = makeWideRenderer(1200);
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+
+    expect(column.fullLaneWidth).to.equal(100 * LANE);
+    expect(column.width).to.equal(Math.round(1200 * 0.35));
+    expect(column.maxScrollLeft).to.equal(100 * LANE - column.width);
+    renderer.destroy();
+  });
+
+  it('honours a user-chosen column width', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 200 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+
+    expect(column.width).to.equal(200);
+    renderer.destroy();
+  });
+
+  it('never lets the column squeeze the message below its minimum width', () => {
+    const renderer = makeWideRenderer(700, { graphColumnWidth: 2000 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+    const bounds = renderer.getColumnBoundaries(99, PADDING);
+    const internals = renderer as unknown as {
+      getRightColumnLayout(messageColumnX?: number): { messageRightEdge: number };
+    };
+    // Message starts after avatar (20 + 22 + 8), refs (200) and gap (12)
+    const messageColumnX = bounds.refsEnd + 12;
+    const { messageRightEdge } = internals.getRightColumnLayout(messageColumnX);
+
+    expect(column.width).to.be.lessThan(2000);
+    expect(bounds.graphEnd).to.equal(column.right);
+    expect(messageRightEdge - messageColumnX).to.be.at.least(160);
+    renderer.destroy();
+  });
+
+  it('anchors the resize handles to the capped column, not the lane count', () => {
+    const renderer = makeWideRenderer(1200);
+    const bounds = renderer.getColumnBoundaries(99, PADDING);
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+
+    expect(bounds.graphEnd).to.equal(column.right);
+    expect(bounds.refsEnd).to.equal(column.right + 20 + 22 + 8 + 200);
+    expect(bounds.refsEnd).to.be.lessThan(bounds.statsStart);
+    expect(bounds.statsStart).to.be.lessThan(1200);
+    renderer.destroy();
+  });
+
+  function makeNode(oid: string, row: number, lane: number) {
+    return {
+      oid,
+      row,
+      lane,
+      commit: { oid, parentIds: [], timestamp: 1, message: 'msg', author: 'a' },
+      childLanes: [],
+      parentLanes: [],
+      colorIndex: 0,
+      hasMissingParents: false,
+    };
+  }
+
+  function renderWide(
+    renderer: CanvasRenderer,
+    scrollLeft: number,
+    nodes = [makeNode('main', 0, 0), makeNode('far', 1, 99)]
+  ): number[] {
+    const internals = renderer as unknown as { ctx: CanvasRenderingContext2D };
+    const arcXs: number[] = [];
+    const originalArc = internals.ctx.arc.bind(internals.ctx);
+    internals.ctx.arc = (x: number, ...rest: [number, number, number, number, boolean?]) => {
+      arcXs.push(x);
+      originalArc(x, ...rest);
+    };
+
+    renderer.markDirty();
+    renderer.render({
+      nodes,
+      edges: [],
+      range: { startRow: 0, endRow: 1, startLane: 0, endLane: 99 },
+      offsetX: PADDING,
+      scrollLeft,
+      offsetY: PADDING,
+      refsByCommit: {},
+      authorEmails: {},
+      maxLane: 99,
+    });
+    internals.ctx.arc = originalArc;
+    return arcXs;
+  }
+
+  it('draws lane 0 against the column edge at the home position', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 200 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+
+    const arcXs = renderWide(renderer, column.maxScrollLeft);
+
+    // Node circles (plus the avatar circle in the text column) are drawn
+    // with arc(); the mainline node sits half a lane inside the right edge
+    expect(arcXs).to.include(column.right - LANE / 2);
+    renderer.destroy();
+  });
+
+  it('reveals the far lane when scrolled fully left', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 200 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+
+    const arcXs = renderWide(renderer, 0);
+
+    expect(arcXs).to.include(column.left + LANE / 2);
+    renderer.destroy();
+  });
+
+  it('clamps an out-of-range scroll to the home position', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 200 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+
+    const arcXs = renderWide(renderer, 99999);
+
+    expect(arcXs).to.include(column.right - LANE / 2);
+    renderer.destroy();
+  });
+
+  it('clips lane drawing to the column when lanes overflow it', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 200 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+    const internals = renderer as unknown as { ctx: CanvasRenderingContext2D };
+
+    const clipRects: Array<[number, number, number, number]> = [];
+    const originalRect = internals.ctx.rect.bind(internals.ctx);
+    internals.ctx.rect = (x: number, y: number, w: number, h: number) => {
+      clipRects.push([x, y, w, h]);
+      originalRect(x, y, w, h);
+    };
+    renderWide(renderer, column.maxScrollLeft);
+    internals.ctx.rect = originalRect;
+
+    const columnClip = clipRects.find(([x]) => x === column.left);
+    expect(columnClip, 'a clip rect starting at the column edge').to.not.be.undefined;
+    // Wide enough for the column plus the overhang of a node on lane 0
+    expect(columnClip![2]).to.equal(column.width + 10);
+    renderer.destroy();
+  });
+
+  it('does not clip when every lane fits', () => {
+    const renderer = makeWideRenderer(1200);
+    const internals = renderer as unknown as { ctx: CanvasRenderingContext2D };
+
+    const clipRects: number[] = [];
+    const originalRect = internals.ctx.rect.bind(internals.ctx);
+    internals.ctx.rect = (x: number, y: number, w: number, h: number) => {
+      clipRects.push(x);
+      originalRect(x, y, w, h);
+    };
+    renderer.markDirty();
+    renderer.render({
+      nodes: [makeNode('main', 0, 0)],
+      edges: [],
+      range: { startRow: 0, endRow: 0, startLane: 0, endLane: 0 },
+      offsetX: PADDING,
+      scrollLeft: 0,
+      offsetY: PADDING,
+      refsByCommit: {},
+      authorEmails: {},
+      maxLane: 0,
+    });
+    internals.ctx.rect = originalRect;
+
+    // Only the header clip (which starts at x = 0)
+    expect(clipRects.every((x) => x === 0)).to.be.true;
+    renderer.destroy();
+  });
+
+  it('places the text columns after the capped column at any scroll', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 200 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+    const internals = renderer as unknown as { ctx: CanvasRenderingContext2D };
+
+    for (const scrollLeft of [0, column.maxScrollLeft / 2, column.maxScrollLeft]) {
+      const textXs: number[] = [];
+      const originalFillText = internals.ctx.fillText.bind(internals.ctx);
+      internals.ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => {
+        if (text === 'msg') textXs.push(x);
+        originalFillText(text, x, y, maxWidth);
+      };
+      renderWide(renderer, scrollLeft);
+      internals.ctx.fillText = originalFillText;
+
+      const expectedMessageX = column.right + 20 + 22 + 8 + 200 + 12;
+      expect(textXs, `scrollLeft ${scrollLeft}`).to.deep.equal([
+        expectedMessageX,
+        expectedMessageX,
+      ]);
+    }
+    renderer.destroy();
+  });
+
+  it('shows a "more" hint for the lanes hidden beyond the column', () => {
+    const renderer = makeWideRenderer(1200, { graphColumnWidth: 320 });
+    const column = renderer.getGraphColumnLayout(99, PADDING);
+    const internals = renderer as unknown as { ctx: CanvasRenderingContext2D };
+
+    const texts: string[] = [];
+    const originalFillText = internals.ctx.fillText.bind(internals.ctx);
+    internals.ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => {
+      texts.push(text);
+      originalFillText(text, x, y, maxWidth);
+    };
+    renderWide(renderer, column.maxScrollLeft);
+
+    const hiddenLeft = (column.fullLaneWidth - column.width) / LANE;
+    expect(texts).to.include(`◂ ${hiddenLeft} more`);
+    expect(texts.some((t) => t.endsWith('more ▸'))).to.be.false;
+
+    texts.length = 0;
+    renderWide(renderer, 0);
+    expect(texts).to.include(`${hiddenLeft} more ▸`);
+    expect(texts.some((t) => t.startsWith('◂'))).to.be.false;
+    internals.ctx.fillText = originalFillText;
+    renderer.destroy();
+  });
+
+  it('shows no hint when every lane fits', () => {
+    const renderer = makeWideRenderer(1200);
+    const internals = renderer as unknown as { ctx: CanvasRenderingContext2D };
+
+    const texts: string[] = [];
+    const originalFillText = internals.ctx.fillText.bind(internals.ctx);
+    internals.ctx.fillText = (text: string, x: number, y: number, maxWidth?: number) => {
+      texts.push(text);
+      originalFillText(text, x, y, maxWidth);
+    };
+    renderer.markDirty();
+    renderer.render({
+      nodes: [makeNode('main', 0, 0)],
+      edges: [],
+      range: { startRow: 0, endRow: 0, startLane: 0, endLane: 0 },
+      offsetX: PADDING,
+      scrollLeft: 0,
+      offsetY: PADDING,
+      refsByCommit: {},
+      authorEmails: {},
+      maxLane: 0,
+    });
+    internals.ctx.fillText = originalFillText;
+
+    expect(texts.some((t) => t.includes('more'))).to.be.false;
     renderer.destroy();
   });
 });

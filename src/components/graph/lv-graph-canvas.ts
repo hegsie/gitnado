@@ -19,6 +19,14 @@ import {
 } from '../../graph/virtual-scroll.ts';
 import { CanvasRenderer, getThemeFromCSS } from '../../graph/canvas-renderer.ts';
 import {
+  MIN_VISIBLE_LANES,
+  clampScrollLeft,
+  isInsideGraphColumn,
+  laneScreenX,
+  reconcileScrollLeft,
+  type GraphColumnLayout,
+} from '../../graph/graph-column.ts';
+import {
   getCommitHistory,
   getCommitTotal,
   getRefsByCommit,
@@ -182,6 +190,41 @@ export class LvGraphCanvas extends LitElement {
 
       .scroll-content {
         position: relative;
+      }
+
+      /* Horizontal scrollbar for the graph column. Only rendered when the
+         lanes overflow the column; positioned under the column so it is
+         obvious what it scrolls. */
+      .hscroll-container {
+        position: absolute;
+        bottom: 0;
+        height: 10px;
+        overflow-x: scroll;
+        overflow-y: hidden;
+        z-index: 3; /* Above canvas for scrollbar interaction */
+      }
+
+      .hscroll-container::-webkit-scrollbar {
+        height: 10px;
+      }
+
+      .hscroll-container::-webkit-scrollbar-track {
+        background: var(--color-bg-secondary);
+        border-top: 1px solid var(--color-border);
+      }
+
+      .hscroll-container::-webkit-scrollbar-thumb {
+        background: var(--color-text-muted);
+        border-radius: 5px;
+        border: 2px solid var(--color-bg-secondary);
+      }
+
+      .hscroll-container::-webkit-scrollbar-thumb:hover {
+        background: var(--color-text-secondary);
+      }
+
+      .hscroll-content {
+        height: 1px;
       }
 
       .overlay-canvas {
@@ -725,15 +768,28 @@ export class LvGraphCanvas extends LitElement {
   // Column resize state
   @state() private refsColumnWidth = 200;
   @state() private statsColumnWidth = 80;
-  @state() private resizing: 'refs' | 'stats' | null = null;
+  /**
+   * User-chosen width of the graph (lane) column, or null for the
+   * automatic default. Lanes beyond it scroll horizontally inside the
+   * column instead of pushing the text columns off the canvas.
+   */
+  @state() private graphColumnWidth: number | null = null;
+  @state() private resizing: 'refs' | 'stats' | 'graph' | null = null;
   private resizeStartX = 0;
   private resizeStartWidth = 0;
+  /**
+   * `maxScrollLeft` of the graph column as of the last layout pass. A view
+   * parked at that limit (lane 0 against the column's right edge) is kept
+   * there when the lane count, zoom or column width changes.
+   */
+  private lastMaxScrollX = 0;
   private readonly COLUMN_STORAGE_KEY = 'gitnado-graph-columns';
   private readonly BRANCH_VISIBILITY_KEY = 'gitnado-hidden-branches';
 
   @query('.canvas-container') private containerEl!: HTMLDivElement;
   @query('canvas[role="img"]') private canvasEl!: HTMLCanvasElement;
   @query('.scroll-container') private scrollEl!: HTMLDivElement;
+  @query('.hscroll-container') private hscrollEl?: HTMLDivElement;
   @query('.minimap-canvas') private minimapEl?: HTMLCanvasElement;
 
   private commits: GraphCommit[] = [];
@@ -955,12 +1011,11 @@ export class LvGraphCanvas extends LitElement {
       const size = this.virtualScroll.getContentSize();
       const viewport = this.getViewport();
       const maxScrollY = Math.max(0, size.height - viewport.height);
-      const maxScrollX = Math.max(0, size.width - viewport.width);
       this.scrollState.setScroll(
         Math.min(previousScroll.scrollTop * ratioY, maxScrollY),
-        Math.min(previousScroll.scrollLeft * ratioX, maxScrollX)
+        previousScroll.scrollLeft
       );
-      this.syncScrollbarPosition();
+      this.reconcileHorizontalScroll(ratioX);
     }
 
     this.renderer?.markDirty();
@@ -988,6 +1043,9 @@ export class LvGraphCanvas extends LitElement {
     if (changedProperties.has('repositoryPath') && changedProperties.get('repositoryPath') !== undefined) {
       // Clear existing state when switching repositories
       this.layout = null;
+      // The new repository's graph opens on its mainline, wherever the
+      // previous one was scrolled to
+      this.lastMaxScrollX = 0;
       this.selectedNode = null;
       this.selectedNodes.clear();
       this.lastClickedNode = null;
@@ -1112,6 +1170,7 @@ export class LvGraphCanvas extends LitElement {
         showFps: false, // We show our own FPS
         refsColumnWidth: this.refsColumnWidth,
         statsColumnWidth: this.statsColumnWidth,
+        graphColumnWidth: this.graphColumnWidth,
         showAuthorColumn: this.showAuthorColumn,
         showDateColumn: this.showDateColumn,
         // The "Show Avatars" app setting controls whether author avatars
@@ -1924,6 +1983,10 @@ export class LvGraphCanvas extends LitElement {
     // Update scroll content size (spans the full history when unfiltered)
     this.updateVirtualTotalRows();
 
+    // The lane count may have changed: keep a view parked on the mainline
+    // parked there, and pull any other view back inside the graph column
+    this.reconcileHorizontalScroll();
+
     // Build spatial index (once per layout — scroll-independent)
     this.buildSpatialIndex();
 
@@ -2348,7 +2411,45 @@ export class LvGraphCanvas extends LitElement {
       scrollLeft: scroll.scrollLeft,
       width: this.containerEl?.clientWidth ?? 800,
       height: this.containerEl?.clientHeight ?? 600,
+      graphColumnWidth: this.getGraphColumn()?.width,
     };
+  }
+
+  /**
+   * Geometry of the graph column for the current layout, canvas size and
+   * column widths, or null before the graph exists.
+   */
+  private getGraphColumn(): GraphColumnLayout | null {
+    if (!this.renderer || !this.layout) return null;
+    return this.renderer.getGraphColumnLayout(this.layout.maxLane, this.PADDING);
+  }
+
+  /** Largest valid horizontal scroll of the graph column */
+  private getMaxScrollX(): number {
+    return this.getGraphColumn()?.maxScrollLeft ?? 0;
+  }
+
+  /**
+   * Re-fit the horizontal scroll after anything that changes the graph
+   * column's geometry (lane count, zoom, canvas or column resize). A view
+   * parked on the mainline stays parked there — that is the home position
+   * and where the lanes arrive as older commits load — while any other
+   * view is scaled by `scaleX` (zoom) and clamped into the new range.
+   */
+  private reconcileHorizontalScroll(scaleX = 1): void {
+    const column = this.getGraphColumn();
+    if (!column || !this.scrollState) return;
+
+    const { scrollTop, scrollLeft } = this.scrollState.getScroll();
+    const next = reconcileScrollLeft(column, scrollLeft, this.lastMaxScrollX, scaleX);
+    this.lastMaxScrollX = column.maxScrollLeft;
+    if (next !== scrollLeft) {
+      this.scrollState.setScroll(scrollTop, next);
+    }
+    this.syncScrollbarPosition();
+    // The horizontal scrollbar and the resize handles are DOM, positioned
+    // from the column geometry inside render()
+    this.requestUpdate();
   }
 
   private onResize(): void {
@@ -2359,6 +2460,8 @@ export class LvGraphCanvas extends LitElement {
     const height = this.containerEl.clientHeight;
 
     this.renderer.resize(width, height);
+    // The automatic column width follows the canvas width
+    this.reconcileHorizontalScroll();
     this.resizeMinimap();
     this.rebuildMinimapDots();
     this.scheduleRender();
@@ -2408,10 +2511,16 @@ export class LvGraphCanvas extends LitElement {
     const size = this.virtualScroll.getContentSize();
     const viewport = this.getViewport();
 
-    const maxScrollX = Math.max(0, size.width - viewport.width);
+    // Sideways wheel (trackpad, or shift+wheel — which some platforms
+    // report as a vertical delta with the shift key held) scrolls the
+    // lanes inside the graph column; the text columns never move
+    const maxScrollX = this.getMaxScrollX();
+    const sideways = e.shiftKey && e.deltaX === 0 && maxScrollX > 0;
+    const deltaX = sideways ? e.deltaY : e.deltaX;
+    const deltaY = sideways ? 0 : e.deltaY;
     const maxScrollY = Math.max(0, size.height - viewport.height);
 
-    this.scrollState.handleWheel(e.deltaX, e.deltaY, maxScrollX, maxScrollY);
+    this.scrollState.handleWheel(deltaX, deltaY, maxScrollX, maxScrollY);
 
     // Sync the native scrollbar position
     this.syncScrollbarPosition();
@@ -2422,13 +2531,23 @@ export class LvGraphCanvas extends LitElement {
       return;
     }
 
-    // Update internal scroll state from native scrollbar
+    // Update internal scroll state from native scrollbar (vertical only —
+    // the graph column has its own horizontal scrollbar)
     const scrollTop = this.scrollEl.scrollTop;
-    const scrollLeft = this.scrollEl.scrollLeft;
+    const { scrollLeft } = this.scrollState.getScroll();
 
     this.scrollState.setScroll(scrollTop, scrollLeft);
     this.checkLoadMore();
   }
+
+  /** The graph column's native horizontal scrollbar was dragged */
+  private handleNativeHScroll = (): void => {
+    if (!this.hscrollEl || !this.scrollState || this.isSyncingScroll) {
+      return;
+    }
+    const { scrollTop } = this.scrollState.getScroll();
+    this.scrollState.setScroll(scrollTop, this.hscrollEl.scrollLeft);
+  };
 
   private isSyncingScroll = false;
 
@@ -2440,12 +2559,29 @@ export class LvGraphCanvas extends LitElement {
     // Prevent feedback loop
     this.isSyncingScroll = true;
     this.scrollEl.scrollTop = scroll.scrollTop;
-    this.scrollEl.scrollLeft = scroll.scrollLeft;
+    if (this.hscrollEl) {
+      this.hscrollEl.scrollLeft = scroll.scrollLeft;
+    }
 
     // Reset flag after scroll event processes
     requestAnimationFrame(() => {
       this.isSyncingScroll = false;
     });
+  }
+
+  /**
+   * Scroll the graph column sideways by a number of lanes (negative =
+   * towards the higher-numbered lanes on the left). No-op when every lane
+   * already fits.
+   */
+  private scrollGraphColumnByLanes(lanes: number): void {
+    const column = this.getGraphColumn();
+    if (!column || !this.scrollState || column.maxScrollLeft === 0) return;
+    const { scrollTop, scrollLeft } = this.scrollState.getScroll();
+    const next = clampScrollLeft(column, scrollLeft + lanes * this.LANE_WIDTH);
+    if (next === scrollLeft) return;
+    this.scrollState.setScroll(scrollTop, next);
+    this.syncScrollbarPosition();
   }
 
   private handleMouseMove = (e: MouseEvent): void => {
@@ -2753,6 +2889,17 @@ export class LvGraphCanvas extends LitElement {
         newIndex = this.sortedNodesByRow.length - 1;
         break;
 
+      // Sideways: reveal lanes hidden beyond the graph column's edges
+      case 'ArrowLeft':
+        e.preventDefault();
+        this.scrollGraphColumnByLanes(-MIN_VISIBLE_LANES);
+        return;
+
+      case 'ArrowRight':
+        e.preventDefault();
+        this.scrollGraphColumnByLanes(MIN_VISIBLE_LANES);
+        return;
+
       case 'PageDown':
         e.preventDefault();
         if (currentIndex === -1) {
@@ -2822,18 +2969,15 @@ export class LvGraphCanvas extends LitElement {
     if (!this.scrollState || !this.virtualScroll) return;
 
     const viewport = this.getViewport();
+    const column = this.getGraphColumn();
     const nodeY = this.PADDING + node.row * this.ROW_HEIGHT;
-    const nodeX = this.PADDING + node.lane * this.LANE_WIDTH;
 
     // Calculate visible area
     const visibleTop = viewport.scrollTop;
     const visibleBottom = viewport.scrollTop + viewport.height;
-    const visibleLeft = viewport.scrollLeft;
-    const visibleRight = viewport.scrollLeft + viewport.width;
 
     // Scroll margins for keeping node comfortably in view
     const marginY = this.ROW_HEIGHT * 2;
-    const marginX = this.LANE_WIDTH * 2;
 
     let targetScrollTop = viewport.scrollTop;
     let targetScrollLeft = viewport.scrollLeft;
@@ -2847,13 +2991,24 @@ export class LvGraphCanvas extends LitElement {
       targetScrollTop = Math.min(maxScrollY, nodeY - viewport.height + marginY + this.ROW_HEIGHT);
     }
 
-    // Horizontal scrolling
-    if (nodeX < visibleLeft + marginX) {
-      targetScrollLeft = Math.max(0, nodeX - marginX);
-    } else if (nodeX > visibleRight - marginX - this.LANE_WIDTH) {
-      const size = this.virtualScroll.getContentSize();
-      const maxScrollX = Math.max(0, size.width - viewport.width);
-      targetScrollLeft = Math.min(maxScrollX, nodeX - viewport.width + marginX + this.LANE_WIDTH);
+    // Horizontal scrolling: bring the node's lane inside the graph column.
+    // The graph is mirrored (lane 0 drawn rightmost), so measure the lane's
+    // on-screen x rather than assuming lanes grow to the right.
+    if (column && column.maxScrollLeft > 0 && this.layout) {
+      const marginX = Math.min(this.LANE_WIDTH * 2, column.width / 4);
+      const nodeScreenX = laneScreenX(
+        column,
+        this.LANE_WIDTH,
+        this.layout.maxLane,
+        node.lane,
+        viewport.scrollLeft
+      );
+      if (nodeScreenX < column.left + marginX) {
+        targetScrollLeft = viewport.scrollLeft - (column.left + marginX - nodeScreenX);
+      } else if (nodeScreenX > column.right - marginX) {
+        targetScrollLeft = viewport.scrollLeft + (nodeScreenX - (column.right - marginX));
+      }
+      targetScrollLeft = clampScrollLeft(column, targetScrollLeft);
     }
 
     // Apply scroll if needed
@@ -3114,11 +3269,16 @@ export class LvGraphCanvas extends LitElement {
     const viewport = this.getViewport();
 
     // Convert screen coords to graph coords, accounting for header offset
-    const graphX = e.clientX - rect.left + viewport.scrollLeft;
+    const screenX = e.clientX - rect.left;
+    const graphX = screenX + viewport.scrollLeft;
     const graphY = e.clientY - rect.top + viewport.scrollTop - this.HEADER_HEIGHT;
 
-    // First check spatial index for node hits
-    if (this.spatialIndex) {
+    // First check spatial index for node hits. Lanes scrolled out of the
+    // graph column are clipped, so a pointer outside the column can only
+    // be over a row, never over a (hidden) node or edge.
+    const column = this.getGraphColumn();
+    const overLanes = column === null || isInsideGraphColumn(column, screenX);
+    if (this.spatialIndex && overLanes) {
       const result = this.spatialIndex.hitTest(graphX, graphY);
       if (result.type === 'node' && result.node) {
         return result;
@@ -3226,9 +3386,10 @@ export class LvGraphCanvas extends LitElement {
     try {
       const saved = localStorage.getItem(this.COLUMN_STORAGE_KEY);
       if (saved) {
-        const { refs, stats } = JSON.parse(saved);
+        const { refs, stats, graph } = JSON.parse(saved);
         this.refsColumnWidth = refs ?? 200;
         this.statsColumnWidth = stats ?? 80;
+        this.graphColumnWidth = typeof graph === 'number' && graph > 0 ? graph : null;
       }
     } catch {
       // Ignore parse errors, use defaults
@@ -3240,6 +3401,7 @@ export class LvGraphCanvas extends LitElement {
       localStorage.setItem(this.COLUMN_STORAGE_KEY, JSON.stringify({
         refs: this.refsColumnWidth,
         stats: this.statsColumnWidth,
+        graph: this.graphColumnWidth,
       }));
     } catch {
       // Ignore storage errors
@@ -3549,17 +3711,30 @@ export class LvGraphCanvas extends LitElement {
     this.renderer?.setConfig({
       refsColumnWidth: this.refsColumnWidth,
       statsColumnWidth: this.statsColumnWidth,
+      graphColumnWidth: this.graphColumnWidth,
     });
+    // Any of these can move the graph column's right edge or its cap
+    this.reconcileHorizontalScroll();
   }
 
-  private handleResizeStart(e: MouseEvent, column: 'refs' | 'stats'): void {
+  private handleResizeStart(e: MouseEvent, column: 'refs' | 'stats' | 'graph'): void {
     e.preventDefault();
     e.stopPropagation();
     this.resizing = column;
     this.resizeStartX = e.clientX;
-    this.resizeStartWidth = column === 'refs'
-      ? this.refsColumnWidth
-      : this.statsColumnWidth;
+    switch (column) {
+      case 'refs':
+        this.resizeStartWidth = this.refsColumnWidth;
+        break;
+      case 'stats':
+        this.resizeStartWidth = this.statsColumnWidth;
+        break;
+      case 'graph':
+        // Start from the width actually on screen, so the drag continues
+        // from where the handle is rather than from a stale preference
+        this.resizeStartWidth = this.getGraphColumn()?.width ?? 0;
+        break;
+    }
 
     document.addEventListener('mousemove', this.handleResizeMove);
     document.addEventListener('mouseup', this.handleResizeEnd);
@@ -3573,6 +3748,14 @@ export class LvGraphCanvas extends LitElement {
     if (this.resizing === 'refs') {
       // Refs column: wider when dragging right
       this.refsColumnWidth = Math.max(80, Math.min(400, this.resizeStartWidth + delta));
+    } else if (this.resizing === 'graph') {
+      // Graph column: wider when dragging right. The renderer caps it so
+      // the message column keeps its minimum width; the floor keeps a few
+      // lanes visible.
+      this.graphColumnWidth = Math.max(
+        MIN_VISIBLE_LANES * this.LANE_WIDTH,
+        Math.round(this.resizeStartWidth + delta)
+      );
     } else {
       // Stats column: wider when dragging left (inverted)
       this.statsColumnWidth = Math.max(50, Math.min(150, this.resizeStartWidth - delta));
@@ -3590,9 +3773,26 @@ export class LvGraphCanvas extends LitElement {
     this.saveColumnWidths();
   };
 
-  private getResizeHandlePositions(): { refsEnd: number; statsStart: number } | null {
+  private getResizeHandlePositions(): {
+    graphEnd: number;
+    refsEnd: number;
+    statsStart: number;
+  } | null {
     if (!this.renderer || !this.layout) return null;
     return this.renderer.getColumnBoundaries(this.layout.maxLane, this.PADDING);
+  }
+
+  /**
+   * The graph column's horizontal scrollbar is DOM; it exists only while
+   * lanes overflow the column, so a freshly rendered one starts at
+   * scrollLeft 0 and has to be moved to the current position.
+   */
+  protected updated(): void {
+    if (!this.hscrollEl || !this.scrollState) return;
+    const { scrollLeft } = this.scrollState.getScroll();
+    if (Math.abs(this.hscrollEl.scrollLeft - scrollLeft) > 0.5) {
+      this.syncScrollbarPosition();
+    }
   }
 
   private renderGraph(): void {
@@ -3757,6 +3957,7 @@ export class LvGraphCanvas extends LitElement {
 
   render() {
     const handlePositions = this.getResizeHandlePositions();
+    const graphColumn = this.getGraphColumn();
 
     return html`
       <div class="container">
@@ -3764,6 +3965,21 @@ export class LvGraphCanvas extends LitElement {
           <div class="scroll-container">
             <div class="scroll-content"></div>
           </div>
+          ${graphColumn && graphColumn.maxScrollLeft > 0
+            ? html`
+                <div
+                  class="hscroll-container"
+                  title="Scroll graph lanes"
+                  style="left: ${graphColumn.left}px; width: ${graphColumn.width}px"
+                  @scroll=${this.handleNativeHScroll}
+                >
+                  <div
+                    class="hscroll-content"
+                    style="width: ${graphColumn.fullLaneWidth}px"
+                  ></div>
+                </div>
+              `
+            : ''}
           <canvas
             tabindex="0"
             role="img"
@@ -3782,6 +3998,12 @@ export class LvGraphCanvas extends LitElement {
 
           ${handlePositions
             ? html`
+                <div
+                  class="resize-handle ${this.resizing === 'graph' ? 'dragging' : ''}"
+                  title="Resize graph column"
+                  style="left: ${handlePositions.graphEnd}px"
+                  @mousedown=${(e: MouseEvent) => this.handleResizeStart(e, 'graph')}
+                ></div>
                 <div
                   class="resize-handle ${this.resizing === 'refs' ? 'dragging' : ''}"
                   style="left: ${handlePositions.refsEnd}px"

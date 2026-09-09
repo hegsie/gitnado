@@ -3,7 +3,7 @@
  * the numeric edge index, and direct (momentum-free) wheel scrolling.
  */
 import { expect } from '@open-wc/testing';
-import { VirtualScrollManager, ScrollStateManager } from '../virtual-scroll.ts';
+import { VirtualScrollManager, ScrollStateManager, type Viewport } from '../virtual-scroll.ts';
 import {
   assignLanes,
   type GraphCommit,
@@ -331,5 +331,176 @@ describe('VirtualScrollManager wide-graph lane culling', () => {
           Math.max(e.fromRow, e.toRow) >= data.range.startRow
       )
     ).to.be.true;
+  });
+});
+
+/**
+ * With a bounded graph column the lanes scroll inside the column, so the
+ * horizontally visible strip is [scrollLeft, scrollLeft + column width]
+ * rather than the whole viewport.
+ */
+describe('VirtualScrollManager bounded graph column', () => {
+  const ROW_HEIGHT = 22;
+  const LANE_WIDTH = 16;
+  const PADDING = 20;
+  const MAX_LANE = 99;
+  const COLUMN_W = 20 * LANE_WIDTH;
+  const FULL_W = (MAX_LANE + 1) * LANE_WIDTH;
+  const HOME = FULL_W - COLUMN_W;
+
+  function makeNode(row: number, lane: number): LayoutNode {
+    const oid = `n${row}`;
+    return {
+      oid,
+      row,
+      lane,
+      commit: { oid, parentIds: [], timestamp: 100 - row, message: `Commit ${row}`, author: 'T' },
+      childLanes: [],
+      parentLanes: [],
+      colorIndex: lane,
+      hasMissingParents: false,
+    };
+  }
+
+  function makeManager(): VirtualScrollManager {
+    // One node per row: rows cycle through lanes 0, 50 and 99 with a
+    // straight edge back to the previous row in the same lane
+    const nodes = new Map<string, LayoutNode>();
+    const edges: LayoutEdge[] = [];
+    const lanes = [0, 50, MAX_LANE];
+    for (let row = 0; row < 30; row++) {
+      const lane = lanes[row % 3];
+      nodes.set(`n${row}`, makeNode(row, lane));
+      if (row >= 3) {
+        edges.push({
+          fromOid: `n${row}`,
+          toOid: `n${row - 3}`,
+          fromRow: row,
+          toRow: row - 3,
+          fromLane: lane,
+          toLane: lane,
+          isMerge: false,
+          colorIndex: lane,
+        });
+      }
+    }
+    const manager = new VirtualScrollManager({
+      rowHeight: ROW_HEIGHT,
+      laneWidth: LANE_WIDTH,
+      padding: PADDING,
+      overscanRows: 2,
+    });
+    manager.setLayout({ nodes, edges, maxLane: MAX_LANE, totalRows: 30 });
+    return manager;
+  }
+
+  function viewport(scrollLeft: number): Viewport {
+    return {
+      scrollTop: 0,
+      scrollLeft,
+      width: 1200,
+      height: 10 * ROW_HEIGHT,
+      graphColumnWidth: COLUMN_W,
+    };
+  }
+
+  it('culls to the lanes inside the column at the home position', () => {
+    const range = makeManager().getVisibleRange(viewport(HOME));
+
+    // Columns 80..99 are on screen (plus 2 of overscan each side):
+    // lanes 0..19, widened to 0..21
+    expect(range.startLane).to.equal(0);
+    expect(range.endLane).to.equal(21);
+  });
+
+  it('culls to the far lanes when scrolled fully left', () => {
+    const range = makeManager().getVisibleRange(viewport(0));
+
+    expect(range.endLane).to.equal(MAX_LANE);
+    expect(range.startLane).to.equal(MAX_LANE - 22);
+  });
+
+  it('drops edges of lanes hidden beyond the column', () => {
+    const home = makeManager().getRenderData(viewport(HOME));
+    expect(home.edges.length).to.be.greaterThan(0);
+    expect(home.edges.every((e) => e.fromLane === 0)).to.be.true;
+
+    const left = makeManager().getRenderData(viewport(0));
+    expect(left.edges.length).to.be.greaterThan(0);
+    expect(left.edges.every((e) => e.fromLane === MAX_LANE)).to.be.true;
+  });
+
+  it('still returns every visible row at any scroll', () => {
+    const manager = makeManager();
+    for (const scrollLeft of [0, HOME / 2, HOME]) {
+      const data = manager.getRenderData(viewport(scrollLeft));
+      const expectedRows = data.range.endRow - data.range.startRow + 1;
+      expect(data.nodes.length, `scrollLeft ${scrollLeft}`).to.equal(expectedRows);
+    }
+  });
+
+  it('passes the scroll offset through unchanged and keeps offsetX at the padding', () => {
+    const data = makeManager().getRenderData(viewport(123));
+
+    expect(data.scrollLeft).to.equal(123);
+    expect(data.offsetX).to.equal(PADDING);
+  });
+
+  it('falls back to viewport-wide culling without a column width', () => {
+    const wide = makeManager().getVisibleRange({
+      scrollTop: 0,
+      scrollLeft: 0,
+      width: 5000,
+      height: 10 * ROW_HEIGHT,
+    });
+
+    expect(wide.startLane).to.equal(0);
+    expect(wide.endLane).to.equal(MAX_LANE);
+  });
+
+  describe('scrollToNode', () => {
+    it('leaves a lane that already fits alone (no overflow)', () => {
+      const manager = new VirtualScrollManager({
+        rowHeight: ROW_HEIGHT,
+        laneWidth: LANE_WIDTH,
+        padding: PADDING,
+        overscanRows: 2,
+      });
+      const nodes = new Map([['n0', makeNode(0, 1)]]);
+      manager.setLayout({ nodes, edges: [], maxLane: 1, totalRows: 1 });
+
+      const { scrollLeft } = manager.scrollToNode(makeNode(0, 1), {
+        scrollTop: 0,
+        scrollLeft: 0,
+        width: 800,
+        height: 200,
+        graphColumnWidth: 2 * LANE_WIDTH,
+      });
+      expect(scrollLeft).to.equal(0);
+    });
+
+    it('brings the mainline to the right edge of the column', () => {
+      const { scrollLeft } = makeManager().scrollToNode(makeNode(0, 0), viewport(0), 'end');
+      expect(scrollLeft).to.equal(HOME);
+    });
+
+    it('brings the far lane to the left edge of the column', () => {
+      const { scrollLeft } = makeManager().scrollToNode(
+        makeNode(2, MAX_LANE),
+        viewport(HOME),
+        'start'
+      );
+      expect(scrollLeft).to.equal(0);
+    });
+
+    it('centres a middle lane and clamps into the scroll range', () => {
+      const { scrollLeft } = makeManager().scrollToNode(makeNode(1, 50), viewport(HOME));
+      // Lane 50 is drawn at column 49; centred means its middle sits at
+      // half the column width
+      expect(scrollLeft).to.equal(49 * LANE_WIDTH + LANE_WIDTH / 2 - COLUMN_W / 2);
+
+      const clamped = makeManager().scrollToNode(makeNode(0, 0), viewport(0));
+      expect(clamped.scrollLeft).to.equal(HOME);
+    });
   });
 });
