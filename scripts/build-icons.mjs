@@ -48,8 +48,11 @@ export const APPLE_MARGIN = (APPLE_CANVAS - APPLE_BODY) / 2;
 
 /**
  * Apple's margin at `size`, as the build lays it out: a whole number of
- * pixels, identical on all four sides, rounding down so the body never
- * exceeds Apple's proportion. The contract test asserts against this.
+ * pixels, identical on all four sides. It rounds DOWN, so at the small
+ * sizes the body comes out a little larger than Apple's proportion
+ * (14/16 at 16px, 26/32 at 32px) rather than smaller — the pixel goes to
+ * the art, not the margin, which is also what a downscale of the 1024
+ * canvas lands on. The contract test asserts against this function.
  */
 export const macMargin = (size) => Math.floor((size * APPLE_MARGIN) / APPLE_CANVAS);
 
@@ -529,35 +532,48 @@ function memo(f) {
 }
 
 /**
- * Build every output from the master PNG bytes. Returns a Map of repo-
- * relative path → file bytes; nothing is written.
+ * Render every output from the master PNG bytes, as straight 8-bit images
+ * — the step before any container encoding, which is all the contract
+ * test needs to compare pixels. Returns
+ *   { pngs: Map<path, image>, ico: [{ size, image }],
+ *     icns: { png: [{ type, image }], legacy: [{ type, mask, image }] } }.
  */
-export function buildIcons(sourcePng) {
+export function renderIcons(sourcePng) {
   const source = decodePng(sourcePng);
   if (source.width !== APPLE_CANVAS || source.height !== APPLE_CANVAS) {
     throw new Error(`master must be ${APPLE_CANVAS}x${APPLE_CANVAS}, got ${source.width}x${source.height}`);
   }
   const master = enhance(toPremultiplied(source), ENHANCE);
-  const files = new Map();
-  const fullBleedPng = memo((size) => encodePng(toStraight8(fullBleed(master, size))));
-
-  for (const [path, size] of Object.entries(FULL_BLEED_PNGS)) files.set(path, fullBleedPng(size));
-
-  files.set(
-    ICO_PATH,
-    encodeIco(ICO_SIZES.map((size) => ({ size, png: fullBleedPng(size) }))),
-  );
-
+  const fullBleedFor = memo((size) => toStraight8(fullBleed(master, size)));
   const macFor = memo((size) => toStraight8(macCanvas(master, size)));
-  const macPngFor = memo((size) => encodePng(macFor(size)));
-  const pngEntries = Object.entries(ICNS_PNG_TYPES).map(([type, size]) => ({ type, png: macPngFor(size) }));
-  const legacy = Object.entries(ICNS_LEGACY_TYPES).map(([type, { mask, size }]) => ({
-    type,
-    mask,
-    image: macFor(size),
-  }));
-  files.set(ICNS_PATH, encodeIcns(pngEntries, legacy));
 
+  return {
+    pngs: new Map(Object.entries(FULL_BLEED_PNGS).map(([path, size]) => [path, fullBleedFor(size)])),
+    ico: ICO_SIZES.map((size) => ({ size, image: fullBleedFor(size) })),
+    icns: {
+      png: Object.entries(ICNS_PNG_TYPES).map(([type, size]) => ({ type, image: macFor(size) })),
+      legacy: Object.entries(ICNS_LEGACY_TYPES).map(([type, { mask, size }]) => ({ type, mask, image: macFor(size) })),
+    },
+  };
+}
+
+/**
+ * Build every output from the master PNG bytes. Returns a Map of repo-
+ * relative path → file bytes; nothing is written.
+ */
+export function buildIcons(sourcePng) {
+  const { pngs, ico, icns } = renderIcons(sourcePng);
+  const encoded = memo((image) => encodePng(image)); // the same image object serves several outputs
+  const files = new Map();
+  for (const [path, image] of pngs) files.set(path, encoded(image));
+  files.set(ICO_PATH, encodeIco(ico.map(({ size, image }) => ({ size, png: encoded(image) }))));
+  files.set(
+    ICNS_PATH,
+    encodeIcns(
+      icns.png.map(({ type, image }) => ({ type, png: encoded(image) })),
+      icns.legacy,
+    ),
+  );
   return files;
 }
 

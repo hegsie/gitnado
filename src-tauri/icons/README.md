@@ -44,6 +44,7 @@ as `tauri icon` made them, and the build does not touch them.
 | `icon.icns`                                    | macOS: Dock, Finder, app switcher, DMG, About                       |
 | `32x32.png`                                    | macOS menu-bar tray icon (`default_window_icon`); Linux             |
 | `128x128.png`, `128x128@2x.png`, `icon.png`    | Linux hicolor icons (128, 256, 512) in AppImage/deb/rpm, via `bundle.icon` |
+| `64x64.png`                                    | nothing today — kept current for parity with `tauri icon`'s set     |
 | `icon.ico`                                     | Windows: taskbar, Explorer, installer; entry 0 (32px) is the window and tray icon |
 | `Square*Logo.png`, `StoreLogo.png`             | Windows Store/MSIX tiles — no current bundle target reads them; kept current so nothing here carries the old art |
 | `site/assets/{favicon-64,icon-256,icon-512}`   | the website                                                         |

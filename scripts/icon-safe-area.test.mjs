@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { test } from 'node:test';
@@ -33,6 +33,7 @@ import {
   SOURCE,
   buildIcons,
   enhance,
+  renderIcons,
   encodeIco,
   encodeIcns,
   icnsRle,
@@ -52,15 +53,29 @@ import { REPO_ROOT, alphaOf, crc32, decodePng, encodePng } from './png.mjs';
 const readRepoFile = (path) => readFileSync(join(REPO_ROOT, path));
 const SOURCE_PNG = readRepoFile(SOURCE);
 
-/** The fresh build and the committed files, made once, on first use — so a single selected test does not pay for it. */
+/**
+ * The fresh render and the committed files, made once, on first use — so a
+ * single selected test does not pay for it. Rendering stops at pixels: the
+ * container encoding is exercised by its own tests below, and comparing
+ * pixels is what the contract is about.
+ */
 let cache;
 function built() {
   if (!cache) {
-    const fresh = buildIcons(SOURCE_PNG);
-    cache = { BUILT: fresh, COMMITTED: new Map([...fresh.keys()].map((path) => [path, readRepoFile(path)])) };
+    const RENDERED = renderIcons(SOURCE_PNG);
+    const paths = [...RENDERED.pngs.keys(), ICO_PATH, ICNS_PATH];
+    const COMMITTED = new Map(
+      paths.map((path) => {
+        const file = join(REPO_ROOT, path);
+        assert.ok(existsSync(file), `${path} is missing — run node scripts/build-icons.mjs`);
+        return [path, readFileSync(file)];
+      }),
+    );
+    cache = { RENDERED, COMMITTED };
   }
   return cache;
 }
+
 const legacySize = (type) => Object.values(ICNS_LEGACY_TYPES).find((t) => t.mask === type)?.size;
 
 /** Decode the ICNS PackBits variant `icnsRle` writes. */
@@ -87,48 +102,50 @@ function maxDifference(a, b) {
   return worst;
 }
 
-function assertSamePng(committed, built, label) {
-  const c = decodePng(committed);
-  const b = decodePng(built);
-  assert.equal(c.width, b.width, `${label}: width`);
-  assert.equal(c.height, b.height, `${label}: height`);
-  assert.ok(maxDifference(c.data, b.data) <= 1, `${label}: pixels differ from a fresh build — run node scripts/build-icons.mjs`);
+const REBUILD = 'differs from a fresh build — run node scripts/build-icons.mjs';
+
+/** A committed PNG against a freshly rendered straight-8 image. */
+function assertSamePixels(committedPng, image, label) {
+  const c = decodePng(committedPng);
+  assert.equal(c.width, image.width, `${label}: width`);
+  assert.equal(c.height, image.height, `${label}: height`);
+  assert.ok(maxDifference(c.data, image.data) <= 1, `${label}: pixels ${REBUILD}`);
 }
 
+/** One colour plane of a straight-8 image. */
+const planeOf = (image, channel) => Uint8Array.from({ length: image.width * image.height }, (_, i) => image.data[i * 4 + channel]);
+
 test('every committed icon is what build-icons.mjs produces from the master', () => {
-  const { BUILT, COMMITTED } = built();
-  for (const [path, fresh] of BUILT) {
-    const committed = COMMITTED.get(path);
-    if (path === ICO_PATH) {
-      const c = readIcoEntries(committed);
-      const b = readIcoEntries(fresh);
-      assert.deepEqual(
-        c.map((e) => e.size),
-        b.map((e) => e.size),
-        `${path}: entry sizes`,
-      );
-      c.forEach((entry, i) => assertSamePng(entry.payload, b[i].payload, `${path} ${entry.size}px`));
-    } else if (path === ICNS_PATH) {
-      const c = readIcnsEntries(committed);
-      const b = readIcnsEntries(fresh);
-      assert.deepEqual(
-        c.map((e) => e.type),
-        b.map((e) => e.type),
-        `${path}: entry types`,
-      );
-      c.forEach((entry, i) => {
-        const fresh = b[i].payload;
-        if (entry.type in ICNS_PNG_TYPES) assertSamePng(entry.payload, fresh, `${path} ${entry.type}`);
-        else if (entry.type in ICNS_LEGACY_TYPES) {
-          assert.ok(
-            maxDifference(icnsRleDecode(entry.payload), icnsRleDecode(fresh)) <= 1,
-            `${path} ${entry.type}: RGB differs from a fresh build`,
-          );
-        } else assert.ok(maxDifference(entry.payload, fresh) <= 1, `${path} ${entry.type}: mask differs from a fresh build`);
-      });
-    } else {
-      assertSamePng(committed, fresh, path);
-    }
+  const { RENDERED, COMMITTED } = built();
+  for (const [path, image] of RENDERED.pngs) assertSamePixels(COMMITTED.get(path), image, path);
+
+  const ico = readIcoEntries(COMMITTED.get(ICO_PATH));
+  assert.deepEqual(
+    ico.map((e) => e.size),
+    RENDERED.ico.map((e) => e.size),
+    `${ICO_PATH}: entry sizes ${REBUILD}`,
+  );
+  ico.forEach((entry, i) => assertSamePixels(entry.payload, RENDERED.ico[i].image, `${ICO_PATH} ${entry.size}px`));
+
+  const icns = readIcnsEntries(COMMITTED.get(ICNS_PATH));
+  const fresh = new Map([
+    ...RENDERED.icns.png.map(({ type, image }) => [type, { image }]),
+    ...RENDERED.icns.legacy.flatMap(({ type, mask, image }) => [
+      [type, { rgb: Buffer.concat([0, 1, 2].map((c) => planeOf(image, c))) }],
+      [mask, { alpha: planeOf(image, 3) }],
+    ]),
+  ]);
+  assert.deepEqual(
+    icns.map((e) => e.type),
+    [...fresh.keys()],
+    `${ICNS_PATH}: entry types ${REBUILD}`,
+  );
+  for (const { type, payload } of icns) {
+    const expected = fresh.get(type);
+    const label = `${ICNS_PATH} ${type}`;
+    if (expected.image) assertSamePixels(payload, expected.image, label);
+    else if (expected.rgb) assert.ok(maxDifference(icnsRleDecode(payload), expected.rgb) <= 1, `${label}: RGB ${REBUILD}`);
+    else assert.ok(maxDifference(payload, expected.alpha) <= 1, `${label}: mask ${REBUILD}`);
   }
 });
 
@@ -191,22 +208,17 @@ test('the Windows, Linux and website PNGs stay full-bleed at their declared size
 });
 
 test('transparent pixels carry no colour, in every built PNG', () => {
-  const check = (png, label) => {
-    const { data } = decodePng(png);
+  const check = ({ data }, label) => {
     for (let i = 0; i < data.length; i += 4) {
       if (data[i + 3] === 0) {
         assert.ok(data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0, `${label}: transparent pixel ${i / 4} has colour`);
       }
     }
   };
-  for (const [path, bytes] of built().BUILT) {
-    if (path === ICO_PATH) readIcoEntries(bytes).forEach((e) => check(e.payload, `${path} ${e.size}px`));
-    else if (path === ICNS_PATH) {
-      readIcnsEntries(bytes)
-        .filter((e) => e.type in ICNS_PNG_TYPES)
-        .forEach((e) => check(e.payload, `${path} ${e.type}`));
-    } else check(bytes, path);
-  }
+  const { RENDERED } = built();
+  for (const [path, image] of RENDERED.pngs) check(image, path);
+  for (const { size, image } of RENDERED.ico) check(image, `${ICO_PATH} ${size}px`);
+  for (const { type, image } of RENDERED.icns.png) check(image, `${ICNS_PATH} ${type}`);
 });
 
 test('icon.ico carries every size Windows asks for, 32 first, each full-bleed', () => {
