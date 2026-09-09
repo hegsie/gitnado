@@ -477,7 +477,10 @@ function icnsEntry(type, payload) {
   return Buffer.concat([header, payload]);
 }
 
-/** ICNS container. `pngEntries` is `[{ type, png }]`, `legacy` `[{ type, mask, rgba8 }]`. */
+/**
+ * ICNS container. `pngEntries` is `[{ type, png }]`; `legacy` is
+ * `[{ type, mask, image }]` with `image` a straight 8-bit `{ width, height, data }`.
+ */
 export function encodeIcns(pngEntries, legacy) {
   const parts = [];
   for (const { type, png } of pngEntries) parts.push(icnsEntry(type, png));
