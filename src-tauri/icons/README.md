@@ -31,9 +31,11 @@ as `tauri icon` made them, and the build does not touch them.
 - **Sharpening at 64px and below.** Windows taskbar and Explorer (16–48px),
   Linux trays and Finder list view are where the tornado's thin strokes turn
   to mush without it.
-- **A touch more saturation and contrast, and a light rim** in the tornado's
-  own cyan along the tile edge, so the dark tile has an outline against dark
-  docks and taskbars. Parameters live at the top of `scripts/build-icons.mjs`.
+- **No outline.** The master carries a bright cyan band (and a dark outer
+  line) around the tile edge; the build paints it over with the ground just
+  inside it, so the tile ends in its own gradient.
+- **A touch more saturation and contrast.** Parameters live at the top of
+  `scripts/build-icons.mjs`.
 - **Every size Windows asks for** in `icon.ico` (16, 20, 24, 32, 40, 48, 64,
   256), so the shell scales nothing it does not have to.
 

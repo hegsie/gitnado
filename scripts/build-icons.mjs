@@ -12,9 +12,10 @@
  *   - macOS lays icons out on Apple's grid — an 824x824 body on a 1024
  *     canvas, with a soft shadow — so a full-bleed tile renders oversized
  *     and looks cut off in the Dock.
- * On top of that the art itself is a dark tile that sinks into dark docks
- * and taskbars; a touch more saturation and contrast and a faint light rim
- * give it an edge to stand on. All of it is done here, in one place,
+ * On top of that the art master carries a bright cyan band around the tile
+ * edge that reads as an outline at every size; it is painted over from the
+ * interior here, and a touch more saturation and contrast lifts the rest.
+ * All of it is done here, in one place,
  * deterministically: the same source always produces the same bytes, which
  * is what lets the contract test regenerate and compare.
  *
@@ -64,20 +65,19 @@ export const macMargin = (size) => Math.floor((size * APPLE_MARGIN) / APPLE_CANV
 export const SHADOW = { opacity: 0.3, offsetY: 12, sigma: 12 };
 
 /**
+ * The band around the master's tile edge — a dark outer line and a bright
+ * cyan inner one, about 14px deep at 1024 — is painted over with the
+ * colour this many pixels further in, so the tile ends in its own ground.
+ */
+export const BORDER_DEPTH = 15;
+
+/**
  * The "pop" pass, applied once to the master before any resizing.
  *   saturation  — chroma multiplier about each pixel's luma;
  *   contrast    — slope about mid-grey, so the navy ground darkens a touch
- *                 and the cyan strokes lift;
- *   rim         — a light line inside the tile's edge, in the tornado's
- *                 own cyan, so the tile has an outline against dark docks
- *                 and taskbars. `width` is the sigma in px at 1024,
- *                 `strength` the peak blend.
+ *                 and the cyan strokes lift.
  */
-export const ENHANCE = {
-  saturation: 1.12,
-  contrast: 1.06,
-  rim: { colour: [150, 225, 255], width: 5, strength: 0.28 },
-};
+export const ENHANCE = { saturation: 1.12, contrast: 1.06 };
 
 /** Sizes at or below this get an unsharp mask after the resample. */
 export const SHARPEN_UP_TO = 64;
@@ -324,16 +324,98 @@ export function sharpen(image, { sigma, amount }) {
 }
 
 /**
- * The pop pass on the premultiplied master: saturation and contrast on the
- * straight colour, then the rim light blended in along the inside of the
- * tile edge. The rim mask is `alpha * (1 - blur(alpha))`: zero deep inside
- * the tile and outside it, peaking just inside the edge.
+ * Signed distance from a point to the edge of a rounded square of side
+ * `size` with corner radius `r`, negative inside, and the unit normal
+ * pointing outward. Bilinear sampling and the border strip below use it.
  */
-export function enhance(image, { saturation, contrast, rim }) {
+function roundedSquareEdge(x, y, size, r) {
+  const half = size / 2;
+  const qx = Math.abs(x - half) - (half - r);
+  const qy = Math.abs(y - half) - (half - r);
+  const mx = Math.max(qx, 0);
+  const my = Math.max(qy, 0);
+  const outside = Math.hypot(mx, my);
+  const distance = outside + Math.min(Math.max(qx, qy), 0) - r;
+  let nx;
+  let ny;
+  if (outside > 0) {
+    nx = mx / outside;
+    ny = my / outside;
+  } else if (qx > qy) {
+    nx = 1;
+    ny = 0;
+  } else {
+    nx = 0;
+    ny = 1;
+  }
+  return { distance, nx: nx * Math.sign(x - half || 1), ny: ny * Math.sign(y - half || 1) };
+}
+
+/**
+ * The tile's corner radius, read off the master. The top row of pixels is
+ * sampled half a pixel below the tile's edge, so the first opaque pixel
+ * `t` is where the corner arc has already dipped 0.5px: solving
+ * (r - t)² + (r - 0.5)² = r² gives r = t + 0.5 + √t.
+ */
+export function cornerRadius({ width, data }) {
+  for (let x = 0; x < width; x += 1) {
+    if (data[x * 4 + 3] > 128) return x + 0.5 + Math.sqrt(x);
+  }
+  throw new Error('the master has no opaque pixel in its top row');
+}
+
+/** Bilinear sample of straight 8-bit RGB at a fractional position, clamped to the image. */
+function sampleRgb({ width, height, data }, x, y) {
+  const x0 = Math.min(width - 1, Math.max(0, Math.floor(x)));
+  const y0 = Math.min(height - 1, Math.max(0, Math.floor(y)));
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const fx = Math.min(1, Math.max(0, x - x0));
+  const fy = Math.min(1, Math.max(0, y - y0));
+  const at = (px, py, c) => data[(py * width + px) * 4 + c];
+  return [0, 1, 2].map(
+    (c) =>
+      (at(x0, y0, c) * (1 - fx) + at(x1, y0, c) * fx) * (1 - fy) + (at(x0, y1, c) * (1 - fx) + at(x1, y1, c) * fx) * fy,
+  );
+}
+
+/**
+ * Paint over the master's edge band: every pixel within `depth` of the
+ * tile's edge takes the colour found a little past `depth` along the
+ * inward normal (2px further, so bilinear sampling never straddles the
+ * band), alpha untouched. The ground near the edge is a smooth gradient,
+ * so the tile simply continues to its edge without an outline. Straight
+ * 8-bit in and out.
+ */
+export function stripBorder(image, depth) {
+  const { width, height, data } = image;
+  if (width !== height) throw new Error('stripBorder expects a square tile');
+  const r = cornerRadius(image);
+  const out = { width, height, data: Uint8Array.from(data) };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const { distance, nx, ny } = roundedSquareEdge(x + 0.5, y + 0.5, width, r);
+      const inside = -distance; // how far in from the edge this pixel sits
+      if (inside >= depth) continue;
+      const shift = depth + 2 - inside;
+      const [red, green, blue] = sampleRgb(image, x + 0.5 - nx * shift, y + 0.5 - ny * shift);
+      out.data[i] = Math.round(red);
+      out.data[i + 1] = Math.round(green);
+      out.data[i + 2] = Math.round(blue);
+    }
+  }
+  return out;
+}
+
+/**
+ * The pop pass on the premultiplied master: saturation and contrast on the
+ * straight colour.
+ */
+export function enhance(image, { saturation, contrast }) {
   const { width, height, data } = image;
   const out = new Float32Array(data.length);
-  const blurredAlpha = blurPlane(plane(image, 3), width, height, rim.width);
-  const [rr, rg, rb] = rim.colour.map((v) => v / 255);
 
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3];
@@ -352,12 +434,6 @@ export function enhance(image, { saturation, contrast, rim }) {
     r = 0.5 + (r - 0.5) * contrast;
     g = 0.5 + (g - 0.5) * contrast;
     b = 0.5 + (b - 0.5) * contrast;
-
-    const edge = a * (1 - blurredAlpha[i >> 2]);
-    const t = clamp01(edge / 0.5) * rim.strength; // edge peaks near 0.5 for a 1px-soft edge
-    r = r + (rr - r) * t;
-    g = g + (rg - g) * t;
-    b = b + (rb - b) * t;
 
     out[i] = clamp01(r) * a;
     out[i + 1] = clamp01(g) * a;
@@ -534,7 +610,7 @@ export function renderIcons(sourcePng) {
   if (source.width !== APPLE_CANVAS || source.height !== APPLE_CANVAS) {
     throw new Error(`master must be ${APPLE_CANVAS}x${APPLE_CANVAS}, got ${source.width}x${source.height}`);
   }
-  const master = enhance(toPremultiplied(source), ENHANCE);
+  const master = enhance(toPremultiplied(stripBorder(source, BORDER_DEPTH)), ENHANCE);
   const fullBleedFor = memo((size) => toStraight8(fullBleed(master, size)));
   const macFor = memo((size) => toStraight8(macCanvas(master, size)));
 

@@ -22,6 +22,7 @@ import { test } from 'node:test';
 
 import {
   APPLE_CANVAS,
+  BORDER_DEPTH,
   ENHANCE,
   FULL_BLEED_PNGS,
   ICNS_LEGACY_TYPES,
@@ -39,6 +40,7 @@ import {
   icnsRle,
   macMargin,
   sharpen,
+  stripBorder,
 } from './build-icons.mjs';
 import {
   BODY_ALPHA_THRESHOLD,
@@ -251,22 +253,66 @@ function sample() {
   return { width: 4, height: 4, data };
 }
 
-test('enhance raises chroma, keeps alpha, and lights the rim in the rim colour', () => {
+test('enhance raises chroma and keeps alpha', () => {
   const before = sample();
   const after = enhance(before, ENHANCE);
   assert.equal(after.data[3], 0, 'transparent pixel stays transparent');
   for (let i = 0; i < 16; i += 1) assert.equal(after.data[i * 4 + 3], before.data[i * 4 + 3], 'alpha is untouched');
 
   const chroma = (d, i) => Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
-  // The centre pixel (2,2) is far from the edge: only saturation/contrast apply.
   const centre = (2 * 4 + 2) * 4;
   assert.ok(chroma(after.data, centre) > chroma(before.data, centre), 'centre pixel is more saturated');
-  // A pixel next to the transparent corner is on the rim: pulled toward the rim colour (bluer-white).
-  const rimPixel = (0 * 4 + 1) * 4;
-  assert.ok(after.data[rimPixel] > after.data[centre], 'rim pixel is lighter than the centre');
   for (let i = 0; i < after.data.length; i += 4) {
     for (let c = 0; c < 3; c += 1) assert.ok(after.data[i + c] <= after.data[i + 3] + 1e-6, 'premultiplied invariant');
   }
+});
+
+/** A 64px rounded tile (radius 16): flat navy inside, a bright 4px band at the edge, corners cut. */
+function borderedTile() {
+  const size = 64;
+  const r = 16;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const qx = Math.max(Math.abs(x + 0.5 - 32) - (32 - r), 0);
+      const qy = Math.max(Math.abs(y + 0.5 - 32) - (32 - r), 0);
+      const inside = r - Math.hypot(qx, qy); // >0 inside the rounded square
+      if (inside <= 0) continue;
+      const band = inside < 4;
+      data.set(band ? [120, 230, 255, 255] : [10, 30, 60, 255], (y * size + x) * 4);
+    }
+  }
+  return { width: size, height: size, data };
+}
+
+test('stripBorder paints the edge band over with the interior and leaves alpha alone', () => {
+  const tile = borderedTile();
+  const out = stripBorder(tile, 6);
+  assert.equal(out.width, 64);
+  for (let i = 0; i < out.data.length; i += 4) {
+    assert.equal(out.data[i + 3], tile.data[i + 3], 'alpha is untouched');
+    if (tile.data[i + 3] === 0) {
+      assert.deepEqual([...out.data.subarray(i, i + 4)], [0, 0, 0, 0], 'transparent pixels are untouched');
+    } else {
+      assert.deepEqual([...out.data.subarray(i, i + 3)], [10, 30, 60], `pixel ${i / 4} still carries the band`);
+    }
+  }
+  assert.throws(() => stripBorder({ width: 2, height: 3, data: new Uint8Array(24) }, 1), /square/);
+  assert.throws(() => stripBorder({ width: 2, height: 2, data: new Uint8Array(16) }, 1), /no opaque pixel/);
+});
+
+test('the built icons end in their own ground — no outline band at the tile edge', () => {
+  const { RENDERED } = built();
+  const check = ({ width, data }, inset, label) => {
+    // Along the middle row, from the tile's first opaque column inward: dark ground, not a bright band.
+    const y = width >> 1;
+    for (let x = inset + 1; x < inset + Math.round((BORDER_DEPTH * width) / APPLE_CANVAS) + 1; x += 1) {
+      const i = (y * width + x) * 4;
+      assert.ok(Math.max(data[i], data[i + 1], data[i + 2]) < 130, `${label}: bright band at x=${x} (${data[i]},${data[i + 1]},${data[i + 2]})`);
+    }
+  };
+  check(RENDERED.pngs.get(`${'src-tauri/icons'}/icon.png`), 0, 'icon.png');
+  for (const { type, image } of RENDERED.icns.png) if (image.width >= 256) check(image, macMargin(image.width), type);
 });
 
 test('sharpen increases local contrast and keeps the premultiplied invariant', () => {
