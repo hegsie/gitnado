@@ -355,12 +355,26 @@ pub fn reserve_test_port() -> u16 {
         AtomicU16::new(lo + offset)
     });
 
+    // A per-candidate probe that stops answering turns this walk into a hang
+    // rather than a failure: at the connect probe's 500 ms timeout, a full
+    // sweep of the block takes 83 minutes, which is how a Windows `cargo test`
+    // came to sit in one test for half an hour with nothing in the log. Bound
+    // the whole search so a future probe regression fails loudly and quickly
+    // instead.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     for _ in 0..span {
         let raw = next.fetch_add(1, Ordering::Relaxed);
         let port = lo + raw.wrapping_sub(lo) % span;
         if !port_has_a_listener(port) {
             return port;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "searching {}..{} for a free loopback port took longer than 20s; \
+             the probe is not answering promptly",
+            lo,
+            hi
+        );
     }
     panic!("no free loopback port in {}..{}", lo, hi);
 }
@@ -370,12 +384,37 @@ pub fn reserve_test_port() -> u16 {
 /// anything else (accepted, timed out, no permission) counts as taken.
 /// Unlike a trial `bind`, this leaves no listening socket behind that a
 /// child mid-spawn on another thread could inherit.
+#[cfg(not(windows))]
 pub fn port_has_a_listener(port: u16) -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     !matches!(
         std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)),
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
     )
+}
+
+/// The same question on Windows, asked with a trial bind instead.
+///
+/// The connect probe above is not merely slower here, it is unusable: every
+/// candidate that does not answer costs the full 500 ms timeout, and
+/// `reserve_test_port` walks a 10 000-port block, so its worst case is 83
+/// minutes. That is not hypothetical — it is what `cargo test` on Windows did.
+/// The suite reached the first oauth test and stopped there; a 30-minute cap
+/// on the CI step ended the job with that test's name printed and no result
+/// after it. Every earlier attempt simply looked like "Windows is slow".
+///
+/// A trial bind is the exact answer and is instant, including for a port
+/// Windows will not let us have at all (bind fails, which is precisely "not
+/// available to us"). The reason it is not used everywhere is the hazard the
+/// comment above describes: on unix a child forked by another test thread
+/// inherits a copy of every open descriptor between its `fork` and its `exec`,
+/// so a probe listener can outlive the probe. Windows has no `fork` — a child
+/// receives only handles explicitly marked inheritable, and Rust's sockets
+/// never are — so the hazard cannot arise, and the cheap answer is also the
+/// safe one.
+#[cfg(windows)]
+pub fn port_has_a_listener(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
 /// Bind `port` after the code under test reports it released — the probe a

@@ -624,6 +624,22 @@ pub fn create_command(program: &str) -> GitCommand {
             cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
             cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
             cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+
+            // And from the developer's (or CI container's) real EDITOR. This
+            // container exports GIT_EDITOR=true, which git prefers over
+            // core.editor, so a test proving that a command supplies its own
+            // GIT_EDITOR could not fail even once the command stopped doing
+            // so. The test that covered exactly that used to scrub the
+            // variables with `std::env::remove_var` — process-global state,
+            // mutated while 2959 tests run in parallel, and on macOS a
+            // concurrent unsetenv/getenv (libgit2 reads GIT_* constantly, from
+            // outside std's env lock) corrupted the environ block and aborted
+            // the whole harness with no message. Removing them per child is
+            // the same isolation without the race; a caller that sets
+            // GIT_EDITOR does so with `.env` after this factory, which wins.
+            cmd.env_remove("GIT_EDITOR");
+            cmd.env_remove("VISUAL");
+            cmd.env_remove("EDITOR");
         }
     }
 

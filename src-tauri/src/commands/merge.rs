@@ -3470,13 +3470,25 @@ mod tests {
         // which dies on the null stdin Command::output() gives it, leaving a
         // paused rebase and a detached HEAD.
         //
-        // The env is scrubbed deliberately: a machine with EDITOR set would mask
-        // the bug this covers.
-        std::env::remove_var("EDITOR");
-        std::env::remove_var("VISUAL");
-        std::env::remove_var("GIT_EDITOR");
-
+        // A machine with EDITOR set would mask the bug this covers, so the
+        // masking has to be shut off — but NOT by scrubbing the process
+        // environment, which this test used to do. `remove_var` mutates state
+        // shared by all 2959 tests running in parallel, and on macOS a
+        // concurrent `unsetenv`/`getenv` (libgit2 reads GIT_* constantly, and
+        // is outside std's env lock) corrupts the environ block: the whole
+        // harness aborted with no message, nondeterministically.
+        //
+        // git consults GIT_EDITOR, then core.editor, then VISUAL, then EDITOR.
+        // Trapping core.editor in THIS repository's own config therefore does
+        // the same job locally and does it better: ambient VISUAL/EDITOR are
+        // never reached, and if the command under test ever stops setting
+        // GIT_EDITOR the rebase fails loudly instead of opening something.
         let repo = TestRepo::with_initial_commit();
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("core.editor", "false")
+            .unwrap();
         let base = repo.head_oid().to_string();
         repo.create_commit("first", &[("a.txt", "a")]);
         repo.create_commit("second", &[("b.txt", "b")]);

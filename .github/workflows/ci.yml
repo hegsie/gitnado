@@ -228,17 +228,9 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # TEMPORARY. The harness now loads (the manifest fix worked) but the
-      # suite does not finish: `cargo test` ran for 34 minutes on a suite that
-      # takes two on macOS, so one test blocks forever on Windows and nothing
-      # in the log says which. Running single-threaded prints each test's name
-      # BEFORE it runs, so the last line of this step is the test that hangs.
-      # The step is capped so the job ends instead of burning the six-hour
-      # default, and it replaces `cargo test` for this run only.
-      - name: TEMP name the test that hangs on Windows
+      - name: Run tests
         working-directory: src-tauri
-        timeout-minutes: 30
-        run: cargo test --lib -- --test-threads=1 --nocapture
+        run: cargo test
 
   test-frontend:
     name: Test Frontend
