@@ -69,7 +69,7 @@ jobs:
         # break apt-get update whenever their mirror is inconsistent, and none
         # is used here. Match by host: the file names differ between images.
         run: |
-          sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
+          (sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ || true) | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
@@ -123,7 +123,7 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
-          sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
+          (sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ || true) | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
@@ -256,7 +256,7 @@ jobs:
         # --with-deps runs its own apt-get update; strip the same third-party
         # sources the Linux dependency steps strip, or a broken mirror kills it.
         run: |
-          sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
+          (sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ || true) | xargs -r sudo rm -f
           npx playwright install --with-deps chromium
 
       - name: Run tests
@@ -283,7 +283,7 @@ jobs:
         # --with-deps runs its own apt-get update; strip the same third-party
         # sources the Linux dependency steps strip, or a broken mirror kills it.
         run: |
-          sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
+          (sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ || true) | xargs -r sudo rm -f
           npx playwright install --with-deps chromium
 
       - name: Run E2E tests
