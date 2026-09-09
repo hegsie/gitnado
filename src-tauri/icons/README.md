@@ -1,8 +1,9 @@
 # Icons
 
 One art master, one build. `icon-source.png` is the full-bleed 1024×1024
-tile; everything else in this directory (and the website's icons in
-`site/assets/`) is written from it by
+tile; everything else in this directory, the website's icons in
+`site/assets/` and the welcome-screen mascot in `src/assets/mascot/` are
+written from it by
 
 ```bash
 npm run icons:build      # node scripts/build-icons.mjs
@@ -50,4 +51,4 @@ as `tauri icon` made them, and the build does not touch them.
 | `icon.ico`                                     | Windows: taskbar, Explorer, installer; entry 0 (32px) is the window and tray icon |
 | `Square*Logo.png`, `StoreLogo.png`             | Windows Store/MSIX tiles — no current bundle target reads them; kept current so nothing here carries the old art |
 | `site/assets/{favicon-64,icon-256,icon-512}`   | the website                                                         |
-| `src/assets/mascot/gitnado-400.png`            | the in-app welcome screen — hand-made, not part of the build        |
+| `src/assets/mascot/gitnado-400.png`            | the in-app welcome screen                                           |
