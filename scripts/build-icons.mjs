@@ -36,9 +36,9 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { decodePng, encodePng } from './png.mjs';
+import { REPO_ROOT, decodePng, encodePng } from './png.mjs';
 
-export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export { REPO_ROOT };
 export const ICONS_DIR = 'src-tauri/icons';
 export const SITE_ASSETS_DIR = 'site/assets';
 export const SOURCE = `${ICONS_DIR}/icon-source.png`;
@@ -153,11 +153,15 @@ function toStraight8({ width, height, data }) {
   const out = new Uint8Array(width * height * 4);
   for (let i = 0; i < out.length; i += 4) {
     const a = clamp01(data[i + 3]);
-    const inv = a > 0 ? 1 / a : 0;
+    const a8 = Math.round(a * 255);
+    // A pixel that rounds to transparent carries no colour: resampling
+    // ringing divided by a near-zero alpha would otherwise leave noise there.
+    if (a8 === 0) continue;
+    const inv = 1 / a;
     out[i] = Math.round(clamp01(data[i] * inv) * 255);
     out[i + 1] = Math.round(clamp01(data[i + 1] * inv) * 255);
     out[i + 2] = Math.round(clamp01(data[i + 2] * inv) * 255);
-    out[i + 3] = Math.round(a * 255);
+    out[i + 3] = a8;
   }
   return { width, height, data: out };
 }
@@ -229,50 +233,61 @@ export function resize(image, size) {
   return resampleAxis(resampleAxis(image, size, true), size, false);
 }
 
-/** Separable Gaussian blur, all four premultiplied channels. */
-function gaussianBlur(image, sigma) {
-  if (sigma <= 0) return image;
+function gaussianKernel(sigma) {
   const radius = Math.ceil(sigma * 3);
-  const kernel = [];
+  const kernel = new Float32Array(2 * radius + 1);
   let sum = 0;
   for (let i = -radius; i <= radius; i += 1) {
-    const w = Math.exp(-(i * i) / (2 * sigma * sigma));
-    kernel.push(w);
-    sum += w;
+    kernel[i + radius] = Math.exp(-(i * i) / (2 * sigma * sigma));
+    sum += kernel[i + radius];
   }
   for (let i = 0; i < kernel.length; i += 1) kernel[i] /= sum;
+  return { radius, kernel };
+}
 
-  const { width, height } = image;
+/**
+ * Separable Gaussian blur of one plane (`width * height` floats), edges
+ * clamped. The plane is what the rim mask and the shadow need; blurring
+ * four channels to read one back would be most of the build's cost.
+ */
+function blurPlane(plane, width, height, sigma) {
+  if (sigma <= 0) return plane;
+  const { radius, kernel } = gaussianKernel(sigma);
   const pass = (src, horizontal) => {
     const out = new Float32Array(src.length);
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
-        let r = 0;
-        let g = 0;
-        let b = 0;
-        let a = 0;
+        let sum = 0;
         for (let k = -radius; k <= radius; k += 1) {
-          let sx = x;
-          let sy = y;
-          if (horizontal) sx = Math.min(width - 1, Math.max(0, x + k));
-          else sy = Math.min(height - 1, Math.max(0, y + k));
-          const idx = (sy * width + sx) * 4;
-          const w = kernel[k + radius];
-          r += src[idx] * w;
-          g += src[idx + 1] * w;
-          b += src[idx + 2] * w;
-          a += src[idx + 3] * w;
+          const sx = horizontal ? Math.min(width - 1, Math.max(0, x + k)) : x;
+          const sy = horizontal ? y : Math.min(height - 1, Math.max(0, y + k));
+          sum += src[sy * width + sx] * kernel[k + radius];
         }
-        const o = (y * width + x) * 4;
-        out[o] = r;
-        out[o + 1] = g;
-        out[o + 2] = b;
-        out[o + 3] = a;
+        out[y * width + x] = sum;
       }
     }
     return out;
   };
-  return { width, height, data: pass(pass(image.data, true), false) };
+  return pass(pass(plane, true), false);
+}
+
+/** One channel of a premultiplied image as its own plane. */
+function plane(image, channel) {
+  const out = new Float32Array(image.width * image.height);
+  for (let i = 0; i < out.length; i += 1) out[i] = image.data[i * 4 + channel];
+  return out;
+}
+
+/** Separable Gaussian blur, all four premultiplied channels. */
+function gaussianBlur(image, sigma) {
+  if (sigma <= 0) return image;
+  const { width, height } = image;
+  const planes = [0, 1, 2, 3].map((c) => blurPlane(plane(image, c), width, height, sigma));
+  const data = new Float32Array(image.data.length);
+  for (let i = 0; i < width * height; i += 1) {
+    for (let c = 0; c < 4; c += 1) data[i * 4 + c] = planes[c][i];
+  }
+  return { width, height, data };
 }
 
 /** Unsharp mask: image + amount * (image - blur(image)), alpha included. */
@@ -300,7 +315,7 @@ export function sharpen(image, { sigma, amount }) {
 export function enhance(image, { saturation, contrast, rim }) {
   const { width, height, data } = image;
   const out = new Float32Array(data.length);
-  const blurredAlpha = gaussianBlur(image, rim.width).data;
+  const blurredAlpha = blurPlane(plane(image, 3), width, height, rim.width);
   const [rr, rg, rb] = rim.colour.map((v) => v / 255);
 
   for (let i = 0; i < data.length; i += 4) {
@@ -321,7 +336,7 @@ export function enhance(image, { saturation, contrast, rim }) {
     g = 0.5 + (g - 0.5) * contrast;
     b = 0.5 + (b - 0.5) * contrast;
 
-    const edge = a * (1 - blurredAlpha[i + 3]);
+    const edge = a * (1 - blurredAlpha[i >> 2]);
     const t = clamp01(edge / 0.5) * rim.strength; // edge peaks near 0.5 for a 1px-soft edge
     r = r + (rr - r) * t;
     g = g + (rg - g) * t;
@@ -372,17 +387,22 @@ export function macCanvas(body1024, size) {
   let body = resize(body1024, bodySize);
   if (size <= SHARPEN_UP_TO) body = sharpen(body, SHARPEN);
 
+  // The shadow is the body's alpha, black at SHADOW.opacity, laid on a
+  // canvas-sized plane BEFORE blurring so the blur can spread past the
+  // body's edges into the margin — a body-sized layer would clamp it to a
+  // hard band.
   const scale = size / APPLE_CANVAS;
-  const shadowLayer = { width: body.width, height: body.height, data: new Float32Array(body.data.length) };
-  for (let i = 0; i < body.data.length; i += 4) {
-    shadowLayer.data[i + 3] = body.data[i + 3] * SHADOW.opacity; // black, premultiplied
+  const shadowPlane = new Float32Array(size * size);
+  const shadowTop = margin + Math.round(SHADOW.offsetY * scale);
+  for (let y = 0; y < bodySize; y += 1) {
+    for (let x = 0; x < bodySize; x += 1) {
+      shadowPlane[(y + shadowTop) * size + x + margin] = body.data[(y * bodySize + x) * 4 + 3] * SHADOW.opacity;
+    }
   }
-  const shadow = gaussianBlur(shadowLayer, SHADOW.sigma * scale);
-
-  let canvas = blank(size);
-  canvas = composite(canvas, shadow, margin, margin + Math.round(SHADOW.offsetY * scale));
-  canvas = composite(canvas, body, margin, margin);
-  return canvas;
+  const blurred = blurPlane(shadowPlane, size, size, SHADOW.sigma * scale);
+  const canvas = blank(size);
+  for (let i = 0; i < blurred.length; i += 1) canvas.data[i * 4 + 3] = blurred[i]; // black, premultiplied
+  return composite(canvas, body, margin, margin);
 }
 
 /** A full-bleed entry at `size`, sharpened when small. */
@@ -508,16 +528,21 @@ export function buildIcons(sourcePng) {
     encodeIco(ICO_SIZES.map((size) => ({ size, png: fullBleedPng(size) }))),
   );
 
-  const macPng = new Map();
+  const macCache = new Map();
+  const macFor = (size) => {
+    if (!macCache.has(size)) macCache.set(size, toStraight8(macCanvas(master, size)));
+    return macCache.get(size);
+  };
+  const macPngCache = new Map();
   const macPngFor = (size) => {
-    if (!macPng.has(size)) macPng.set(size, encodePng(toStraight8(macCanvas(master, size))));
-    return macPng.get(size);
+    if (!macPngCache.has(size)) macPngCache.set(size, encodePng(macFor(size)));
+    return macPngCache.get(size);
   };
   const pngEntries = Object.entries(ICNS_PNG_TYPES).map(([type, size]) => ({ type, png: macPngFor(size) }));
   const legacy = Object.entries(ICNS_LEGACY_TYPES).map(([type, { mask, size }]) => ({
     type,
     mask,
-    image: toStraight8(macCanvas(master, size)),
+    image: macFor(size),
   }));
   files.set(ICNS_PATH, encodeIcns(pngEntries, legacy));
 

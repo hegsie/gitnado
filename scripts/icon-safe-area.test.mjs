@@ -154,11 +154,17 @@ test('every icon.icns entry sits on Apple’s grid, shadow inside the canvas', (
       `${type} (${width}px) is off Apple's grid; the body must leave ${m}px on every side`,
     );
 
-    // The shadow: visible just below the body from 64px up, and never
-    // reaching the canvas edge at any size.
+    // The shadow: visible just below the body from 64px up, SOFT — still
+    // there but fainter a few percent of the canvas further down, which a
+    // hard band would fail — and never reaching the canvas edge at any size.
     if (type in ICNS_PNG_TYPES && width >= 64) {
-      const below = alpha[(height - m) * width + (width >> 1)];
+      const cx = width >> 1;
+      const below = alpha[(height - m) * width + cx];
       assert.ok(below > 0 && below <= BODY_ALPHA_THRESHOLD, `${type}: no shadow under the body (alpha ${below})`);
+      if (width >= 128) {
+        const further = alpha[(height - m + Math.round(width * 0.03)) * width + cx];
+        assert.ok(further > 0 && further < below, `${type}: shadow is not soft (alpha ${below} then ${further})`);
+      }
     }
     for (let i = 0; i < width; i += 1) {
       assert.equal(alpha[i], 0, `${type}: top edge is not clear`);
@@ -175,6 +181,25 @@ test('the Windows, Linux and website PNGs stay full-bleed at their declared size
     assert.equal(image.width, size, `${path}: width`);
     assert.equal(image.height, size, `${path}: height`);
     assert.deepEqual(measureMargins(image, 0), { left: 0, top: 0, right: 0, bottom: 0 }, `${path} gained a margin`);
+  }
+});
+
+test('transparent pixels carry no colour, in every built PNG', () => {
+  const check = (png, label) => {
+    const { data } = decodePng(png);
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) {
+        assert.ok(data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0, `${label}: transparent pixel ${i / 4} has colour`);
+      }
+    }
+  };
+  for (const [path, bytes] of BUILT) {
+    if (path === ICO_PATH) readIcoEntries(bytes).forEach((e) => check(e.payload, `${path} ${e.size}px`));
+    else if (path === ICNS_PATH) {
+      readIcnsEntries(bytes)
+        .filter((e) => e.type in ICNS_PNG_TYPES)
+        .forEach((e) => check(e.payload, `${path} ${e.type}`));
+    } else check(bytes, path);
   }
 });
 
@@ -292,6 +317,9 @@ test('the PNG codec round-trips and decodes every scanline filter', () => {
 test('the PNG codec rejects what it cannot handle', () => {
   assert.throws(() => decodePng(Buffer.alloc(4)), /not a PNG/);
   assert.throws(() => decodePng(Buffer.alloc(64)), /not a PNG/);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.throws(() => decodePng(signature), /no IHDR/);
+  assert.throws(() => decodePng(Buffer.concat([signature, Buffer.alloc(40)])), /no IHDR/);
   assert.throws(() => decodePng(pngFromRaw(1, 1, Buffer.from([0, 1, 2, 3, 4]), { colourType: 2 })), /unsupported PNG/);
   assert.throws(() => decodePng(pngFromRaw(1, 1, Buffer.alloc(0), { withIdat: false })), /no IDAT/);
   assert.throws(() => decodePng(pngFromRaw(2, 2, Buffer.from([0, 1, 2, 3, 4]))), /truncated/);

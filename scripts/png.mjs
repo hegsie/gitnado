@@ -11,7 +11,12 @@
  * the committed files.
  */
 
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync, inflateSync } from 'node:zlib';
+
+/** The repository root; shared by the build and the contract so both read the same tree. */
+export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const BYTES_PER_PIXEL = 4;
@@ -62,6 +67,9 @@ function unfilterScanline(filter, line, previous, bpp) {
  */
 export function decodePng(buffer) {
   if (!isPng(buffer)) throw new Error('not a PNG');
+  if (buffer.length < 33 || buffer.subarray(12, 16).toString('latin1') !== 'IHDR') {
+    throw new Error('PNG has no IHDR chunk');
+  }
   const width = buffer.readUInt32BE(16);
   const height = buffer.readUInt32BE(20);
   const bitDepth = buffer[24];
