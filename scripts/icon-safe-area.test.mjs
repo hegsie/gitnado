@@ -301,18 +301,41 @@ test('stripBorder paints the edge band over with the interior and leaves alpha a
   assert.throws(() => stripBorder({ width: 2, height: 2, data: new Uint8Array(16) }, 1), /no opaque pixel/);
 });
 
-test('the built icons end in their own ground — no outline band at the tile edge', () => {
+test('the built icons end in their own ground — no outline band on any edge or corner', () => {
   const { RENDERED } = built();
-  const check = ({ width, data }, inset, label) => {
-    // Along the middle row, from the tile's first opaque column inward: dark ground, not a bright band.
-    const y = width >> 1;
-    for (let x = inset + 1; x < inset + Math.round((BORDER_DEPTH * width) / APPLE_CANVAS) + 1; x += 1) {
-      const i = (y * width + x) * 4;
-      assert.ok(Math.max(data[i], data[i + 1], data[i + 2]) < 130, `${label}: bright band at x=${x} (${data[i]},${data[i + 1]},${data[i + 2]})`);
+  // Walk inward from the tile's edge along eight rays — the four edge
+  // midpoints and the four corner diagonals — over the band's depth, and
+  // require each pixel to match the ground a little further in along the
+  // same ray. Relative, so it holds on the bright top edge and the dark
+  // bottom one alike; a leftover cyan arc in a corner fails the diagonals.
+  // The master's band is ~14px deep at 1024 — measured from the art, not
+  // taken from BORDER_DEPTH, so a build that strips too little (or nothing)
+  // is caught rather than matched.
+  const MASTER_BAND = 14;
+  assert.ok(BORDER_DEPTH >= MASTER_BAND, 'BORDER_DEPTH must cover the master band');
+  const check = ({ width, data }, label) => {
+    const depth = Math.max(1, Math.round((MASTER_BAND * width) / APPLE_CANVAS));
+    const alphaAt = (x, y) => data[(y * width + x) * 4 + 3];
+    const rgbAt = (x, y) => [0, 1, 2].map((c) => data[(y * width + x) * 4 + c]);
+    const mid = width >> 1;
+    const rays = [
+      [0, mid, 1, 0], [width - 1, mid, -1, 0], [mid, 0, 0, 1], [mid, width - 1, 0, -1], // edge midpoints
+      [0, 0, 1, 1], [width - 1, 0, -1, 1], [0, width - 1, 1, -1], [width - 1, width - 1, -1, -1], // corner diagonals
+    ];
+    for (const [sx, sy, dx, dy] of rays) {
+      let x = sx;
+      let y = sy;
+      while (alphaAt(x, y) <= 128) { x += dx; y += dy; } // find the tile's edge along the ray
+      const reference = rgbAt(x + dx * (depth + 3), y + dy * (depth + 3));
+      for (let k = 0; k < depth; k += 1) {
+        const px = rgbAt(x + dx * k, y + dy * k);
+        const off = Math.max(...px.map((v, c) => Math.abs(v - reference[c])));
+        assert.ok(off <= 16, `${label}: ray from (${sx},${sy}) still carries a band ${k}px in: (${px}) vs ground (${reference})`);
+      }
     }
   };
-  check(RENDERED.pngs.get(`${'src-tauri/icons'}/icon.png`), 0, 'icon.png');
-  for (const { type, image } of RENDERED.icns.png) if (image.width >= 256) check(image, macMargin(image.width), type);
+  check(RENDERED.pngs.get(`${'src-tauri/icons'}/icon.png`), 'icon.png');
+  for (const { type, image } of RENDERED.icns.png) if (image.width >= 256) check(image, type);
 });
 
 test('sharpen increases local contrast and keeps the premultiplied invariant', () => {

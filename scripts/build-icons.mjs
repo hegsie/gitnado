@@ -258,8 +258,8 @@ function gaussianKernel(sigma) {
 
 /**
  * Separable Gaussian blur of one plane (`width * height` floats), edges
- * clamped. The plane is what the rim mask and the shadow need; blurring
- * four channels to read one back would be most of the build's cost.
+ * clamped. The shadow is a single plane; blurring four channels to read
+ * one back would be most of the build's cost.
  */
 function blurPlane(plane, width, height, sigma) {
   if (sigma <= 0) return plane;
@@ -326,7 +326,7 @@ export function sharpen(image, { sigma, amount }) {
 /**
  * Signed distance from a point to the edge of a rounded square of side
  * `size` with corner radius `r`, negative inside, and the unit normal
- * pointing outward. Bilinear sampling and the border strip below use it.
+ * pointing outward. The border strip below uses it.
  */
 function roundedSquareEdge(x, y, size, r) {
   const half = size / 2;
@@ -353,25 +353,33 @@ function roundedSquareEdge(x, y, size, r) {
 
 /**
  * The tile's corner radius, read off the master. The top row of pixels is
- * sampled half a pixel below the tile's edge, so the first opaque pixel
- * `t` is where the corner arc has already dipped 0.5px: solving
- * (r - t)² + (r - 0.5)² = r² gives r = t + 0.5 + √t.
+ * sampled half a pixel below the tile's edge, and the first pixel more than
+ * half covered has its centre at t = x + 0.5: that is where the corner arc
+ * has dipped 0.5px, so solving (r - t)² + (r - 0.5)² = r² gives
+ * r = t + 0.5 + √t.
  */
 export function cornerRadius({ width, data }) {
   for (let x = 0; x < width; x += 1) {
-    if (data[x * 4 + 3] > 128) return x + 0.5 + Math.sqrt(x);
+    if (data[x * 4 + 3] > 128) {
+      const t = x + 0.5;
+      return t + 0.5 + Math.sqrt(t);
+    }
   }
   throw new Error('the master has no opaque pixel in its top row');
 }
 
-/** Bilinear sample of straight 8-bit RGB at a fractional position, clamped to the image. */
+/**
+ * Bilinear sample of straight 8-bit RGB at a fractional position, clamped
+ * to the image. Pixel i is centred at i + 0.5, the convention every caller
+ * here uses, so (0.5, 0.5) returns pixel (0, 0) exactly.
+ */
 function sampleRgb({ width, height, data }, x, y) {
-  const x0 = Math.min(width - 1, Math.max(0, Math.floor(x)));
-  const y0 = Math.min(height - 1, Math.max(0, Math.floor(y)));
+  const x0 = Math.min(width - 1, Math.max(0, Math.floor(x - 0.5)));
+  const y0 = Math.min(height - 1, Math.max(0, Math.floor(y - 0.5)));
   const x1 = Math.min(width - 1, x0 + 1);
   const y1 = Math.min(height - 1, y0 + 1);
-  const fx = Math.min(1, Math.max(0, x - x0));
-  const fy = Math.min(1, Math.max(0, y - y0));
+  const fx = Math.min(1, Math.max(0, x - 0.5 - x0));
+  const fy = Math.min(1, Math.max(0, y - 0.5 - y0));
   const at = (px, py, c) => data[(py * width + px) * 4 + c];
   return [0, 1, 2].map(
     (c) =>
