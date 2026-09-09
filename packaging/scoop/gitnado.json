@@ -8,7 +8,7 @@
     "64bit": {
       "url": "https://github.com/hegsie/gitnado/releases/download/v0.9.0/Gitnado_0.9.0_x64_en-US.msi",
       "extract_dir": "PFiles/Gitnado",
-      "hash": "4a913b86ee3028dd3e69ec61b8fe8640b296a267feb46011e7b1809392542ae5"
+      "hash": "c22697677c52cd5362ea8a987d0a8752669859d7d8b80baab4f97922f82b59d2"
     }
   },
   "shortcuts": [
