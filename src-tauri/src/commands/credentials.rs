@@ -1646,9 +1646,13 @@ mod tests {
         repo.repo()
             .config()
             .expect("config")
+            // Forward slashes: git evaluates a credential helper through its
+            // bundled shell, which eats the backslashes of a Windows path, so
+            // `--file=C:\Users\…` reaches `store` as a path that does not
+            // exist and every lookup answers "No credentials found".
             .set_str(
                 "credential.helper",
-                &format!("store --file={}", store.display()),
+                &format!("store --file={}", crate::test_utils::git_path(&store)),
             )
             .expect("set credential.helper");
         repo

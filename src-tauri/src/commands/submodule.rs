@@ -1312,12 +1312,12 @@ mod tests {
     fn nested_submodule_tree() -> (TestRepo, TestRepo, TestRepo) {
         let leaf = TestRepo::with_initial_commit();
         let mid = TestRepo::with_initial_commit();
-        let leaf_url = format!("file://nested.test{}", leaf.path.display());
+        let leaf_url = crate::test_utils::file_url("nested.test", &leaf.path);
         git_in(&mid.path, &["submodule", "add", &leaf_url, "leafdir"]);
         git_in(&mid.path, &["commit", "-m", "add leaf"]);
 
         let superproject = TestRepo::with_initial_commit();
-        let mid_url = format!("file://dep.test{}", mid.path.display());
+        let mid_url = crate::test_utils::file_url("dep.test", &mid.path);
         git_in(
             &superproject.path,
             &["submodule", "add", &mid_url, "vendor/mid"],
@@ -1804,13 +1804,13 @@ mod tests {
     fn superproject_with_initialised_submodule(origin_host: &str) -> (TestRepo, TestRepo) {
         let dep = TestRepo::with_initial_commit();
         let superproject = TestRepo::with_initial_commit();
-        let declared = format!("file://dep.test{}", dep.path.display());
+        let declared = crate::test_utils::file_url("dep.test", &dep.path);
         git_in(
             &superproject.path,
             &["submodule", "add", &declared, "vendor/dep"],
         );
         git_in(&superproject.path, &["commit", "-m", "add dep"]);
-        let actual = format!("file://{}{}", origin_host, dep.path.display());
+        let actual = crate::test_utils::file_url(origin_host, &dep.path);
         git_in(
             &superproject.path.join("vendor/dep"),
             &["remote", "set-url", "origin", &actual],

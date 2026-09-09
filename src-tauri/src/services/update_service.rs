@@ -544,7 +544,12 @@ mod tests {
 
         let this_file =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/update_service.rs");
-        let source = std::fs::read_to_string(&this_file).expect("this module is readable");
+        // Normalise line endings first: a Windows checkout has CRLF, and the
+        // body boundary searched for below is "\n}\n", which CRLF never
+        // contains — the scan found no body and the test failed there.
+        let source = std::fs::read_to_string(&this_file)
+            .expect("this module is readable")
+            .replace("\r\n", "\n");
         let gate_start = source
             .find("fn gated_updater")
             .expect("gated_updater is the one constructor");
@@ -619,7 +624,9 @@ mod tests {
         // The refusal has to land before the `update-available` /
         // `update-downloading` emits, or the user gets a progress row for a
         // download that never starts — and before the fetch itself, obviously.
-        let source = include_str!("update_service.rs");
+        // Same reason: `include_str!` hands back the file verbatim, CRLF and
+        // all, on a Windows checkout.
+        let source = include_str!("update_service.rs").replace("\r\n", "\n");
         let body = source
             .split_once("async fn check_and_install_update")
             .expect("the install path exists")
@@ -645,7 +652,9 @@ mod tests {
         // so Settings said "Update available" forever with nothing installed
         // or explained. The guard has to run BEFORE the availability is
         // reported, so the click gets the refusal, host and all.
-        let source = include_str!("update_service.rs");
+        // Same reason: `include_str!` hands back the file verbatim, CRLF and
+        // all, on a Windows checkout.
+        let source = include_str!("update_service.rs").replace("\r\n", "\n");
         let body = source
             .split_once("pub async fn check_for_update_manual")
             .expect("the manual check exists")

@@ -1164,7 +1164,13 @@ mod tests {
     fn runs_naming(needle: &str) -> Vec<crate::utils::GitCommandLog> {
         crate::utils::test_sink::recorded()
             .into_iter()
-            .filter(|entry| entry.command.contains(needle))
+            // The panel renders a command line the way a user would type it, so
+            // an argument containing a backslash is quoted with its backslashes
+            // doubled. A Windows path is therefore recorded as `C:\\Users\\…`
+            // and never contains the needle it was built from — both clone
+            // tests saw an empty list. Undo that one escaping before matching,
+            // so the needle can stay the real path.
+            .filter(|entry| entry.command.replace(r"\\", r"\").contains(needle))
             .collect()
     }
 
@@ -1176,7 +1182,7 @@ mod tests {
         let checkout = dest.path().join("shallow");
         // `file://` rather than a bare path: git ignores `--depth` on a local
         // path clone, and this pins the argv the panel shows for a real one.
-        let url = format!("file://{}", source.path.display());
+        let url = crate::test_utils::file_url("", &source.path);
 
         let cmd = build_clone_command(&url, &checkout, false, None, Some(1), None, true, None);
         run_clone_command(cmd, &checkout, &AtomicBool::new(false), None, |_| {})
@@ -1204,7 +1210,7 @@ mod tests {
         captured_git_runs();
         let dest = TempDir::new().expect("temp dir");
         let checkout = dest.path().join("missing");
-        let url = format!("file://{}", dest.path().join("no-such-source").display());
+        let url = crate::test_utils::file_url("", &dest.path().join("no-such-source"));
 
         let cmd = build_clone_command(
             &url,
@@ -1249,7 +1255,7 @@ mod tests {
         let source = TestRepo::with_initial_commit();
         let dest = TempDir::new().expect("temp dir");
         let checkout = dest.path().join("cancelled");
-        let url = format!("file://{}", source.path.display());
+        let url = crate::test_utils::file_url("", &source.path);
 
         let cmd = build_clone_command(&url, &checkout, false, None, None, None, false, None);
         // Cancelled before the child is polled; whether the clone finished
@@ -1724,7 +1730,7 @@ mod tests {
         // takes git's pack transport rather than the local hardlink shortcut,
         // which is the path that reports progress.
         let mut child = build_clone_command(
-            &format!("file://{}", source.path.display()),
+            &crate::test_utils::file_url("", &source.path),
             &dest_path,
             false,
             None,

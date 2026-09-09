@@ -3,7 +3,7 @@
 #![cfg(test)]
 
 use crate::services::security::test_support::{self, GlobalSettingsGuard};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
@@ -377,6 +377,31 @@ pub fn reserve_test_port() -> u16 {
         );
     }
     panic!("no free loopback port in {}..{}", lo, hi);
+}
+
+/// A native path spelled the way git and URLs want it: forward slashes.
+///
+/// Git for Windows accepts `/` everywhere, and several places actively need it.
+/// A `credential.helper` value is evaluated through git's bundled shell, which
+/// eats backslashes as escapes, so `store --file=C:\Users\…` reaches the
+/// helper as `C:Users…` and the store silently is not found.
+pub fn git_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+/// `path` as the path component of a `file://` URL.
+///
+/// `format!("file://{host}{}", path.display())` reads correctly on unix only
+/// because a unix path already begins with `/`. A Windows path does not, so the
+/// same format produces `file://dep.testC:\Users\…`, which git parses as a
+/// host called `dep.testC:` and cannot clone.
+pub fn file_url(host: &str, path: &Path) -> String {
+    let path = git_path(path);
+    if path.starts_with('/') {
+        format!("file://{host}{path}")
+    } else {
+        format!("file://{host}/{path}")
+    }
 }
 
 /// Whether something accepts connections on `127.0.0.1:port` right now.

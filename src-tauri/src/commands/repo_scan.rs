@@ -396,7 +396,13 @@ mod tests {
     /// Create `dir` and give it a `.git` directory, so the scan sees a
     /// repository without paying for a real git2 init.
     fn make_repo(root: &Path, relative: &str) -> PathBuf {
-        let dir = root.join(relative);
+        // One component at a time. `Path::join("aaa/repo")` keeps the embedded
+        // forward slash verbatim on Windows, so the expected path would read
+        // `root\aaa/repo` while the scan, which joins a component per
+        // directory it walks into, reports `root\aaa\repo`.
+        let dir = relative
+            .split('/')
+            .fold(root.to_path_buf(), |path, part| path.join(part));
         fs::create_dir_all(dir.join(".git")).unwrap();
         dir
     }
