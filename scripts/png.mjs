@@ -5,21 +5,34 @@
  *
  * Decoding accepts only 8-bit, non-interlaced, truecolour+alpha files
  * (colour type 6) — what the build emits and what the art master is — and
- * throws on anything else rather than measuring it wrong. Encoding writes
- * filter 0 scanlines under maximum deflate; the output is byte-for-byte
- * deterministic, which is what lets the test compare a fresh build against
- * the committed files.
+ * throws on anything else rather than measuring it wrong. Encoding picks
+ * a scanline filter per row (the usual minimum-sum-of-residuals heuristic)
+ * under maximum deflate; the output is a pure function of the pixels, so
+ * a fresh build compares against the committed files.
  */
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { crc32, deflateSync, inflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 
 /** The repository root; shared by the build and the contract so both read the same tree. */
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const BYTES_PER_PIXEL = 4;
+
+/** CRC-32 (IEEE), table-driven — `node:zlib` only grew one in 20.15/22.2. */
+const CRC_TABLE = new Uint32Array(256);
+for (let n = 0; n < 256; n += 1) {
+  let c = n;
+  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  CRC_TABLE[n] = c >>> 0;
+}
+export function crc32(bytes, seed = 0) {
+  let c = (seed ^ 0xffffffff) >>> 0;
+  for (let i = 0; i < bytes.length; i += 1) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
 
 /** True when `buffer` starts with the PNG signature. */
 export function isPng(buffer) {
@@ -125,6 +138,56 @@ function chunk(type, payload) {
   return Buffer.concat([header, payload, crc]);
 }
 
+/** Apply PNG scanline filter `type` to `line` (given the previous unfiltered row). */
+function filterScanline(type, line, previous, bpp) {
+  const out = Buffer.alloc(line.length);
+  for (let i = 0; i < line.length; i += 1) {
+    const a = i >= bpp ? line[i - bpp] : 0;
+    const b = previous[i];
+    const c = i >= bpp ? previous[i - bpp] : 0;
+    let predictor;
+    switch (type) {
+      case 0:
+        predictor = 0;
+        break;
+      case 1:
+        predictor = a;
+        break;
+      case 2:
+        predictor = b;
+        break;
+      case 3:
+        predictor = (a + b) >> 1;
+        break;
+      default: {
+        const p = a + b - c;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+    }
+    out[i] = (line[i] - predictor) & 0xff;
+  }
+  return out;
+}
+
+/** The heuristic libpng uses: the filter whose residuals, read as signed bytes, sum smallest. */
+function bestFilter(line, previous, bpp) {
+  let best = null;
+  let bestScore = Infinity;
+  for (let type = 0; type <= 4; type += 1) {
+    const filtered = filterScanline(type, line, previous, bpp);
+    let score = 0;
+    for (let i = 0; i < filtered.length; i += 1) score += filtered[i] < 128 ? filtered[i] : 256 - filtered[i];
+    if (score < bestScore) {
+      bestScore = score;
+      best = { type, filtered };
+    }
+  }
+  return best;
+}
+
 /** Encode `{ width, height, data }` (straight 8-bit RGBA) as a PNG buffer. */
 export function encodePng({ width, height, data }) {
   if (data.length !== width * height * BYTES_PER_PIXEL) {
@@ -141,9 +204,13 @@ export function encodePng({ width, height, data }) {
 
   const stride = width * BYTES_PER_PIXEL;
   const raw = Buffer.alloc(height * (stride + 1));
+  let previous = Buffer.alloc(stride);
   for (let y = 0; y < height; y += 1) {
-    raw[y * (stride + 1)] = 0; // filter type 0 for every scanline
-    raw.set(data.subarray(y * stride, (y + 1) * stride), y * (stride + 1) + 1);
+    const line = Buffer.from(data.buffer, data.byteOffset + y * stride, stride);
+    const { type, filtered } = bestFilter(line, previous, BYTES_PER_PIXEL);
+    raw[y * (stride + 1)] = type;
+    raw.set(filtered, y * (stride + 1) + 1);
+    previous = line;
   }
   return Buffer.concat([
     PNG_SIGNATURE,

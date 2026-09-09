@@ -44,7 +44,7 @@ as `tauri icon` made them, and the build does not touch them.
 | `icon.icns`                                    | macOS: Dock, Finder, app switcher, DMG, About                       |
 | `32x32.png`                                    | macOS menu-bar tray icon (`default_window_icon`); Linux             |
 | `128x128.png`, `128x128@2x.png`, `icon.png`    | Linux desktop entries and AppImage/deb/rpm                          |
-| `icon.ico`                                     | Windows: taskbar, Explorer, installer                               |
+| `icon.ico`                                     | Windows: taskbar, Explorer, installer; entry 0 (32px) is the window and tray icon |
 | `Square*Logo.png`, `StoreLogo.png`             | Windows MSIX tiles                                                  |
 | `site/assets/{favicon-64,icon-256,icon-512}`   | the website                                                         |
 | `src/assets/mascot/gitnado-400.png`            | the in-app welcome screen — hand-made, not part of the build        |

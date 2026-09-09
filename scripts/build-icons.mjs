@@ -37,8 +37,6 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { REPO_ROOT, decodePng, encodePng } from './png.mjs';
-
-export { REPO_ROOT };
 export const ICONS_DIR = 'src-tauri/icons';
 export const SITE_ASSETS_DIR = 'site/assets';
 export const SOURCE = `${ICONS_DIR}/icon-source.png`;
@@ -101,8 +99,11 @@ export const FULL_BLEED_PNGS = {
  * Windows picks the ICO entry nearest the size it needs and scales the rest;
  * these are the sizes the shell, Explorer and the taskbar ask for at 100%,
  * 125%, 150% and 200%, plus the 256 that everything else is scaled from.
+ * ORDER MATTERS: Tauri's codegen embeds entry 0 as the Windows window and
+ * tray icon (`default_window_icon`), so 32 goes first, as `tauri icon`
+ * also puts it.
  */
-export const ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 256];
+export const ICO_SIZES = [32, 16, 20, 24, 40, 48, 64, 256];
 
 /**
  * ICNS entries. PNG-payload types by edge length, then the legacy 24-bit
@@ -463,7 +464,6 @@ export function icnsRle(bytes) {
       if (j + 2 < bytes.length && bytes[j] === bytes[j + 1] && bytes[j] === bytes[j + 2]) break;
       literal += 1;
     }
-    if (literal === 0) literal = 1;
     out.push(literal - 1, ...bytes.subarray(i, i + literal));
     i += literal;
   }

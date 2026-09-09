@@ -41,14 +41,13 @@ import {
 } from './build-icons.mjs';
 import {
   BODY_ALPHA_THRESHOLD,
-  REPO_ROOT,
   maskAlpha,
   measureMargins,
   pngAlpha,
   readIcnsEntries,
   readIcoEntries,
 } from './icon-safe-area.mjs';
-import { alphaOf, decodePng, encodePng } from './png.mjs';
+import { REPO_ROOT, alphaOf, crc32, decodePng, encodePng } from './png.mjs';
 
 const readRepoFile = (path) => readFileSync(join(REPO_ROOT, path));
 const SOURCE_PNG = readRepoFile(SOURCE);
@@ -203,12 +202,13 @@ test('transparent pixels carry no colour, in every built PNG', () => {
   }
 });
 
-test('icon.ico carries every size Windows asks for, each full-bleed', () => {
+test('icon.ico carries every size Windows asks for, 32 first, each full-bleed', () => {
   const entries = readIcoEntries(COMMITTED.get(ICO_PATH));
   assert.deepEqual(
     entries.map((e) => e.size),
     ICO_SIZES,
   );
+  assert.equal(entries[0].size, 32, 'entry 0 is what Tauri embeds as the Windows window and tray icon');
   for (const { size, payload } of entries) {
     const image = pngAlpha(payload);
     assert.equal(image.width, size);
@@ -289,11 +289,27 @@ function pngFromRaw(width, height, raw, { colourType = 6, withIdat = true } = {}
   ]);
 }
 
+test('crc32 matches the IEEE reference values', () => {
+  assert.equal(crc32(Buffer.from('')), 0);
+  assert.equal(crc32(Buffer.from('123456789')), 0xcbf43926);
+  assert.equal(crc32(Buffer.from('IEND')), 0xae426082, 'the CRC every PNG ends with');
+  assert.equal(crc32(Buffer.from('56789'), crc32(Buffer.from('1234'))), 0xcbf43926, 'seeded continuation');
+});
+
 test('the PNG codec round-trips and decodes every scanline filter', () => {
   const image = { width: 3, height: 2, data: Uint8Array.from({ length: 24 }, (_, i) => (i * 37) & 0xff) };
   const back = decodePng(encodePng(image));
   assert.deepEqual([back.width, back.height], [3, 2]);
   assert.deepEqual(back.data, image.data);
+
+  // The encoder chooses a filter per row: a flat image and a gradient must
+  // both survive, and a gradient row is cheaper filtered than raw.
+  const flat = { width: 8, height: 4, data: new Uint8Array(128).fill(200) };
+  assert.deepEqual(decodePng(encodePng(flat)).data, flat.data);
+  const gradient = { width: 64, height: 64, data: Uint8Array.from({ length: 64 * 64 * 4 }, (_, i) => ((i >> 2) * 3) & 0xff) };
+  assert.deepEqual(decodePng(encodePng(gradient)).data, gradient.data);
+  const encoded = encodePng(gradient);
+  assert.ok(encoded.length < gradient.data.length / 4, `filtered gradient should compress well, got ${encoded.length} bytes`);
   assert.deepEqual(alphaOf(back), Uint8Array.from([image.data[3], image.data[7], image.data[11], image.data[15], image.data[19], image.data[23]]));
 
   // One row per filter type, each encoding the same known pixels.

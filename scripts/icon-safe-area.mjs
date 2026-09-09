@@ -12,9 +12,7 @@
  *     composite their own shape and would render a padded tile undersized.
  */
 
-import { REPO_ROOT, alphaOf, decodePng, isPng } from './png.mjs';
-
-export { REPO_ROOT };
+import { alphaOf, decodePng, isPng } from './png.mjs';
 
 /**
  * Alpha at or below this counts as empty canvas when measuring a body.
