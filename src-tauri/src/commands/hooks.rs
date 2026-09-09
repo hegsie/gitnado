@@ -554,16 +554,15 @@ pub async fn save_hook(path: String, name: String, content: String) -> Result<()
     #[cfg(unix)]
     let was_inert = target.exists() && !is_executable(&target);
     std::fs::write(&target, &content)?;
-    let hook_path = target;
 
     // Make executable on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if !was_inert {
-            let mut perms = std::fs::metadata(&hook_path)?.permissions();
+            let mut perms = std::fs::metadata(&target)?.permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&hook_path, perms)?;
+            std::fs::set_permissions(&target, perms)?;
         }
     }
 

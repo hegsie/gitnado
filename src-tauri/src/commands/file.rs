@@ -56,7 +56,17 @@ fn windows_reveal_argument(target: &Path) -> std::ffi::OsString {
 fn windows_reveal_command(target: &Path) -> std::process::Command {
     use std::os::windows::process::CommandExt;
 
-    let mut command = create_command("explorer.exe");
+    // Deliberately NOT `create_command`: that returns the `GitCommand` wrapper,
+    // whose whole purpose is reporting git runs to the Output panel, and which
+    // exposes no `raw_arg` because no git invocation needs one. Explorer parses
+    // its own command line, so the `/select,"…"` argument has to reach it
+    // unquoted-then-quoted exactly as `windows_reveal_argument` builds it.
+    // `create_command`'s only relevant side effect here was CREATE_NO_WINDOW,
+    // reproduced below.
+    let mut command = std::process::Command::new("explorer.exe");
+    // CREATE_NO_WINDOW = 0x08000000, so revealing a file never flashes a
+    // console window. Same flag `create_command` sets for every child.
+    command.creation_flags(0x08000000);
     command.raw_arg(windows_reveal_argument(target));
     command
 }

@@ -430,6 +430,8 @@ pub fn bind_released_port_within(
 /// shifted down to sit just below the kernel's ephemeral range on a Linux host
 /// configured with an unusually low one.
 fn test_port_block() -> (u16, u16) {
+    // Only the Linux branch below narrows the block; elsewhere these stay put.
+    #[allow(unused_mut)]
     let (mut lo, mut hi) = (20000u16, 30000u16);
     #[cfg(target_os = "linux")]
     if let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") {

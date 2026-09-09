@@ -830,6 +830,8 @@ mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
     use std::io::Write;
+    // Only the `#[cfg(unix)]` credential-helper tests pipe a child's stdio.
+    #[cfg(unix)]
     use std::process::Stdio;
 
     use crate::services::security::test_support;
