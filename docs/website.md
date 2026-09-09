@@ -7,6 +7,14 @@ page, a few assets, no build step) and is published to GitHub Pages by
 API at load time to fill in version-specific download links, and falls back to
 the Releases page if that request fails.
 
+Asset URLs are versioned at deploy time: the workflow runs
+[`.github/scripts/version-site-assets.mjs`](../.github/scripts/version-site-assets.mjs),
+which appends `?v=<content hash>` to every `assets/…` reference in
+`index.html`. Replace an image under the same file name and the deployed page
+points at a new URL, so Cloudflare, GitHub Pages and browsers (which cache
+images for hours) pick it up on the next load. The committed HTML keeps plain
+paths, so opening `site/index.html` locally needs no build step.
+
 ## One-time setup
 
 1. **Enable Pages from Actions.** Repository *Settings → Pages → Build and

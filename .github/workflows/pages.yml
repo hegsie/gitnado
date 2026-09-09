@@ -36,6 +36,11 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      # Append ?v=<content hash> to every asset URL so a replaced image gets a
+      # new URL and is not served stale from Cloudflare, Pages or browser caches.
+      - name: Version asset URLs
+        run: node .github/scripts/version-site-assets.mjs site
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
