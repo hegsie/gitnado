@@ -90,9 +90,9 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       # winget-releaser can only update a package that already exists in
-      # winget-pkgs. Until the first Gitnado version is merged there, create
-      # the package from scratch with Komac instead (same tool the action
-      # uses); after that, every release goes through the update path.
+      # winget-pkgs. Until the first Gitnado version is merged there, submit
+      # manifests rendered from packaging/winget/ with Komac (the same tool the
+      # action uses); after that, every release goes through the update path.
       - name: Check whether the package exists in winget-pkgs
         id: exists
         run: |
@@ -112,41 +112,42 @@ jobs:
           max-versions-to-keep: 5
           token: ${{ secrets.WINGET_TOKEN }}
 
+      - name: Checkout repository
+        if: steps.exists.outputs.exists == 'false'
+        uses: actions/checkout@v7
+
       - name: Install Komac
         if: steps.exists.outputs.exists == 'false'
         uses: cargo-bins/cargo-binstall@main
 
-      # Every field Komac would otherwise prompt for is passed explicitly so
-      # the run is non-interactive; --submit opens the PR on winget-pkgs.
+      # `komac new` always prompts (install modes and more) and has no flag to
+      # preset those answers, so it cannot run in CI. Render the manifests from
+      # packaging/winget/ instead and hand them to `komac submit`, which is
+      # non-interactive: hashes come from the downloaded installers and the
+      # MSI ProductCode (new on every build) from `komac analyze`.
       - name: Create package (first submission)
         if: steps.exists.outputs.exists == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          RELEASE_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cargo binstall komac -y
           base="https://github.com/${{ github.repository }}"
-          komac new "$WINGET_ID" \
+          curl -fsSL -o setup.exe "${base}/releases/download/${TAG}/Gitnado_${VERSION}_x64-setup.exe"
+          curl -fsSL -o setup.msi "${base}/releases/download/${TAG}/Gitnado_${VERSION}_x64_en-US.msi"
+          komac analyze setup.msi > msi-analysis.txt
+          release_date=$(curl -fsSL -H "Authorization: Bearer ${RELEASE_API_TOKEN}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}" \
+            | jq -r '.published_at[:10]')
+          manifests=$(node .github/scripts/winget-manifests.mjs \
             --version "$VERSION" \
-            --urls "${base}/releases/download/${TAG}/Gitnado_${VERSION}_x64-setup.exe" \
-                   "${base}/releases/download/${TAG}/Gitnado_${VERSION}_x64_en-US.msi" \
-            --package-locale en-US \
-            --publisher hegsie \
-            --publisher-url https://gitnado.dev \
-            --publisher-support-url "${base}/issues" \
-            --package-name Gitnado \
-            --package-url https://gitnado.dev \
-            --moniker gitnado \
-            --author "Gitnado Contributors" \
-            --license MIT \
-            --license-url "${base}/blob/main/LICENSE" \
-            --copyright "Copyright © 2024 Gitnado Contributors" \
-            --copyright-url "${base}/blob/main/LICENSE" \
-            --short-description "Fast, privacy-first Git GUI client" \
-            --description "A fully-featured, open-source, cross-platform Git GUI client. Interactive rebase, 3-way merge editor, worktrees, GitHub/GitLab/Azure DevOps/Bitbucket integrations and local AI commit messages, with no telemetry or account." \
-            --release-notes-url "${base}/releases/tag/${TAG}" \
-            --created-with "publish-packages workflow" \
-            --created-with-url "${base}/blob/main/.github/workflows/publish-packages.yml" \
-            --submit
+            --exe setup.exe \
+            --msi setup.msi \
+            --msi-analysis msi-analysis.txt \
+            --release-date "$release_date" \
+            --out winget | tail -n 1)
+          cat "${manifests}"/*.yaml
+          komac submit --yes "${manifests}"
 
   homebrew:
     name: Update Homebrew cask

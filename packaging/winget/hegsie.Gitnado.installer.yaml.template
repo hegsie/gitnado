@@ -1,0 +1,43 @@
+# Rendered by .github/scripts/winget-manifests.mjs from the release assets and
+# submitted to microsoft/winget-pkgs by .github/workflows/publish-packages.yml.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+PackageIdentifier: hegsie.Gitnado
+PackageVersion: {{VERSION}}
+InstallerLocale: en-US
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+UpgradeBehavior: install
+ReleaseDate: {{RELEASE_DATE}}
+Installers:
+- Architecture: x64
+  InstallerType: nullsoft
+  Scope: user
+  InstallerUrl: https://github.com/hegsie/gitnado/releases/download/v{{VERSION}}/Gitnado_{{VERSION}}_x64-setup.exe
+  InstallerSha256: {{EXE_SHA256}}
+  ProductCode: Gitnado
+  AppsAndFeaturesEntries:
+  - DisplayName: Gitnado
+    Publisher: Gitnado Contributors
+    DisplayVersion: {{VERSION}}
+    ProductCode: Gitnado
+  InstallationMetadata:
+    DefaultInstallLocation: '%LocalAppData%\Gitnado'
+- Architecture: x64
+  InstallerType: wix
+  Scope: machine
+  InstallerUrl: https://github.com/hegsie/gitnado/releases/download/v{{VERSION}}/Gitnado_{{VERSION}}_x64_en-US.msi
+  InstallerSha256: {{MSI_SHA256}}
+  ProductCode: '{{MSI_PRODUCT_CODE}}'
+  AppsAndFeaturesEntries:
+  - DisplayName: Gitnado
+    Publisher: Gitnado Contributors
+    DisplayVersion: {{VERSION}}
+    ProductCode: '{{MSI_PRODUCT_CODE}}'
+    UpgradeCode: '{84C95AFF-09D5-5959-BE4D-927B1CC7FC1B}'
+  InstallationMetadata:
+    DefaultInstallLocation: '%ProgramFiles%\Gitnado'
+ManifestType: installer
+ManifestVersion: 1.12.0
