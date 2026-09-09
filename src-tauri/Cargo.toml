@@ -94,6 +94,12 @@ keyring = { version = "3", features = ["windows-native", "linux-native"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Runs the libgit2 config isolation before libtest starts a single thread.
+# git2 documents the search-path setters as mutating process-global state with
+# no thread-safety, needing external synchronisation against every other use of
+# the library; a lazy OnceLock in the first TestRepo cannot provide that, and on
+# macOS it corrupted the harness outright. See test_utils::isolate_git_config.
+ctor = "0.2"
 # Generates a throwaway RSA keypair so the GitHub App JWT signing path can be
 # tested without committing a private key to the repo. Both crates are already
 # in the tree via jsonwebtoken, so this adds no new dependencies.

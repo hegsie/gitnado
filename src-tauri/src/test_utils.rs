@@ -40,6 +40,25 @@ fn isolate_git_config() {
     }
 }
 
+/// Apply [`isolate_git_config`] before libtest starts a single test thread.
+///
+/// The lazy call in `TestRepo::new_in_subdir` cannot give the ordering the
+/// SAFETY note above needs. git2 documents the search-path setters as mutating
+/// process-global state with no thread-safety, to be "externally synchronized
+/// with calls to access the global state" — and with 2959 tests fanning out,
+/// the FIRST `TestRepo` is built while dozens of other threads are already
+/// inside libgit2. `OnceLock` makes the write happen once; it does not make it
+/// happen alone.
+///
+/// On macOS that corrupted the harness: SIGABRT (once SIGTRAP) about ten
+/// milliseconds after "running 2959 tests", no message, no test named, on
+/// roughly two runs in five. A constructor runs before `main`, so the mutation
+/// is over before there is a second thread to race with.
+#[ctor::ctor]
+fn isolate_git_config_before_any_test_thread() {
+    isolate_git_config();
+}
+
 /// A temporary git repository for testing
 pub struct TestRepo {
     /// Held, never read: this is an RAII guard. Dropping the TempDir deletes
