@@ -1410,3 +1410,183 @@ test.describe('Graph multi-selection actions', () => {
     ).toContainText('3 selected');
   });
 });
+
+/**
+ * A repository with dozens of unmerged branches has more graph lanes than
+ * fit the canvas. The lanes live in a bounded column that scrolls on its
+ * own; the commit message and the other text columns must stay on screen.
+ */
+test.describe('Graph with more lanes than fit', () => {
+  let graph: GraphPanelPage;
+
+  const BRANCHES = 80;
+  // One root and BRANCHES tips branching straight off it: every tip holds
+  // its own lane until the root, so the graph is BRANCHES lanes wide
+  const commits = [
+    ...Array.from({ length: BRANCHES }, (_, i) => makeCommit(i, ['root'])),
+    { ...makeCommit(BRANCHES, []), oid: 'root', shortId: 'root' },
+  ];
+
+  type ColumnState = {
+    left: number;
+    right: number;
+    width: number;
+    fullLaneWidth: number;
+    maxScrollLeft: number;
+    scrollLeft: number;
+    canvasWidth: number;
+    laneWidth: number;
+    handles: { graphEnd: number; refsEnd: number; statsStart: number };
+  };
+
+  async function readColumn(page: import('@playwright/test').Page): Promise<ColumnState> {
+    const handle = await getGraphCanvasHandle(page);
+    return page.evaluate((el) => {
+      const canvas = el as HTMLElement & {
+        getGraphColumn(): Omit<ColumnState, 'scrollLeft' | 'canvasWidth' | 'laneWidth' | 'handles'>;
+        getResizeHandlePositions(): ColumnState['handles'];
+        scrollState: { getScroll(): { scrollLeft: number } };
+        canvasEl: HTMLCanvasElement;
+        LANE_WIDTH: number;
+      };
+      const column = canvas.getGraphColumn();
+      return {
+        ...column,
+        scrollLeft: canvas.scrollState.getScroll().scrollLeft,
+        canvasWidth: canvas.canvasEl.width / (window.devicePixelRatio || 1),
+        laneWidth: canvas.LANE_WIDTH,
+        handles: canvas.getResizeHandlePositions(),
+      };
+    }, handle);
+  }
+
+  async function waitForScrollLeft(
+    page: import('@playwright/test').Page,
+    expected: number
+  ): Promise<void> {
+    const handle = await getGraphCanvasHandle(page);
+    await page.waitForFunction(
+      ([el, value]) => {
+        const canvas = el as HTMLElement & { scrollState: { getScroll(): { scrollLeft: number } } };
+        return Math.abs(canvas.scrollState.getScroll().scrollLeft - (value as number)) < 0.5;
+      },
+      [handle, expected] as const
+    );
+  }
+
+  test.beforeEach(async ({ page }) => {
+    graph = new GraphPanelPage(page);
+    // Wide enough that the automatic column is not already at the cap that
+    // protects the message column, so the resize test has room to widen it
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await setupOpenRepository(page, { commits });
+    await expect(graph.canvas).toBeVisible();
+    await waitForNodeCount(page, BRANCHES + 1);
+  });
+
+  test('keeps the commit message column on screen and shows a lane scrollbar', async ({ page }) => {
+    const column = await readColumn(page);
+
+    // The lanes alone are wider than the canvas, yet the column is bounded
+    expect(column.fullLaneWidth).toBeGreaterThan(column.canvasWidth);
+    expect(column.width).toBeLessThan(column.canvasWidth / 2);
+    expect(column.maxScrollLeft).toBeGreaterThan(0);
+
+    // ...so the avatar/refs/message/stats columns all fit on the canvas
+    expect(column.handles.graphEnd).toBe(column.right);
+    expect(column.handles.refsEnd).toBeGreaterThan(column.handles.graphEnd);
+    expect(column.handles.statsStart).toBeGreaterThan(column.handles.refsEnd + 160);
+    expect(column.handles.statsStart).toBeLessThan(column.canvasWidth);
+
+    // The view starts on the mainline side (lane 0 at the right edge)
+    expect(column.scrollLeft).toBe(column.maxScrollLeft);
+
+    // The lane scrollbar sits under the graph column
+    const hscroll = page.locator('lv-graph-canvas .hscroll-container');
+    await expect(hscroll).toBeVisible();
+    const box = (await hscroll.boundingBox())!;
+    const canvasBox = (await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox())!;
+    expect(Math.round(box.x - canvasBox.x)).toBe(column.left);
+    expect(Math.round(box.width)).toBe(column.width);
+    expect(Math.round(box.y + box.height)).toBe(Math.round(canvasBox.y + canvasBox.height));
+  });
+
+  test('scrolls the lanes with a sideways wheel but never the text columns', async ({ page }) => {
+    const before = await readColumn(page);
+    const canvasBox = (await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox())!;
+
+    await page.mouse.move(canvasBox.x + before.left + before.width / 2, canvasBox.y + 100);
+    await page.mouse.wheel(-120, 0);
+    await waitForScrollLeft(page, before.maxScrollLeft - 120);
+
+    const after = await readColumn(page);
+    expect(after.handles).toEqual(before.handles);
+    // The native scrollbar follows the wheel
+    const hscroll = page.locator('lv-graph-canvas .hscroll-container');
+    await expect(hscroll).toHaveJSProperty('scrollLeft', before.maxScrollLeft - 120);
+
+    // Cannot scroll past the mainline side
+    await page.mouse.wheel(100000, 0);
+    await waitForScrollLeft(page, before.maxScrollLeft);
+  });
+
+  test('reveals hidden lanes with the arrow keys', async ({ page }) => {
+    const column = await readColumn(page);
+    await focusGraphInternalCanvas(page);
+
+    await page.keyboard.press('ArrowLeft');
+    await waitForScrollLeft(page, column.maxScrollLeft - 3 * column.laneWidth);
+    expect(await getSelectedNodeOid(page)).toBeNull();
+
+    await page.keyboard.press('ArrowRight');
+    await waitForScrollLeft(page, column.maxScrollLeft);
+  });
+
+  test('follows the lane scrollbar', async ({ page }) => {
+    const hscroll = page.locator('lv-graph-canvas .hscroll-container');
+    await hscroll.evaluate((el) => {
+      el.scrollLeft = 0;
+    });
+    await waitForScrollLeft(page, 0);
+
+    // Scrolled fully to the far lanes: the text columns did not move
+    const column = await readColumn(page);
+    expect(column.handles.statsStart).toBeLessThan(column.canvasWidth);
+  });
+
+  test('widens the graph column by dragging its handle and remembers it', async ({ page }) => {
+    const before = await readColumn(page);
+    const handle = page.locator('lv-graph-canvas .resize-handle[title="Resize graph column"]');
+    await expect(handle).toBeAttached();
+    const canvasBox = (await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox())!;
+
+    const startX = canvasBox.x + before.right;
+    const y = canvasBox.y + 150;
+    await page.mouse.move(startX, y);
+    await page.mouse.down();
+    await page.mouse.move(startX + 30, y, { steps: 3 });
+    await page.mouse.move(startX + 60, y, { steps: 3 });
+    await page.mouse.up();
+
+    const handleEl = await getGraphCanvasHandle(page);
+    await page.waitForFunction(
+      ([el, expected]) => {
+        const canvas = el as HTMLElement & { getGraphColumn(): { width: number } };
+        return canvas.getGraphColumn().width === expected;
+      },
+      [handleEl, before.width + 60] as const
+    );
+
+    const after = await readColumn(page);
+    expect(after.width).toBe(before.width + 60);
+    // Still parked on the mainline; the extra room shows more lanes
+    expect(after.scrollLeft).toBe(after.maxScrollLeft);
+    expect(after.maxScrollLeft).toBe(before.maxScrollLeft - 60);
+    // The text columns moved right by the same amount and still fit
+    expect(after.handles.refsEnd).toBe(before.handles.refsEnd + 60);
+    expect(after.handles.statsStart).toBeLessThan(after.canvasWidth);
+
+    const saved = await page.evaluate(() => localStorage.getItem('gitnado-graph-columns'));
+    expect(JSON.parse(saved!).graph).toBe(before.width + 60);
+  });
+});

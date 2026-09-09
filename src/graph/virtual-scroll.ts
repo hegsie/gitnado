@@ -22,12 +22,21 @@ export interface VirtualScrollConfig {
 export interface Viewport {
   /** Scroll position from top */
   scrollTop: number;
-  /** Scroll position from left */
+  /**
+   * Horizontal scroll of the graph (lane) column, in pixels over the full
+   * lane strip: 0 shows the highest-numbered lanes, the maximum shows
+   * lane 0 against the column's right edge. See `graph-column.ts`.
+   */
   scrollLeft: number;
   /** Visible width */
   width: number;
   /** Visible height */
   height: number;
+  /**
+   * On-screen width of the graph column. Lanes outside it are clipped, so
+   * horizontal culling uses this instead of `width` when set.
+   */
+  graphColumnWidth?: number;
 }
 
 export interface VisibleRange {
@@ -63,9 +72,16 @@ export interface RenderData {
   edges: LayoutEdge[];
   /** Visible range */
   range: VisibleRange;
-  /** Offset for rendering (accounts for scroll position) */
+  /**
+   * Screen x of the graph column's left edge (the graph padding). Unlike
+   * `offsetY` it does NOT include the scroll: the renderer scrolls lanes
+   * inside the column using `scrollLeft`.
+   */
   offsetX: number;
+  /** Vertical offset for rendering (accounts for scroll position) */
   offsetY: number;
+  /** Horizontal scroll of the graph column (see `Viewport.scrollLeft`) */
+  scrollLeft: number;
   /** Refs by commit OID */
   refsByCommit: RefsByCommit;
   /** Author emails by commit OID for avatar loading */
@@ -231,10 +247,18 @@ export class VirtualScrollManager {
     );
 
     // Visible drawn columns, measured from the left edge of the graph, +/-2
-    // columns of overscan
-    const startColumn = Math.floor((viewport.scrollLeft - padding) / laneWidth) - 2;
-    const endColumn =
-      Math.ceil((viewport.scrollLeft + viewport.width - padding) / laneWidth) + 2;
+    // columns of overscan. With a bounded graph column the lanes scroll
+    // inside it, so the visible strip is [scrollLeft, scrollLeft + column
+    // width]; without one the whole viewport shows lanes.
+    let startColumn: number;
+    let endColumn: number;
+    if (viewport.graphColumnWidth !== undefined) {
+      startColumn = Math.floor(viewport.scrollLeft / laneWidth) - 2;
+      endColumn = Math.ceil((viewport.scrollLeft + viewport.graphColumnWidth) / laneWidth) + 2;
+    } else {
+      startColumn = Math.floor((viewport.scrollLeft - padding) / laneWidth) - 2;
+      endColumn = Math.ceil((viewport.scrollLeft + viewport.width - padding) / laneWidth) + 2;
+    }
 
     // The graph is mirrored — lane L is DRAWN at column (maxLane - L), lane 0
     // on the right (see renderEdges/renderNodes in canvas-renderer) — so the
@@ -258,8 +282,9 @@ export class VirtualScrollManager {
       nodes,
       edges,
       range,
-      offsetX: this.config.padding - viewport.scrollLeft,
+      offsetX: this.config.padding,
       offsetY: this.config.padding - viewport.scrollTop,
+      scrollLeft: viewport.scrollLeft,
       refsByCommit: this.refsByCommit,
       authorEmails: this.authorEmails,
       maxLane: this.layout?.maxLane ?? 0,
@@ -350,38 +375,47 @@ export class VirtualScrollManager {
   }
 
   /**
-   * Scroll to bring a specific node into view
+   * Scroll to bring a specific node into view.
+   *
+   * Horizontally the node's lane is measured on the mirrored strip (lane 0
+   * is the rightmost drawn column) and brought inside the graph column;
+   * when every lane already fits, `scrollLeft` is 0.
    */
   scrollToNode(
     node: LayoutNode,
     viewport: Viewport,
     align: 'start' | 'center' | 'end' = 'center'
   ): { scrollTop: number; scrollLeft: number } {
-    const nodeY = node.row * this.config.rowHeight + this.config.padding;
-    const nodeX = node.lane * this.config.laneWidth + this.config.padding;
+    const { rowHeight, laneWidth, padding } = this.config;
+    const maxLane = this.layout?.maxLane ?? 0;
+    const nodeY = node.row * rowHeight + padding;
+    // Lane offset along the strip, from its left edge
+    const laneX = (maxLane - node.lane) * laneWidth;
+    const columnWidth = viewport.graphColumnWidth ?? viewport.width - padding * 2;
 
     let scrollTop: number;
     let scrollLeft: number;
 
     switch (align) {
       case 'start':
-        scrollTop = nodeY - this.config.padding;
-        scrollLeft = nodeX - this.config.padding;
+        scrollTop = nodeY - padding;
+        scrollLeft = laneX;
         break;
       case 'end':
-        scrollTop = nodeY - viewport.height + this.config.rowHeight + this.config.padding;
-        scrollLeft = nodeX - viewport.width + this.config.laneWidth + this.config.padding;
+        scrollTop = nodeY - viewport.height + rowHeight + padding;
+        scrollLeft = laneX - columnWidth + laneWidth;
         break;
       case 'center':
       default:
         scrollTop = nodeY - viewport.height / 2;
-        scrollLeft = nodeX - viewport.width / 2;
+        scrollLeft = laneX + laneWidth / 2 - columnWidth / 2;
     }
 
     // Clamp to valid range
-    const { width, height } = this.getContentSize();
+    const { height } = this.getContentSize();
+    const fullLaneWidth = (maxLane + 1) * laneWidth;
     scrollTop = Math.max(0, Math.min(scrollTop, height - viewport.height));
-    scrollLeft = Math.max(0, Math.min(scrollLeft, width - viewport.width));
+    scrollLeft = Math.max(0, Math.min(scrollLeft, fullLaneWidth - columnWidth));
 
     return { scrollTop, scrollLeft };
   }

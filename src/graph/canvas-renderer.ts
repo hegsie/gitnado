@@ -10,6 +10,14 @@
 import type { RenderData, GraphPullRequest } from './virtual-scroll.ts';
 import type { RefInfo, RefType } from '../types/git.types.ts';
 import { md5 } from '../utils/md5.ts';
+import {
+  AUTO_GRAPH_COLUMN_SHARE,
+  clampScrollLeft,
+  computeGraphColumnLayout,
+  hiddenLaneCounts,
+  laneScreenX,
+  type GraphColumnLayout,
+} from './graph-column.ts';
 
 export interface RenderConfig {
   /** Row height in pixels */
@@ -57,6 +65,14 @@ export interface RenderConfig {
   showAuthorColumn: boolean;
   /** Show the absolute-date column */
   showDateColumn: boolean;
+  /**
+   * Preferred on-screen width of the graph (lane) column in pixels, or
+   * null for the automatic default (a share of the canvas width). The
+   * column never grows past what the lanes need, and never so wide that
+   * the message column loses its minimum width; wider graphs scroll
+   * horizontally inside the column. See `graph-column.ts`.
+   */
+  graphColumnWidth: number | null;
 }
 
 export interface RenderTheme {
@@ -137,6 +153,7 @@ const DEFAULT_CONFIG: RenderConfig = {
   showRefIcons: true,
   refsColumnWidth: 200,
   statsColumnWidth: 80,
+  graphColumnWidth: null,
   showAuthorColumn: false,
   showDateColumn: false,
 };
@@ -778,6 +795,131 @@ export class CanvasRenderer {
     };
   }
 
+  /** Gap between the graph column and the avatar column */
+  private static readonly GRAPH_TO_AVATAR_GAP = 20;
+  private static readonly AVATAR_SIZE = 22;
+  /** Gap between the avatar and the refs column */
+  private static readonly AVATAR_TO_REFS_GAP = 8;
+  /** Gap between the refs column and the message column */
+  private static readonly REFS_TO_MESSAGE_GAP = 12;
+
+  /**
+   * Widest the graph column may be on this canvas before the text columns
+   * (avatar, refs, a minimum-width message, stats, time) stop fitting.
+   */
+  private getMaxGraphColumnWidth(left: number): number {
+    const { statsColumnX } = this.getRightColumnLayout();
+    const textColumnsWidth =
+      CanvasRenderer.GRAPH_TO_AVATAR_GAP +
+      CanvasRenderer.AVATAR_SIZE +
+      CanvasRenderer.AVATAR_TO_REFS_GAP +
+      this.config.refsColumnWidth +
+      CanvasRenderer.REFS_TO_MESSAGE_GAP +
+      CanvasRenderer.MIN_MESSAGE_WIDTH +
+      8;
+    return statsColumnX - textColumnsWidth - left;
+  }
+
+  /**
+   * Geometry of the graph (lane) column: where it starts and ends on
+   * screen and how far it can scroll horizontally. Every text column is
+   * laid out from `right`, so a graph with more lanes than fit never
+   * pushes the commit message off the canvas.
+   *
+   * @param maxLane Highest lane number in the layout
+   * @param left Screen x of the column's left edge (the graph padding)
+   */
+  getGraphColumnLayout(maxLane: number, left: number): GraphColumnLayout {
+    const canvasWidth = this.canvas.width / this.dpr;
+    const preferredWidth =
+      this.config.graphColumnWidth ?? Math.round(canvasWidth * AUTO_GRAPH_COLUMN_SHARE);
+    return computeGraphColumnLayout({
+      maxLane,
+      laneWidth: this.config.laneWidth,
+      left,
+      preferredWidth,
+      maxWidth: this.getMaxGraphColumnWidth(left),
+    });
+  }
+
+  /** Screen x of a lane's centre for the frame being rendered */
+  private laneX(column: GraphColumnLayout, maxLane: number, lane: number, scrollLeft: number): number {
+    return laneScreenX(column, this.config.laneWidth, maxLane, lane, scrollLeft);
+  }
+
+  /**
+   * Clip drawing to the graph column when lanes overflow it. Nodes on the
+   * rightmost lane may be wider than half a lane, so the clip extends by
+   * one node radius on the right: that side is only ever hidden after the
+   * user scrolls away from the mainline, and the 20px gap before the
+   * avatar column absorbs the overhang.
+   */
+  private clipToGraphColumn(column: GraphColumnLayout): void {
+    const { ctx } = this;
+    const height = this.canvas.height / this.dpr;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(
+      column.left,
+      this.HEADER_HEIGHT,
+      column.width + this.config.maxNodeRadius,
+      height - this.HEADER_HEIGHT
+    );
+    ctx.clip();
+  }
+
+  /**
+   * Fade the column's cut edges so a clipped lane reads as "more this way"
+   * rather than as a rendering glitch.
+   */
+  private renderGraphColumnFades(column: GraphColumnLayout, scrollLeft: number): void {
+    if (column.maxScrollLeft === 0) return;
+    const { ctx, theme } = this;
+    const height = this.canvas.height / this.dpr;
+    const hidden = hiddenLaneCounts(column, this.config.laneWidth, scrollLeft);
+    const fadeWidth = Math.min(24, column.width / 3);
+    const transparent = this.toTransparent(theme.background);
+
+    if (hidden.left > 0) {
+      const gradient = ctx.createLinearGradient(column.left, 0, column.left + fadeWidth, 0);
+      gradient.addColorStop(0, theme.background);
+      gradient.addColorStop(1, transparent);
+      ctx.fillStyle = gradient;
+      ctx.fillRect(column.left, this.HEADER_HEIGHT, fadeWidth, height - this.HEADER_HEIGHT);
+    }
+    if (hidden.right > 0) {
+      const gradient = ctx.createLinearGradient(column.right - fadeWidth, 0, column.right, 0);
+      gradient.addColorStop(0, transparent);
+      gradient.addColorStop(1, theme.background);
+      ctx.fillStyle = gradient;
+      ctx.fillRect(column.right - fadeWidth, this.HEADER_HEIGHT, fadeWidth, height - this.HEADER_HEIGHT);
+    }
+  }
+
+  /**
+   * A fully transparent version of a CSS color, for gradient end stops.
+   * Handles the #rgb / #rrggbb / rgb() forms the theme uses; anything else
+   * falls back to plain transparent (which only matters for the very edge
+   * pixel of the fade).
+   */
+  private toTransparent(color: string): string {
+    const hex = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (hex) {
+      const digits = hex[1].length === 3
+        ? hex[1].split('').map((d) => d + d).join('')
+        : hex[1];
+      const r = parseInt(digits.slice(0, 2), 16);
+      const g = parseInt(digits.slice(2, 4), 16);
+      const b = parseInt(digits.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, 0)`;
+    }
+    const rgb = color.trim().match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+    if (rgb) {
+      return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0)`;
+    }
+    return 'transparent';
+  }
+
   /**
    * Format a timestamp as an absolute date (e.g. "12 Jan 25"), cached per
    * timestamp
@@ -902,20 +1044,31 @@ export class CanvasRenderer {
     ctx.rect(0, this.HEADER_HEIGHT, width, height - this.HEADER_HEIGHT);
     ctx.clip();
 
+    // Lanes that overflow the graph column are clipped to it; rows (which
+    // span the whole canvas) are painted outside that clip
+    const column = this.getGraphColumnLayout(data.maxLane, data.offsetX);
+    const scrollLeft = clampScrollLeft(column, data.scrollLeft);
+    const overflows = column.maxScrollLeft > 0;
+    if (overflows) this.clipToGraphColumn(column);
+
     // Draw edges (behind nodes)
-    this.renderEdges(data);
+    this.renderEdges(data, column, scrollLeft);
 
     // Draw nodes
-    this.renderNodes(data);
+    this.renderNodes(data, column, scrollLeft);
+
+    if (overflows) ctx.restore();
 
     // Draw ref labels (on top of nodes)
-    this.renderRefLabels(data);
+    this.renderRefLabels(data, column);
+
+    this.renderGraphColumnFades(column, scrollLeft);
 
     // Restore context (remove clipping)
     ctx.restore();
 
     // Draw column headers LAST (on top of everything)
-    this.renderColumnHeaders(data);
+    this.renderColumnHeaders(column, scrollLeft);
 
     // Draw FPS counter
     if (config.showFps) {
@@ -928,22 +1081,27 @@ export class CanvasRenderer {
   /**
    * Render column headers (GRAPH, COMMIT MESSAGE, STATS, TIME)
    */
-  private renderColumnHeaders(data: RenderData): void {
+  private renderColumnHeaders(column: GraphColumnLayout, scrollLeft: number): void {
     const { ctx, config, theme } = this;
-    const { offsetX, maxLane } = data;
 
     const headerY = this.HEADER_HEIGHT / 2;
     const canvasWidth = this.canvas.width / this.dpr;
 
-    // Calculate column positions
-    const graphEndX = offsetX + (maxLane + 1) * config.laneWidth;
-    const avatarColumnX = graphEndX + 20;
-    const avatarSize = 22;
+    // Calculate column positions from the graph column's right edge
+    const graphEndX = column.right;
+    const avatarColumnX = graphEndX + CanvasRenderer.GRAPH_TO_AVATAR_GAP;
+    const avatarSize = CanvasRenderer.AVATAR_SIZE;
     const messageColumnX = avatarColumnX + avatarSize + 12;
     // Rows start the message AFTER the refs column — the optional-column
     // drop decision must use the same origin as renderRefLabels or headers
     // and cells could disagree about which columns exist
-    const rowMessageColumnX = avatarColumnX + avatarSize + 8 + config.refsColumnWidth + 12;
+    const rowMessageColumnX =
+      avatarColumnX +
+      avatarSize +
+      CanvasRenderer.AVATAR_TO_REFS_GAP +
+      config.refsColumnWidth +
+      CanvasRenderer.REFS_TO_MESSAGE_GAP;
+    const hidden = hiddenLaneCounts(column, config.laneWidth, scrollLeft);
 
     // Right-aligned columns (use config values)
     const { timeColumnX, timeColumnWidth, statsColumnX, dateColumnX, authorColumnX } =
@@ -959,10 +1117,26 @@ export class CanvasRenderer {
     ctx.globalAlpha = 0.5;
     ctx.textBaseline = 'middle';
 
-    // Graph header - centered over graph area
-    const graphCenterX = offsetX + ((maxLane + 1) * config.laneWidth) / 2;
+    // Graph header - centered over the graph column
+    const graphCenterX = column.left + column.width / 2;
     ctx.textAlign = 'center';
     ctx.fillText('GRAPH', graphCenterX, headerY);
+
+    // "N more" hints for lanes scrolled out of the column. Only when the
+    // column is wide enough that they do not collide with the GRAPH label.
+    const graphLabelWidth = ctx.measureText('GRAPH').width;
+    if (column.width >= graphLabelWidth + 2 * 56) {
+      ctx.font = '9px -apple-system, BlinkMacSystemFont, sans-serif';
+      if (hidden.left > 0) {
+        ctx.textAlign = 'left';
+        ctx.fillText(`◂ ${hidden.left} more`, column.left + 2, headerY);
+      }
+      if (hidden.right > 0) {
+        ctx.textAlign = 'right';
+        ctx.fillText(`${hidden.right} more ▸`, column.right - 2, headerY);
+      }
+      ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
+    }
 
     // Commit message header
     ctx.textAlign = 'left';
@@ -999,21 +1173,19 @@ export class CanvasRenderer {
   /**
    * Render edges with smooth bezier curves (GitKraken style)
    */
-  private renderEdges(data: RenderData): void {
+  private renderEdges(data: RenderData, column: GraphColumnLayout, scrollLeft: number): void {
     const { ctx, config } = this;
-    const { edges, offsetX, offsetY, maxLane } = data;
+    const { edges, offsetY, maxLane } = data;
 
     ctx.lineWidth = config.lineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
     // Graph is mirrored: lane 0 is on the right, higher lanes extend left
-    const graphEndX = offsetX + (maxLane + 1) * config.laneWidth;
-
     for (const edge of edges) {
-      const fromX = graphEndX - (edge.fromLane + 1) * config.laneWidth + config.laneWidth / 2;
+      const fromX = this.laneX(column, maxLane, edge.fromLane, scrollLeft);
       const fromY = offsetY + edge.fromRow * config.rowHeight + this.HEADER_HEIGHT;
-      const toX = graphEndX - (edge.toLane + 1) * config.laneWidth + config.laneWidth / 2;
+      const toX = this.laneX(column, maxLane, edge.toLane, scrollLeft);
       const toY = offsetY + edge.toRow * config.rowHeight + this.HEADER_HEIGHT;
 
       ctx.strokeStyle = this.getBranchColor(edge.colorIndex);
@@ -1082,18 +1254,16 @@ export class CanvasRenderer {
   /**
    * Render nodes with avatars
    */
-  private renderNodes(data: RenderData): void {
+  private renderNodes(data: RenderData, column: GraphColumnLayout, scrollLeft: number): void {
     const { ctx, config, theme } = this;
-    const { nodes, offsetX, offsetY, authorEmails, maxLane } = data;
-
-    // Graph is mirrored: lane 0 is on the right, higher lanes extend left
-    const graphEndX = offsetX + (maxLane + 1) * config.laneWidth;
+    const { nodes, offsetY, authorEmails, maxLane } = data;
 
     // Check if search highlighting is active
     const hasHighlighting = this.highlightedOids.size > 0;
 
     for (const node of nodes) {
-      const x = graphEndX - (node.lane + 1) * config.laneWidth + config.laneWidth / 2;
+      // Graph is mirrored: lane 0 is on the right, higher lanes extend left
+      const x = this.laneX(column, maxLane, node.lane, scrollLeft);
       const y = offsetY + node.row * config.rowHeight + this.HEADER_HEIGHT;
       const color = this.getBranchColor(node.colorIndex);
       const radius = this.getNodeRadius(node.oid);
@@ -1284,20 +1454,21 @@ export class CanvasRenderer {
    * Render ref labels and commit messages in fixed columns
    * Layout: [Branch Labels] | [Graph] | [Avatar] | [Message + Refs]
    */
-  private renderRefLabels(data: RenderData): void {
+  private renderRefLabels(data: RenderData, column: GraphColumnLayout): void {
     const { ctx, config, theme } = this;
-    const { nodes, offsetX, offsetY, refsByCommit, maxLane } = data;
+    const { nodes, offsetY, refsByCommit } = data;
 
     // Get canvas width for responsive layout
     const canvasWidth = this.canvas.width / this.dpr;
 
-    // Calculate column positions (left to right)
-    const graphEndX = offsetX + (maxLane + 1) * config.laneWidth;
-    const avatarColumnX = graphEndX + 20;
-    const avatarSize = 22;
-    const refsColumnX = avatarColumnX + avatarSize + 8;
+    // Calculate column positions (left to right) from the graph column's
+    // right edge, so they stay on screen however many lanes the graph has
+    const graphEndX = column.right;
+    const avatarColumnX = graphEndX + CanvasRenderer.GRAPH_TO_AVATAR_GAP;
+    const avatarSize = CanvasRenderer.AVATAR_SIZE;
+    const refsColumnX = avatarColumnX + avatarSize + CanvasRenderer.AVATAR_TO_REFS_GAP;
     const refsColumnWidth = config.refsColumnWidth;
-    const messageColumnX = refsColumnX + refsColumnWidth + 12;
+    const messageColumnX = refsColumnX + refsColumnWidth + CanvasRenderer.REFS_TO_MESSAGE_GAP;
 
     // Right-aligned columns (use config values)
     const {
@@ -2222,21 +2393,23 @@ export class CanvasRenderer {
    * @returns Object with column boundary X positions
    */
   getColumnBoundaries(maxLane: number, offsetX: number): {
+    graphEnd: number;
     refsEnd: number;
     statsStart: number;
   } {
     const { config } = this;
 
     // Calculate column positions (must match renderRefLabels logic)
-    const graphEndX = offsetX + (maxLane + 1) * config.laneWidth;
-    const avatarColumnX = graphEndX + 20;
-    const avatarSize = 22;
-    const refsColumnX = avatarColumnX + avatarSize + 8;
+    const graphEndX = this.getGraphColumnLayout(maxLane, offsetX).right;
+    const avatarColumnX = graphEndX + CanvasRenderer.GRAPH_TO_AVATAR_GAP;
+    const refsColumnX =
+      avatarColumnX + CanvasRenderer.AVATAR_SIZE + CanvasRenderer.AVATAR_TO_REFS_GAP;
     const refsColumnWidth = config.refsColumnWidth;
 
     const { statsColumnX } = this.getRightColumnLayout();
 
     return {
+      graphEnd: graphEndX,
       refsEnd: refsColumnX + refsColumnWidth,
       statsStart: statsColumnX,
     };
