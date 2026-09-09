@@ -238,7 +238,7 @@ jobs:
       - name: TEMP name the test that hangs on Windows
         working-directory: src-tauri
         timeout-minutes: 30
-        run: cargo test --lib -- --test-threads=1 --nocapture --report-time
+        run: cargo test --lib -- --test-threads=1 --nocapture
 
   test-frontend:
     name: Test Frontend
