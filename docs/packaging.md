@@ -34,11 +34,16 @@ One-time setup:
    (fine-grained tokens are not supported by winget-releaser) and add it as
    the `WINGET_TOKEN` repository secret.
 3. Nothing else: the job checks whether `manifests/h/hegsie/Gitnado` exists in
-   winget-pkgs. If it does not (the very first release), it runs
-   [Komac](https://github.com/russellbanks/Komac) `new` with every manifest
-   field supplied on the command line and `--submit`, which opens the
-   "New package" PR. Once that PR is merged, every later release takes the
-   update path via winget-releaser.
+   winget-pkgs. If it does not (the very first release), it renders the three
+   manifests from the templates in [`packaging/winget/`](../packaging/winget/)
+   with [`.github/scripts/winget-manifests.mjs`](../.github/scripts/winget-manifests.mjs)
+   (installer hashes from the downloaded assets, the MSI `ProductCode` from
+   `komac analyze`, the release date from the GitHub release) and submits the
+   directory with [Komac](https://github.com/russellbanks/Komac)
+   `submit --yes`, which opens the "New package" PR. `komac new` is not used
+   because it always prompts for install modes and cannot run unattended.
+   Once that PR is merged, every later release takes the update path via
+   winget-releaser.
 
 Users install with `winget install hegsie.Gitnado`.
 
@@ -46,9 +51,14 @@ New-package PRs go through winget-pkgs moderation and typically take a few
 days; the automated executable check may flag a
 `Validation-Executable-Error` because the app needs the WebView2 runtime and
 a desktop session — a short comment on the PR saying so helps the moderator.
-If the Komac step ever fails, the same submission can be made by hand on
-Windows with [wingetcreate](https://github.com/microsoft/winget-create):
-`wingetcreate new <exe-url> <msi-url>` (identifier `hegsie.Gitnado`).
+If the Komac step ever fails, render the manifests locally with the same
+script and submit them by hand: `node .github/scripts/winget-manifests.mjs
+--version <v> --exe <exe> --msi <msi> --msi-analysis <komac analyze output>
+--release-date <YYYY-MM-DD> --out winget`, then `komac submit winget/manifests/h/hegsie/Gitnado/<v>`
+(or `wingetcreate submit` on Windows). The templates pin the NSIS
+`ProductCode` (`Gitnado`, the uninstall registry key Tauri writes) and the
+WiX `UpgradeCode` from `tauri.conf.json`; update them together if either
+changes.
 
 The earlier `hegsie.Leviathan` submission
 ([microsoft/winget-pkgs#428196](https://github.com/microsoft/winget-pkgs/pull/428196))
