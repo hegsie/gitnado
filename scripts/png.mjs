@@ -34,6 +34,15 @@ export function crc32(bytes, seed = 0) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+/** The Paeth predictor (PNG spec 9.4): whichever of a, b, c is nearest a + b - c, ties to a, then b. */
+function paeth(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+}
+
 /** True when `buffer` starts with the PNG signature. */
 export function isPng(buffer) {
   return buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_SIGNATURE);
@@ -59,14 +68,8 @@ function unfilterScanline(filter, line, previous, bpp) {
     case 4: // Paeth
       for (let i = 0; i < line.length; i += 1) {
         const a = i >= bpp ? line[i - bpp] : 0;
-        const b = previous[i];
         const c = i >= bpp ? previous[i - bpp] : 0;
-        const p = a + b - c;
-        const pa = Math.abs(p - a);
-        const pb = Math.abs(p - b);
-        const pc = Math.abs(p - c);
-        const predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-        line[i] = (line[i] + predictor) & 0xff;
+        line[i] = (line[i] + paeth(a, previous[i], c)) & 0xff;
       }
       break;
     default:
@@ -159,13 +162,8 @@ function filterScanline(type, line, previous, bpp) {
       case 3:
         predictor = (a + b) >> 1;
         break;
-      default: {
-        const p = a + b - c;
-        const pa = Math.abs(p - a);
-        const pb = Math.abs(p - b);
-        const pc = Math.abs(p - c);
-        predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-      }
+      default:
+        predictor = paeth(a, b, c);
     }
     out[i] = (line[i] - predictor) & 0xff;
   }

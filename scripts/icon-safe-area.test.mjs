@@ -22,7 +22,6 @@ import { test } from 'node:test';
 
 import {
   APPLE_CANVAS,
-  APPLE_MARGIN,
   ENHANCE,
   FULL_BLEED_PNGS,
   ICNS_LEGACY_TYPES,
@@ -37,6 +36,7 @@ import {
   encodeIco,
   encodeIcns,
   icnsRle,
+  macMargin,
   sharpen,
 } from './build-icons.mjs';
 import {
@@ -51,11 +51,16 @@ import { REPO_ROOT, alphaOf, crc32, decodePng, encodePng } from './png.mjs';
 
 const readRepoFile = (path) => readFileSync(join(REPO_ROOT, path));
 const SOURCE_PNG = readRepoFile(SOURCE);
-const BUILT = buildIcons(SOURCE_PNG);
-const COMMITTED = new Map([...BUILT.keys()].map((path) => [path, readRepoFile(path)]));
 
-/** Apple's margin at `size`, as the build lays it out: a whole pixel count. */
-const expectedMargin = (size) => Math.floor((size * APPLE_MARGIN) / APPLE_CANVAS);
+/** The fresh build and the committed files, made once, on first use — so a single selected test does not pay for it. */
+let cache;
+function built() {
+  if (!cache) {
+    const fresh = buildIcons(SOURCE_PNG);
+    cache = { BUILT: fresh, COMMITTED: new Map([...fresh.keys()].map((path) => [path, readRepoFile(path)])) };
+  }
+  return cache;
+}
 const legacySize = (type) => Object.values(ICNS_LEGACY_TYPES).find((t) => t.mask === type)?.size;
 
 /** Decode the ICNS PackBits variant `icnsRle` writes. */
@@ -91,11 +96,12 @@ function assertSamePng(committed, built, label) {
 }
 
 test('every committed icon is what build-icons.mjs produces from the master', () => {
-  for (const [path, built] of BUILT) {
+  const { BUILT, COMMITTED } = built();
+  for (const [path, fresh] of BUILT) {
     const committed = COMMITTED.get(path);
     if (path === ICO_PATH) {
       const c = readIcoEntries(committed);
-      const b = readIcoEntries(built);
+      const b = readIcoEntries(fresh);
       assert.deepEqual(
         c.map((e) => e.size),
         b.map((e) => e.size),
@@ -104,7 +110,7 @@ test('every committed icon is what build-icons.mjs produces from the master', ()
       c.forEach((entry, i) => assertSamePng(entry.payload, b[i].payload, `${path} ${entry.size}px`));
     } else if (path === ICNS_PATH) {
       const c = readIcnsEntries(committed);
-      const b = readIcnsEntries(built);
+      const b = readIcnsEntries(fresh);
       assert.deepEqual(
         c.map((e) => e.type),
         b.map((e) => e.type),
@@ -121,13 +127,13 @@ test('every committed icon is what build-icons.mjs produces from the master', ()
         } else assert.ok(maxDifference(entry.payload, fresh) <= 1, `${path} ${entry.type}: mask differs from a fresh build`);
       });
     } else {
-      assertSamePng(committed, built, path);
+      assertSamePng(committed, fresh, path);
     }
   }
 });
 
 test('icon.icns carries the entry set the build writes, PNG and legacy', () => {
-  const types = readIcnsEntries(COMMITTED.get(ICNS_PATH)).map((e) => e.type);
+  const types = readIcnsEntries(built().COMMITTED.get(ICNS_PATH)).map((e) => e.type);
   const expected = [
     ...Object.keys(ICNS_PNG_TYPES),
     ...Object.entries(ICNS_LEGACY_TYPES).flatMap(([type, { mask }]) => [type, mask]),
@@ -136,7 +142,7 @@ test('icon.icns carries the entry set the build writes, PNG and legacy', () => {
 });
 
 test('every icon.icns entry sits on Apple’s grid, shadow inside the canvas', () => {
-  for (const { type, payload } of readIcnsEntries(COMMITTED.get(ICNS_PATH))) {
+  for (const { type, payload } of readIcnsEntries(built().COMMITTED.get(ICNS_PATH))) {
     let image;
     if (type in ICNS_PNG_TYPES) image = pngAlpha(payload);
     else if (legacySize(type)) image = maskAlpha(payload, legacySize(type));
@@ -146,7 +152,7 @@ test('every icon.icns entry sits on Apple’s grid, shadow inside the canvas', (
     assert.equal(width, height, `${type} is not square`);
     if (type in ICNS_PNG_TYPES) assert.equal(width, ICNS_PNG_TYPES[type], `${type} is the wrong size`);
 
-    const m = expectedMargin(width);
+    const m = macMargin(width);
     assert.deepEqual(
       measureMargins(image),
       { left: m, top: m, right: m, bottom: m },
@@ -175,6 +181,7 @@ test('every icon.icns entry sits on Apple’s grid, shadow inside the canvas', (
 });
 
 test('the Windows, Linux and website PNGs stay full-bleed at their declared size', () => {
+  const { COMMITTED } = built();
   for (const [path, size] of Object.entries(FULL_BLEED_PNGS)) {
     const image = pngAlpha(COMMITTED.get(path));
     assert.equal(image.width, size, `${path}: width`);
@@ -192,7 +199,7 @@ test('transparent pixels carry no colour, in every built PNG', () => {
       }
     }
   };
-  for (const [path, bytes] of BUILT) {
+  for (const [path, bytes] of built().BUILT) {
     if (path === ICO_PATH) readIcoEntries(bytes).forEach((e) => check(e.payload, `${path} ${e.size}px`));
     else if (path === ICNS_PATH) {
       readIcnsEntries(bytes)
@@ -203,7 +210,7 @@ test('transparent pixels carry no colour, in every built PNG', () => {
 });
 
 test('icon.ico carries every size Windows asks for, 32 first, each full-bleed', () => {
-  const entries = readIcoEntries(COMMITTED.get(ICO_PATH));
+  const entries = readIcoEntries(built().COMMITTED.get(ICO_PATH));
   assert.deepEqual(
     entries.map((e) => e.size),
     ICO_SIZES,

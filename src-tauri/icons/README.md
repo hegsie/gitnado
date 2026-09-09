@@ -25,9 +25,9 @@ as `tauri icon` made them, and the build does not touch them.
   its Dock slot: the icon looks cut off. Only `icon.icns` gets the margin;
   Windows, Linux and the website composite their own shape (and the site
   wants a square hero) and would draw a padded tile undersized.
-- **Premultiplied resampling.** The tile's transparent corners are black, so
-  a straight resize drags black into the corner anti-aliasing — a dark
-  fringe on light desktops.
+- **Premultiplied resampling.** The colour under the tile's transparent
+  corners is dark navy, so a straight resize drags it into the corner
+  anti-aliasing — a dark fringe on light desktops.
 - **Sharpening at 64px and below.** Windows taskbar and Explorer (16–48px),
   Linux trays and Finder list view are where the tornado's thin strokes turn
   to mush without it.
@@ -45,6 +45,6 @@ as `tauri icon` made them, and the build does not touch them.
 | `32x32.png`                                    | macOS menu-bar tray icon (`default_window_icon`); Linux             |
 | `128x128.png`, `128x128@2x.png`, `icon.png`    | Linux hicolor icons (128, 256, 512) in AppImage/deb/rpm, via `bundle.icon` |
 | `icon.ico`                                     | Windows: taskbar, Explorer, installer; entry 0 (32px) is the window and tray icon |
-| `Square*Logo.png`, `StoreLogo.png`             | Windows MSIX tiles                                                  |
+| `Square*Logo.png`, `StoreLogo.png`             | Windows Store/MSIX tiles — no current bundle target reads them; kept current so nothing here carries the old art |
 | `site/assets/{favicon-64,icon-256,icon-512}`   | the website                                                         |
 | `src/assets/mascot/gitnado-400.png`            | the in-app welcome screen — hand-made, not part of the build        |

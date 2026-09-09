@@ -4,8 +4,8 @@
  * `src-tauri/icons/icon-source.png` is a full-bleed 1024x1024 rounded tile.
  * `tauri icon` would resize it and nothing more, and that shows at every
  * size users actually meet:
- *   - the rounded corners are transparent BLACK, so a straight (non-
- *     premultiplied) resample drags black into the corner anti-aliasing —
+ *   - the colour under the transparent corners is dark navy, so a straight
+ *     (non-premultiplied) resample drags it into the corner anti-aliasing —
  *     a dark fringe on light desktops;
  *   - 16–32px (Windows taskbar, Linux tray, Finder list view) turns the
  *     tornado's thin strokes into blue mush without a sharpening pass;
@@ -45,6 +45,13 @@ export const SOURCE = `${ICONS_DIR}/icon-source.png`;
 export const APPLE_CANVAS = 1024;
 export const APPLE_BODY = 824;
 export const APPLE_MARGIN = (APPLE_CANVAS - APPLE_BODY) / 2;
+
+/**
+ * Apple's margin at `size`, as the build lays it out: a whole number of
+ * pixels, identical on all four sides, rounding down so the body never
+ * exceeds Apple's proportion. The contract test asserts against this.
+ */
+export const macMargin = (size) => Math.floor((size * APPLE_MARGIN) / APPLE_CANVAS);
 
 /**
  * Apple's icon template shadow, at 1024: black at 30%, offset 12px down,
@@ -254,22 +261,28 @@ function gaussianKernel(sigma) {
 function blurPlane(plane, width, height, sigma) {
   if (sigma <= 0) return plane;
   const { radius, kernel } = gaussianKernel(sigma);
-  const pass = (src, horizontal) => {
-    const out = new Float32Array(src.length);
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        let sum = 0;
+  // One pass along an axis of `length` samples spaced `step` apart in the
+  // plane, starting at `base`. Only the `radius` samples at either end need
+  // their taps clamped; the interior runs unchecked.
+  const pass = (src, out, base, step, length) => {
+    for (let i = 0; i < length; i += 1) {
+      let sum = 0;
+      if (i >= radius && i + radius < length) {
+        for (let k = -radius; k <= radius; k += 1) sum += src[base + (i + k) * step] * kernel[k + radius];
+      } else {
         for (let k = -radius; k <= radius; k += 1) {
-          const sx = horizontal ? Math.min(width - 1, Math.max(0, x + k)) : x;
-          const sy = horizontal ? y : Math.min(height - 1, Math.max(0, y + k));
-          sum += src[sy * width + sx] * kernel[k + radius];
+          const j = Math.min(length - 1, Math.max(0, i + k));
+          sum += src[base + j * step] * kernel[k + radius];
         }
-        out[y * width + x] = sum;
       }
+      out[base + i * step] = sum;
     }
-    return out;
   };
-  return pass(pass(plane, true), false);
+  const horizontal = new Float32Array(plane.length);
+  for (let y = 0; y < height; y += 1) pass(plane, horizontal, y * width, 1, width);
+  const vertical = new Float32Array(plane.length);
+  for (let x = 0; x < width; x += 1) pass(horizontal, vertical, x, width, height);
+  return vertical;
 }
 
 /** One channel of a premultiplied image as its own plane. */
@@ -378,12 +391,11 @@ function composite(base, layer, x0, y0) {
 
 /**
  * The macOS entry at `size`: body scaled to Apple's proportion, its shadow
- * beneath, centred on a transparent canvas. The margin is
- * floor(size * APPLE_MARGIN / APPLE_CANVAS) so it is a whole number of
- * pixels and identical on all four sides.
+ * beneath, centred on a transparent canvas with `macMargin(size)` on every
+ * side.
  */
 export function macCanvas(body1024, size) {
-  const margin = Math.floor((size * APPLE_MARGIN) / APPLE_CANVAS);
+  const margin = macMargin(size);
   const bodySize = size - 2 * margin;
   let body = resize(body1024, bodySize);
   if (size <= SHARPEN_UP_TO) body = sharpen(body, SHARPEN);
@@ -507,6 +519,15 @@ export function encodeIcns(pngEntries, legacy) {
 // The build.
 // ---------------------------------------------------------------------------
 
+/** Memoise a one-argument function by its argument. */
+function memo(f) {
+  const cache = new Map();
+  return (key) => {
+    if (!cache.has(key)) cache.set(key, f(key));
+    return cache.get(key);
+  };
+}
+
 /**
  * Build every output from the master PNG bytes. Returns a Map of repo-
  * relative path → file bytes; nothing is written.
@@ -518,11 +539,7 @@ export function buildIcons(sourcePng) {
   }
   const master = enhance(toPremultiplied(source), ENHANCE);
   const files = new Map();
-  const pngCache = new Map();
-  const fullBleedPng = (size) => {
-    if (!pngCache.has(size)) pngCache.set(size, encodePng(toStraight8(fullBleed(master, size))));
-    return pngCache.get(size);
-  };
+  const fullBleedPng = memo((size) => encodePng(toStraight8(fullBleed(master, size))));
 
   for (const [path, size] of Object.entries(FULL_BLEED_PNGS)) files.set(path, fullBleedPng(size));
 
@@ -531,16 +548,8 @@ export function buildIcons(sourcePng) {
     encodeIco(ICO_SIZES.map((size) => ({ size, png: fullBleedPng(size) }))),
   );
 
-  const macCache = new Map();
-  const macFor = (size) => {
-    if (!macCache.has(size)) macCache.set(size, toStraight8(macCanvas(master, size)));
-    return macCache.get(size);
-  };
-  const macPngCache = new Map();
-  const macPngFor = (size) => {
-    if (!macPngCache.has(size)) macPngCache.set(size, encodePng(macFor(size)));
-    return macPngCache.get(size);
-  };
+  const macFor = memo((size) => toStraight8(macCanvas(master, size)));
+  const macPngFor = memo((size) => encodePng(macFor(size)));
   const pngEntries = Object.entries(ICNS_PNG_TYPES).map(([type, size]) => ({ type, png: macPngFor(size) }));
   const legacy = Object.entries(ICNS_LEGACY_TYPES).map(([type, { mask, size }]) => ({
     type,
