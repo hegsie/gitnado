@@ -205,8 +205,9 @@ impl RepoWatch {
                 };
                 let repo =
                     repo.get_or_insert_with(|| git2::Repository::open(&self.worktree_root).ok());
+                let root = self.worktree_root.as_path();
                 let skip = |candidate: &Path, name: &str| {
-                    should_skip_worktree_dir(repo.as_ref(), candidate, name)
+                    should_skip_worktree_dir(repo.as_ref(), root, candidate, name)
                 };
                 if skip(path, &name) {
                     continue;
@@ -325,8 +326,9 @@ impl WatcherService {
         }
 
         // Scope 2: the working tree, pruned of heavy ignored directories.
-        let skip =
-            |candidate: &Path, name: &str| should_skip_worktree_dir(repo.as_ref(), candidate, name);
+        let skip = |candidate: &Path, name: &str| {
+            should_skip_worktree_dir(repo.as_ref(), repo_path, candidate, name)
+        };
         for (path, mode) in plan_worktree_watches(repo_path, &skip) {
             if roots.len() >= MAX_WATCH_ROOTS {
                 tracing::warn!(
@@ -463,25 +465,28 @@ fn is_heavy_dir_name(name: &str) -> bool {
 /// `.git` always is (it has its own scope). A heavy directory is skipped only
 /// when git ignores it too — a repository that really does track `dist/` or
 /// vendors `node_modules` still gets live status for those files.
-fn should_skip_worktree_dir(repo: Option<&git2::Repository>, path: &Path, name: &str) -> bool {
+fn should_skip_worktree_dir(
+    repo: Option<&git2::Repository>,
+    root: &Path,
+    path: &Path,
+    name: &str,
+) -> bool {
     if name == ".git" {
         return true;
     }
     if !is_heavy_dir_name(name) {
         return false;
     }
-    git_ignores_dir(repo, path)
+    git_ignores_dir(repo, root, path)
 }
 
-/// Ask git whether a directory is ignored.
-fn git_ignores_dir(repo: Option<&git2::Repository>, path: &Path) -> bool {
+/// Ask git whether a directory is ignored. `root` is the working-tree root the
+/// walk started from, and `path` one of its descendants.
+fn git_ignores_dir(repo: Option<&git2::Repository>, root: &Path, path: &Path) -> bool {
     let Some(repo) = repo else {
         return false;
     };
-    let Some(workdir) = repo.workdir() else {
-        return false;
-    };
-    let Ok(relative) = path.strip_prefix(workdir) else {
+    let Some(relative) = worktree_relative(repo, root, path) else {
         return false;
     };
     if repo.is_path_ignored(relative).unwrap_or(false) {
@@ -492,6 +497,28 @@ fn git_ignores_dir(repo: Option<&git2::Repository>, path: &Path) -> bool {
     let mut as_dir = relative.as_os_str().to_os_string();
     as_dir.push("/");
     repo.is_path_ignored(Path::new(&as_dir)).unwrap_or(false)
+}
+
+/// `path` expressed relative to the working tree, for an ignore query.
+///
+/// `path` is produced by walking down from `root` — the path the repository was
+/// opened with — while `repo.workdir()` is libgit2's own normalisation of that
+/// same directory. On Windows the two routinely differ: `Path::strip_prefix`
+/// compares components byte for byte, so an 8.3 short name (`C:\Users\RUNNER~1\…`
+/// against the `runneradmin` libgit2 resolves it to) or a directory whose case
+/// differs from the one on disk made stripping the workdir fail. It failed
+/// silently, and the caller read that as "git does not ignore this", so every
+/// ignored `node_modules` was walked and watched after all — the exact cost the
+/// heavy-directory rule exists to avoid.
+///
+/// Stripping the caller's own root cannot drift that way, because `path` was
+/// built from it. The workdir stays as a fallback for a `path` that came from
+/// somewhere else.
+fn worktree_relative<'a>(repo: &git2::Repository, root: &Path, path: &'a Path) -> Option<&'a Path> {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return Some(relative);
+    }
+    path.strip_prefix(repo.workdir()?).ok()
 }
 
 /// Plan the working-tree watches for `root`.
@@ -901,8 +928,10 @@ mod tests {
 
     #[test]
     fn dot_git_is_always_skipped_but_source_directories_are_not() {
+        let root = Path::new("/repo");
         assert!(should_skip_worktree_dir(
             None,
+            root,
             Path::new("/repo/.git"),
             ".git"
         ));
@@ -910,11 +939,13 @@ mod tests {
         // are kept rather than guessed at
         assert!(!should_skip_worktree_dir(
             None,
+            root,
             Path::new("/repo/node_modules"),
             "node_modules"
         ));
         assert!(!should_skip_worktree_dir(
             None,
+            root,
             Path::new("/repo/src"),
             "src"
         ));
@@ -931,14 +962,47 @@ mod tests {
 
         assert!(should_skip_worktree_dir(
             Some(&git_repo),
+            &repo.path,
             &repo.path.join("node_modules"),
             "node_modules"
         ));
         // `dist` is heavy by name but tracked/not ignored here, so it stays
         assert!(!should_skip_worktree_dir(
             Some(&git_repo),
+            &repo.path,
             &repo.path.join("dist"),
             "dist"
+        ));
+    }
+
+    /// The root the repository was opened with and libgit2's own normalisation
+    /// of it are two different strings whenever the caller's path reaches the
+    /// working tree by another name: a symlink here, an 8.3 short name or a
+    /// differently-cased drive on Windows. Stripping the workdir fails for all
+    /// of them, and a failed strip used to read as "not ignored".
+    #[cfg(unix)]
+    #[test]
+    fn an_ignored_directory_is_recognised_through_a_differently_named_root() {
+        let repo = crate::test_utils::TestRepo::with_initial_commit();
+        fs::write(repo.path.join(".gitignore"), "node_modules/\n").unwrap();
+        fs::create_dir_all(repo.path.join("node_modules")).unwrap();
+
+        let link_parent = tempfile::tempdir().unwrap();
+        let link = link_parent.path().join("by-another-name");
+        std::os::unix::fs::symlink(&repo.path, &link).unwrap();
+
+        let git_repo = git2::Repository::open(&link).unwrap();
+        assert_ne!(
+            git_repo.workdir().unwrap(),
+            link.as_path(),
+            "the test only means anything if the two forms really differ"
+        );
+
+        assert!(should_skip_worktree_dir(
+            Some(&git_repo),
+            &link,
+            &link.join("node_modules"),
+            "node_modules"
         ));
     }
 
@@ -1560,10 +1624,18 @@ mod tests {
         let key = repo.path.to_string_lossy().to_string();
         let roots = &service.watchers.get(&key).unwrap().roots;
 
+        // The git scope is registered under the path libgit2 resolves, which is
+        // not always `repo.path/.git` spelled the same way (see
+        // `worktree_relative`), so ask git2 for it rather than assuming.
+        let git_dir = git2::Repository::open(&repo.path)
+            .unwrap()
+            .path()
+            .to_path_buf();
+
         assert!(
             !roots
                 .iter()
-                .any(|(p, _)| p.starts_with(repo.path.join(".git").join("objects"))),
+                .any(|(p, _)| p.starts_with(git_dir.join("objects"))),
             "objects must never be watched: {roots:?}"
         );
         assert!(
@@ -1579,7 +1651,7 @@ mod tests {
         assert!(
             roots
                 .iter()
-                .any(|(p, _)| p.ends_with("refs") && p.starts_with(repo.path.join(".git"))),
+                .any(|(p, _)| p.ends_with("refs") && p.starts_with(&git_dir)),
             "refs must be watched: {roots:?}"
         );
     }
