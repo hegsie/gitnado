@@ -43,8 +43,10 @@ Edit `site/index.html` and push to `main`. Assets:
 - `site/assets/main-window.webp` — hero screenshot, generated from
   `docs/screenshots/main-window.png` (resized to 1600px wide, WebP quality
   82). Regenerate after the 0.9.0 release so the title bar shows *Gitnado*.
-- `site/assets/icon-256.png`, `site/assets/favicon-64.png` — from
-  `src-tauri/icons/icon.png`.
+- `site/assets/icon-256.png`, `site/assets/icon-512.png`,
+  `site/assets/favicon-64.png` — written by `npm run icons:build` from
+  `src-tauri/icons/icon-source.png`, alongside the app icons (see
+  `src-tauri/icons/README.md`).
 
 Download links are matched by asset-name suffix (`_aarch64.dmg`,
 `_x64_en-US.msi`, `_x64-setup.exe`, `_amd64.deb`, `_amd64.AppImage`,

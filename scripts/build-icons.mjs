@@ -1,0 +1,671 @@
+/**
+ * Icon build: every shipped icon, from the one art master.
+ *
+ * `src-tauri/icons/icon-source.png` is a full-bleed 1024x1024 rounded tile.
+ * `tauri icon` would resize it and nothing more, and that shows at every
+ * size users actually meet:
+ *   - the colour under the transparent corners is dark navy, so a straight
+ *     (non-premultiplied) resample drags it into the corner anti-aliasing —
+ *     a dark fringe on light desktops;
+ *   - 16–32px (Windows taskbar, Linux tray, Finder list view) turns the
+ *     tornado's thin strokes into blue mush without a sharpening pass;
+ *   - macOS lays icons out on Apple's grid — an 824x824 body on a 1024
+ *     canvas, with a soft shadow — so a full-bleed tile renders oversized
+ *     and looks cut off in the Dock.
+ * On top of that the art master carries a bright cyan band around the tile
+ * edge that reads as an outline at every size; it is painted over from the
+ * interior here, and a touch more saturation and contrast lifts the rest.
+ * All of it is done here, in one place,
+ * deterministically: the same source always produces the same bytes, which
+ * is what lets the contract test regenerate and compare.
+ *
+ * Outputs (relative to the repo root):
+ *   src-tauri/icons/{32x32,64x64,128x128,128x128@2x,icon}.png   Linux, Tauri
+ *   src-tauri/icons/Square*Logo.png, StoreLogo.png               Windows tiles
+ *   src-tauri/icons/icon.ico                                     Windows
+ *   src-tauri/icons/icon.icns                                    macOS
+ *   site/assets/{favicon-64,icon-256,icon-512}.png               website
+ *   src/assets/mascot/gitnado-400.png                            welcome screen
+ * The Android and iOS sets are left to `tauri icon`; Gitnado ships no mobile
+ * build and those hosts composite their own shape.
+ *
+ * Run `node scripts/build-icons.mjs` after changing the master or any
+ * parameter below; `npm run test:contract` then checks the committed files
+ * are exactly what this script produces.
+ */
+
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { REPO_ROOT, channelOf, decodePng, encodePng } from './png.mjs';
+export const ICONS_DIR = 'src-tauri/icons';
+export const SITE_ASSETS_DIR = 'site/assets';
+export const MASCOT_PATH = 'src/assets/mascot/gitnado-400.png';
+export const SOURCE = `${ICONS_DIR}/icon-source.png`;
+
+/** Apple's icon grid: an 824x824 body centred on a 1024x1024 canvas. */
+export const APPLE_CANVAS = 1024;
+export const APPLE_BODY = 824;
+export const APPLE_MARGIN = (APPLE_CANVAS - APPLE_BODY) / 2;
+
+/**
+ * Apple's margin at `size`, as the build lays it out: a whole number of
+ * pixels, identical on all four sides. It rounds DOWN, so at the small
+ * sizes the body comes out a little larger than Apple's proportion
+ * (14/16 at 16px, 26/32 at 32px) rather than smaller — the pixel goes to
+ * the art, not the margin, which is also what a downscale of the 1024
+ * canvas lands on. The contract test asserts against this function.
+ */
+export const macMargin = (size) => Math.floor((size * APPLE_MARGIN) / APPLE_CANVAS);
+
+/**
+ * Apple's icon template shadow, at 1024: black at 30%, offset 12px down,
+ * Gaussian blur of sigma 12 (about 24px of spread). It stays well inside
+ * the 100px margin and is scaled with the canvas for the smaller entries.
+ */
+export const SHADOW = { opacity: 0.3, offsetY: 12, sigma: 12 };
+
+/**
+ * The band around the master's tile edge — a dark outer line and a bright
+ * cyan inner one, about 14px deep at 1024 — is painted over with the
+ * colour this many pixels further in, so the tile ends in its own ground.
+ */
+export const BORDER_DEPTH = 15;
+
+/**
+ * The "pop" pass, applied once to the master before any resizing.
+ *   saturation  — chroma multiplier about each pixel's luma;
+ *   contrast    — slope about mid-grey, so the navy ground darkens a touch
+ *                 and the cyan strokes lift.
+ */
+export const ENHANCE = { saturation: 1.12, contrast: 1.06 };
+
+/** Sizes at or below this get an unsharp mask after the resample. */
+export const SHARPEN_UP_TO = 64;
+export const SHARPEN = { sigma: 0.7, amount: 0.55 };
+
+/** Full-bleed PNGs: `path` → edge length. */
+export const FULL_BLEED_PNGS = {
+  [`${ICONS_DIR}/32x32.png`]: 32,
+  [`${ICONS_DIR}/64x64.png`]: 64,
+  [`${ICONS_DIR}/128x128.png`]: 128,
+  [`${ICONS_DIR}/128x128@2x.png`]: 256,
+  [`${ICONS_DIR}/icon.png`]: 512,
+  [`${ICONS_DIR}/Square30x30Logo.png`]: 30,
+  [`${ICONS_DIR}/Square44x44Logo.png`]: 44,
+  [`${ICONS_DIR}/Square71x71Logo.png`]: 71,
+  [`${ICONS_DIR}/Square89x89Logo.png`]: 89,
+  [`${ICONS_DIR}/Square107x107Logo.png`]: 107,
+  [`${ICONS_DIR}/Square142x142Logo.png`]: 142,
+  [`${ICONS_DIR}/Square150x150Logo.png`]: 150,
+  [`${ICONS_DIR}/Square284x284Logo.png`]: 284,
+  [`${ICONS_DIR}/Square310x310Logo.png`]: 310,
+  [`${ICONS_DIR}/StoreLogo.png`]: 50,
+  [`${SITE_ASSETS_DIR}/favicon-64.png`]: 64,
+  [`${SITE_ASSETS_DIR}/icon-256.png`]: 256,
+  [`${SITE_ASSETS_DIR}/icon-512.png`]: 512,
+  [MASCOT_PATH]: 400,
+};
+
+/**
+ * Windows picks the ICO entry nearest the size it needs and scales the rest;
+ * these are the sizes the shell, Explorer and the taskbar ask for at 100%,
+ * 125%, 150% and 200%, plus the 256 that everything else is scaled from.
+ * ORDER MATTERS: Tauri's codegen embeds entry 0 as the Windows window and
+ * tray icon (`default_window_icon`), so 32 goes first, as `tauri icon`
+ * also puts it.
+ */
+export const ICO_SIZES = [32, 16, 20, 24, 40, 48, 64, 256];
+
+/**
+ * ICNS entries. PNG-payload types by edge length, then the legacy 24-bit
+ * RLE + 8-bit mask pairs macOS still reads for 16pt and 32pt at 1x in
+ * bundled apps (the same set `tauri icon` writes).
+ */
+export const ICNS_PNG_TYPES = {
+  ic07: 128,
+  ic08: 256,
+  ic09: 512,
+  ic10: 1024,
+  ic11: 32,
+  ic12: 64,
+  ic13: 256,
+  ic14: 512,
+};
+export const ICNS_LEGACY_TYPES = {
+  is32: { mask: 's8mk', size: 16 },
+  il32: { mask: 'l8mk', size: 32 },
+};
+
+export const ICO_PATH = `${ICONS_DIR}/icon.ico`;
+export const ICNS_PATH = `${ICONS_DIR}/icon.icns`;
+
+// ---------------------------------------------------------------------------
+// Pixel helpers. Images are `{ width, height, data: Float32Array }` of
+// PREMULTIPLIED RGBA in 0..1 while in flight — every filter below assumes
+// that — and are converted back to straight 8-bit only at the edges.
+// ---------------------------------------------------------------------------
+
+function toPremultiplied({ width, height, data }) {
+  const out = new Float32Array(width * height * 4);
+  for (let i = 0; i < out.length; i += 4) {
+    const a = data[i + 3] / 255;
+    out[i] = (data[i] / 255) * a;
+    out[i + 1] = (data[i + 1] / 255) * a;
+    out[i + 2] = (data[i + 2] / 255) * a;
+    out[i + 3] = a;
+  }
+  return { width, height, data: out };
+}
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function toStraight8({ width, height, data }) {
+  const out = new Uint8Array(width * height * 4);
+  for (let i = 0; i < out.length; i += 4) {
+    const a = clamp01(data[i + 3]);
+    const a8 = Math.round(a * 255);
+    // A pixel that rounds to transparent carries no colour: resampling
+    // ringing divided by a near-zero alpha would otherwise leave noise there.
+    if (a8 === 0) continue;
+    const inv = 1 / a;
+    out[i] = Math.round(clamp01(data[i] * inv) * 255);
+    out[i + 1] = Math.round(clamp01(data[i + 1] * inv) * 255);
+    out[i + 2] = Math.round(clamp01(data[i + 2] * inv) * 255);
+    out[i + 3] = a8;
+  }
+  return { width, height, data: out };
+}
+
+/** Lanczos-3 kernel. */
+function lanczos(x) {
+  if (x === 0) return 1;
+  if (x <= -3 || x >= 3) return 0;
+  const px = Math.PI * x;
+  return (3 * Math.sin(px) * Math.sin(px / 3)) / (px * px);
+}
+
+/** Resample one axis of a premultiplied float image with Lanczos-3. */
+function resampleAxis(src, dstLength, horizontal) {
+  const { width, height, data } = src;
+  const srcLength = horizontal ? width : height;
+  const scale = dstLength / srcLength;
+  const support = scale < 1 ? 3 / scale : 3;
+  const dstWidth = horizontal ? dstLength : width;
+  const dstHeight = horizontal ? height : dstLength;
+  const out = new Float32Array(dstWidth * dstHeight * 4);
+
+  // Weights per destination index, computed once.
+  const taps = [];
+  for (let d = 0; d < dstLength; d += 1) {
+    const centre = (d + 0.5) / scale - 0.5;
+    const lo = Math.max(0, Math.floor(centre - support));
+    const hi = Math.min(srcLength - 1, Math.ceil(centre + support));
+    const weights = [];
+    let sum = 0;
+    for (let s = lo; s <= hi; s += 1) {
+      const w = lanczos((s - centre) * (scale < 1 ? scale : 1));
+      weights.push(w);
+      sum += w;
+    }
+    taps.push({ lo, weights: weights.map((w) => w / sum) });
+  }
+
+  const lines = horizontal ? height : width;
+  for (let line = 0; line < lines; line += 1) {
+    for (let d = 0; d < dstLength; d += 1) {
+      const { lo, weights } = taps[d];
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let k = 0; k < weights.length; k += 1) {
+        const s = lo + k;
+        const idx = horizontal ? (line * width + s) * 4 : (s * width + line) * 4;
+        const w = weights[k];
+        r += data[idx] * w;
+        g += data[idx + 1] * w;
+        b += data[idx + 2] * w;
+        a += data[idx + 3] * w;
+      }
+      const o = horizontal ? (line * dstWidth + d) * 4 : (d * dstWidth + line) * 4;
+      out[o] = r;
+      out[o + 1] = g;
+      out[o + 2] = b;
+      out[o + 3] = a;
+    }
+  }
+  return { width: dstWidth, height: dstHeight, data: out };
+}
+
+/** Lanczos-3 resize of a premultiplied float image to `size` x `size`. */
+export function resize(image, size) {
+  if (image.width === size && image.height === size) return image;
+  return resampleAxis(resampleAxis(image, size, true), size, false);
+}
+
+function gaussianKernel(sigma) {
+  const radius = Math.ceil(sigma * 3);
+  const kernel = new Float32Array(2 * radius + 1);
+  let sum = 0;
+  for (let i = -radius; i <= radius; i += 1) {
+    kernel[i + radius] = Math.exp(-(i * i) / (2 * sigma * sigma));
+    sum += kernel[i + radius];
+  }
+  for (let i = 0; i < kernel.length; i += 1) kernel[i] /= sum;
+  return { radius, kernel };
+}
+
+/**
+ * Separable Gaussian blur of one plane (`width * height` floats), edges
+ * clamped. The shadow is a single plane; blurring four channels to read
+ * one back would be most of the build's cost.
+ */
+function blurPlane(plane, width, height, sigma) {
+  if (sigma <= 0) return plane;
+  const { radius, kernel } = gaussianKernel(sigma);
+  // One pass along an axis of `length` samples spaced `step` apart in the
+  // plane, starting at `base`. Only the `radius` samples at either end need
+  // their taps clamped; the interior runs unchecked.
+  const pass = (src, out, base, step, length) => {
+    for (let i = 0; i < length; i += 1) {
+      let sum = 0;
+      if (i >= radius && i + radius < length) {
+        for (let k = -radius; k <= radius; k += 1) sum += src[base + (i + k) * step] * kernel[k + radius];
+      } else {
+        for (let k = -radius; k <= radius; k += 1) {
+          const j = Math.min(length - 1, Math.max(0, i + k));
+          sum += src[base + j * step] * kernel[k + radius];
+        }
+      }
+      out[base + i * step] = sum;
+    }
+  };
+  const horizontal = new Float32Array(plane.length);
+  for (let y = 0; y < height; y += 1) pass(plane, horizontal, y * width, 1, width);
+  const vertical = new Float32Array(plane.length);
+  for (let x = 0; x < width; x += 1) pass(horizontal, vertical, x, width, height);
+  return vertical;
+}
+
+/** One channel of a premultiplied image as its own plane. */
+function plane(image, channel) {
+  const out = new Float32Array(image.width * image.height);
+  for (let i = 0; i < out.length; i += 1) out[i] = image.data[i * 4 + channel];
+  return out;
+}
+
+/** Separable Gaussian blur, all four premultiplied channels. */
+function gaussianBlur(image, sigma) {
+  if (sigma <= 0) return image;
+  const { width, height } = image;
+  const planes = [0, 1, 2, 3].map((c) => blurPlane(plane(image, c), width, height, sigma));
+  const data = new Float32Array(image.data.length);
+  for (let i = 0; i < width * height; i += 1) {
+    for (let c = 0; c < 4; c += 1) data[i * 4 + c] = planes[c][i];
+  }
+  return { width, height, data };
+}
+
+/** Unsharp mask: image + amount * (image - blur(image)), alpha included. */
+export function sharpen(image, { sigma, amount }) {
+  const blurred = gaussianBlur(image, sigma);
+  const out = new Float32Array(image.data.length);
+  for (let i = 0; i < out.length; i += 4) {
+    const a = image.data[i + 3] + amount * (image.data[i + 3] - blurred.data[i + 3]);
+    const alpha = clamp01(a);
+    for (let c = 0; c < 3; c += 1) {
+      const v = image.data[i + c] + amount * (image.data[i + c] - blurred.data[i + c]);
+      out[i + c] = Math.min(alpha, Math.max(0, v)); // keep premultiplied invariant
+    }
+    out[i + 3] = alpha;
+  }
+  return { width: image.width, height: image.height, data: out };
+}
+
+/**
+ * Signed distance from a point to the edge of a rounded square of side
+ * `size` with corner radius `r`, negative inside, and the unit normal
+ * pointing outward. The border strip below uses it.
+ */
+function roundedSquareEdge(x, y, size, r) {
+  const half = size / 2;
+  const qx = Math.abs(x - half) - (half - r);
+  const qy = Math.abs(y - half) - (half - r);
+  const mx = Math.max(qx, 0);
+  const my = Math.max(qy, 0);
+  const outside = Math.hypot(mx, my);
+  const distance = outside + Math.min(Math.max(qx, qy), 0) - r;
+  let nx;
+  let ny;
+  if (outside > 0) {
+    nx = mx / outside;
+    ny = my / outside;
+  } else if (qx > qy) {
+    nx = 1;
+    ny = 0;
+  } else {
+    nx = 0;
+    ny = 1;
+  }
+  return { distance, nx: nx * Math.sign(x - half || 1), ny: ny * Math.sign(y - half || 1) };
+}
+
+/**
+ * The tile's corner radius, read off the master. The top row of pixels is
+ * sampled half a pixel below the tile's edge, and the first pixel more than
+ * half covered has its centre at t = x + 0.5: that is where the corner arc
+ * has dipped 0.5px, so solving (r - t)² + (r - 0.5)² = r² gives
+ * r = t + 0.5 + √t.
+ */
+export function cornerRadius({ width, data }) {
+  for (let x = 0; x < width; x += 1) {
+    if (data[x * 4 + 3] > 128) {
+      const t = x + 0.5;
+      return t + 0.5 + Math.sqrt(t);
+    }
+  }
+  throw new Error('the master has no opaque pixel in its top row');
+}
+
+/**
+ * Bilinear sample of straight 8-bit RGB at a fractional position, clamped
+ * to the image. Pixel i is centred at i + 0.5, the convention every caller
+ * here uses, so (0.5, 0.5) returns pixel (0, 0) exactly.
+ */
+function sampleRgb({ width, height, data }, x, y) {
+  const x0 = Math.min(width - 1, Math.max(0, Math.floor(x - 0.5)));
+  const y0 = Math.min(height - 1, Math.max(0, Math.floor(y - 0.5)));
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const fx = Math.min(1, Math.max(0, x - 0.5 - x0));
+  const fy = Math.min(1, Math.max(0, y - 0.5 - y0));
+  const at = (px, py, c) => data[(py * width + px) * 4 + c];
+  return [0, 1, 2].map(
+    (c) =>
+      (at(x0, y0, c) * (1 - fx) + at(x1, y0, c) * fx) * (1 - fy) + (at(x0, y1, c) * (1 - fx) + at(x1, y1, c) * fx) * fy,
+  );
+}
+
+/**
+ * Paint over the master's edge band: every pixel within `depth` of the
+ * tile's edge takes the colour found a little past `depth` along the
+ * inward normal (2px further, so bilinear sampling never straddles the
+ * band), alpha untouched. The ground near the edge is a smooth gradient,
+ * so the tile simply continues to its edge without an outline. Straight
+ * 8-bit in and out.
+ */
+export function stripBorder(image, depth) {
+  const { width, height, data } = image;
+  if (width !== height) throw new Error('stripBorder expects a square tile');
+  const r = cornerRadius(image);
+  const out = { width, height, data: Uint8Array.from(data) };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const { distance, nx, ny } = roundedSquareEdge(x + 0.5, y + 0.5, width, r);
+      const inside = -distance; // how far in from the edge this pixel sits
+      if (inside >= depth) continue;
+      const shift = depth + 2 - inside;
+      const [red, green, blue] = sampleRgb(image, x + 0.5 - nx * shift, y + 0.5 - ny * shift);
+      out.data[i] = Math.round(red);
+      out.data[i + 1] = Math.round(green);
+      out.data[i + 2] = Math.round(blue);
+    }
+  }
+  return out;
+}
+
+/**
+ * The pop pass on the premultiplied master: saturation and contrast on the
+ * straight colour.
+ */
+export function enhance(image, { saturation, contrast }) {
+  const { width, height, data } = image;
+  const out = new Float32Array(data.length);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    if (a <= 0) {
+      out[i + 3] = 0;
+      continue;
+    }
+    // Work in straight colour for the tone adjustments.
+    let r = data[i] / a;
+    let g = data[i + 1] / a;
+    let b = data[i + 2] / a;
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    r = luma + (r - luma) * saturation;
+    g = luma + (g - luma) * saturation;
+    b = luma + (b - luma) * saturation;
+    r = 0.5 + (r - 0.5) * contrast;
+    g = 0.5 + (g - 0.5) * contrast;
+    b = 0.5 + (b - 0.5) * contrast;
+
+    out[i] = clamp01(r) * a;
+    out[i + 1] = clamp01(g) * a;
+    out[i + 2] = clamp01(b) * a;
+    out[i + 3] = a;
+  }
+  return { width, height, data: out };
+}
+
+/** A transparent premultiplied canvas. */
+function blank(size) {
+  return { width: size, height: size, data: new Float32Array(size * size * 4) };
+}
+
+/** Source-over composite of `layer` onto `base` at (x, y), premultiplied, in place. */
+function compositeInto(base, layer, x0, y0) {
+  for (let y = 0; y < layer.height; y += 1) {
+    const by = y + y0;
+    if (by < 0 || by >= base.height) continue;
+    for (let x = 0; x < layer.width; x += 1) {
+      const bx = x + x0;
+      if (bx < 0 || bx >= base.width) continue;
+      const li = (y * layer.width + x) * 4;
+      const bi = (by * base.width + bx) * 4;
+      const la = layer.data[li + 3];
+      for (let c = 0; c < 4; c += 1) {
+        base.data[bi + c] = layer.data[li + c] + base.data[bi + c] * (1 - la);
+      }
+    }
+  }
+  return base;
+}
+
+/**
+ * The macOS entry at `size`: body scaled to Apple's proportion, its shadow
+ * beneath, centred on a transparent canvas with `macMargin(size)` on every
+ * side.
+ */
+export function macCanvas(body1024, size) {
+  const margin = macMargin(size);
+  const bodySize = size - 2 * margin;
+  let body = resize(body1024, bodySize);
+  if (size <= SHARPEN_UP_TO) body = sharpen(body, SHARPEN);
+
+  // The shadow is the body's alpha, black at SHADOW.opacity, laid on a
+  // canvas-sized plane BEFORE blurring so the blur can spread past the
+  // body's edges into the margin — a body-sized layer would clamp it to a
+  // hard band.
+  const scale = size / APPLE_CANVAS;
+  const shadowPlane = new Float32Array(size * size);
+  const shadowTop = margin + Math.round(SHADOW.offsetY * scale);
+  for (let y = 0; y < bodySize; y += 1) {
+    for (let x = 0; x < bodySize; x += 1) {
+      shadowPlane[(y + shadowTop) * size + x + margin] = body.data[(y * bodySize + x) * 4 + 3] * SHADOW.opacity;
+    }
+  }
+  const blurred = blurPlane(shadowPlane, size, size, SHADOW.sigma * scale);
+  const canvas = blank(size);
+  for (let i = 0; i < blurred.length; i += 1) canvas.data[i * 4 + 3] = blurred[i]; // black, premultiplied
+  return compositeInto(canvas, body, margin, margin);
+}
+
+/** A full-bleed entry at `size`, sharpened when small. */
+export function fullBleed(master, size) {
+  const image = resize(master, size);
+  return size <= SHARPEN_UP_TO ? sharpen(image, SHARPEN) : image;
+}
+
+// ---------------------------------------------------------------------------
+// Containers.
+// ---------------------------------------------------------------------------
+
+/** ICO with PNG-compressed entries (Vista+). `entries` is `[{ size, png }]`. */
+export function encodeIco(entries) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(entries.length, 4);
+  const directory = [];
+  const payloads = [];
+  let offset = 6 + 16 * entries.length;
+  for (const { size, png } of entries) {
+    const entry = Buffer.alloc(16);
+    entry[0] = size >= 256 ? 0 : size;
+    entry[1] = size >= 256 ? 0 : size;
+    entry[2] = 0; // colour palette
+    entry[3] = 0; // reserved
+    entry.writeUInt16LE(1, 4); // colour planes
+    entry.writeUInt16LE(32, 6); // bits per pixel
+    entry.writeUInt32LE(png.length, 8);
+    entry.writeUInt32LE(offset, 12);
+    directory.push(entry);
+    payloads.push(png);
+    offset += png.length;
+  }
+  return Buffer.concat([header, ...directory, ...payloads]);
+}
+
+/**
+ * ICNS PackBits-style RLE for the legacy 24-bit entries: runs of 3–130 equal
+ * bytes as `0x80 + (n - 3), byte`; literals of 1–128 as `n - 1, bytes…`.
+ */
+export function icnsRle(bytes) {
+  const out = [];
+  let i = 0;
+  while (i < bytes.length) {
+    let run = 1;
+    while (i + run < bytes.length && bytes[i + run] === bytes[i] && run < 130) run += 1;
+    if (run >= 3) {
+      out.push(0x80 + (run - 3), bytes[i]);
+      i += run;
+      continue;
+    }
+    let literal = 0;
+    while (i + literal < bytes.length && literal < 128) {
+      const j = i + literal;
+      // Stop before a run of 3 begins.
+      if (j + 2 < bytes.length && bytes[j] === bytes[j + 1] && bytes[j] === bytes[j + 2]) break;
+      literal += 1;
+    }
+    out.push(literal - 1, ...bytes.subarray(i, i + literal));
+    i += literal;
+  }
+  return Buffer.from(out);
+}
+
+function icnsEntry(type, payload) {
+  const header = Buffer.alloc(8);
+  header.write(type, 0, 'latin1');
+  header.writeUInt32BE(8 + payload.length, 4);
+  return Buffer.concat([header, payload]);
+}
+
+/**
+ * ICNS container. `pngEntries` is `[{ type, png }]`; `legacy` is
+ * `[{ type, mask, image }]` with `image` a straight 8-bit `{ width, height, data }`.
+ */
+export function encodeIcns(pngEntries, legacy) {
+  const parts = [];
+  for (const { type, png } of pngEntries) parts.push(icnsEntry(type, png));
+  for (const { type, mask, image } of legacy) {
+    parts.push(icnsEntry(type, Buffer.concat([0, 1, 2].map((c) => icnsRle(channelOf(image, c))))));
+    parts.push(icnsEntry(mask, Buffer.from(channelOf(image, 3))));
+  }
+  const body = Buffer.concat(parts);
+  const header = Buffer.alloc(8);
+  header.write('icns', 0, 'latin1');
+  header.writeUInt32BE(8 + body.length, 4);
+  return Buffer.concat([header, body]);
+}
+
+// ---------------------------------------------------------------------------
+// The build.
+// ---------------------------------------------------------------------------
+
+/** Memoise a one-argument function by its argument. */
+function memo(f) {
+  const cache = new Map();
+  return (key) => {
+    if (!cache.has(key)) cache.set(key, f(key));
+    return cache.get(key);
+  };
+}
+
+/**
+ * Render every output from the master PNG bytes, as straight 8-bit images
+ * — the step before any container encoding, which is all the contract
+ * test needs to compare pixels. Returns
+ *   { pngs: Map<path, image>, ico: [{ size, image }],
+ *     icns: { png: [{ type, image }], legacy: [{ type, mask, image }] } }.
+ */
+export function renderIcons(sourcePng) {
+  const source = decodePng(sourcePng);
+  if (source.width !== APPLE_CANVAS || source.height !== APPLE_CANVAS) {
+    throw new Error(`master must be ${APPLE_CANVAS}x${APPLE_CANVAS}, got ${source.width}x${source.height}`);
+  }
+  const master = enhance(toPremultiplied(stripBorder(source, BORDER_DEPTH)), ENHANCE);
+  const fullBleedFor = memo((size) => toStraight8(fullBleed(master, size)));
+  const macFor = memo((size) => toStraight8(macCanvas(master, size)));
+
+  return {
+    pngs: new Map(Object.entries(FULL_BLEED_PNGS).map(([path, size]) => [path, fullBleedFor(size)])),
+    ico: ICO_SIZES.map((size) => ({ size, image: fullBleedFor(size) })),
+    icns: {
+      png: Object.entries(ICNS_PNG_TYPES).map(([type, size]) => ({ type, image: macFor(size) })),
+      legacy: Object.entries(ICNS_LEGACY_TYPES).map(([type, { mask, size }]) => ({ type, mask, image: macFor(size) })),
+    },
+  };
+}
+
+/**
+ * Build every output from the master PNG bytes. Returns a Map of repo-
+ * relative path → file bytes; nothing is written.
+ */
+export function buildIcons(sourcePng) {
+  const { pngs, ico, icns } = renderIcons(sourcePng);
+  const encoded = memo((image) => encodePng(image)); // the same image object serves several outputs
+  const files = new Map();
+  for (const [path, image] of pngs) files.set(path, encoded(image));
+  files.set(ICO_PATH, encodeIco(ico.map(({ size, image }) => ({ size, png: encoded(image) }))));
+  files.set(
+    ICNS_PATH,
+    encodeIcns(
+      icns.png.map(({ type, image }) => ({ type, png: encoded(image) })),
+      icns.legacy,
+    ),
+  );
+  return files;
+}
+
+/** Write a build to disk under `root`. */
+export function writeIcons(files, root = REPO_ROOT) {
+  for (const [path, bytes] of files) {
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, bytes);
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const files = buildIcons(readFileSync(join(REPO_ROOT, SOURCE)));
+  writeIcons(files);
+  for (const [path, bytes] of files) console.log(`${path}  ${bytes.length} bytes`);
+}
