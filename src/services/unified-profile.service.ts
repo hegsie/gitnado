@@ -10,7 +10,12 @@
 import { invokeCommand } from './tauri-api.ts';
 import { unifiedProfileStore } from '../stores/unified-profile.store.ts';
 import { AccountCredentials } from './credential.service.ts';
-import { checkGitHubConnectionWithToken } from './git.service.ts';
+import {
+  checkAdoConnectionWithToken,
+  checkBitbucketConnectionWithToken,
+  checkGitHubConnectionWithToken,
+  checkGitLabConnectionWithToken,
+} from './git.service.ts';
 import { loggers } from '../utils/logger.ts';
 
 const log = loggers.profile;
@@ -730,31 +735,31 @@ export async function refreshAccountCachedUser(
         break;
       }
       case 'gitlab': {
-        // Use Tauri command to check GitLab connection
+        // Through the gated wrapper, like the GitHub branch above: this runs
+        // unattended every five minutes, and offline mode (or an allowlist that
+        // does not name this instance) has to stop it here rather than leave the
+        // Rust backstop as the only thing between a background timer and the
+        // network.
         const instanceUrl = account.config.type === 'gitlab' ? account.config.instanceUrl : 'https://gitlab.com';
-        const result = await invokeCommand<{ connected: boolean; user?: { username: string; name: string; avatarUrl: string; email: string } }>(
-          'check_gitlab_connection',
-          { token, instanceUrl }
-        );
+        const result = await checkGitLabConnectionWithToken(instanceUrl, token);
         if (result.success && result.data?.connected && result.data.user) {
           isConnected = true;
           cachedUser = {
             username: result.data.user.username,
             displayName: result.data.user.name,
             avatarUrl: result.data.user.avatarUrl,
-            email: result.data.user.email,
+            // GitLab's user payload carries no email (`gitlab.rs:102`); the
+            // inline type this used to declare claimed one, so this field was
+            // always undefined.
+            email: null,
           };
         }
         break;
       }
       case 'azure-devops': {
-        // Use Tauri command to check Azure DevOps connection
         const organization = account.config.type === 'azure-devops' ? account.config.organization : '';
         if (organization) {
-          const result = await invokeCommand<{ connected: boolean; user?: { displayName: string; uniqueName: string } }>(
-            'check_ado_connection',
-            { organization, token }
-          );
+          const result = await checkAdoConnectionWithToken(organization, token);
           if (result.success && result.data?.connected && result.data.user) {
             isConnected = true;
             cachedUser = {
@@ -773,11 +778,7 @@ export async function refreshAccountCachedUser(
         break;
       }
       case 'bitbucket': {
-        // Use Tauri command to check Bitbucket connection
-        const result = await invokeCommand<{ connected: boolean; user?: { uuid: string; username: string; displayName: string; avatarUrl?: string } }>(
-          'check_bitbucket_connection_with_token',
-          { token }
-        );
+        const result = await checkBitbucketConnectionWithToken(token);
         if (result.success && result.data?.connected && result.data.user) {
           isConnected = true;
           cachedUser = {

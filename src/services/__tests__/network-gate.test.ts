@@ -23,6 +23,7 @@ import {
   fetch,
   pull,
   push,
+  pushToMultipleRemotes,
   pushTag,
   deleteRemoteTag,
   lfsPull,
@@ -41,8 +42,10 @@ import {
   fetchInBackground,
   checkoutWithAutoStash,
   testSshConnection,
+  testCredentials,
 } from '../git.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
+import { uiStore } from '../../stores/ui.store.ts';
 
 /** Every export that reaches a remote, and the Tauri command it must not send. */
 const NETWORK_OPERATIONS: Array<{ name: string; command: string; run: () => Promise<unknown> }> = [
@@ -260,6 +263,120 @@ describe('network security gate', () => {
       expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
     });
 
+    // A self-hosted box with no DNS is reached by literal address, and git
+    // accepts the bracketed IPv6 scp form. `[^:/]+` stopped at the first colon
+    // INSIDE the literal, so the host read as "[2001" — which no allowlist
+    // entry can ever name — while the BACKEND gate read the whole
+    // "[2001:db8::1]" and allowed it. Fetch, pull and push were refused here,
+    // first, with a message naming a remote the list does name.
+    it('reads the whole bracketed IPv6 literal of an scp-form remote', async () => {
+      mockRemotes('git@[2001:db8::1]:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'the allowlist names this exact host').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    it('reads a bracketed IPv6 ssh:// URL, with a port, as the same host', async () => {
+      mockRemotes('ssh://git@[2001:db8::1]:2222/team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'the port does not change the host').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    // git's scp-like form is `[user@]host:path` and the LOGIN IS OPTIONAL —
+    // `gitserver:team/app.git` is an ssh remote, and it is what an
+    // `~/.ssh/config` `Host` alias leaves in the config. Requiring the `@`
+    // read no host at all here, so every fetch, pull and push to that remote
+    // was refused with `Remote "gitserver:team/app.git" is not in your
+    // allowlist` — naming a remote no entry the user could write would ever
+    // have covered.
+    it('matches an scp-form remote whose login is left to ~/.ssh/config', async () => {
+      mockRemotes('gitserver:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['gitserver'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'the allowlist names this exact host').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    it('still refuses a login-less scp remote that is not on the list', async () => {
+      mockRemotes('gitserver:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['elsewhere.test'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'a host the list does not name').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+    });
+
+    // ...and the `@` AFTER the separating colon belongs to the PATH, exactly as
+    // git reads it: `gitserver:x@evil.test:y` is the path `x@evil.test:y` on
+    // `gitserver`. Reading the first `@` in the whole string judged the host
+    // `evil.test`, which git never contacts — the login-less spelling of the
+    // smuggling case the `git@github.com:x@evil.test:y` tests already pin.
+    it('reads a login-less scp remote whose PATH contains an @ on its own host', async () => {
+      mockRemotes('gitserver:x@evil.test:y');
+      settingsStore.setState({ remoteAllowlist: ['evil.test'] });
+
+      const refused = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(refused.success, 'evil.test is in the path, not the host').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+
+      settingsStore.setState({ remoteAllowlist: ['gitserver'] });
+      const allowed = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(allowed.success, 'gitserver is the host git contacts').to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(true);
+    });
+
+    // Widening the scp form necessarily narrows what counts as a PATH — the
+    // gate skips both settings for anything that never leaves the machine, and
+    // a Windows drive or a relative path must not be dragged out of that
+    // carve-out by the change above.
+    it('leaves a Windows drive path and a relative path local', async () => {
+      settingsStore.setState({ offlineMode: true });
+
+      for (const url of ['C:\\repos\\app.git', 'C:/repos/app.git', './sub/repo.git', '.\\x:y']) {
+        mockRemotes(url);
+        invokeHistory.length = 0;
+
+        const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+        expect(result.success, `${url} never leaves the machine`).to.not.equal(false);
+        expect(invokeHistory.some((c) => c.command === 'fetch'), url).to.equal(true);
+      }
+    });
+
+    // ...while the alias remote itself DOES leave the machine, so offline mode
+    // goes on refusing it.
+    it('still blocks a login-less scp remote under offline mode', async () => {
+      mockRemotes('gitserver:team/app.git');
+      settingsStore.setState({ offlineMode: true });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success).to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+    });
+
+    it('still refuses a bracketed IPv6 remote that is not on the list', async () => {
+      mockRemotes('git@[2001:db8::2]:team/app.git');
+      settingsStore.setState({ remoteAllowlist: ['[2001:db8::1]'] });
+
+      const result = await fetch({ path: '/repo', remote: 'origin', silent: true });
+
+      expect(result.success, 'a different address is a different host').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'fetch')).to.equal(false);
+    });
+
     // Settings > SSH > Test Connection hands the gate whatever the user typed,
     // and the backend accepts `git@host` as readily as a bare host. Deriving
     // the host from the string as-is returns nothing for that form, so it used
@@ -292,6 +409,54 @@ describe('network security gate', () => {
 
       expect(result.success, 'the host is evil.test; github.com is only the user').to.equal(false);
       expect(invokeHistory.some((c) => c.command === 'test_ssh_connection')).to.equal(false);
+    });
+
+    // The Credentials dialog hands the gate the remote's URL. It used to go in
+    // the NAME slot, and the "is this a URL?" test there recognised only a
+    // literal `git@` — so an ordinary corporate remote with another login was
+    // treated as a remote name, matched none, and fell back to the FIRST
+    // remote in the list. The user was refused with a toast naming a host the
+    // test would never have contacted, and could not test the remote they had
+    // selected.
+    it('judges a scp-form remote on its own host, not the first remote in the list', async () => {
+      mockInvoke = (command: string) => {
+        if (command === 'get_remotes') {
+          return Promise.resolve([
+            {
+              name: 'origin',
+              url: 'https://github.com/me/app.git',
+              fetchUrl: 'https://github.com/me/app.git',
+              pushUrl: 'https://github.com/me/app.git',
+            },
+            {
+              name: 'corp',
+              url: 'deploy@git.example.com:team/app.git',
+              fetchUrl: 'deploy@git.example.com:team/app.git',
+              pushUrl: 'deploy@git.example.com:team/app.git',
+            },
+          ]);
+        }
+        return Promise.resolve(null);
+      };
+      settingsStore.setState({ remoteAllowlist: ['git.example.com'] });
+
+      const result = await testCredentials('/repo', 'deploy@git.example.com:team/app.git');
+
+      expect(
+        result.success,
+        'git.example.com is allowlisted; origin\'s github.com is irrelevant here',
+      ).to.not.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'test_credentials')).to.equal(true);
+    });
+
+    it('still refuses a scp-form remote whose own host is off the allowlist', async () => {
+      mockRemotes('https://github.com/me/app.git');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await testCredentials('/repo', 'deploy@evil.test:team/app.git');
+
+      expect(result.success, 'the host tested is evil.test, whatever origin says').to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'test_credentials')).to.equal(false);
     });
 
     it('leaves everything alone when no allowlist is configured', async () => {
@@ -664,6 +829,395 @@ describe('network security gate', () => {
       const call = invokeHistory.find((c) => c.command === 'pull');
       expect(call, 'pull still runs').to.not.be.undefined;
       expect((call!.args as Record<string, unknown>).remote).to.equal(undefined);
+    });
+  });
+
+  describe('an operation that names no remote is judged on the tracking remote', () => {
+    // git's default remote for a remote-less fetch, LFS transfer or relative
+    // submodule url is `branch.<n>.remote`, then origin. The gate assumed
+    // origin, so in the fork layout — origin on github.com, the branch
+    // tracking upstream on gitlab.com — a github.com allowlist waved through
+    // an LFS pull that went to gitlab.
+    const installTrackingUpstream = () => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_fetch_remote'
+            ? 'upstream'
+            : command === 'get_remotes'
+              ? [
+                  { name: 'origin', url: 'https://github.com/me/app.git', pushUrl: null },
+                  { name: 'upstream', url: 'https://gitlab.com/acme/app.git', pushUrl: null },
+                ]
+              : null,
+        );
+    };
+
+    it('blocks an LFS pull whose tracking remote is off the list', async () => {
+      installTrackingUpstream();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
+    });
+
+    it('allows it when the tracking remote is on the list', async () => {
+      installTrackingUpstream();
+      settingsStore.setState({ remoteAllowlist: ['gitlab.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+  });
+
+  describe('an LFS transfer is judged on the LFS endpoint, not the git remote', () => {
+    // git-lfs reads `lfs.url` from `.lfsconfig`, a file committed to the
+    // repository, before it falls back to the remote — so the host an LFS
+    // pull reaches is chosen by whoever pushed the repository.
+    const installLfsEndpoint = (endpoint: string | null, kind: 'config' | 'remote' = 'config') => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_lfs_endpoint'
+            ? endpoint === null
+              ? null
+              : { url: endpoint, kind }
+            : command === 'get_fetch_remote'
+              ? 'origin'
+              : command === 'get_remotes'
+                ? [{ name: 'origin', url: 'https://github.com/o/r.git', pushUrl: null }]
+                : null,
+        );
+    };
+
+    it('blocks an LFS pull whose committed endpoint is off the list', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
+    });
+
+    it('blocks an LFS fetch the same way', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsFetch('/repo', ['main']);
+
+      expect(result.success).to.equal(false);
+      expect(invokeHistory.some((c) => c.command === 'lfs_fetch')).to.equal(false);
+    });
+
+    it('allows an LFS pull whose endpoint is on the list', async () => {
+      installLfsEndpoint('https://github.com/o/r.git');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+
+    it('falls back to the git remote when no endpoint can be resolved', async () => {
+      installLfsEndpoint(null);
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+    });
+
+    // git-lfs's LAST RESORT is the git remote's url, verbatim — so for a
+    // repository with no `lfs.url` the endpoint IS a git remote, and
+    // `sub/mybackup.git` is a repository on this disk. Judged with the strict
+    // reading its host parsed as `sub`, so this gate refused an LFS pull
+    // against a path the push gate beside it permits, and no allowlist entry
+    // could ever have fixed it.
+    it('permits a bare relative path the git remote fell back to', async () => {
+      installLfsEndpoint('sub/mybackup.git', 'remote');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+    });
+
+    it('permits it under offline mode too, and an LFS fetch the same way', async () => {
+      installLfsEndpoint('sub/mybackup.git', 'remote');
+      settingsStore.setState({ offlineMode: true });
+
+      expect((await lfsPull('/repo')).success).to.equal(true);
+      expect((await lfsFetch('/repo', ['main'])).success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'lfs_fetch')).to.equal(true);
+    });
+
+    // The other half of the same rule, and why this is a PROVENANCE split
+    // rather than a blanket swap: `.lfsconfig` is committed, so whoever pushed
+    // the repository chooses `lfs.url`, and reading the separator in a
+    // scheme-less endpoint as "a path on this disk" would wave the transfer
+    // through with its host never judged.
+    it('still refuses a scheme-less endpoint that came from .lfsconfig', async () => {
+      installLfsEndpoint('evil.example.com/lfs', 'config');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await lfsPull('/repo');
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'lfs_pull')).to.equal(false);
+    });
+
+    it('does not look the endpoint up when no allowlist is configured', async () => {
+      installLfsEndpoint('https://evil.example.net/o/r.git/info/lfs');
+      settingsStore.setState({ remoteAllowlist: [] });
+
+      await lfsPull('/repo');
+
+      expect(invokeHistory.some((c) => c.command === 'get_lfs_endpoint')).to.equal(false);
+    });
+  });
+
+  describe('the push gate judges the PUSH url', () => {
+    // git2 and `git push` contact `remote.<n>.pushurl` when one is set — and
+    // the Remote dialog can set one, on any host — so a push gated on the
+    // fetch url passed a github.com allowlist while pushing to gitlab.
+    const installSplitPushUrl = () => {
+      mockInvoke = (command) =>
+        Promise.resolve(
+          command === 'get_push_remote'
+            ? 'origin'
+            : command === 'get_remotes'
+              ? [
+                  {
+                    name: 'origin',
+                    url: 'https://github.com/org/x.git',
+                    pushUrl: 'https://gitlab.example/org/x.git',
+                  },
+                  { name: 'mirror', url: 'https://github.com/org/mirror.git', pushUrl: null },
+                ]
+              : null,
+        );
+    };
+
+    it('blocks a push whose push url is off the list even though its fetch url is on it', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'push')).to.equal(false);
+    });
+
+    it('allows a push whose push url is on the list', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['gitlab.example'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'push')).to.equal(true);
+    });
+
+    it('a remote with no push url is judged on its url', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', remote: 'mirror', silent: true });
+
+      expect(result.success).to.equal(true);
+    });
+
+    it('blocks a multi-remote push when ANY destination pushes off the list', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await pushToMultipleRemotes({
+        path: '/repo',
+        remotes: ['mirror', 'origin'],
+        force: false,
+        forceWithLease: false,
+        pushTags: false,
+        silent: true,
+      });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'push_to_multiple_remotes')).to.equal(false);
+    });
+
+    it('allows a multi-remote push when every destination pushes on the list', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await pushToMultipleRemotes({
+        path: '/repo',
+        remotes: ['mirror'],
+        force: false,
+        forceWithLease: false,
+        pushTags: false,
+        silent: true,
+      });
+
+      expect(result.success).to.equal(true);
+      expect(invokeHistory.some((c) => c.command === 'push_to_multiple_remotes')).to.equal(true);
+    });
+
+    it('does not look the push url up when no allowlist is configured', async () => {
+      installSplitPushUrl();
+      settingsStore.setState({ remoteAllowlist: [] });
+
+      await push({ path: '/repo', silent: true });
+
+      expect(
+        invokeHistory.some((c) => c.command === 'get_remotes'),
+        'the common path pays no extra round trip',
+      ).to.equal(false);
+    });
+  });
+
+  describe('a push refusal only the backend could make is still told to the user', () => {
+    /**
+     * `remote.rs::push` runs `guard_lfs_upload` after the frontend gate has
+     * already permitted the push: it judges the LFS UPLOAD endpoint
+     * (`lfs.pushurl`, which a committed `.lfsconfig` chooses), and nothing on
+     * this side resolves that — `resolveLfsEndpoint` asks for the DOWNLOAD
+     * endpoint and only `lfsPull`/`lfsFetch` call it. So the backend can refuse
+     * a push this gate waved through, and every silent consumer
+     * (`remote-operations.service.ts`, the force push in `app-shell.ts`)
+     * swallows `BLOCKED` on the understanding that the gate already explained
+     * itself. It had not. The row appeared, the row vanished, nothing was said.
+     */
+    const BACKEND_REASON = 'Remote "https://lfs.evil.test/repo" is not in your allowlist';
+
+    /** Everything resolves to an ALLOWED host, so only the backend refuses. */
+    function backendRefusesPush(command: string): void {
+      mockInvoke = (invoked) => {
+        if (invoked === command) {
+          return Promise.reject({ code: 'BLOCKED', message: BACKEND_REASON });
+        }
+        if (invoked === 'get_push_remote') return Promise.resolve('origin');
+        if (invoked === 'get_remotes') {
+          return Promise.resolve([
+            { name: 'origin', url: ALLOWED_URL, fetchUrl: ALLOWED_URL, pushUrl: ALLOWED_URL },
+          ]);
+        }
+        return Promise.resolve(null);
+      };
+    }
+
+    beforeEach(() => {
+      uiStore.setState({ toasts: [] });
+    });
+
+    afterEach(() => {
+      uiStore.setState({ toasts: [] });
+    });
+
+    it('toasts the backend reason for a silent push', async () => {
+      backendRefusesPush('push');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code, 'the code the consumers suppress').to.equal('BLOCKED');
+      const toasts = uiStore.getState().toasts;
+      expect(
+        toasts.some((t) => t.message.includes('lfs.evil.test') && t.type === 'error'),
+        'the backend reason must reach the user',
+      ).to.equal(true);
+    });
+
+    it('toasts the backend reason for a silent multi-remote push', async () => {
+      backendRefusesPush('push_to_multiple_remotes');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await pushToMultipleRemotes({
+        path: '/repo',
+        remotes: ['origin'],
+        force: false,
+        forceWithLease: false,
+        pushTags: false,
+        silent: true,
+      });
+
+      expect(result.success).to.equal(false);
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(
+        uiStore.getState().toasts.some((t) => t.message.includes('lfs.evil.test')),
+      ).to.equal(true);
+    });
+
+    it('says it once when the FRONTEND gate is the half that refused', async () => {
+      // The frontend refusal toasts and returns before `invokeCommand`, so the
+      // wrapper cannot double up. Pinned, because a second stacked message on
+      // one click is the failure mode the silent branch exists to avoid.
+      mockInvoke = (invoked) =>
+        Promise.resolve(
+          invoked === 'get_push_remote'
+            ? 'origin'
+            : invoked === 'get_remotes'
+              ? [
+                  {
+                    name: 'origin',
+                    url: 'https://evil.test/x.git',
+                    pushUrl: 'https://evil.test/x.git',
+                  },
+                ]
+              : null,
+        );
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.error?.code).to.equal('BLOCKED');
+      expect(invokeHistory.some((c) => c.command === 'push')).to.equal(false);
+      expect(uiStore.getState().toasts.length, 'exactly one refusal message').to.equal(1);
+    });
+
+    it('leaves an ordinary silent push failure to the caller that owns the message', async () => {
+      // Only `BLOCKED` is the silent-consumer blind spot. A rejected push has
+      // always been reported by `runRemoteOperation` through the suggestion
+      // service, and toasting it here too would stack two on one click.
+      mockInvoke = (invoked) => {
+        if (invoked === 'push') {
+          return Promise.reject({ code: 'PUSH_REJECTED', message: 'non-fast-forward' });
+        }
+        if (invoked === 'get_push_remote') return Promise.resolve('origin');
+        if (invoked === 'get_remotes') {
+          return Promise.resolve([
+            { name: 'origin', url: ALLOWED_URL, fetchUrl: ALLOWED_URL, pushUrl: ALLOWED_URL },
+          ]);
+        }
+        return Promise.resolve(null);
+      };
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      const result = await push({ path: '/repo', silent: true });
+
+      expect(result.error?.code).to.equal('PUSH_REJECTED');
+      expect(uiStore.getState().toasts, 'the silent contract still holds').to.deep.equal([]);
+    });
+
+    it('does not double-toast a non-silent push', async () => {
+      backendRefusesPush('push');
+      settingsStore.setState({ remoteAllowlist: ['github.com'] });
+
+      await push({ path: '/repo' });
+
+      const toasts = uiStore.getState().toasts;
+      expect(toasts.length, 'the non-silent branch already prints the reason').to.equal(1);
+      expect(toasts[0].message).to.contain('lfs.evil.test');
     });
   });
 

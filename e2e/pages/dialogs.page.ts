@@ -48,6 +48,8 @@ export class CloneDialogPage extends BaseDialog {
   readonly browseButton: Locator;
   readonly cloneButton: Locator;
   readonly progressBar: Locator;
+  readonly branchInput: Locator;
+  readonly submodulesCheckbox: Locator;
 
   constructor(page: Page) {
     super(page, 'lv-clone-dialog');
@@ -61,6 +63,20 @@ export class CloneDialogPage extends BaseDialog {
     // Clone button inside the dialog - use locator within the dialog to avoid matching welcome screen button
     this.cloneButton = page.locator('lv-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
     this.progressBar = this.dialog.locator('.progress-bar, progress');
+    // Role selectors, not CSS: two lv-clone-dialog instances are mounted (the
+    // toolbar's and the shell's) and only the open one is in the
+    // accessibility tree, so a CSS id match is ambiguous while a role match is
+    // not.
+    this.branchInput = page.getByRole('textbox', { name: /^Branch/ });
+    this.submodulesCheckbox = page.getByRole('checkbox', { name: /Clone submodules/i });
+  }
+
+  async fillBranch(branch: string): Promise<void> {
+    await this.branchInput.fill(branch);
+  }
+
+  async checkSubmodules(): Promise<void> {
+    await this.submodulesCheckbox.check();
   }
 
   async fillUrl(url: string): Promise<void> {
@@ -175,7 +191,7 @@ export class SettingsDialogPage extends BaseDialog {
     // Use locator for modal dialog (lv-modal with Settings title)
     this.dialog = page.locator('lv-modal:has(lv-settings-dialog)');
     // Theme select - the select element inside settings-dialog
-    this.themeSelect = page.locator('lv-settings-dialog select').first();
+    this.themeSelect = page.locator('lv-settings-dialog #theme-select');
     // Toggle switches for boolean settings (showAvatars, showCommitSize, wordWrap, confirmBeforeDiscard)
     // Note: vim mode toggle is in keyboard shortcuts dialog, not settings
     this.vimModeToggle = page.locator('lv-settings-dialog lv-toggle').first();

@@ -14,6 +14,18 @@ import { settingsStore } from "../stores/settings.store.ts";
 export type NetworkBlockReason = 'offline' | 'allowlist' | 'declined';
 
 /**
+ * Which question the gate's "is this a place on this machine?" carve-out is
+ * being asked.
+ *
+ * `'remote'` — the target is a git REMOTE, so a bare relative path
+ * (`sub/backup.git`) is a repository on this disk. `'host'` — it may be a bare
+ * host or a scheme-less endpoint, where reading a separator that way would wave
+ * the request through with its host never judged. Mirrors the `check` /
+ * `check_remote` split in `src-tauri/src/services/security.rs`.
+ */
+type NetworkTargetKind = 'remote' | 'host';
+
+/**
  * Resolve a remote *name* to its URL so the allowlist has a domain to match.
  *
  * The allowlist compares against a domain, but almost every caller only knows
@@ -24,21 +36,39 @@ export type NetworkBlockReason = 'offline' | 'allowlist' | 'declined';
  *
  * `get_remotes` reads the local config; it does not touch the network, so this
  * is safe to call from inside the gate.
+ *
+ * No name given means the remote git itself would use — the current branch's
+ * tracking remote, then `origin` — which is what `get_fetch_remote` answers,
+ * exactly as `push` asks `get_push_remote`. Assuming `origin` judged the wrong
+ * host in the ordinary fork layout (origin on github.com, the branch tracking
+ * `upstream` on gitlab.com), for every caller that names no remote: LFS, a
+ * relative submodule url, deepen/unshallow.
  */
 async function resolveRemoteUrl(repoPath: string, remote?: string): Promise<string | null> {
-  if (remote && /^([a-z][a-z0-9+.-]*:\/\/|git@|ssh:\/\/)/i.test(remote)) {
+  if (remote && looksLikeUrl(remote)) {
     return remote;
+  }
+  let wanted = remote;
+  if (wanted === undefined) {
+    const resolved = await invokeCommand<string>('get_fetch_remote', { path: repoPath });
+    if (resolved.success && resolved.data) wanted = resolved.data;
   }
   const result = await invokeCommand<Remote[]>("get_remotes", { path: repoPath });
   if (!result.success || !result.data) return null;
-  // No name given means the operation targets the repo's default remote.
-  const wanted = remote ?? 'origin';
-  const match = result.data.find((r) => r.name === wanted) ?? result.data[0];
+  // A caller that NAMED a remote gets that remote or nothing. Falling back to
+  // the first in the list judged — and reported — a host the caller never
+  // named, which is the same defect the `git@`-only URL test above caused by
+  // another route. The backend half (`resolve_remote_url`, `security.rs`) and
+  // the sibling below both fail closed here; the gate then refuses, because a
+  // target it cannot see is a target it must not wave through.
+  const match =
+    result.data.find((r) => r.name === (wanted ?? 'origin')) ??
+    (remote === undefined ? result.data[0] : undefined);
   return match?.url ?? null;
 }
 
 async function resolveRemotePushUrl(repoPath: string, remote?: string): Promise<string | null> {
-  if (remote && /^([a-z][a-z0-9+.-]*:\/\/|[^@/]+@[^:/]+:|ssh:\/\/)/i.test(remote)) {
+  if (remote && looksLikeUrl(remote)) {
     return remote;
   }
   const result = await invokeCommand<Remote[]>("get_remotes", { path: repoPath });
@@ -60,6 +90,218 @@ async function resolveRemotePushUrl(repoPath: string, remote?: string): Promise<
  *
  * Returns null when allowed, or the reason it was refused.
  */
+/**
+ * The host of a scp-like `[user@]host:path` target, or null when the string is
+ * not that form.
+ *
+ * Mirrors `split_scp_like` / `scp_like_host` in
+ * `src-tauri/src/services/security.rs`, bracketed IPv6 literal included; any
+ * change to either half has to move both, exactly as `isLocalTarget` and
+ * `is_local_target` already do.
+ *
+ * git (`connect.c`, `url_is_local_not_ssh`) reads a target as scp-like as soon
+ * as a colon comes before any slash, and the LOGIN IS OPTIONAL:
+ * `gitserver:team/app.git` is an ssh remote, and it is the spelling an
+ * `~/.ssh/config` `Host` alias leaves behind. Requiring `user@` here resolved
+ * that remote to no host at all, so the gate refused every fetch, pull and push
+ * to it — `Remote "gitserver:team/app.git" is not in your allowlist`, with no
+ * entry that could ever have named it.
+ *
+ * Three guards keep the widened form off what is not a remote at all:
+ *
+ * - the login is read only from AHEAD of the separating colon, so the `@` in
+ *   `gitserver:x@evil.test:y` belongs to the PATH — git reads that as the path
+ *   `x@evil.test:y` on `gitserver`, and so does the backend half;
+ * - neither separator may appear in the host, so `./x:y` and `.\x:y` stay
+ *   relative paths;
+ * - with no login to say otherwise, a one-letter authority is a Windows drive
+ *   (`C:\repos\app.git`, `c:x`), which git carves out too.
+ */
+function scpLikeHost(value: string): string | null {
+  const trimmed = value.trim();
+  // Step for step the same walk as `split_scp_like`, rather than one regex
+  // that has to be read twice to see that it agrees with it: the two halves
+  // have to answer alike for every string, and a backtracking alternation
+  // quietly did not (`x@:y` matched the host `x@` here while the Rust half
+  // declined it).
+  const delimiter = /[@:/]/.exec(trimmed);
+  let login: string | null = null;
+  let rest = trimmed;
+  if (delimiter && delimiter[0] === '@') {
+    // `@host:path` names an empty login: not a form git accepts.
+    if (delimiter.index === 0) return null;
+    login = trimmed.slice(0, delimiter.index);
+    rest = trimmed.slice(delimiter.index + 1);
+  }
+  // A bracketed IPv6 literal carries colons of its own; only one AFTER the
+  // closing bracket separates the host from the path.
+  let colon: number;
+  if (rest.startsWith('[')) {
+    const close = rest.indexOf(']');
+    if (close < 0) return null;
+    colon = rest.indexOf(':', close);
+  } else {
+    colon = rest.indexOf(':');
+  }
+  if (colon <= 0) return null;
+  const host = rest.slice(0, colon);
+  if (host.includes('/') || host.includes('\\')) return null;
+  if (login === null && /^[A-Za-z]$/.test(host)) return null;
+  return host.toLowerCase();
+}
+
+/**
+ * Whether a string is already a URL rather than a remote NAME.
+ *
+ * Mirrors `looks_like_url` in `src-tauri/src/services/security.rs`; any change
+ * to either half has to move both.
+ *
+ * It used to be a regex that required an `@` (`[^@/]+@[^:/]+:`), which is the
+ * requirement the backend dropped when it learned that git's scp form takes an
+ * OPTIONAL login. The two then disagreed about `gitserver:team/app.git`: the
+ * backend passed it through as a URL while this half treated it as the name of
+ * a remote, looked it up, found none, and (in `resolveRemoteUrl`) judged
+ * whichever remote happened to be first in the list.
+ *
+ * `value` is a string BY CONTRACT only: `fetch` copies `get_fetch_remote`'s
+ * answer straight into `args.remote`, so a backend that answered with anything
+ * else lands here. The regex this replaced coerced such a value silently; so
+ * does this, because turning a malformed answer into a TypeError inside the
+ * gate would abort the operation with a stack trace instead of refusing it.
+ */
+function looksLikeUrl(value: string): boolean {
+  const trimmed = String(value ?? '').trim();
+  return trimmed.includes('://') || scpLikeHost(trimmed) !== null;
+}
+
+/**
+ * Whether a target is a place on THIS machine — a filesystem path or a
+ * host-less `file://` URL.
+ *
+ * Mirrors `is_local_target` in `src-tauri/src/services/security.rs`; any change
+ * to either half has to move both, exactly as `cloneUrlHost` and `url_host`
+ * already do.
+ *
+ * This is the STRICT reading, for a target that may be a bare host
+ * (`checkOutboundHostAllowed('api.github.com')`) or a scheme-less endpoint or
+ * provider instance URL (`gitlab.example.com/gitlab`, which `providerApiHost`
+ * hands straight over). A caller that knows it holds a git REMOTE takes
+ * `isLocalRemoteTarget` below, which adds the one carve-out only a remote can
+ * claim.
+ *
+ * A push to `/mnt/usb/repo.git` or `file:///srv/git/app.git` opens no socket at
+ * all, so offline mode ("block every operation that leaves this machine") and
+ * the remote allowlist (a list of HOSTS) have nothing to say about it. Both
+ * refused one: offline mode answered before it looked at the target, and the
+ * allowlist read `/mnt/usb/repo.git` as the host `mnt`.
+ *
+ * Deliberately EXCLUDED, because they do leave the machine: a UNC path
+ * (`\\server\share`, and its `//server/share` spelling), a `file://` URL whose
+ * host is ANOTHER machine, anything in the scp-like `user@host:path` form (so
+ * `~user@host:repo.git` is read as the ssh remote git reads it), and anything
+ * else carrying a scheme, so a path with a URL embedded in it cannot smuggle
+ * one past this. A path that is really a network MOUNT is not excluded —
+ * nothing in the string says so, and the kernel, not this app, does that I/O.
+ */
+function isLocalTarget(target: string): boolean {
+  const trimmed = target.trim();
+  if (!trimmed) return false;
+  // UNC, in either spelling.
+  if (trimmed.startsWith('//') || trimmed.startsWith('\\\\')) return false;
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      const host = new URL(trimmed).hostname;
+      // The URL spec folds `file://localhost/…` to an empty host. Anything
+      // else on LOOPBACK is this machine too — `is_local_target` says so, and
+      // refusing here what the backend gate permits would toast "Offline mode
+      // is enabled" for a target that opens no socket off this box, with no
+      // allowlist entry able to work around it.
+      return host === '' || isLoopbackHost(host);
+    } catch {
+      return false;
+    }
+  }
+  // A scheme, or the scp-like form, means a transport — never a path.
+  if (trimmed.includes('://') || scpLikeHost(trimmed) !== null) {
+    return false;
+  }
+  return (
+    trimmed.startsWith('/') ||
+    // `.` and `..` are `./` and `../` without the separator — the spelling
+    // `git remote add local .` leaves behind.
+    trimmed === '.' ||
+    trimmed === '..' ||
+    trimmed.startsWith('./') ||
+    trimmed.startsWith('../') ||
+    trimmed.startsWith('.\\') ||
+    trimmed.startsWith('..\\') ||
+    trimmed.startsWith('~') ||
+    /^[A-Za-z]:[\\/]/.test(trimmed)
+  );
+}
+
+/**
+ * `isLocalTarget` for a string the caller knows is a git REMOTE: the same rule,
+ * plus the BARE relative path only a remote can be.
+ *
+ * Mirrors `is_local_remote_target` in `src-tauri/src/services/security.rs`; any
+ * change to either half has to move both.
+ *
+ * `git remote add b2 sub/mybackup.git` is purely local — git's
+ * `url_is_local_not_ssh` (`connect.c`) reads a target with no colon, or with a
+ * slash before its colon, as a path — but the strict rule above refused it, so
+ * offline mode blocked a push that never leaves the machine and the allowlist
+ * read the host as `sub`, whose only workaround was to allowlist the literal
+ * string `sub`.
+ *
+ * It is a SECOND function because the rule is only safe where the string is
+ * known to be a remote: calling `gitlab.example.com/gitlab` local would wave an
+ * outbound request through with its host never judged. A bare host carries no
+ * separator; a scheme-less instance URL with a path segment does.
+ *
+ * `mybackup.git`, with no separator at all, stays NON-local here too and is
+ * pinned that way: nothing in that string tells it apart from a bare host, and
+ * guessing "path" fails open. `./mybackup.git` is the spelling both halves have
+ * always read as local.
+ */
+function isLocalRemoteTarget(target: string): boolean {
+  return isLocalTarget(target) || isBareRelativePath(target);
+}
+
+/**
+ * A relative path written without a `./` — `sub/mybackup.git`, `sub\backup`.
+ * Mirrors `is_bare_relative_path` in `src-tauri/src/services/security.rs`.
+ *
+ * Everything `isLocalTarget` excludes is excluded here first, and for the same
+ * reasons: a UNC path is SMB, a scheme is the URL parser's business, and the
+ * scp-like form is an ssh remote whose colon comes BEFORE any separator.
+ */
+function isBareRelativePath(target: string): boolean {
+  const trimmed = target.trim();
+  if (trimmed.startsWith('//') || trimmed.startsWith('\\\\')) return false;
+  // `file://…` is caught by the scheme test, and `isLocalTarget` has already
+  // given it the answer its host deserves.
+  if (trimmed.includes('://') || scpLikeHost(trimmed) !== null) return false;
+  return trimmed.includes('/') || trimmed.includes('\\');
+}
+
+/**
+ * Whether a host is the machine itself. Mirrors `is_loopback_host` in
+ * `src-tauri/src/services/security.rs`.
+ *
+ * Only reached with a host `new URL()` already produced, and the WHATWG parser
+ * canonicalises both literal families first — `[0:0:0:0:0:0:0:1]` comes back
+ * `[::1]` and `127.1` comes back `127.0.0.1` — so matching the canonical forms
+ * is the same rule Rust's `IpAddr::is_loopback` applies to the same string. The
+ * `.localhost` suffix is required, so `localhost.evil.test` does not match.
+ */
+function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (bare === 'localhost' || bare.endsWith('.localhost') || bare === '::1') return true;
+  const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(bare);
+  return octets !== null && octets[1] === '127' && octets.slice(1).every((o) => Number(o) <= 255);
+}
+
 async function checkNetworkAllowed(
   repoPath: string | null,
   remote?: string,
@@ -73,8 +315,36 @@ async function checkNetworkAllowed(
    * allowlist check would resolve each bare name over IPC again, one round trip
    * per remote for a value already in hand. */
   resolvedUrl?: string | null,
+  /** Which question the local-target carve-out is being asked. `'remote'` means
+   * the target is a git remote, so a bare relative path (`sub/backup.git`) is a
+   * place on this disk; `'host'` means it may be a bare host or a scheme-less
+   * endpoint, where reading a separator that way would wave the request through
+   * with its host never judged. Defaults from `repoPath`, which is non-null
+   * exactly when the target was resolved out of a repository's remotes; the one
+   * caller that holds a remote url with no repo path (a submodule's own url)
+   * says so explicitly. Mirrors the `check` / `check_remote` split in
+   * `src-tauri/src/services/security.rs`. */
+  targetKind: NetworkTargetKind = repoPath !== null ? 'remote' : 'host',
 ): Promise<NetworkBlockReason | null> {
   const settings = settingsStore.getState();
+
+  // Nothing is in force, so nothing has to be resolved — the hot path for
+  // every push and fetch on a machine with neither setting on.
+  if (!settings.offlineMode && settings.remoteAllowlist.length === 0) return null;
+
+  // An allowlist that cannot see the URL must refuse, not wave the operation
+  // through: silently allowing is the failure mode that made this setting
+  // decorative. Offline mode used to refuse here without resolving anything,
+  // which is why it refused a push to a USB disk; it needs the target too, to
+  // tell a remote that leaves the machine from one that does not.
+  const url =
+    resolvedUrl ?? (repoPath ? await resolveRemoteUrl(repoPath, remote) : (remote ?? null));
+
+  // A remote on this machine is neither setting's business. Same carve-out the
+  // backend's `check` / `check_remote` make, ahead of the offline branch for
+  // the same reason.
+  const isLocal = targetKind === 'remote' ? isLocalRemoteTarget : isLocalTarget;
+  if (url && isLocal(url)) return null;
 
   if (settings.offlineMode) {
     if (!silent) {
@@ -84,12 +354,6 @@ async function checkNetworkAllowed(
   }
 
   if (settings.remoteAllowlist.length === 0) return null;
-
-  // An allowlist that cannot see the URL must refuse, not wave the operation
-  // through: silently allowing is the failure mode that made this setting
-  // decorative.
-  const url =
-    resolvedUrl ?? (repoPath ? await resolveRemoteUrl(repoPath, remote) : (remote ?? null));
   // Try the string as it stands, then as an https URL. Branching on '@'
   // instead broke the bare `git@host` form the SSH connection test hands over:
   // `cloneUrlHost`'s scheme-less branch only matches the scp shape
@@ -188,9 +452,15 @@ async function checkNetworkPermission(
    * confirm; the URL, when the caller already resolved one, spares the
    * allowlist check a `get_remotes` round trip per remote. */
   remotes?: NetworkRemoteTarget[],
+  /** See `NetworkTargetKind`. Defaults from `repoPath`, which is non-null
+   * exactly when the target came out of a repository's remotes; the callers
+   * that hold a remote url with no repo path (clone, a submodule's own url), and
+   * the one that holds an ENDPOINT alongside a repo path (LFS), say so. */
+  targetKind: NetworkTargetKind = repoPath !== null ? 'remote' : 'host',
 ): Promise<boolean> {
   for (const target of remotes ?? [{ name: remote, url: resolvedUrl }]) {
-    if (await checkNetworkAllowed(repoPath, target.name, false, target.url)) return false;
+    if (await checkNetworkAllowed(repoPath, target.name, false, target.url, targetKind))
+      return false;
   }
 
   if (settingsStore.getState().confirmNetworkOps) {
@@ -261,6 +531,45 @@ function providerApiHost(command: string, args?: Record<string, unknown>): strin
 }
 
 /**
+ * True when a hard network policy is in force — offline mode, or an allowlist.
+ *
+ * Callers use this to skip the work of resolving a destination when nothing
+ * could refuse it anyway. It deliberately lives here, next to the gate whose
+ * settings it reports on: a copy of "which settings count as a policy" kept
+ * anywhere else goes stale the moment another one is added, and goes stale
+ * fail-OPEN, which is the failure mode this gate exists to avoid.
+ */
+export function isNetworkPolicyActive(): boolean {
+  const settings = settingsStore.getState();
+  return settings.offlineMode || settings.remoteAllowlist.length > 0;
+}
+
+/**
+ * The hard-block gate for an outbound request whose destination host the caller
+ * already knows — the AI providers, which reach `api.openai.com` and friends
+ * over reqwest exactly as the hosting-provider APIs above do.
+ *
+ * Exported so `ai.service` applies the same offline-mode and allowlist rules
+ * without restating them. A second copy of this logic is precisely how the gate
+ * came to cover less than it claimed, twice.
+ *
+ * `host` may be null when the caller could not determine the destination. Like
+ * every other path through the gate, that fails closed once an allowlist is
+ * configured — silently allowing is what made the setting decorative.
+ *
+ * `silent` defaults to true: AI callers render `result.error.message`
+ * themselves, and a toast here would double up on it with a vaguer wording.
+ *
+ * Returns null when allowed, or the reason it was refused.
+ */
+export async function checkOutboundHostAllowed(
+  host: string | null,
+  silent = true,
+): Promise<NetworkBlockReason | null> {
+  return checkNetworkAllowed(null, host ?? undefined, silent);
+}
+
+/**
  * True when a failed result is the security gate refusing, or the user
  * declining its confirm. Both are already accounted for — the gate toasts its
  * own reason, and a decline is the user's own choice — so callers must not
@@ -268,6 +577,26 @@ function providerApiHost(command: string, args?: Record<string, unknown>): strin
  */
 export function isNetworkGateRefusal(error?: { code?: string }): boolean {
   return error?.code === 'BLOCKED' || error?.code === 'CANCELLED';
+}
+
+/**
+ * Surface a refusal the BACKEND gate made after the frontend gate had let the
+ * operation through.
+ *
+ * The two gates judge the same thing from different vantage points, and the
+ * backend can see what the frontend cannot: a cloned submodule's own
+ * `remote.origin.url`, a submodule registered in the config but not yet
+ * cloned, an LFS endpoint. Every
+ * dialog treats a `BLOCKED` result as "the gate already explained itself" and
+ * shows nothing — right when the frontend gate refused and toasted, wrong when
+ * only the backend did. So a `BLOCKED` reaching here is one the user has not
+ * been told about yet, and it is toasted with the backend's own reason.
+ */
+function surfaceBackendRefusal<T>(result: CommandResult<T>): CommandResult<T> {
+  if (!result.success && result.error?.code === 'BLOCKED' && result.error.message) {
+    showToast(result.error.message, 'error');
+  }
+  return result;
 }
 
 /**
@@ -400,6 +729,7 @@ import type {
   DescribeResult,
   GetDiffCommand,
   GetDiffWithOptionsCommand,
+  DiffWhitespaceMode,
   GetAvatarUrlCommand,
   GetAvatarUrlsCommand,
   CheckoutFileFromCommitCommand,
@@ -429,17 +759,29 @@ export async function openRepository(
 /**
  * Host of a clone URL. Covers the forms the clone dialog accepts:
  * `https://host/path`, `ssh://git@host/path`, and the scp-like
- * `git@host:owner/repo.git`.
+ * `[user@]host:owner/repo.git` — whose login `scpLikeHost` reads as optional,
+ * because git does.
  *
  * Matching on the host — not on a substring of the whole URL, as this used to —
  * keeps a stored token off a look-alike host (`github.com.example.net`) and off
  * a repo whose PATH merely names a provider.
+ *
+ * The scp branch reads a bracketed IPv6 literal whole. `[^:/]+` stopped at the
+ * first colon INSIDE the literal, so `git@[2001:db8::1]:team/app.git` — how a
+ * self-hosted box with no DNS is reached — resolved to `[2001`, a host no
+ * allowlist entry can name, while the backend gate (`security.rs`,
+ * `scp_like_host`) read the whole `[2001:db8::1]` and allowed it. Every fetch,
+ * pull and push to that remote was refused HERE, with a message naming a
+ * remote the allowlist did name, and no entry could fix it.
  */
 function cloneUrlHost(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed.includes("://")) {
-    const scpLike = /^[^@/]+@([^:/]+):/.exec(trimmed);
-    return scpLike ? scpLike[1].toLowerCase() : null;
+    // `[...]` first: only a colon AFTER the closing bracket separates host
+    // from path. The unbracketed alternative refuses a leading `[` so a
+    // half-written literal falls through to the caller's `https://` fallback
+    // rather than being read as a host that is not one.
+    return scpLikeHost(trimmed);
   }
   try {
     return new URL(trimmed).hostname.toLowerCase();
@@ -603,10 +945,41 @@ async function getCloneToken(url: string): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * Hooks the clone dialog hands `cloneRepository`.
+ */
+export interface CloneRepositoryOptions {
+  /**
+   * Reports whether the user has cancelled the clone in the meantime.
+   *
+   * Everything before the `clone_repository` invoke is asynchronous — the
+   * network gate can await a native confirm, and the token lookup a keyring
+   * round trip — while the dialog already shows "Cancel Clone". A cancel
+   * pressed in that window sets the backend's cancellation flag, but the
+   * backend RESETS that flag when the clone starts (a stale cancellation must
+   * not kill the next clone), so the clone it was meant to stop ran to
+   * completion with the dialog locked on "Cancelling…". Checked immediately
+   * before the invoke so a cancel that has already landed stops the clone
+   * from ever starting.
+   */
+  isCancelled?: () => boolean;
+}
+
+/** The result every cancellable operation returns for the user's own Cancel. */
+function cancelledResult<T>(): CommandResult<T> {
+  return {
+    success: false,
+    error: { code: 'OPERATION_CANCELLED', message: 'Operation cancelled' },
+  };
+}
+
 export async function cloneRepository(
   args: CloneRepositoryCommand,
+  options?: CloneRepositoryOptions,
 ): Promise<CommandResult<Repository>> {
-  if (!await checkNetworkPermission('clone', null, args.url)) {
+  // A clone URL is a git remote: `git clone sub/mybackup.git` is a copy from a
+  // repository on this disk, and the backend's `guard_remote_url` says so too.
+  if (!await checkNetworkPermission('clone', null, args.url, undefined, undefined, 'remote')) {
     return blockedResult();
   }
 
@@ -624,6 +997,13 @@ export async function cloneRepository(
   const timeoutSecs = settingsStore.getState().networkOperationTimeout;
   if (args && timeoutSecs > 0) {
     args.timeoutSecs = timeoutSecs;
+  }
+
+  // Last chance to honour a cancel that landed during the awaits above: once
+  // the command is sent the backend clears the cancellation flag and the clone
+  // runs. See `CloneRepositoryOptions.isCancelled`.
+  if (options?.isCancelled?.()) {
+    return cancelledResult();
   }
 
   return invokeCommand<Repository>("clone_repository", args);
@@ -651,17 +1031,37 @@ export async function getCloneFilterInfo(
   return invokeCommand<CloneFilterInfo>("get_clone_filter_info", { path });
 }
 
+/**
+ * `git fetch --deepen` is a fetch: it contacts the remote for the history the
+ * shallow clone left behind. It named no remote and had no frontend gate at
+ * all, so offline mode let it go straight out; the backend `guard_remote` was
+ * the only thing standing in front of it, and a backend-only refusal is one
+ * the user is never shown a reason for. Neither names a remote, so the gate
+ * resolves the one git itself would fetch from.
+ */
 export async function deepenRepository(
   path: string,
   depth: number,
 ): Promise<CommandResult<void>> {
-  return invokeCommand<void>("deepen_repository", { path, depth });
+  if (!await checkNetworkPermission('deepen', path)) {
+    return blockedResult();
+  }
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("deepen_repository", { path, depth }),
+  );
 }
 
+/** `git fetch --unshallow`, the whole history in one request. Gated exactly
+ * like {@link deepenRepository}. */
 export async function unshallowRepository(
   path: string,
 ): Promise<CommandResult<void>> {
-  return invokeCommand<void>("unshallow_repository", { path });
+  if (!await checkNetworkPermission('unshallow', path)) {
+    return blockedResult();
+  }
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("unshallow_repository", { path }),
+  );
 }
 
 export async function listTrackedFiles(
@@ -1316,7 +1716,19 @@ export async function push(
       args.remote = resolved.data;
     }
   }
-  if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote)) {
+  // Judged on the remote's PUSH url, like the tag paths already are: git2 and
+  // `git push` both contact `remote.<n>.pushurl` when one is set (the Remote
+  // dialog itself can set one, on any host), so the fetch url says nothing
+  // about where this push is going. Only an allowlist needs the lookup.
+  // Resolved whenever ANY policy is in force, not just an allowlist: offline
+  // mode now judges the target too (a remote on this machine is permitted), and
+  // judging a push on the FETCH url would let a local fetch url excuse a
+  // `pushurl` that leaves the machine.
+  const pushUrl =
+    args?.path && args.remote && isNetworkPolicyActive()
+      ? await resolveRemotePushUrl(args.path, args.remote)
+      : null;
+  if (!await checkNetworkPermission('push', args?.path ?? null, args?.remote, pushUrl)) {
     return blockedResult();
   }
 
@@ -1346,6 +1758,19 @@ export async function push(
         "error",
       );
     }
+  } else {
+    // The silent branch hands the result to a caller that treats `BLOCKED` as
+    // "the gate already explained itself" and says nothing — true when the
+    // frontend gate refused above (it toasted, and returned before reaching
+    // here), false when only the BACKEND did. And the backend really does
+    // refuse pushes this gate cannot: `remote.rs::push` also runs
+    // `guard_lfs_upload`, which judges the LFS UPLOAD endpoint
+    // (`lfs.pushurl`, a committed `.lfsconfig` can set it to any host) — a
+    // target nothing on this side ever resolves. Without this the user
+    // watched "Pushing to remote…" appear and vanish with nothing said,
+    // while the very same repository pushed as a TAG explained itself,
+    // because `pushTag` has always wrapped.
+    surfaceBackendRefusal(result);
   }
   return result;
 }
@@ -1356,7 +1781,31 @@ export async function push(
 export async function pushToMultipleRemotes(
   args: PushToMultipleRemotesCommand & { silent?: boolean },
 ): Promise<CommandResult<MultiPushResult>> {
-  if (!await checkNetworkPermission('push', args?.path ?? null)) {
+  // Every destination is gated, each on its PUSH url (see `push`), and the
+  // user is asked once for the whole set. Gating the repository's default
+  // remote alone — what this used to do — judged a host the gesture might
+  // not even touch, and none of the ones it would.
+  // Resolved whenever ANY policy is in force, exactly as single `push` does:
+  // offline mode judges the target too now, so a `pushurl` that leaves the
+  // machine must not be excused by a local fetch url, and a `pushurl` that
+  // stays on this machine must not be refused because the fetch url is remote.
+  // Reading only the allowlist here made this button disagree with the single
+  // push to the very same remote.
+  const remotes = args?.remotes ?? [];
+  const pushUrls =
+    args?.path && remotes.length > 0 && isNetworkPolicyActive()
+      ? await Promise.all(remotes.map((name) => resolveRemotePushUrl(args.path, name)))
+      : remotes.map(() => null);
+  const targets: NetworkRemoteTarget[] = remotes.map((name, i) => ({ name, url: pushUrls[i] }));
+  if (
+    !await checkNetworkPermission(
+      'push',
+      args?.path ?? null,
+      undefined,
+      undefined,
+      targets.length > 0 ? targets : undefined,
+    )
+  ) {
     return blockedResult();
   }
   // If no token is provided, try to find one for the repository
@@ -1391,6 +1840,12 @@ export async function pushToMultipleRemotes(
         "error",
       );
     }
+  } else {
+    // Identical gap to single `push`, through the identical backend guard:
+    // `guard_push_destinations` runs `guard_lfs_upload` for every destination
+    // (remote.rs), so a `.lfsconfig` pointing off the allowlist refuses the
+    // whole gesture on a target this side never resolved.
+    surfaceBackendRefusal(result);
   }
   return result;
 }
@@ -1401,7 +1856,35 @@ export async function pushToMultipleRemotes(
 export async function fetchAllRemotes(
   args: FetchAllRemotesCommand & { silent?: boolean },
 ): Promise<CommandResult<FetchAllResult>> {
-  if (!await checkNetworkPermission('fetch', args?.path ?? null)) {
+  // Every remote in the gesture is gated, exactly as the backend's own guard
+  // does (`fetch_all_remotes` in remote.rs loops `guard_remote` over
+  // `repo.remotes()`), and exactly as this function's two multi-remote
+  // siblings above do. Gating the repository's DEFAULT fetch remote alone —
+  // what this used to do — judged one host out of several: it waved a
+  // github.com remote through because the default one happened to be a USB
+  // disk, and it let a gesture the backend would refuse outright start anyway,
+  // so the user got a red "Fetch all failed" instead of the gate's own
+  // explanation. Only a policy in force needs the extra round trip.
+  let targets: NetworkRemoteTarget[] | undefined;
+  if (args?.path && isNetworkPolicyActive()) {
+    const remotes = await getRemotes(args.path);
+    if (!remotes.success) return { success: false, error: remotes.error };
+    if (!Array.isArray(remotes.data)) {
+      return {
+        success: false,
+        error: { code: 'REMOTE_LIST_FAILED', message: 'Failed to list repository remotes' },
+      };
+    }
+    targets = remotes.data.map((item) => ({ name: item.name, url: item.url }));
+    // An empty list is left as `undefined` so the gate keeps its single-target
+    // behaviour: there is no remote to name, so it resolves nothing, sees no
+    // URL and fails closed — which is what it already did here, and what it
+    // does everywhere else it cannot see a destination. An empty ARRAY would
+    // mean "the hard blocks are settled" (the idiom `updateSubmodules` uses)
+    // and wave an ungated `fetch_all_remotes` straight through.
+    if (targets.length === 0) targets = undefined;
+  }
+  if (!await checkNetworkPermission('fetch', args?.path ?? null, undefined, undefined, targets)) {
     return blockedResult();
   }
   // If no token is provided, try to find one for the repository
@@ -1842,6 +2325,42 @@ export async function merge(args: MergeCommand): Promise<CommandResult<void>> {
   return invokeCommand<void>("merge", args);
 }
 
+export interface MergePreview {
+  /**
+   * What the merge would do. `unborn` means the branch being merged INTO has
+   * no commits yet, which `merge` cannot fast-forward.
+   */
+  outcome: "upToDate" | "fastForward" | "normal" | "unborn";
+  /** Exact number of paths that would conflict. */
+  conflictCount: number;
+  /** The conflicting paths, sorted — capped, so it can be shorter than the count. */
+  conflictingFiles: string[];
+  /** The two sides share no common ancestor. */
+  unrelatedHistories: boolean;
+  /** Repository state blocking the merge (e.g. "Merge"), or null when clean. */
+  operationInProgress: string | null;
+}
+
+/**
+ * Predict a merge without performing it.
+ *
+ * Purely in-memory in the backend (libgit2 merges the two trees into an index
+ * that is never checked out), so it touches neither the working tree nor the
+ * index and leaves nothing to clean up. `intoRef` names the branch the merge
+ * will land on; omit it for HEAD.
+ */
+export async function previewMerge(
+  path: string,
+  sourceRef: string,
+  intoRef?: string,
+): Promise<CommandResult<MergePreview>> {
+  return invokeCommand<MergePreview>("preview_merge", {
+    path,
+    sourceRef,
+    intoRef,
+  });
+}
+
 export async function abortMerge(
   args: AbortMergeCommand,
 ): Promise<CommandResult<void>> {
@@ -2273,7 +2792,7 @@ export async function pushTag(
     }
   }
 
-  return invokeCommand<void>("push_tag", args);
+  return surfaceBackendRefusal(await invokeCommand<void>("push_tag", args));
 }
 
 export async function getPushRemote(
@@ -2319,7 +2838,7 @@ export async function deleteRemoteTag(
     }
   }
 
-  return invokeCommand<void>("delete_remote_tag", args);
+  return surfaceBackendRefusal(await invokeCommand<void>("delete_remote_tag", args));
 }
 
 export async function getTagDetails(
@@ -2388,17 +2907,32 @@ export async function getDiffWithOptions(
   return invokeCommand<DiffFile[]>("get_diff_with_options", options);
 }
 
+/**
+ * Per-view diff rendering options shared by the single-file diff commands.
+ * Both are optional: omitting them keeps git's defaults (3 context lines, no
+ * whitespace ignored).
+ */
+export interface DiffRenderOptions {
+  /** Lines of unchanged context around each hunk. */
+  contextLines?: number;
+  /** Whitespace handling mode ("none" shows every change). */
+  ignoreWhitespace?: DiffWhitespaceMode;
+}
+
 export async function getFileDiff(
   repoPath: string,
   filePath: string,
   staged?: boolean,
   maxLines?: number,
+  options?: DiffRenderOptions,
 ): Promise<CommandResult<DiffFile>> {
   return invokeCommand<DiffFile>("get_file_diff", {
     path: repoPath,
     filePath,
     staged,
     maxLines,
+    contextLines: options?.contextLines,
+    ignoreWhitespace: options?.ignoreWhitespace,
   });
 }
 
@@ -2417,12 +2951,15 @@ export async function getCommitFileDiff(
   commitOid: string,
   filePath: string,
   maxLines?: number,
+  options?: DiffRenderOptions,
 ): Promise<CommandResult<DiffFile>> {
   return invokeCommand<DiffFile>("get_commit_file_diff", {
     path: repoPath,
     commitOid,
     filePath,
     maxLines,
+    contextLines: options?.contextLines,
+    ignoreWhitespace: options?.ignoreWhitespace,
   });
 }
 
@@ -2836,6 +3373,138 @@ export async function getSubmodules(
   return invokeCommand<Submodule[]>("get_submodules", { path: repoPath });
 }
 
+/**
+ * A `.gitmodules` url that is relative to the superproject.
+ *
+ * git resolves `./x.git` and `../x.git` against the superproject's OWN remote,
+ * so such a submodule is always fetched from the superproject's host — the one
+ * the gate has already checked. The allowlist cannot parse a host out of the
+ * relative string itself, so handing it over as a destination would refuse an
+ * entirely ordinary relative layout.
+ */
+function isRelativeSubmoduleUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed.startsWith('./') || trimmed.startsWith('../');
+}
+
+/**
+ * Whether `wanted` — a path the caller hands git after `--` — selects the
+ * submodule at `path`.
+ *
+ * Those paths are PATHSPECS, not submodule names: `git submodule update --
+ * vendor` registers and clones every submodule under `vendor/`. Matching the
+ * entries as exact submodule paths guarded nothing for that spelling, and let
+ * the update reach a host the allowlist never admitted. The exact path and
+ * the directory-prefix form are reproduced here; anything else falls back to
+ * checking every submodule (see `selectSubmodules`).
+ */
+function pathspecSelects(wanted: string, path: string): boolean {
+  const trimmed = wanted.replace(/\/+$/, '');
+  return path === trimmed || path.startsWith(`${trimmed}/`);
+}
+
+/**
+ * The submodules a `submodulePaths` list selects out of `all`.
+ *
+ * Every one of them when the list is absent or empty (the backend emits a bare
+ * `--` for an empty list, and git then updates every submodule), when an entry
+ * carries glob characters (git's pathspec matching is not reproduced here, and
+ * guessing at it would guess OPEN), and when an entry selects nothing (the
+ * update then has a destination this check cannot see, which is the
+ * fail-closed rule the rest of the gate uses). Otherwise exactly the
+ * submodules the pathspecs name.
+ */
+function selectSubmodules(all: Submodule[], submodulePaths?: string[]): Submodule[] {
+  if (!submodulePaths || submodulePaths.length === 0) return all;
+  if (submodulePaths.some((p) => /[*?[]/.test(p))) return all;
+  for (const entry of submodulePaths) {
+    if (!all.some((s) => pathspecSelects(entry, s.path))) return all;
+  }
+  return all.filter((s) => submodulePaths.some((entry) => pathspecSelects(entry, s.path)));
+}
+
+/**
+ * Check every host `git submodule update` is actually going to contact.
+ *
+ * The superproject's remote is NOT the answer on its own: a submodule url is
+ * repository content and can name any host it likes, and `git submodule
+ * update` clones or fetches every one of them. Checking only the superproject
+ * — which is all this used to do — let an allowlist of `github.com` sit there
+ * while the app went to gitlab.com. The backend enforces the same rule
+ * (`commands/submodule.rs`); this half is the one that can say so in a toast
+ * before any work starts.
+ *
+ * `submodule.url` from `get_submodules` is the url git will really use —
+ * `submodule.<name>.url` from the repository config, falling back to
+ * `.gitmodules` when nothing is registered — which is what the backend judges
+ * too. It used to be the `.gitmodules` snapshot alone, so the two halves
+ * judged different urls: with upstream having moved a submodule, the config
+ * url on the allowlist and the `.gitmodules` url off it, git and the backend
+ * both allowed the update and this half refused it, naming a host the
+ * operation never contacts.
+ *
+ * Offline mode is judged per submodule, like everything else. It used to
+ * refuse here before anything was listed, so the local-target carve-out
+ * `checkNetworkAllowed` makes could never be reached: a submodule on
+ * `/srv/git/dep.git` opens no socket, an allowlist permits updating it, and
+ * offline mode refused it anyway — stricter than an allowlist for an
+ * identical purely-local operation, and refusing to UPDATE a submodule the
+ * same dialog had just let the user ADD (`addSubmodule` checks the url).
+ *
+ * Under an allowlist the superproject's own remote is deliberately not
+ * checked: it is only where a RELATIVE submodule url resolves to, and the
+ * backend guards it for exactly those. Checking it for every update refused a
+ * local-only superproject — no remotes at all — whose `.gitmodules` named
+ * nothing but allowlisted hosts.
+ *
+ * Top-level only, on purpose. A NESTED submodule's url lives in its parent's
+ * `.gitmodules`, which does not exist until the parent is cloned, so no check
+ * made before the command runs can see it. The backend is the honest gate for
+ * those: under a policy it walks the tree itself instead of handing git
+ * `--recursive`, guarding each level before that level is contacted.
+ *
+ * Skipped entirely when no policy is in force, so the common case does not pay
+ * for an extra round trip. When the submodules cannot be listed, the check
+ * fails closed, exactly as an unresolvable remote does.
+ */
+async function checkSubmoduleHostsAllowed(
+  repoPath: string,
+  submodulePaths?: string[],
+  /** Whether the update carries `--init`. Without it git skips a submodule
+   * that was never registered — verified: exit 0, nothing contacted — so its
+   * host is not one this update will reach and must not refuse it. */
+  init = false,
+): Promise<boolean> {
+  if (!isNetworkPolicyActive()) return true;
+
+  const listed = await getSubmodules(repoPath);
+  if (!listed.success || !listed.data) {
+    return (await checkNetworkAllowed(null, undefined)) === null;
+  }
+
+  for (const submodule of selectSubmodules(listed.data, submodulePaths)) {
+    // Deliberately still `initialized` and not "has no config url", which is
+    // the backend's own drop rule: an entry registered in the config but not
+    // cloned is skipped here and judged there. That direction only ever
+    // UNDER-refuses, and `surfaceBackendRefusal` toasts the backend's reason
+    // when it does, so nothing goes unexplained. The opposite direction —
+    // refusing what git would happily do — is the one this gate must not take.
+    if (!submodule.initialized && !init) continue;
+    if (submodule.url && isRelativeSubmoduleUrl(submodule.url)) {
+      // Resolves against the superproject's remote, so that remote is the
+      // host to check — the one case it decides anything.
+      if (await checkNetworkAllowed(repoPath, undefined)) return false;
+      continue;
+    }
+    // A submodule url is a git REMOTE even though no repo path was resolved
+    // for it, so it gets the remote reading of "is this on this machine".
+    if (await checkNetworkAllowed(null, submodule.url ?? undefined, false, undefined, 'remote'))
+      return false;
+  }
+  return true;
+}
+
+
 export async function addSubmodule(
   repoPath: string,
   url: string,
@@ -2843,8 +3512,20 @@ export async function addSubmodule(
   branch?: string,
 ): Promise<CommandResult<Submodule>> {
   // `git submodule add` clones from `url` — a network operation despite living
-  // among the local submodule commands.
-  if (!await checkNetworkPermission('add submodule', null, url)) {
+  // among the local submodule commands. A relative url is checked against the
+  // superproject's remote, the host git will actually resolve it to.
+  const relative = isRelativeSubmoduleUrl(url);
+  if (
+    !await checkNetworkPermission(
+      'add submodule',
+      relative ? repoPath : null,
+      relative ? undefined : url,
+      undefined,
+      undefined,
+      // A submodule url is a git remote, whichever branch resolved it.
+      'remote',
+    )
+  ) {
     return blockedResult();
   }
   return invokeCommand<Submodule>("add_submodule", {
@@ -2882,8 +3563,16 @@ export async function updateSubmodules(
   },
 ): Promise<CommandResult<void>> {
   // `git submodule update` fetches (and clones with --init), so it belongs
-  // behind the same gate as fetch/pull.
-  if (!await checkNetworkPermission('update submodules', repoPath)) {
+  // behind the same gate as fetch/pull — applied to every host named in
+  // `.gitmodules`, which is where the clones and fetches this spawns actually
+  // go, rather than to the superproject's own remote.
+  if (!await checkSubmoduleHostsAllowed(repoPath, options?.submodulePaths, options?.init)) {
+    return blockedResult();
+  }
+  // The confirm, when the user asked for one. The hard blocks were settled
+  // above against the submodule hosts, so none is named here for the
+  // allowlist to resolve — an empty target list runs only the confirm.
+  if (!await checkNetworkPermission('update submodules', repoPath, undefined, undefined, [])) {
     return blockedResult();
   }
 
@@ -2901,7 +3590,7 @@ export async function updateSubmodules(
     tokenRemote = resolved.remoteName;
   }
 
-  return invokeCommand<void>("update_submodules", {
+  return surfaceBackendRefusal(await invokeCommand<void>("update_submodules", {
     path: repoPath,
     submodulePaths: options?.submodulePaths,
     init: options?.init,
@@ -2909,7 +3598,7 @@ export async function updateSubmodules(
     remote: options?.remote,
     token,
     tokenRemote,
-  });
+  }));
 }
 
 export async function syncSubmodules(
@@ -3090,25 +3779,115 @@ export async function getLfsFiles(
   return invokeCommand<LfsFile[]>("get_lfs_files", { path: repoPath });
 }
 
+/**
+ * What `get_lfs_endpoint` reports: the URL an LFS transfer will contact, and
+ * where that URL came from. Mirrors `LfsEndpoint` in
+ * `src-tauri/src/commands/lfs.rs`.
+ */
+export interface LfsEndpointInfo {
+  /** The URL (or path) the transfer will contact. */
+  url: string;
+  /** `'config'` for an `lfs.*` key (a committed `.lfsconfig` may set one),
+   * `'remote'` for the git remote's own url falling through verbatim. */
+  kind: 'config' | 'remote';
+}
+
+/**
+ * The URL an LFS transfer will contact, for the allowlist.
+ *
+ * git-lfs does not talk to the git remote: its endpoint comes from `lfs.url`
+ * / `remote.<r>.lfsurl`, which a COMMITTED `.lfsconfig` may set, before it
+ * falls back to the remote. The backend resolves it the way git-lfs does
+ * (`get_lfs_endpoint`); judged on the git remote alone, a github.com
+ * allowlist waved through a pull that transferred from wherever the
+ * repository's own `.lfsconfig` pointed. `null` when nothing names one — the
+ * gate then falls back to the remote, and the backend's own check (which
+ * fails closed) is the backstop.
+ *
+ * Looked up whenever ANY policy is in force, not just an allowlist: offline
+ * mode judges the target too (a `file://` or filesystem LFS endpoint never
+ * leaves the machine), so reading only the allowlist here left offline mode
+ * judging the git remote instead of the endpoint the transfer really contacts
+ * — in both directions.
+ */
+async function resolveLfsEndpoint(repoPath: string): Promise<LfsEndpointInfo | null> {
+  if (!isNetworkPolicyActive()) return null;
+  const result = await invokeCommand<LfsEndpointInfo | null>('get_lfs_endpoint', {
+    path: repoPath,
+  });
+  return result.success && result.data ? result.data : null;
+}
+
+/**
+ * Which reading of "a place on this machine" a resolved LFS endpoint is owed.
+ *
+ * `'config'` — an `lfs.url` / `lfs.pushurl` / `remote.<r>.lfs*url` value, which
+ * a COMMITTED `.lfsconfig` may have chosen. It is a URL, not a git remote, so
+ * it takes the strict reading: `evil.example.com/lfs` is an outbound host, not
+ * a path on this disk.
+ *
+ * `'remote'` — the git remote's own url, which git-lfs falls back to verbatim
+ * when nothing names an endpoint. That IS a git remote, so `sub/mybackup.git`
+ * is a repository on this disk and gets the same reading the push gate beside
+ * it already gives the very same string.
+ *
+ * `null` — nothing resolved, so the gate falls back to the git remote and the
+ * backend (which fails closed on an endpoint it cannot see) is the backstop.
+ * The strict reading keeps the two halves agreeing on that refusal.
+ */
+function lfsEndpointTargetKind(endpoint: LfsEndpointInfo | null): NetworkTargetKind {
+  return endpoint?.kind === 'remote' ? 'remote' : 'host';
+}
+
 export async function lfsPull(
   repoPath: string,
 ): Promise<CommandResult<string>> {
-  if (!await checkNetworkPermission('LFS pull', repoPath)) {
+  const endpoint = await resolveLfsEndpoint(repoPath);
+  // An LFS endpoint is USUALLY a URL rather than a git remote, so it takes the
+  // strict reading — but git-lfs's last resort is the git remote's url
+  // verbatim, and the backend judges that one with `check_remote`. The kind
+  // rides along with the URL so both halves give the same string the same
+  // reading; guessing 'host' for all of them refused a pull against
+  // `sub/mybackup.git`, a repository on this disk.
+  if (
+    !await checkNetworkPermission(
+      'LFS pull',
+      repoPath,
+      undefined,
+      endpoint?.url ?? null,
+      undefined,
+      lfsEndpointTargetKind(endpoint),
+    )
+  ) {
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
-  return invokeCommand<string>("lfs_pull", { path: repoPath, token });
+  return surfaceBackendRefusal(await invokeCommand<string>("lfs_pull", { path: repoPath, token }));
 }
 
 export async function lfsFetch(
   repoPath: string,
   refs?: string[],
 ): Promise<CommandResult<string>> {
-  if (!await checkNetworkPermission('LFS fetch', repoPath)) {
+  const endpoint = await resolveLfsEndpoint(repoPath);
+  // See `lfsPull`: the endpoint's provenance chooses the reading, because the
+  // fallback endpoint IS the git remote.
+  if (
+    !await checkNetworkPermission(
+      'LFS fetch',
+      repoPath,
+      undefined,
+      endpoint?.url ?? null,
+      undefined,
+      lfsEndpointTargetKind(endpoint),
+    )
+  ) {
     return blockedResult();
   }
   const token = await getRepoToken(repoPath);
-  return invokeCommand<string>("lfs_fetch", { path: repoPath, refs, token });
+  return surfaceBackendRefusal(
+    await invokeCommand<string>("lfs_fetch", { path: repoPath, refs, token }),
+  );
 }
 
 export async function lfsPrune(
@@ -3575,6 +4354,19 @@ export interface CredentialTestResult {
   protocol: string;
   username: string | null;
   message: string;
+  /**
+   * Whether `host` is the remote AS TYPED — a path standing in for a host
+   * there is none of — rather than a hostname to connect to. Mirrors
+   * `CredentialTestResult::is_path_target` in
+   * `src-tauri/src/commands/credentials.rs`.
+   *
+   * The dialog used to answer this from `protocol === 'file'` alone, which is
+   * not the rule: `file://server/share/repo.git` keeps its `file` scheme while
+   * resolving a real host — the very target the network gate refuses as one
+   * that leaves the machine — and was drawn as a local path anyway. Only the
+   * backend knows whether the target resolved.
+   */
+  isPathTarget: boolean;
 }
 
 export interface AvailableHelper {
@@ -3621,14 +4413,39 @@ export async function getAvailableHelpers(): Promise<
   return invokeCommand<AvailableHelper[]>("get_available_helpers", {});
 }
 
+/**
+ * Testing an SSH remote's credentials runs `ssh -T git@host`, which opens a
+ * real connection to that host — the same handshake `test_ssh_connection`
+ * already gates. This one had no gate on either side, so offline mode let it
+ * out. The remote's own URL is the destination, so it is what the allowlist
+ * judges; the HTTPS branch only reads a credential helper, and refusing that
+ * under a configured policy is the fail-closed side to err on.
+ */
 export async function testCredentials(
   path: string,
   remoteUrl: string,
 ): Promise<CommandResult<CredentialTestResult>> {
-  return invokeCommand<CredentialTestResult>("test_credentials", {
-    path,
-    remoteUrl,
-  });
+  // The URL goes in the RESOLVED slot, not the name slot: it IS the
+  // destination, and routing it through the name lookup sent an scp-form
+  // remote whose login is not `git` (`deploy@host:team/app.git`) down the
+  // "not a URL" path, where it matched no remote name and fell back to the
+  // first remote in the list — refusing the test with a toast naming a host
+  // the operation would never have contacted.
+  if (!await checkNetworkPermission('test credentials', path, remoteUrl, remoteUrl)) {
+    return blockedResult();
+  }
+  // The backend guards this one too, and the two allowlists can disagree —
+  // `security-sync.service.ts` warns about exactly that state. Without this
+  // the backend's `NetworkBlocked` reached the dialog as a bare `BLOCKED`,
+  // which every dialog suppresses on the understanding that the gate has
+  // already explained itself: the button flipped to "Testing...", flipped
+  // back, and the user was told nothing at all. Its siblings all wrap.
+  return surfaceBackendRefusal(
+    await invokeCommand<CredentialTestResult>("test_credentials", {
+      path,
+      remoteUrl,
+    }),
+  );
 }
 
 export async function eraseCredentials(
@@ -4003,7 +4820,7 @@ export async function getCommitStatus(
   commitSha: string,
   token?: string | null,
 ): Promise<CommandResult<string>> {
-  return invokeCommand<string>("get_commit_status", {
+  return invokeProviderCommand<string>("get_commit_status", {
     owner,
     repo,
     commitSha,
@@ -5176,6 +5993,103 @@ export async function listBitbucketPipelines(
     workspace,
     repoSlug,
     pagelen,
+    token,
+  });
+}
+
+// ============================================================================
+// Account Repository Listings
+// ============================================================================
+
+/**
+ * One repository owned by (or shared with) a connected account.
+ *
+ * Every provider's listing command normalises into this shape, so the clone
+ * dialog's picker renders one list whatever the account is.
+ */
+export interface ProviderRepository {
+  /** Provider-assigned id, stringified. Used as the list key only. */
+  id: string;
+  name: string;
+  /** Owner / namespace / workspace / project the repository lives under. */
+  owner: string;
+  /** "owner/name" as the provider spells it. */
+  fullName: string;
+  description: string | null;
+  isPrivate: boolean;
+  /** HTTPS clone URL — what selecting the repository fills in. */
+  cloneUrl: string;
+  webUrl: string | null;
+  defaultBranch: string | null;
+  /** ISO timestamp of the last push, when the provider reports one. */
+  lastPushedAt: string | null;
+}
+
+/** One page of an account's repository listing. */
+export interface ProviderRepositoryPage {
+  repositories: ProviderRepository[];
+  /** Page to request next, or null when the listing is exhausted. */
+  nextPage: number | null;
+}
+
+/** List the repositories a GitHub account can clone (one page per call). */
+export async function listGitHubRepositories(
+  perPage?: number,
+  page?: number,
+  token?: string | null,
+): Promise<CommandResult<ProviderRepositoryPage>> {
+  return invokeProviderCommand<ProviderRepositoryPage>("list_github_repositories", {
+    perPage,
+    page,
+    token,
+  });
+}
+
+/** List the projects a GitLab account is a member of (one page per call). */
+export async function listGitLabProjects(
+  instanceUrl: string,
+  perPage?: number,
+  page?: number,
+  token?: string | null,
+): Promise<CommandResult<ProviderRepositoryPage>> {
+  return invokeProviderCommand<ProviderRepositoryPage>("list_gitlab_projects", {
+    instanceUrl,
+    perPage,
+    page,
+    token,
+  });
+}
+
+/**
+ * List the repositories a Bitbucket account can clone (one page per call).
+ * A workspace narrows the listing; omitting it lists every workspace the
+ * account belongs to.
+ */
+export async function listBitbucketRepositories(
+  workspace?: string | null,
+  pagelen?: number,
+  page?: number,
+  token?: string | null,
+): Promise<CommandResult<ProviderRepositoryPage>> {
+  return invokeProviderCommand<ProviderRepositoryPage>("list_bitbucket_repositories", {
+    workspace,
+    pagelen,
+    page,
+    token,
+  });
+}
+
+/** List the Git repositories in an Azure DevOps organization. */
+export async function listAdoRepositories(
+  organization: string,
+  perPage?: number,
+  page?: number,
+  token?: string | null,
+): Promise<CommandResult<ProviderRepositoryPage>> {
+  return invokeProviderCommand<ProviderRepositoryPage>("list_ado_repositories", {
+    organization,
+    perPage,
+    page,
     token,
   });
 }
@@ -7585,30 +8499,117 @@ export type CommitInfoFormat =
 export type FilePathFormat = "relative" | "absolute" | "filename";
 
 /**
+ * How long to wait for `navigator.clipboard.writeText` before giving up on it.
+ *
+ * The async clipboard API does not always reject when it cannot write: without
+ * clipboard-write permission, outside a secure context, or outside a user
+ * gesture it can leave its promise pending forever. An unbounded `await` there
+ * means the caller never returns, so the user clicks "Copy" and gets neither a
+ * clipboard entry nor an error — the operation just disappears. Bound the wait
+ * and fall through to the synchronous fallback below instead.
+ */
+const CLIPBOARD_WRITE_TIMEOUT_MS = 2000;
+
+/**
+ * Last-resort clipboard write using the legacy synchronous API.
+ *
+ * `document.execCommand("copy")` is deprecated but still implemented
+ * everywhere, works without the clipboard-write permission, and — being
+ * synchronous — cannot hang. It only copies the current selection, so the text
+ * is staged in an off-screen textarea first.
+ *
+ * @returns true when the copy was accepted
+ */
+function copyToClipboardFallback(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  // Keep it out of view and out of the layout, but still focusable/selectable —
+  // `display: none` and `visibility: hidden` elements cannot hold a selection.
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-9999px";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  textarea.setAttribute("aria-hidden", "true");
+
+  const previouslyFocused = document.activeElement as HTMLElement | null;
+  document.body.appendChild(textarea);
+
+  try {
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+    // Restore focus so the fallback is invisible to the user.
+    previouslyFocused?.focus?.();
+  }
+}
+
+/**
  * Copy text to the system clipboard
- * Uses the browser's clipboard API for better reliability
+ *
+ * Prefers the async clipboard API and falls back to the legacy synchronous
+ * copy when it is missing, rejects, or never settles. Always resolves — a
+ * clipboard write must never leave a caller (or a test) awaiting forever.
+ *
+ * Note: this deliberately does not route through the `copy_to_clipboard` Tauri
+ * command. That command does not touch the system clipboard; it echoes the
+ * text back, so using it would report success while copying nothing.
+ *
  * @param text Text to copy
  * @returns Result with the copied text
  */
 export async function copyToClipboard(
   text: string,
 ): Promise<CommandResult<CopyResult>> {
-  try {
-    await navigator.clipboard.writeText(text);
+  let asyncError: unknown;
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const wrote = await Promise.race([
+        navigator.clipboard.writeText(text).then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), CLIPBOARD_WRITE_TIMEOUT_MS);
+        }),
+      ]);
+      if (wrote) {
+        return {
+          success: true,
+          data: { success: true, text },
+        };
+      }
+    } catch (error) {
+      asyncError = error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  if (copyToClipboardFallback(text)) {
     return {
       success: true,
       data: { success: true, text },
     };
-  } catch (error) {
-    return {
-      success: false,
-      error: {
-        code: "CLIPBOARD_ERROR",
-        message:
-          error instanceof Error ? error.message : "Failed to copy to clipboard",
-      },
-    };
   }
+
+  return {
+    success: false,
+    error: {
+      code: "CLIPBOARD_ERROR",
+      message:
+        asyncError instanceof Error
+          ? asyncError.message
+          : "Failed to copy to clipboard",
+    },
+  };
 }
 
 /**
@@ -7782,15 +8783,14 @@ export async function pruneRemoteTrackingBranches(
   repoPath: string,
   remote?: string,
 ): Promise<CommandResult<PruneResult>> {
-  // Offline is settled before the remote list is read, so the user hears
-  // "offline mode is enabled" rather than whatever enumerating the remotes
-  // happens to report. `checkNetworkAllowed` is called for its toast; the
-  // refusal is unconditional.
-  if (settingsStore.getState().offlineMode) {
-    await checkNetworkAllowed(repoPath, remote);
-    return blockedResult();
-  }
-
+  // Offline mode is NOT settled ahead of the remote list. It used to be, and
+  // that refused a prune of a remote living on this machine — the one case
+  // both the backend (`maintenance.rs`) and the allowlist branch below permit,
+  // and it refused it in silence, because `checkNetworkAllowed` returns null
+  // for a local target so no toast fired and the dialogs suppress `BLOCKED`.
+  // The gate below sees every remote WITH its URL and applies the same
+  // local-target carve-out per target, still toasting "Offline mode is
+  // enabled" for the first one that genuinely leaves the machine.
   let targets: string[];
   // The listed remotes already carry their URLs, so the allowlist gate and the
   // token loop below both read them from here instead of resolving each one

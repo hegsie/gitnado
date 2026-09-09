@@ -4,7 +4,9 @@
 //! Events emitted to the frontend carry the repository path they belong to.
 //! A single poller thread serves all watchers; it exits when the last
 //! watcher is removed and is restarted on demand, so threads never
-//! accumulate no matter how often watching starts and stops.
+//! accumulate no matter how often watching starts and stops. It blocks on the
+//! watcher's debounced event queue rather than polling on a timer, so bursts
+//! of file system activity are coalesced before they reach the frontend.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +18,11 @@ use tauri::{command, AppHandle, Emitter, State};
 
 use crate::error::Result;
 use crate::services::WatcherService;
+
+/// How long the poller blocks waiting for a batch before re-checking whether
+/// any watchers are left. Only bounds shutdown latency — event latency is
+/// governed by the watcher's debounce window.
+const WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Managed state for the file watcher
 pub struct WatcherState {
@@ -68,10 +75,24 @@ pub async fn start_watching(
     {
         let service = Arc::clone(&state.service);
         let poller_running = Arc::clone(&state.poller_running);
+        let stream = {
+            let service = state.service.lock().map_err(|_| {
+                state.poller_running.store(false, Ordering::SeqCst);
+                crate::error::GitnadoError::OperationFailed("Watcher lock poisoned".to_string())
+            })?;
+            service.event_stream()
+        };
 
         thread::spawn(move || {
             loop {
-                // Poll for events; exit when the last watcher is gone.
+                // Block until the debouncer hands over a coalesced batch (or
+                // the wait times out). The debouncer does the rate limiting,
+                // so there is no sleep-and-poll loop here any more, and a
+                // burst of thousands of raw events (a fetch, a `git gc`)
+                // arrives as a couple of events rather than thousands.
+                let events = stream.wait_events(WAIT_TIMEOUT);
+
+                // Exit when the last watcher is gone.
                 //
                 // The exit flag MUST be flipped while the service lock is
                 // still held: start_watching registers its watcher under this
@@ -80,8 +101,8 @@ pub async fn start_watching(
                 // this thread sees the new watcher and keeps running. Storing
                 // the flag after releasing the lock would open a window where
                 // a watcher is registered but no poller ever serves it.
-                let events = {
-                    let Ok(service) = service.lock() else {
+                {
+                    let Ok(mut service) = service.lock() else {
                         // Mutex poisoned — nothing sane left to do
                         poller_running.store(false, Ordering::SeqCst);
                         break;
@@ -90,8 +111,12 @@ pub async fn start_watching(
                         poller_running.store(false, Ordering::SeqCst);
                         break;
                     }
-                    service.poll_events()
-                };
+                    // Directories created (or deleted) after registration are
+                    // not covered by the pruned watch plan on their own — it
+                    // watches an excluded directory's ancestors
+                    // non-recursively — so keep the plan in step here.
+                    service.sync_directories(&events);
+                }
 
                 // Emit events to frontend
                 for (repo_path, event) in events {
@@ -120,9 +145,6 @@ pub async fn start_watching(
                         },
                     );
                 }
-
-                // Sleep before next poll
-                thread::sleep(Duration::from_millis(500));
             }
         });
     }

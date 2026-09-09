@@ -1,8 +1,22 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
+import { localized, msg } from '@lit/localize';
 import { sharedStyles } from './styles/shared-styles.ts';
 import { repositoryStore, uiStore, type OpenRepository } from './stores/index.ts';
+import {
+  dialogStore,
+  dialogs,
+  type ConflictDialogContext,
+} from './stores/dialog.store.ts';
 import { registerDefaultShortcuts, keyboardService } from './services/keyboard.service.ts';
+import {
+  MENU_ACTION_EVENT,
+  resolveMenuAction,
+  shouldSuppressMenuAction,
+  startAcceleratorWatch,
+  syncAppMenu,
+  type MenuShellHandlers,
+} from './services/app-menu.service.ts';
 import { loggers } from './utils/logger.ts';
 import { sweepRepoScopedDialogs } from './utils/repo-scoped-dialogs.ts';
 import { rebasedOntoMessage } from './utils/rebase-messages.ts';
@@ -39,6 +53,15 @@ const ABORTABLE_STATES: readonly RepositoryState[] = [
  * and listing it here without a switch arm would render a dead button.
  */
 const SKIPPABLE_STATES: readonly RepositoryState[] = ['cherrypick', 'revert'];
+
+/**
+ * The palette query that turns the command palette into a branch switcher.
+ *
+ * Matches the label lv-command-palette gives every branch entry
+ * ("Switch to <branch>"), so a prefix match puts them all above every other
+ * command. Kept as a constant so the two cannot drift silently.
+ */
+const SWITCH_BRANCH_PALETTE_QUERY = 'Switch to ';
 
 /**
  * How a repository state reads in user-facing prose.
@@ -92,6 +115,8 @@ import './components/dialogs/lv-azure-devops-dialog.ts';
 import './components/dialogs/lv-profile-manager-dialog.ts';
 import './components/dialogs/lv-migration-dialog.ts';
 import './components/dialogs/lv-workspace-manager-dialog.ts';
+import './components/dialogs/lv-scan-repositories-dialog.ts';
+import './components/dialogs/lv-init-dialog.ts';
 import './components/dialogs/lv-hooks-dialog.ts';
 import './components/dialogs/lv-create-tag-dialog.ts';
 import './components/dialogs/lv-create-branch-dialog.ts';
@@ -114,6 +139,11 @@ import type { LvProfileManagerDialog } from './components/dialogs/lv-profile-man
 import type { LvReflogDialog } from './components/dialogs/lv-reflog-dialog.ts';
 import type { LvDescribeDialog } from './components/dialogs/lv-describe-dialog.ts';
 import type { LvCompareBranchesDialog } from './components/dialogs/lv-compare-branches-dialog.ts';
+import type { LvGitHubDialog } from './components/dialogs/lv-github-dialog.ts';
+import type { LvGitLabDialog } from './components/dialogs/lv-gitlab-dialog.ts';
+import type { LvBitbucketDialog } from './components/dialogs/lv-bitbucket-dialog.ts';
+import type { LvAzureDevOpsDialog } from './components/dialogs/lv-azure-devops-dialog.ts';
+import type { PullRequestProviderId } from './services/pull-request.service.ts';
 import type { SearchDialogMode } from './components/dialogs/lv-search-dialog.ts';
 import type { LvCleanDialog } from './components/dialogs/lv-clean-dialog.ts';
 import type { LvExportImportDialog } from './components/dialogs/lv-export-import-dialog.ts';
@@ -124,21 +154,24 @@ import type { IntegrationOpenContext, IntegrationType } from './types/integratio
 import type { Commit, RefInfo, StatusEntry, Tag, Branch, RepositoryState } from './types/git.types.ts';
 import type { SearchFilter } from './components/toolbar/lv-search-bar.ts';
 import type { PaletteCommand } from './components/dialogs/lv-command-palette.ts';
+import { buildPaletteCommands, type PaletteCommandHost } from './palette-commands.ts';
 import * as gitService from './services/git.service.ts';
 import * as updateService from './services/update.service.ts';
 import * as unifiedProfileService from './services/unified-profile.service.ts';
 import { settingsStore } from './stores/settings.store.ts';
 import { workspaceStore } from './stores/workspace.store.ts';
 import * as workspaceService from './services/workspace.service.ts';
-import { listenToEvent } from './services/tauri-api.ts';
-import { showToast, notifyWarning } from './services/notification.service.ts';
-import { showErrorWithSuggestion } from './services/error-suggestion.service.ts';
+import { listenToEvent, safeUnlisten } from './services/tauri-api.ts';
 import {
-  openRepositoryInTerminal,
-  openRepositoryInFileManager,
-  openRepositoryInEditor,
-} from './services/open-location.service.ts';
-import { showConfirm, showPrompt } from './services/dialog.service.ts';
+  startGitCommandLogging,
+  stopGitCommandLogging,
+} from './services/git-output.service.ts';
+import { showToast, notifyWarning } from './services/notification.service.ts';
+import { emitSecuritySettings } from './services/security-sync.service.ts';
+import { showErrorWithSuggestion } from './services/error-suggestion.service.ts';
+import { runFetch, runPull, runPush } from './services/remote-operations.service.ts';
+import { showConfirm, showMessage, showPrompt } from './services/dialog.service.ts';
+import { mergePreviewSummary } from './utils/merge-preview.ts';
 import {
   confirmGarbageCollection,
   confirmPrune,
@@ -149,6 +182,12 @@ import {
   isMaintenanceBlocked,
 } from './utils/maintenance-confirms.ts';
 import { confirmDeleteTag, offerRemoteTagDelete } from './utils/tag-delete.ts';
+import {
+  cherryPickConfirmMessage,
+  cherryPickFailureMessage,
+  orderCommitsForApply,
+  shortCommitLabel,
+} from './utils/commit-selection.ts';
 import {
   tryAcquireRefOp,
   releaseRefOp,
@@ -165,12 +204,21 @@ import { embeddingIndexService } from './services/embedding-index.service.ts';
 import { initOAuthListener } from './services/oauth.service.ts';
 import * as localAiService from './services/local-ai.service.ts';
 import { emit, type UnlistenFn } from '@tauri-apps/api/event';
+import {
+  startRepositoryDropListener,
+  REPOSITORY_SCAN_OFFER_EVENT,
+  REPOSITORY_SCAN_RESOLVED_EVENT,
+} from './services/window-drop.service.ts';
 
 /**
  * Main application shell component
  * Provides the top-level layout and routing
  */
 @customElement('lv-app-shell')
+// Only the Settings modal's own title is localised here so far — but the shell
+// still has to re-render on a locale change, or that title would go stale while
+// the dialog inside it switches language.
+@localized()
 export class AppShell extends LitElement {
   static styles = [
     sharedStyles,
@@ -229,6 +277,49 @@ export class AppShell extends LitElement {
         0% { transform: translateX(-100%); }
         50% { transform: translateX(150%); }
         100% { transform: translateX(350%); }
+      }
+
+      /* Drop affordance for the REPOSITORY-OPEN window.
+         The OS drop is accepted in both states — dropping a folder with a repo
+         open opens it in a new tab — but only lv-welcome had an overlay, so the
+         same drag looked accepted on one screen and ignored on the other. Same
+         wording and same dashed frame as lv-welcome's copy; it cannot be shared
+         as one element because that one lives inside the welcome component's
+         shadow root. Fixed rather than absolute: the shell is a flex column and
+         the overlay must cover the whole window, toolbar included. */
+      .window-drop-overlay {
+        position: fixed;
+        inset: var(--spacing-md);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--spacing-sm);
+        border: 2px dashed var(--color-primary);
+        border-radius: var(--radius-lg);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        z-index: 9998;
+        /* The OS owns the drag; the overlay must never swallow a pointer. */
+        pointer-events: none;
+      }
+
+      .window-drop-overlay svg {
+        width: 48px;
+        height: 48px;
+        color: var(--color-primary);
+      }
+
+      .window-drop-overlay-title {
+        font-size: var(--font-size-lg);
+        font-weight: var(--font-weight-medium);
+      }
+
+      .window-drop-overlay-hint {
+        font-size: var(--font-size-sm);
+        color: var(--color-text-secondary);
+        max-width: 380px;
+        text-align: center;
       }
 
       /* The shared reduced-motion rules clamp every animation to one 0.01ms
@@ -599,18 +690,28 @@ export class AppShell extends LitElement {
     `,
   ];
 
-  @state() private activeRepository: OpenRepository | null = null;
-  @state() private selectedCommit: Commit | null = null;
+  @state() activeRepository: OpenRepository | null = null;
+  @state() selectedCommit: Commit | null = null;
   @state() private selectedCommitRefs: RefInfo[] = [];
+  /**
+   * Every commit in the graph's current selection (Ctrl/Shift+click), primary
+   * included. The graph has always shipped this list on `commit-selected`;
+   * dropping it meant a user could select eight commits and find no action
+   * that used more than one of them. Kept whole here so the commit context
+   * menu can offer the batch actions, and re-derived from the graph's loaded
+   * commits at use time so a reload that rewrote history away cannot leave a
+   * menu offering to cherry-pick commits the repository no longer has.
+   */
+  @state() private selectedCommits: Commit[] = [];
 
-  // Diff view state
-  @state() private showDiff = false;
+  // Diff view state. Whether the pane is up lives in the dialog store
+  // (`dialogs.isOpen('diff')`); these payload fields stay here because they are
+  // re-derived from every status refresh, not fixed at open time.
   @state() private diffFile: StatusEntry | null = null;
   @state() private diffCommitFile: { commitOid: string; filePath: string } | null = null;
   @state() private diffFilePartiallyStaged = false;
 
-  // Blame view state
-  @state() private showBlame = false;
+  // Blame view state. Open-ness lives in the dialog store, as for the diff.
   @state() private blameFile: string | null = null;
   @state() private blameCommitOid: string | null = null;
 
@@ -618,8 +719,6 @@ export class AppShell extends LitElement {
   @state() private progressOperations: ProgressOperation[] = [];
   private progressUnsubscribe?: () => void;
 
-  // Settings dialog
-  @state() private showSettings = false;
   /** True while an abort is in flight — blocks a double-click firing two. */
   @state() private abortInProgress = false;
   @state() private skipInProgress = false;
@@ -655,28 +754,10 @@ export class AppShell extends LitElement {
     isHead: false,
   };
 
-  // Conflict resolution dialog
-  @state() private showConflictDialog = false;
-  /**
-   * The open dialog's inputs, SNAPSHOTTED at open time. The dialog must
-   * keep operating on the repository and operation it was opened for even
-   * if the user switches repo tabs (Ctrl+Tab still works behind the
-   * full-screen dialog) or another conflicting operation fires while it is
-   * up — live-binding the loose fields below would let a second conflict
-   * source retarget an in-flight resolution's repo/operation, aiming its
-   * abort/resolve/stage commands at the wrong repository.
-   */
-  @state() private conflictDialogConfig: {
-    repoPath: string;
-    operationType: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'stash';
-    initialFilePath: string | null;
-    stashSourceCertain: boolean;
-    stashIndex: number;
-    stashOid: string | null;
-    dropStashOnComplete: boolean;
-    squashMerge: boolean;
-    gitflowFinish: GitflowFinishContext | null;
-  } | null = null;
+  // Conflict resolution dialog. Its open flag AND its snapshotted inputs live
+  // in the dialog store as the `conflict` dialog's context — see
+  // ConflictDialogContext there for why they are snapshotted rather than
+  // live-bound to the loose staging fields below.
   @state() private conflictOperationType: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'stash' = 'merge';
   // Stash-completion semantics for the conflict dialog (which entry to drop and
   // whether to drop it at all — pop drops, plain apply keeps).
@@ -697,104 +778,81 @@ export class AppShell extends LitElement {
   @state() private conflictStashSourceCertain = true;
 
   // Command palette
-  @state() private showCommandPalette = false;
-  @state() private showOutputPanel = false;
   @state() private paletteBranches: Branch[] = [];
   @state() private paletteTrackedFiles: string[] = [];
   private commandPaletteRepositoryPath: string | null = null;
   private commandPaletteRequestId = 0;
+  /**
+   * Text the palette's search box opens with. Empty for every entry point but
+   * the native menu's "Switch Branch…", which opens the palette already
+   * filtered to the branch entries rather than the full command list.
+   */
+  @state() private commandPaletteQuery = '';
 
-  // File history
-  @state() private showFileHistory = false;
-  @state() private fileHistoryPath: string | null = null;
+  /**
+   * Mirror of the graph canvas's loaded commits / tag tips, for the command
+   * palette and the export-import dialog.
+   *
+   * These used to be pulled straight from the canvas inside render()
+   * (`.commits=${this.graphCanvas?.getLoadedCommits() ?? []}`), which copied
+   * up to a full page of commits and walked the whole ref map on EVERY
+   * re-render of this component — and produced a fresh array identity each
+   * time, so both consumers rebuilt their lists even while closed. The canvas
+   * now announces changes with `graph-commits-changed` and this mirror is
+   * refreshed from that (plus once more when the palette opens, so the
+   * palette can never show a stale list).
+   *
+   * `graphPaletteRepositoryPath` is captured in the SAME update as the two
+   * lists: the export dialog compares it against its own repositoryPath to
+   * decide whether the lists belong to the repo it is showing, so the three
+   * must never be sampled at different moments.
+   */
+  @state() private graphPaletteCommits: Commit[] = [];
+  @state() private graphPaletteTags: Array<{ name: string; oid: string }> = [];
+  @state() private graphPaletteRepositoryPath = '';
 
-  // Reflog dialog
-  @state() private showReflog = false;
+  /**
+   * Memoised palette command list. Every entry's action closes over the shell
+   * and reads live state when INVOKED (requiresRepository() checks
+   * activeRepository at click time), so the only input that changes what the
+   * list renders is the modifier-key label — which is the cache key.
+   */
+  private paletteCommandsCache: PaletteCommand[] | null = null;
+  private paletteCommandsCacheKey: string | null = null;
 
-  // Content/diff/pickaxe search dialog. The `show[A-Z]` name is load-bearing:
-  // closeRepoScopedDialogs() enumerates Lit's reactive properties for it.
-  @state() private showSearchDialog = false;
-  @state() private searchDialogMode: SearchDialogMode = 'files';
-
-  // Keyboard shortcuts dialog
-  @state() private showShortcuts = false;
   @state() private vimMode = false;
-
-  // Remote management dialog
-  @state() private showRemotes = false;
-
-  // Clean dialog
-  @state() private showClean = false;
-
-  // Repository health dialog
-  @state() private showRepositoryHealth = false;
-
-  // Bisect dialog
-  @state() private showBisect = false;
-
-  // Submodule dialog
-  @state() private showSubmodules = false;
-
-  // Worktree dialog
-  @state() private showWorktrees = false;
-
-  // LFS dialog
-  @state() private showLfs = false;
-
-  // Changelog dialog
-
-  // GPG dialog
-  @state() private showGpg = false;
-
-  // SSH dialog
-  @state() private showSsh = false;
-
-  // Config dialog
-  @state() private showConfig = false;
-
-  // Credentials dialog
-  @state() private showCredentials = false;
-
-  // GitHub dialog
-  @state() private showGitHub = false;
-
-  // GitLab dialog
-  @state() private showGitLab = false;
-
-  // Bitbucket dialog
-  @state() private showBitbucket = false;
-
-  // Azure DevOps dialog
-  @state() private showAzureDevOps = false;
-
-  // OIDC / Enterprise SSO dialog
-  @state() private showOidc = false;
-
-  // Profile Manager dialog
-  @state() private showProfileManager = false;
-  // Which view the Profile Manager should open to. 'accounts' is set when the
-  // user picks "Manage Accounts" from an integration dialog; reset on close.
-  @state() private profileManagerView: '' | 'accounts' = '';
 
   // EXPLICIT navigation context for a provider/OIDC dialog opened FROM the
   // profile manager's "Connect a new account" flow. Non-null ONLY while such a
   // dialog is open: it drives the Back arrow, the "Adding to <name>" breadcrumb,
   // and the deterministic return + attach-after-connect. Cleared on every
   // standalone open (command palette/dashboard/toolbar) so those never show a
-  // back arrow or auto-attach. Replaces the old `showProfileManager` inference.
+  // back arrow or auto-attach. Replaces the old open-profile-manager inference.
   @state() private integrationContext: IntegrationOpenContext | null = null;
   // When "Manage Accounts" is opened from a provider dialog, remember which
   // provider so closing the Accounts view can return there — making that
   // navigation reversible rather than a one-way teleport.
   private manageAccountsReturnProvider: IntegrationType | null = null;
+  /**
+   * The manager closed by returning the user to a provider dialog, so the
+   * `profile-manager-closed` announcement is owed only once THAT dialog closes
+   * — see handleProfileManagerClose.
+   */
+  private announceManagerClosedAfterProvider = false;
 
-  // Migration dialog
-  @state() private showMigrationDialog = false;
-
-  // Workspace Manager dialog
-  @state() private showWorkspaceManager = false;
-  @state() private showHooksDialog = false;
-  @state() private showGitignoreDialog = false;
+  /** Folder the scan dialog was opened for, and which of its two modes. */
+  @state() private repositoryScanPath = '';
+  @state() private repositoryScanMode: 'scan' | 'offer' = 'scan';
+  /**
+   * Bumped for every request to show the scan dialog. Dropping the SAME folder
+   * onto an open dialog changes neither of the two properties above, so without
+   * this the dialog could not tell the drop happened and said nothing at all.
+   */
+  @state() private repositoryScanRequest = 0;
+  /** True while an OS drag is over the window, so whichever screen is up —
+   *  the welcome screen or an open repository — can show its drop
+   *  affordance. The drop is accepted in both states. */
+  @state() private fileDragActive = false;
 
   // Right panel tab tracking
   @state() private activeRightPanelTab: string | undefined;
@@ -812,22 +870,32 @@ export class AppShell extends LitElement {
   private resizing: 'left' | 'right' | null = null;
   private resizeStartPos = 0;
   private resizeStartValue = 0;
+  // Latest un-applied pointer position while dragging a panel divider, and
+  // the frame callback that will apply it. mousemove fires far faster than
+  // the display refreshes, and each width assignment re-renders this whole
+  // component, so the moves are coalesced into one update per frame.
+  private resizePendingClientX: number | null = null;
+  private resizeRafId: number | null = null;
 
-  @query('lv-graph-canvas') private graphCanvas?: LvGraphCanvas;
+  @query('lv-graph-canvas') graphCanvas?: LvGraphCanvas;
   @query('lv-diff-view') private diffView?: LvDiffView;
-  @query('lv-create-tag-dialog') private createTagDialog?: LvCreateTagDialog;
-  @query('lv-create-branch-dialog') private createBranchDialog?: LvCreateBranchDialog;
+  @query('lv-create-tag-dialog') createTagDialog?: LvCreateTagDialog;
+  @query('lv-create-branch-dialog') createBranchDialog?: LvCreateBranchDialog;
   @query('lv-cherry-pick-dialog') private cherryPickDialog?: LvCherryPickDialog;
-  @query('lv-export-import-dialog') private exportImportDialog?: LvExportImportDialog;
+  @query('lv-export-import-dialog') exportImportDialog?: LvExportImportDialog;
   @query('#app-rebase-dialog') private interactiveRebaseDialog?: LvInteractiveRebaseDialog;
   @query('lv-profile-manager-dialog') private profileManagerDialog?: LvProfileManagerDialog;
   @query('lv-reflog-dialog') private reflogDialog?: LvReflogDialog;
-  @query('lv-describe-dialog') private describeDialog?: LvDescribeDialog;
-  @query('lv-compare-branches-dialog') private compareBranchesDialog?: LvCompareBranchesDialog;
+  @query('lv-describe-dialog') describeDialog?: LvDescribeDialog;
+  @query('lv-compare-branches-dialog') compareBranchesDialog?: LvCompareBranchesDialog;
   @query('lv-clean-dialog') private cleanDialog?: LvCleanDialog;
   @query('lv-remote-dialog') private remoteDialog?: LvRemoteDialog;
   @query('lv-repository-health-dialog') private repositoryHealthDialog?: LvRepositoryHealthDialog;
   @query('lv-changelog-dialog') private changelogDialog?: LvChangelogDialog;
+  @query('lv-github-dialog') private githubDialog?: LvGitHubDialog;
+  @query('lv-gitlab-dialog') private gitlabDialog?: LvGitLabDialog;
+  @query('lv-bitbucket-dialog') private bitbucketDialog?: LvBitbucketDialog;
+  @query('lv-azure-devops-dialog') private azureDevOpsDialog?: LvAzureDevOpsDialog;
 
   private unsubscribe?: () => void;
   private unsubscribeUi?: () => void;
@@ -838,6 +906,8 @@ export class AppShell extends LitElement {
   private staleRepoPaths = new Set<string>();
   // Debounce timers for background tab-badge refreshes, keyed by repo path
   private badgeHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Debounce timers for re-reading a repo's remotes after a config change
+  private remotesReloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // Last auto-fetch interval applied to the backend (settings subscription
   // must only restart timers when THIS value actually changes)
   /** Repos with a window-focus fetch already running. */
@@ -854,6 +924,17 @@ export class AppShell extends LitElement {
    * rather than mutated so Lit sees the change and re-renders the menus. */
   @state() private refOpsVersion = 0;
   private unsubscribeRefOps?: () => void;
+  /**
+   * Re-render trigger for the dialog store.
+   *
+   * Which dialogs are open is module state now (see stores/dialog.store.ts), so
+   * Lit has nothing of its own to observe. Bumping this from the store
+   * subscription is the same trick `refOpsVersion` above uses for the ref lock,
+   * and it keeps `await el.updateComplete` after a `dialogs.open(...)` working
+   * exactly as it did when each dialog had its own `@state()` flag.
+   */
+  @state() private dialogVersion = 0;
+  private unsubscribeDialogs?: () => void;
   /**
    * Keys for destructive actions already running.
    *
@@ -895,7 +976,7 @@ export class AppShell extends LitElement {
   }
 
   /** The one refusal message every busy-repo path shows. */
-  private warnRepositoryBusy(): void {
+  warnRepositoryBusy(): void {
     warnRepositoryBusy();
   }
 
@@ -924,11 +1005,11 @@ export class AppShell extends LitElement {
   }
 
   /** Claim the lock for `repoPath`; false when it is already held. */
-  private claimRefOperation(repoPath: string): boolean {
+  claimRefOperation(repoPath: string): boolean {
     return tryAcquireRefOp(repoPath);
   }
 
-  private releaseRefOperation(repoPath: string): void {
+  releaseRefOperation(repoPath: string): void {
     releaseRefOp(repoPath);
   }
 
@@ -990,6 +1071,12 @@ export class AppShell extends LitElement {
   private lastRemoteAllowlistKey = '';
   private refsChangedDebounceTimer?: ReturnType<typeof setTimeout>;
   private updateUnlisteners: UnlistenFn[] = [];
+  /** Teardown for the native menu's key-press watcher. */
+  private appMenuWatchDispose?: () => void;
+  /** Last repository-open state pushed to the native menu, to skip no-op IPC. */
+  private appMenuHasRepository?: boolean;
+  /** Teardown for the keyboard-settings subscription that refreshes the menu. */
+  private appMenuShortcutUnsubscribe?: () => void;
   private shownIntegrationSuggestions: Set<string> = new Set();
   private isRestoringRepositories = false;
   private autoFetchUnsubscribe?: () => void;
@@ -1032,6 +1119,25 @@ export class AppShell extends LitElement {
     }
   };
 
+  /**
+   * A fetch, pull or push landed — refresh the repository it ran ON.
+   *
+   * Raised by remote-operations.service, the one runner behind BOTH surfaces
+   * (the shortcuts and palette here, the context dashboard's three buttons),
+   * so the two cannot drift apart again. It is a private request rather than
+   * the `repository-refresh` broadcast for a reason: every panel listens to
+   * that one, and `handleRefresh` emits it itself, so raising it from the
+   * runner would refresh the branch list, the analytics panel and the
+   * dashboard twice for one fetch.
+   *
+   * Pinned to the repo in the detail, never the active tab: these are slow
+   * network operations and the user can switch tabs while one runs.
+   */
+  private handleRemoteOperationRefresh = (e: Event): void => {
+    const detail = (e as CustomEvent).detail as { repoPath?: string } | undefined;
+    this.refreshConflictDialogRepo(detail?.repoPath ?? null);
+  };
+
   // Cycle the active repository tab by offset (wraps around both ends)
   /**
    * Open the branch-cleanup dialog from the command palette.
@@ -1044,7 +1150,7 @@ export class AppShell extends LitElement {
    * its branch list to render — `lv-branch-list` registers the window listener
    * in connectedCallback, so dispatching before it exists is the same dead end.
    */
-  private async openBranchCleanup(): Promise<void> {
+  async openBranchCleanup(): Promise<void> {
     if (!this.leftPanelVisible) {
       uiStore.getState().togglePanel('left');
       await this.updateComplete;
@@ -1084,6 +1190,18 @@ export class AppShell extends LitElement {
     if (event.eventType === 'refs-changed') {
       this.handleRefsChanged();
     }
+    // `.git/config` changed under us — most importantly, a remote added or
+    // removed from a terminal. `remotes` in the store is what greys out
+    // Fetch/Pull/Push on both button surfaces and what the runner REFUSES on,
+    // and its other writers are a refresh (which the Remotes dialog asks for)
+    // and tab activation. Neither fires for the repository the user is looking
+    // at, so `git remote add origin …` left all five surfaces still insisting
+    // the repository had none — while the refusal's own "Add a remote…" button
+    // opened a dialog that listed it. A background repo self-heals through
+    // `staleRepoPaths`; the active one, the common case, did not.
+    if (event.eventType === 'config-changed') {
+      this.scheduleRemotesReload(event.repoPath);
+    }
   };
 
   // Per-path monotonic sequence for badge hydration: a superseded hydration
@@ -1119,6 +1237,11 @@ export class AppShell extends LitElement {
     if (pendingHydration) {
       clearTimeout(pendingHydration);
       this.badgeHydrationTimers.delete(path);
+    }
+    const pendingRemotesReload = this.remotesReloadTimers.get(path);
+    if (pendingRemotesReload) {
+      clearTimeout(pendingRemotesReload);
+      this.remotesReloadTimers.delete(path);
     }
   }
 
@@ -1301,6 +1424,34 @@ export class AppShell extends LitElement {
     );
   }
 
+  /**
+   * Re-read a repository's remotes after its `.git/config` changed.
+   *
+   * Debounced like the badge hydration above and for the same reason: git
+   * rewrites `.git/config` for a great many operations, and this is the
+   * narrowest possible answer to one — a single local `get_remotes`, not a
+   * `handleRefresh` that would re-read the repository, the graph and the
+   * search index on every `git config` line the user types. The other
+   * config-dependent state (branch upstreams, identity) already rides in on
+   * the `refs-changed` refresh those operations also produce.
+   *
+   * Leading call suppressed, trailing call kept, so a burst of writes settles
+   * into one read; the repo may have been closed by the time it fires, which
+   * `watchedRepoPaths` is the check for.
+   */
+  private scheduleRemotesReload(repoPath: string): void {
+    if (this.remotesReloadTimers.has(repoPath)) return;
+    this.remotesReloadTimers.set(
+      repoPath,
+      setTimeout(() => {
+        this.remotesReloadTimers.delete(repoPath);
+        if (this.watchedRepoPaths.has(repoPath)) {
+          void this.loadRepositoryRemotes(repoPath);
+        }
+      }, 300)
+    );
+  }
+
   // Handle refs-changed from file watcher (debounced)
   private handleRefsChanged = (): void => {
     if (this.refsChangedDebounceTimer) {
@@ -1392,14 +1543,14 @@ export class AppShell extends LitElement {
       );
       return;
     }
-    if (this.showConflictDialog) {
+    if (dialogs.isOpen('conflict')) {
       showToast(
         'A conflict resolution is already in progress — finish or close it first',
         'warning',
       );
       return;
     }
-    this.conflictDialogConfig = {
+    dialogs.open('conflict', {
       repoPath,
       operationType: this.conflictOperationType,
       initialFilePath: this.conflictInitialFilePath,
@@ -1409,67 +1560,38 @@ export class AppShell extends LitElement {
       dropStashOnComplete: this.conflictDropStashOnComplete,
       squashMerge: this.conflictSquashMerge,
       gitflowFinish: this.conflictGitflowFinish,
-    };
-    this.showConflictDialog = true;
+    });
   }
 
   /**
-   * Dialog flags that are NOT tied to an open repository.
+   * The conflict dialog's snapshotted inputs, or null while it is shut.
    *
-   * The criterion is where the dialog RENDERS. The sweep exists because a
-   * dialog inside the `${this.activeRepository ? ...}` block has its ELEMENT
-   * destroyed while its flag stays true, so it springs back open over the next
-   * repository. A dialog rendered outside that block is never destroyed and has
-   * no such problem: clearing its flag just kills a session the user started,
-   * and skips the `@close` binding that unwinds its navigation state
-   * (`integrationContext`, `manageAccountsReturnProvider`).
-   *
-   * Every flag below is reachable with zero repositories open — the welcome
-   * screen offers the profile manager, and the palette's SSH, profiles and
-   * provider entries are deliberately not wrapped in `requiresRepository`.
+   * Read through the store rather than a field of its own: the snapshot IS the
+   * dialog's open-time context, so it is created and dropped by the same
+   * `dialogs.open('conflict', …)` / `dialogs.close('conflict')` calls and
+   * cannot drift out of step with the flag the way two fields could.
    */
-  private static readonly REPO_INDEPENDENT_DIALOGS = new Set([
-    'showSettings',
-    'showShortcuts',
-    'showOutputPanel',
-    'showCommandPalette',
-    'showWorkspaceManager',
-    'showSsh',
-    'showProfileManager',
-    // Fires from checkUnifiedProfilesMigration on startup, before any repo.
-    'showMigrationDialog',
-    // Account connection is repo-independent; only the PR/issue/pipeline tabs
-    // inside these dialogs guard themselves on a repository.
-    'showGitHub',
-    'showGitLab',
-    'showBitbucket',
-    'showAzureDevOps',
-    'showOidc',
-  ]);
-
-  /**
-   * Clear every repo-scoped `show*` flag. See the call site for why this is an
-   * exclusion list: an inclusion list has gone stale here more than once.
-   */
-  private closeRepoScopedDialogs(): void {
-    // Enumerated from Lit's own reactive-property map, NOT Object.keys: an
-    // @state() field is an accessor on the prototype backed by a private slot,
-    // so it never appears as an own enumerable key.
-    const self = this as unknown as Record<string, unknown>;
-    const declared = (this.constructor as unknown as {
-      elementProperties: Map<PropertyKey, unknown>;
-    }).elementProperties;
-    for (const key of declared.keys()) {
-      if (typeof key !== 'string') continue;
-      if (!/^show[A-Z]/.test(key)) continue;
-      if (AppShell.REPO_INDEPENDENT_DIALOGS.has(key)) continue;
-      if (self[key] === true) self[key] = false;
-    }
+  private get conflictDialogConfig(): ConflictDialogContext | null {
+    return dialogs.context('conflict');
   }
 
   private closeConflictDialog(): void {
-    this.showConflictDialog = false;
-    this.conflictDialogConfig = null;
+    dialogs.close('conflict');
+  }
+
+  /** The file the history pane is showing, or null while it is shut. */
+  private get fileHistoryPath(): string | null {
+    return dialogs.context('fileHistory')?.filePath ?? null;
+  }
+
+  /** Which mode the search dialog opened in. */
+  private get searchDialogMode(): SearchDialogMode {
+    return dialogs.context('search')?.mode ?? 'files';
+  }
+
+  /** Which view the Profile Manager should open to. */
+  private get profileManagerView(): '' | 'accounts' {
+    return dialogs.context('profileManager')?.initialView ?? '';
   }
 
   // Reset the conflict-dialog completion semantics to defaults so a value set by a
@@ -1515,28 +1637,43 @@ export class AppShell extends LitElement {
       this.refOpsVersion++;
     });
 
+    // A freshly mounted shell shows nothing, exactly as it did when every
+    // dialog was a `@state()` flag initialised to false on the instance. The
+    // store is module state and outlives an instance, so it is cleared here
+    // rather than inherited from whatever the previous shell left open.
+    dialogs.reset();
+    this.unsubscribeDialogs = dialogStore.subscribe(() => {
+      this.dialogVersion++;
+    });
+
     this.unsubscribe = repositoryStore.subscribe((state) => {
       const newActiveRepo = state.getActiveRepository();
       const repoChanged = this.activeRepository?.repository.path !== newActiveRepo?.repository.path;
       this.activeRepository = newActiveRepo;
 
-      // Every repo-scoped dialog flag must die with the last repository.
-      //
+      // Repository-scoped menu items must be greyed out the moment the last
+      // tab closes, and live again the moment one opens.
+      this.syncAppMenuState(state.openRepositories.length > 0);
+
+      // Every repo-scoped dialog must die with the last repository.      //
       // These dialogs render inside the `${this.activeRepository ? ...}` block,
-      // so closing the last tab destroys the ELEMENT while its `show*` flag
-      // stays true. Open the next repository and the element is reconstructed
-      // with ?open=true — a full-screen overlay springing up unbidden over a
-      // repo the user just opened, freshly constructed with every button
+      // so closing the last tab destroys the ELEMENT while its open flag stays
+      // set. Open the next repository and the element is reconstructed with
+      // ?open=true — a full-screen overlay springing up unbidden over a repo
+      // the user just opened, freshly constructed with every button
       // re-enabled. lv-repository-health-dialog carries that exact story, and
       // lv-bisect-dialog then reproduced it because it has no pinned path and
       // so was in neither hand-written sweep.
       //
-      // Written as an EXCLUSION list, not an inclusion one. A list of dialogs
-      // to close goes stale every time one is added — which is how this keeps
-      // recurring — whereas the handful that are genuinely not repo-scoped is
-      // stable, and a new dialog defaults to the safe behaviour.
+      // This used to reflect over Lit's reactive-property map and match field
+      // names against /^show[A-Z]/, minus a hand-kept exclusion list, because
+      // nothing enumerated the dialogs. DIALOG_REGISTRY does, so it is now a
+      // plain loop over the dialogs declared `repoScoped` — and repo-scoping is
+      // a property of the dialog rather than of how its field was named. The
+      // default is still the safe one: a newly declared dialog is repo-scoped
+      // unless it says otherwise.
       if (state.openRepositories.length === 0) {
-        this.closeRepoScopedDialogs();
+        dialogs.closeRepoScoped();
       }
 
       // Closing the pinned repo's TAB while its conflict dialog is up
@@ -1546,7 +1683,7 @@ export class AppShell extends LitElement {
       // explanation — the operation itself persists on disk and resurfaces
       // when the repo is reopened.
       if (
-        this.showConflictDialog &&
+        dialogs.isOpen('conflict') &&
         this.conflictDialogConfig &&
         !state.openRepositories.some(
           (r) => r.repository.path === this.conflictDialogConfig!.repoPath,
@@ -1602,7 +1739,7 @@ export class AppShell extends LitElement {
           'lv-clean-dialog': {
             dismissed: 'clean cancelled',
             running: 'clean',
-            clearFlag: () => { this.showClean = false; },
+            clearFlag: () => { dialogs.close('clean'); },
           },
           // No clearFlag: this dialog owns its own open state via open()/close(),
           // like lv-create-branch-dialog.
@@ -1613,7 +1750,7 @@ export class AppShell extends LitElement {
           'lv-reflog-dialog': {
             dismissed: 'undo history closed',
             running: 'reset',
-            clearFlag: () => { this.showReflog = false; },
+            clearFlag: () => { dialogs.close('reflog'); },
           },
           // Read-only: it never reports work in flight, so the sweep always
           // takes the dismissal branch here.
@@ -1628,60 +1765,60 @@ export class AppShell extends LitElement {
           'lv-search-dialog': {
             dismissed: 'search closed',
             running: 'search',
-            clearFlag: () => { this.showSearchDialog = false; },
+            clearFlag: () => { dialogs.close('search'); },
           },
           'lv-remote-dialog': {
             dismissed: 'remote management closed',
             running: 'remote update',
-            clearFlag: () => { this.showRemotes = false; },
+            clearFlag: () => { dialogs.close('remotes'); },
           },
           // Closing this one DESTROYS the element (its render block is gated on
-          // showRepositoryHealth), so it implements closeWhenIdle() and the
+          // the repositoryHealth dialog), so it implements closeWhenIdle() and the
           // sweep hands the close over rather than orphaning a running gc.
           'lv-repository-health-dialog': {
             dismissed: 'repository health closed',
             running: 'maintenance operation',
-            clearFlag: () => { this.showRepositoryHealth = false; },
+            clearFlag: () => { dialogs.close('repositoryHealth'); },
           },
           'lv-worktree-dialog': {
             dismissed: 'worktrees closed',
             running: 'worktree removal',
-            clearFlag: () => { this.showWorktrees = false; },
+            clearFlag: () => { dialogs.close('worktrees'); },
           },
           'lv-submodule-dialog': {
             dismissed: 'submodules closed',
             running: 'submodule removal',
-            clearFlag: () => { this.showSubmodules = false; },
+            clearFlag: () => { dialogs.close('submodules'); },
           },
           'lv-lfs-dialog': {
             dismissed: 'Git LFS closed',
             running: 'LFS prune',
-            clearFlag: () => { this.showLfs = false; },
+            clearFlag: () => { dialogs.close('lfs'); },
           },
           'lv-gpg-dialog': {
             dismissed: 'signing settings closed',
             running: 'signing update',
-            clearFlag: () => { this.showGpg = false; },
+            clearFlag: () => { dialogs.close('gpg'); },
           },
           'lv-config-dialog': {
             dismissed: 'configuration closed',
             running: 'configuration save',
-            clearFlag: () => { this.showConfig = false; },
+            clearFlag: () => { dialogs.close('config'); },
           },
           'lv-credentials-dialog': {
             dismissed: 'credentials closed',
             running: 'credential test',
-            clearFlag: () => { this.showCredentials = false; },
+            clearFlag: () => { dialogs.close('credentials'); },
           },
           'lv-hooks-dialog': {
             dismissed: 'hooks closed',
             running: 'hook save',
-            clearFlag: () => { this.showHooksDialog = false; },
+            clearFlag: () => { dialogs.close('hooks'); },
           },
           'lv-gitignore-dialog': {
             dismissed: 'ignore rules closed',
             running: 'ignore rule update',
-            clearFlag: () => { this.showGitignoreDialog = false; },
+            clearFlag: () => { dialogs.close('gitignore'); },
           },
           'lv-changelog-dialog': {
             dismissed: 'changelog closed',
@@ -1716,7 +1853,7 @@ export class AppShell extends LitElement {
           // that file the typed text goes with the pane, so say so.
           this.warnIfDiscardingEdits();
           this.diffFile = null;
-          this.showDiff = false;
+          dialogs.close('diff');
         }
       }
 
@@ -1727,6 +1864,8 @@ export class AppShell extends LitElement {
       for (const path of openPaths) {
         if (!this.watchedRepoPaths.has(path)) {
           watcherService.startWatching(path).catch((err) => {
+            // watcher.service already warns the user that auto-refresh is
+            // unavailable (with the actionable cause); don't toast twice
             log.warn('Failed to start file watcher:', err);
           });
           const autoFetchInterval = settingsStore.getState().autoFetchInterval;
@@ -1749,27 +1888,32 @@ export class AppShell extends LitElement {
       // Clear view state when switching repositories
       if (repoChanged) {
         this.commandPaletteRequestId++;
-        this.showCommandPalette = false;
+        dialogs.close('commandPalette');
         this.commandPaletteRepositoryPath = null;
+        this.commandPaletteQuery = '';
         this.paletteBranches = [];
         this.paletteTrackedFiles = [];
         // Clear selected commit and refs
         this.selectedCommit = null;
         this.selectedCommitRefs = [];
+        // The graph clears its own selection on a repository switch without
+        // announcing it (there is no commit to announce), so the multi-select
+        // list has to be dropped here or the next repo's commit menu would
+        // offer batch actions over the previous repo's commits.
+        this.selectedCommits = [];
 
         // Same gesture-owned teardown as handleCloseDiff: the tab switch
         // unmounts the editor along with the pane.
         this.warnIfDiscardingEdits();
 
         // Close any open overlays
-        this.showDiff = false;
+        dialogs.close('diff');
         this.diffFile = null;
         this.diffCommitFile = null;
-        this.showBlame = false;
+        dialogs.close('blame');
         this.blameFile = null;
         this.blameCommitOid = null;
-        this.showFileHistory = false;
-        this.fileHistoryPath = null;
+        dialogs.close('fileHistory');
 
         // Graph context-menu entries are scoped to the repository that
         // produced their commit/ref. Leaving either menu open across a tab
@@ -1790,8 +1934,10 @@ export class AppShell extends LitElement {
             // Indexes build lazily on first activation of a tab
             this.ensureRepoIndexes(newActiveRepo.repository.path);
           }
-          // Load remotes if not already loaded
-          if (!newActiveRepo.remotes || newActiveRepo.remotes.length === 0) {
+          // Load remotes if they have never been read for this tab (the store
+          // seeds an empty list), or if the last read found none — a remote
+          // may have been added from outside the app since.
+          if (!newActiveRepo.remotesLoaded || newActiveRepo.remotes.length === 0) {
             this.loadRepositoryRemotes(newActiveRepo.repository.path);
           }
           // If this repo changed while it was a background tab, its store
@@ -1813,9 +1959,11 @@ export class AppShell extends LitElement {
     document.addEventListener('click', this.handleDocumentClick);
     document.addEventListener('contextmenu', this.handleContextMenu);
     window.addEventListener('repository-refresh', this.handleWindowRefresh);
+    window.addEventListener('remote-operation-refresh', this.handleRemoteOperationRefresh);
     window.addEventListener('trigger-pull', this.handleTriggerPull);
     window.addEventListener('force-delete-branch', this.handleForceDeleteBranch as EventListener);
     window.addEventListener('open-settings', this.handleOpenSettings);
+    window.addEventListener('open-git-config', this.handleOpenGitConfig);
     window.addEventListener('trigger-abort', this.handleTriggerAbort);
     window.addEventListener('force-push', this.handleForcePush);
     window.addEventListener('force-push-tag', this.handleForcePushTag);
@@ -1830,12 +1978,21 @@ export class AppShell extends LitElement {
     this.addEventListener('rebase-complete', this.handleRebaseComplete);
     this.addEventListener('show-commit', this.handleShowCommitEvent);
     window.addEventListener('settings-changed', this.handleSettingsChanged);
+    window.addEventListener(REPOSITORY_SCAN_OFFER_EVENT, this.handleRepositoryScanOffer);
+    window.addEventListener(REPOSITORY_SCAN_RESOLVED_EVENT, this.handleRepositoryScanResolved);
+    // OS folder drops open repositories from anywhere in the app, not just
+    // the welcome screen.
+    void this.setupWindowDropListener();
 
     // Load vim mode from keyboard service
     this.vimMode = keyboardService.isVimMode();
 
     // Set up remote operation event listeners (for auto-fetch notifications)
     gitService.setupRemoteOperationListeners();
+
+    // Record the backend's real `git` invocations (interactive rebase, force
+    // push, difftool, LFS, …) into the Output panel's log.
+    void startGitCommandLogging();
 
     // Load profiles
     gitService.loadProfiles();
@@ -1916,12 +2073,12 @@ export class AppShell extends LitElement {
       commit: () => {/* handled by commit panel */},
       refresh: () => this.handleRefresh(),
       search: () => this.handleToggleSearch(),
-      openSettings: () => { this.showSettings = true; },
-      openShortcuts: () => { this.showShortcuts = true; },
+      openSettings: () => { dialogs.open('settings'); },
+      openShortcuts: () => { dialogs.open('shortcuts'); },
       toggleLeftPanel: () => this.toggleLeftPanel(),
       toggleRightPanel: () => uiStore.getState().togglePanel('right'),
       openCommandPalette: () => this.openCommandPalette(),
-      openReflog: this.requiresRepository(() => { this.showReflog = true; }),
+      openReflog: this.requiresRepository(() => { dialogs.open('reflog'); }),
       // Wrapped like the palette entries: pressing Ctrl+Shift+F on the welcome
       // screen used to do nothing at all while the same command from the
       // palette explained that a repository is needed.
@@ -1936,6 +2093,10 @@ export class AppShell extends LitElement {
       selectTab: (index) => repositoryStore.getState().setActiveIndex(index),
     });
 
+    // Wire the native application menu. AFTER registerDefaultShortcuts, so the
+    // accelerators pushed to the menu are the bindings that actually exist.
+    void this.setupAppMenu();
+
     // Subscribe to progress updates
     this.progressUnsubscribe = progressService.subscribe((operations) => {
       this.progressOperations = operations;
@@ -1946,8 +2107,11 @@ export class AppShell extends LitElement {
   // Verified: every addEventListener has a corresponding removeEventListener below.
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    stopGitCommandLogging();
     this.unsubscribeRefOps?.();
     this.unsubscribeRefOps = undefined;
+    this.unsubscribeDialogs?.();
+    this.unsubscribeDialogs = undefined;
     this.unsubscribe?.();
     this.unsubscribeUi?.();
     this.unsubscribeWatcher?.();
@@ -1958,6 +2122,10 @@ export class AppShell extends LitElement {
       clearTimeout(timer);
     }
     this.badgeHydrationTimers.clear();
+    for (const timer of this.remotesReloadTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.remotesReloadTimers.clear();
     // Tear down per-repo backend services so a remount (hot reload, tests)
     // doesn't leave orphaned watchers, auto-fetch tasks, commit indexes, or
     // in-flight embedding builds running. Uses the exact same teardown as
@@ -1967,15 +2135,19 @@ export class AppShell extends LitElement {
     }
     this.watchedRepoPaths.clear();
     this.staleRepoPaths.clear();
+    this.cancelPendingResizeFrame();
+    this.resizePendingClientX = null;
     document.removeEventListener('mousemove', this.boundHandleMouseMove);
     document.removeEventListener('mouseup', this.boundHandleMouseUp);
     document.removeEventListener('keydown', this.boundHandleKeyDown);
     document.removeEventListener('click', this.handleDocumentClick);
     document.removeEventListener('contextmenu', this.handleContextMenu);
     window.removeEventListener('repository-refresh', this.handleWindowRefresh);
+    window.removeEventListener('remote-operation-refresh', this.handleRemoteOperationRefresh);
     window.removeEventListener('trigger-pull', this.handleTriggerPull);
     window.removeEventListener('force-delete-branch', this.handleForceDeleteBranch as EventListener);
     window.removeEventListener('open-settings', this.handleOpenSettings);
+    window.removeEventListener('open-git-config', this.handleOpenGitConfig);
     window.removeEventListener('trigger-abort', this.handleTriggerAbort);
     window.removeEventListener('force-push', this.handleForcePush);
     window.removeEventListener('force-push-tag', this.handleForcePushTag);
@@ -1986,6 +2158,10 @@ export class AppShell extends LitElement {
     this.removeEventListener('rebase-complete', this.handleRebaseComplete);
     this.removeEventListener('show-commit', this.handleShowCommitEvent);
     window.removeEventListener('settings-changed', this.handleSettingsChanged);
+    window.removeEventListener(REPOSITORY_SCAN_OFFER_EVENT, this.handleRepositoryScanOffer);
+    window.removeEventListener(REPOSITORY_SCAN_RESOLVED_EVENT, this.handleRepositoryScanResolved);
+    this.dropUnlisten?.();
+    this.dropUnlisten = undefined;
     gitService.cleanupRemoteOperationListeners();
     // Clean up auto-fetch
     this.autoFetchUnsubscribe?.();
@@ -1994,11 +2170,20 @@ export class AppShell extends LitElement {
     }
     // Stop periodic token validation
     unifiedProfileService.stopPeriodicTokenValidation();
-    // Clean up update listeners
-    this.updateUnlisteners.forEach((unlisten) => unlisten());
+    // Clean up update listeners. The update service hands back raw Tauri
+    // unlisten closures, which reject where there is no event bridge — and a
+    // teardown has no one to hand that rejection to.
+    this.updateUnlisteners.forEach((unlisten) => safeUnlisten(unlisten));
     this.updateUnlisteners = [];
     // Unsubscribe from progress service
     this.progressUnsubscribe?.();
+    // Tear down the native menu wiring (its Tauri listener rides in
+    // updateUnlisteners, torn down just above)
+    this.appMenuWatchDispose?.();
+    this.appMenuWatchDispose = undefined;
+    this.appMenuShortcutUnsubscribe?.();
+    this.appMenuShortcutUnsubscribe = undefined;
+    this.appMenuHasRepository = undefined;
   }
 
   private async checkUnifiedProfilesMigration(): Promise<void> {
@@ -2011,7 +2196,7 @@ export class AppShell extends LitElement {
       if (needsMigration) {
         // Show migration dialog after a short delay to let the UI settle
         setTimeout(() => {
-          this.showMigrationDialog = true;
+          dialogs.open('migration');
         }, 500);
       }
     } catch (error) {
@@ -2179,7 +2364,7 @@ export class AppShell extends LitElement {
    * Hiding the left panel is refused while it hosts an open dialog — see
    * hasSidebarDialogOpen. Revealing it is always allowed.
    */
-  private toggleLeftPanel(): void {
+  toggleLeftPanel(): void {
     if (this.leftPanelVisible && this.hasSidebarDialogOpen()) {
       showToast('Close the open dialog before hiding the sidebar', 'info');
       return;
@@ -2200,7 +2385,7 @@ export class AppShell extends LitElement {
       if (modal) (modal as HTMLElement & { open: boolean }).open = true;
       return;
     }
-    this.showRepositoryHealth = false;
+    dialogs.close('repositoryHealth');
   };
 
   private handleCloseOverlay(): void {
@@ -2209,7 +2394,7 @@ export class AppShell extends LitElement {
       // A modal owns this Escape and dismisses itself, through lv-modal's
       // handler or its own — each now gated on being the TOPMOST overlay.
       //
-      // This arm is FIRST. The showShortcuts and showCommandPalette arms used
+      // This arm is FIRST. The shortcuts and command-palette arms used
       // to precede it and closed unconditionally, without consulting the
       // stack: opening the undo-history dialog over the shortcuts dialog and
       // pressing Escape once closed BOTH. Both dialogs clear their own flag
@@ -2219,20 +2404,20 @@ export class AppShell extends LitElement {
       // so a dialog that deliberately blocks dismissal mid-operation does not
       // leak the key either.
       //
-      // This subsumes the old showReflog arm, which assumed reflog was always
+      // This subsumes the old reflog arm, which assumed reflog was always
       // topmost: a dialog opened over it (via the palette) made Escape discard
       // the reflog session underneath. The dialog's own handler applies the
-      // isResetting guard and its `close` event clears showReflog.
+      // isResetting guard and its `close` event closes the reflog dialog.
       return;
     } else if (this.contextMenu.visible) {
       this.contextMenu = { ...this.contextMenu, visible: false };
     } else if (this.refContextMenu.visible) {
       this.refContextMenu = { ...this.refContextMenu, visible: false };
-    } else if (this.showDiff) {
+    } else if (dialogs.isOpen('diff')) {
       this.handleCloseDiff();
-    } else if (this.showBlame) {
+    } else if (dialogs.isOpen('blame')) {
       this.handleCloseBlame();
-    } else if (this.showFileHistory) {
+    } else if (dialogs.isOpen('fileHistory')) {
       this.handleCloseFileHistory();
     }
   }
@@ -2386,9 +2571,13 @@ export class AppShell extends LitElement {
     // is an IPC round trip, so a claim taken after it does not serialize two
     // dispatches that both got past the check.
     if (!this.claimRefOperation(repoPath)) return;
+    // Predicted before the confirm and inside the claim — see the sidebar's
+    // handleMergeBranch. Falls back to an unpredicted confirm when the preview
+    // cannot be computed; it must never be the reason a merge is unavailable.
+    const prediction = await mergePreviewSummary(repoPath, refName);
     if (!await showConfirm(
       'Merge Branch',
-      `Merge "${refName}" into the current branch?`,
+      `Merge "${refName}" into the current branch?${prediction}`,
       'info',
     )) {
       this.releaseRefOperation(repoPath);
@@ -2627,6 +2816,189 @@ export class AppShell extends LitElement {
     this.cherryPickDialog?.open(commit);
   }
 
+  /**
+   * The batch actions the commit context menu grows when the right-clicked
+   * commit is part of a multi-selection.
+   *
+   * They sit ABOVE the single-commit items and are separated from them by a
+   * divider and a "Just <oid>" label, so it is never ambiguous which of the
+   * two scopes an entry acts on. Nothing renders for a one-commit selection,
+   * which is why the label below it only appears alongside these.
+   */
+  private renderMultiCommitActions() {
+    const commits = this.menuSelection;
+    if (commits.length < 2) return '';
+    const count = commits.length;
+    const subject = this.contextMenu.commit;
+    const subjectShort = subject ? subject.shortId || subject.oid.substring(0, 7) : '';
+    return html`
+      <div class="context-menu-submenu" data-testid="multi-commit-actions">
+        <span class="context-menu-label" data-testid="multi-commit-count"
+          >${count} commits selected</span
+        >
+        <button
+          class="context-menu-item"
+          data-testid="multi-cherry-pick"
+          ?disabled=${this.isRefOperationInFlight()}
+          @click=${this.handleCherryPickSelection}
+          title="Apply all ${count} selected commits to the current branch, oldest first"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2z" />
+            <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.5" fill="none" />
+          </svg>
+          Cherry-pick ${count} commits
+        </button>
+        <button
+          class="context-menu-item"
+          data-testid="multi-create-patch"
+          @click=${this.handleCreatePatchFromSelection}
+          title="Write one .patch file per selected commit, numbered oldest first"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="12" y1="18" x2="12" y2="12"></line>
+            <line x1="9" y1="15" x2="15" y2="15"></line>
+          </svg>
+          Create patch from ${count} commits
+        </button>
+        ${count === 2
+          ? html`
+              <button
+                class="context-menu-item"
+                data-testid="multi-compare"
+                @click=${this.handleCompareSelection}
+                title="Compare the two selected commits"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="17 1 21 5 17 9"></polyline>
+                  <path d="M3 11V9a4 4 0 014-4h14"></path>
+                  <polyline points="7 23 3 19 7 15"></polyline>
+                  <path d="M21 13v2a4 4 0 01-4 4H3"></path>
+                </svg>
+                Compare these commits
+              </button>
+            `
+          : ''}
+      </div>
+      <div class="context-menu-divider"></div>
+      <span class="context-menu-label" data-testid="single-commit-scope"
+        >Just ${subjectShort}</span
+      >
+    `;
+  }
+
+  /**
+   * Cherry-pick the whole graph multi-selection, oldest first.
+   *
+   * The order is the graph's, never the click order: `git cherry-pick a b c`
+   * replays in the order it is given, and a descendant applied before its
+   * ancestor either conflicts or produces a different tree. The picks run one
+   * at a time through the SAME single-commit command the cherry-pick dialog
+   * uses, so a conflict lands in the existing conflict-resolution dialog
+   * rather than a second mechanism — and stopping there is deliberate: the
+   * commits after it are reported, not silently dropped or force-applied over
+   * a conflicted index.
+   */
+  private handleCherryPickSelection(): Promise<void> {
+    const commits = this.menuSelection;
+    const repoPath = this.activeRepository?.repository.path;
+    if (commits.length < 2 || !repoPath) return Promise.resolve();
+
+    this.contextMenu = { ...this.contextMenu, visible: false };
+    return this.runRefExclusive(repoPath, () => this.cherryPickCommits(repoPath, commits));
+  }
+
+  private async cherryPickCommits(repoPath: string, commits: Commit[]): Promise<void> {
+    const branch = this.activeRepository?.currentBranch?.shorthand ?? 'HEAD';
+
+    // A merge commit needs an explicit mainline parent (`git cherry-pick -m`),
+    // which only the single-commit dialog can ask for. Refuse the whole batch
+    // BEFORE anything is applied rather than dying partway through it.
+    const merge = commits.find((c) => c.parentIds.length > 1);
+    if (merge) {
+      showToast(
+        `${merge.shortId || merge.oid.substring(0, 7)} is a merge commit — cherry-pick it on ` +
+          'its own to choose which parent to keep, then run the rest as a batch',
+        'warning',
+        8000,
+      );
+      return;
+    }
+
+    const confirmed = await showConfirm(
+      `Cherry-pick ${commits.length} commits`,
+      cherryPickConfirmMessage(commits, branch),
+      'warning',
+    );
+    if (!confirmed) return;
+
+    const applied: Commit[] = [];
+    for (const [index, commit] of commits.entries()) {
+      const result = await gitService.cherryPick({ path: repoPath, commitOid: commit.oid });
+      if (result.success) {
+        applied.push(commit);
+        continue;
+      }
+
+      const message = result.error?.message ?? '';
+      const isConflict =
+        result.error?.code === 'CHERRY_PICK_CONFLICT' || message.toLowerCase().includes('conflict');
+      showToast(
+        cherryPickFailureMessage(
+          applied,
+          commits.slice(index),
+          commits.length,
+          message || (isConflict ? 'it conflicts' : 'the cherry-pick failed'),
+        ),
+        'error',
+        12000,
+      );
+      if (isConflict) {
+        this.showCherryPickConflict(repoPath);
+      } else {
+        this.refreshConflictDialogRepo(repoPath);
+      }
+      return;
+    }
+
+    showToast(`Cherry-picked ${applied.length} commits onto ${branch}`, 'success');
+    this.refreshConflictDialogRepo(repoPath);
+  }
+
+  /**
+   * Write patch files for the whole multi-selection (the export dialog's Patch
+   * tab, with every selected commit pre-ticked). Writes no git state, so it is
+   * not gated on the ref lock — same as the single-commit entry beside it.
+   */
+  private handleCreatePatchFromSelection(): void {
+    const commits = this.menuSelection;
+    if (commits.length < 2) return;
+    this.contextMenu = { ...this.contextMenu, visible: false };
+    this.exportImportDialog?.open({
+      tab: 'patch',
+      patchMode: 'create',
+      commitOids: commits.map((c) => c.oid),
+    });
+  }
+
+  /** Compare exactly two selected commits, the ancestor as the base. */
+  private handleCompareSelection(): void {
+    const commits = this.menuSelection;
+    if (commits.length !== 2) return;
+    this.contextMenu = { ...this.contextMenu, visible: false };
+    const [base, compare] = commits;
+    this.compareBranchesDialog?.open({
+      baseRef: base.oid,
+      compareRef: compare.oid,
+      extraRefs: [
+        { ref: base.oid, label: shortCommitLabel(base) },
+        { ref: compare.oid, label: shortCommitLabel(compare) },
+      ],
+    });
+  }
+
   private handleCherryPickComplete(e: CustomEvent): void {
     const { sourceCommit, noCommit, repositoryPath } = e.detail;
     if (noCommit) {
@@ -2652,16 +3024,27 @@ export class AppShell extends LitElement {
 
   private handleCherryPickConflict(e: Event): void {
     const detail = (e as CustomEvent<{ repositoryPath?: string }>).detail;
+    this.showCherryPickConflict(detail?.repositoryPath);
+  }
+
+  /**
+   * The one "a cherry-pick stopped on conflicts" surface, shared by the
+   * cherry-pick dialog's event and the graph's batch pick. Both leave the
+   * repository in the same state, so both must reach the same dialog — a
+   * second mechanism for the batch case would have to re-implement continue,
+   * skip and abort.
+   */
+  private showCherryPickConflict(repositoryPath?: string): void {
     // Show conflict resolution dialog
     this.conflictOperationType = 'cherry-pick';
     this.resetConflictDetailState();
-    this.openConflictDialogPinned(detail?.repositoryPath);
+    this.openConflictDialogPinned(repositoryPath);
     notifyWarning(
       'Cherry-pick Conflict',
       'Conflicts detected during cherry-pick. Please resolve conflicts to continue.',
       !settingsStore.getState().showNativeNotifications
     );
-    this.refreshConflictDialogRepo(detail?.repositoryPath ?? null);
+    this.refreshConflictDialogRepo(repositoryPath ?? null);
   }
 
   private canResolveConflicts(state: string): boolean {
@@ -3076,12 +3459,102 @@ export class AppShell extends LitElement {
   };
 
   private handleOpenSettings = (): void => {
-    this.showSettings = true;
+    dialogs.open('settings');
+  };
+
+  /** Unlisten for the webview's OS drag/drop events. */
+  private dropUnlisten?: UnlistenFn;
+
+  /** Open the scan dialog on a folder the user picked (welcome screen). */
+  private handleOpenRepositoryScan = (e: Event): void => {
+    const detail = (e as CustomEvent<{ path?: string; mode?: 'scan' | 'offer' }>).detail;
+    if (!detail?.path) return;
+    this.repositoryScanPath = detail.path;
+    this.repositoryScanMode = detail.mode ?? 'scan';
+    this.repositoryScanRequest += 1;
+    dialogs.open('repositoryScan');
+  };
+
+  /**
+   * A folder dropped on the window is not a repository: offer to scan it or to
+   * initialize one there. Fired on `window` by the drop service, which has no
+   * component of its own.
+   */
+  private handleRepositoryScanOffer = (e: Event): void => {
+    const detail = (e as CustomEvent<{ path?: string }>).detail;
+    if (!detail?.path) return;
+    this.repositoryScanPath = detail.path;
+    this.repositoryScanMode = 'offer';
+    this.repositoryScanRequest += 1;
+    dialogs.open('repositoryScan');
+  };
+
+  /**
+   * A folder the scan dialog is currently offering to scan or initialize has
+   * just been opened as a repository — the user created or cloned one in it and
+   * dropped it again, which is exactly the flow the re-drop exists for.
+   *
+   * The offer is now false ("This folder is not a Git repository") and its
+   * Initialize action would hand a real repository to `init`, so the dialog
+   * goes. It is closed rather than re-pointed: the drop already produced the
+   * answer the dialog was asking about — a repository tab, plus its
+   * "Opened <name>" toast — and there is nothing left to ask.
+   *
+   * ONLY those screens, which is what `isOfferingInitialize` names. Closing
+   * unconditionally also threw away a list of results and the ticks made on it,
+   * recoverable only by scanning the whole folder again, and aborted a walk the
+   * user was still waiting on.
+   */
+  private handleRepositoryScanResolved = (e: Event): void => {
+    const path = (e as CustomEvent<{ path?: string }>).detail?.path;
+    if (!path || path !== this.repositoryScanPath) return;
+    if (!dialogs.isOpen('repositoryScan')) return;
+    const dialog = this.shadowRoot?.querySelector('lv-scan-repositories-dialog');
+    if (dialog && !dialog.isOfferingInitialize) return;
+    dialogs.close('repositoryScan');
+  };
+
+  /**
+   * Hand a folder to the init dialog. Only one init dialog is mounted at a
+   * time: the welcome screen owns it while no repository is open, the shell
+   * owns it once one is.
+   */
+  private handleInitializeRepositoryRequest = async (e: Event): Promise<void> => {
+    const path = (e as CustomEvent<{ path?: string }>).detail?.path;
+    dialogs.close('repositoryScan');
+    await this.updateComplete;
+    const welcome = this.renderRoot.querySelector('lv-welcome');
+    if (welcome) {
+      welcome.openInitDialog(path);
+      return;
+    }
+    const initDialog = this.renderRoot.querySelector('lv-init-dialog');
+    if (initDialog) {
+      initDialog.open(path);
+      return;
+    }
+    showToast('Could not open the Initialize Repository dialog', 'error');
+  };
+
+  /** Start listening for folders dropped onto the window. */
+  private async setupWindowDropListener(): Promise<void> {
+    this.dropUnlisten = await startRepositoryDropListener((active) => {
+      this.fileDragActive = active;
+    });
+  }
+
+  /**
+   * Open the Git Configuration dialog — where user.name/user.email are set.
+   * Dispatched by the commit panel when there is no identity to sign off with,
+   * so the warning it shows leads somewhere.
+   */
+  private handleOpenGitConfig = (): void => {
+    dialogs.open('config');
   };
 
   // True while any integration dialog is open.
   private get integrationDialogOpen(): boolean {
-    return this.showGitHub || this.showGitLab || this.showBitbucket || this.showAzureDevOps || this.showOidc;
+    return dialogs.isOpen('gitHub') || dialogs.isOpen('gitLab') || dialogs.isOpen('bitbucket') || dialogs.isOpen('azureDevOps') || dialogs.isOpen('oidc');
   }
 
   // True only while a provider/OIDC dialog is open ON TOP of the profile manager
@@ -3120,7 +3593,7 @@ export class AppShell extends LitElement {
    * Clears any return context so the dialog shows no Back arrow and never
    * auto-attaches to a profile.
    */
-  private openIntegrationStandalone(type: IntegrationType): void {
+  openIntegrationStandalone(type: IntegrationType): void {
     this.integrationContext = null;
     this.setIntegrationDialogOpen(type, true);
   }
@@ -3136,13 +3609,75 @@ export class AppShell extends LitElement {
     return this.integrationContext?.attach ? this.integrationContext.profileName : '';
   }
 
+  /**
+   * "Create pull request..." on a branch in the sidebar.
+   *
+   * Routed to the provider dialog that ALREADY owns the create flow rather
+   * than reimplemented: the dialog holds the form, the account selection, the
+   * create call and its own success/error feedback. All this does is open the
+   * right one on its create tab with the branch prefilled as the source.
+   */
+  private handleCreatePullRequest = async (
+    e: CustomEvent<{
+      provider?: PullRequestProviderId;
+      sourceBranch?: string;
+      baseBranch?: string;
+    }>,
+  ): Promise<void> => {
+    const provider = e.detail?.provider;
+    const sourceBranch = e.detail?.sourceBranch;
+    if (!provider || !sourceBranch) return;
+
+    this.openIntegrationStandalone(provider);
+    // The dialogs are always rendered (only their `open` flag changes), but the
+    // very first open still needs this render to land before the element and
+    // its own update cycle are reachable.
+    await this.updateComplete;
+
+    switch (provider) {
+      case 'github': {
+        const dialog = this.githubDialog;
+        if (!dialog) break;
+        await dialog.updateComplete;
+        dialog.startCreatePullRequest(sourceBranch, e.detail?.baseBranch);
+        return;
+      }
+      case 'gitlab': {
+        const dialog = this.gitlabDialog;
+        if (!dialog) break;
+        await dialog.updateComplete;
+        dialog.startCreateMergeRequest(sourceBranch, e.detail?.baseBranch);
+        return;
+      }
+      case 'bitbucket': {
+        const dialog = this.bitbucketDialog;
+        if (!dialog) break;
+        await dialog.updateComplete;
+        dialog.startCreatePullRequest(sourceBranch, e.detail?.baseBranch);
+        return;
+      }
+      case 'azure-devops': {
+        const dialog = this.azureDevOpsDialog;
+        if (!dialog) break;
+        await dialog.updateComplete;
+        dialog.startCreatePullRequest(sourceBranch, e.detail?.baseBranch);
+        return;
+      }
+    }
+
+    // The dialog is open but could not be reached, so the create form was never
+    // prefilled. Say so rather than leaving the user staring at a blank form
+    // wondering which branch it is about.
+    showToast('Could not open the create form. Fill in the branch manually.', 'error');
+  };
+
   private setIntegrationDialogOpen(type: IntegrationType, open: boolean): void {
     switch (type) {
-      case 'github': this.showGitHub = open; break;
-      case 'gitlab': this.showGitLab = open; break;
-      case 'bitbucket': this.showBitbucket = open; break;
-      case 'azure-devops': this.showAzureDevOps = open; break;
-      case 'oidc': this.showOidc = open; break;
+      case 'github': dialogs.setOpen('gitHub', open); break;
+      case 'gitlab': dialogs.setOpen('gitLab', open); break;
+      case 'bitbucket': dialogs.setOpen('bitbucket', open); break;
+      case 'azure-devops': dialogs.setOpen('azureDevOps', open); break;
+      case 'oidc': dialogs.setOpen('oidc', open); break;
     }
   }
 
@@ -3159,6 +3694,13 @@ export class AppShell extends LitElement {
       // The profile manager stayed mounted (demoted) underneath; reveal it and
       // attach the just-connected account per the explicit context.
       void this.profileManagerDialog?.revealAfterConnect(context);
+      return;
+    }
+    // The manager returned the user to this dialog when it closed, deferring
+    // its announcement; the detour they took through the manager is over now.
+    if (this.announceManagerClosedAfterProvider) {
+      this.announceManagerClosedAfterProvider = false;
+      this.announceProfileManagerClosed();
     }
   }
 
@@ -3712,7 +4254,7 @@ export class AppShell extends LitElement {
    * (plus a badge hydration so its tab updates promptly) when it is
    * backgrounded.
    */
-  private refreshConflictDialogRepo(pinnedPath: string | null): void {
+  refreshConflictDialogRepo(pinnedPath: string | null): void {
     if (!pinnedPath || pinnedPath === this.activeRepository?.repository.path) {
       this.handleRefresh();
       return;
@@ -3746,7 +4288,25 @@ export class AppShell extends LitElement {
   private handleResizeMove(e: MouseEvent): void {
     if (!this.resizing) return;
 
-    const delta = e.clientX - this.resizeStartPos;
+    // Only remember where the pointer is; the width is assigned once per
+    // frame below. Writing it here re-rendered the whole shell at
+    // pointer-event rate (well above the display refresh rate) for a value
+    // the user can only ever see once per frame.
+    this.resizePendingClientX = e.clientX;
+    if (this.resizeRafId !== null) return;
+    this.resizeRafId = requestAnimationFrame(() => {
+      this.resizeRafId = null;
+      this.applyPendingResize();
+    });
+  }
+
+  /** Apply the most recent coalesced pointer position to the panel width. */
+  private applyPendingResize(): void {
+    const clientX = this.resizePendingClientX;
+    if (clientX === null || !this.resizing) return;
+    this.resizePendingClientX = null;
+
+    const delta = clientX - this.resizeStartPos;
     if (this.resizing === 'left') {
       const newWidth = Math.max(150, Math.min(400, this.resizeStartValue + delta));
       this.leftPanelWidth = newWidth;
@@ -3757,15 +4317,58 @@ export class AppShell extends LitElement {
   }
 
   private handleResizeEnd(): void {
+    // Flush the last coalesced move BEFORE clearing `resizing` (which
+    // applyPendingResize checks): mouseup usually lands in the same frame as
+    // the final mousemove, and dropping that frame would leave the divider
+    // a few pixels away from where the user released it.
+    this.cancelPendingResizeFrame();
+    this.applyPendingResize();
     this.resizing = null;
     this.classList.remove('resizing', 'resizing-h');
     document.removeEventListener('mousemove', this.boundHandleMouseMove);
     document.removeEventListener('mouseup', this.boundHandleMouseUp);
   }
 
+  private cancelPendingResizeFrame(): void {
+    if (this.resizeRafId !== null) {
+      cancelAnimationFrame(this.resizeRafId);
+      this.resizeRafId = null;
+    }
+  }
+
   private handleCommitSelected(e: CustomEvent<CommitSelectedEvent>): void {
     this.selectedCommit = e.detail.commit;
     this.selectedCommitRefs = e.detail.refs;
+    // A plain click sends a one-commit list, which IS the "selection cleared
+    // back to one" signal — the graph re-announces on every selection change,
+    // including the pruning pass after a reload, so this stays in step with
+    // what the canvas paints without a second source of truth.
+    this.selectedCommits = e.detail.commits.length > 1 ? [...e.detail.commits] : [];
+  }
+
+  /** The graph's loaded commits, newest first — the ordering authority. */
+  private loadedGraphCommits(): Commit[] {
+    return this.graphCanvas?.getLoadedCommits() ?? [];
+  }
+
+  /**
+   * The multi-selection the commit context menu is acting on, ancestor first,
+   * or `[]` when the menu is a single-commit menu.
+   *
+   * Empty unless the right-clicked commit is part of the selection: the graph
+   * collapses the selection onto any commit clicked outside it, so a menu
+   * offering batch actions over a set that no longer contains its own subject
+   * would be acting on something the user cannot see highlighted.
+   */
+  private get menuSelection(): Commit[] {
+    const subject = this.contextMenu.commit;
+    if (!subject || this.selectedCommits.length < 2) return [];
+    if (!this.selectedCommits.some((c) => c.oid === subject.oid)) return [];
+    const ordered = orderCommitsForApply(this.selectedCommits, this.loadedGraphCommits());
+    // The subject has to survive the graph's own list too, or the batch would
+    // run over a set the menu's header does not belong to.
+    if (!ordered.some((c) => c.oid === subject.oid)) return [];
+    return ordered.length > 1 ? ordered : [];
   }
 
   private handleSelectCommit(e: CustomEvent<{ oid: string }>): void {
@@ -3829,6 +4432,29 @@ export class AppShell extends LitElement {
     showToast(`Note ${verb} ${shortOid}`, 'success');
   }
 
+  /**
+   * The graph canvas loaded, cleared or extended its commit set (or its
+   * refs). Re-take the palette/export mirror so those consumers see the new
+   * data without render() having to ask the canvas for it every update.
+   */
+  private handleGraphCommitsChanged(): void {
+    this.syncGraphPaletteData();
+  }
+
+  /**
+   * Copy the graph canvas's loaded commits and tag tips into state.
+   *
+   * All three fields are sampled together so the repository path always
+   * describes the two lists beside it — lv-export-import-dialog uses exactly
+   * that comparison to decide whether the lists belong to the repo it shows.
+   */
+  private syncGraphPaletteData(): void {
+    const canvas = this.graphCanvas;
+    this.graphPaletteCommits = canvas?.getLoadedCommits() ?? [];
+    this.graphPaletteTags = canvas?.getTagTips() ?? [];
+    this.graphPaletteRepositoryPath = canvas?.repositoryPath ?? '';
+  }
+
   private handleGraphNotice(e: CustomEvent<{ message: string; type?: 'info' | 'success' | 'error' }>): void {
     // User-facing notices from the graph canvas (it has no toast of its own)
     showToast(e.detail.message, e.detail.type ?? 'info', 4000);
@@ -3849,7 +4475,7 @@ export class AppShell extends LitElement {
       return;
     }
     // Close blame if open
-    this.showBlame = false;
+    dialogs.close('blame');
     this.blameFile = null;
     this.blameCommitOid = null;
     // Close file history if open. It sits last in the center pane's
@@ -3858,31 +4484,29 @@ export class AppShell extends LitElement {
     // the diff is closed. Unlike the diff a file-history pane opens
     // (`handleFileHistoryViewDiff`), this selection comes from the right
     // panel, not from history, so there is no drill-down to return to.
-    this.showFileHistory = false;
-    this.fileHistoryPath = null;
+    dialogs.close('fileHistory');
     // Working directory file selected - show diff
     this.diffFile = file;
     this.diffFilePartiallyStaged = isPartiallyStaged;
     this.diffCommitFile = null;
-    this.showDiff = true;
+    dialogs.open('diff');
   }
 
   private handleCommitFileSelected(e: CustomEvent<{ commitOid: string; filePath: string }>): void {
     // Close blame if open
-    this.showBlame = false;
+    dialogs.close('blame');
     this.blameFile = null;
     this.blameCommitOid = null;
     // Close file history if open — same reason as handleFileSelected: it
     // would otherwise reappear under the user when this diff is closed.
-    this.showFileHistory = false;
-    this.fileHistoryPath = null;
+    dialogs.close('fileHistory');
     // Commit file selected - show diff
     this.diffCommitFile = {
       commitOid: e.detail.commitOid,
       filePath: e.detail.filePath,
     };
     this.diffFile = null;
-    this.showDiff = true;
+    dialogs.open('diff');
   }
 
   /**
@@ -3890,7 +4514,7 @@ export class AppShell extends LitElement {
    *
    * The editor guards every teardown it can see — Cancel confirms, a file
    * change warns — but the × button, Escape and a repository tab switch are all
-   * owned by app-shell and simply set `showDiff = false`, dropping typed text
+   * owned by app-shell and simply close the diff, dropping typed text
    * with no confirm and no message. Escape is the sharpest case: the editor's
    * own indicator says "Esc to cancel" while the header says "Close diff (Esc)",
    * and which one won depended purely on whether the caret was in the textarea.
@@ -3907,7 +4531,7 @@ export class AppShell extends LitElement {
 
   private handleCloseDiff(): void {
     this.warnIfDiscardingEdits();
-    this.showDiff = false;
+    dialogs.close('diff');
     this.diffFile = null;
     this.diffCommitFile = null;
   }
@@ -3946,11 +4570,11 @@ export class AppShell extends LitElement {
     return '';
   }
 
-  private handleStageAll(): void {
+  handleStageAll(): void {
     void this.dispatchToFileStatus('stage-all');
   }
 
-  private handleUnstageAll(): void {
+  handleUnstageAll(): void {
     void this.dispatchToFileStatus('unstage-all');
   }
 
@@ -4027,7 +4651,7 @@ export class AppShell extends LitElement {
   private refreshInFlight = false;
   private refreshQueued = false;
 
-  private async handleRefresh(): Promise<void> {
+  async handleRefresh(): Promise<void> {
     if (this.refreshInFlight) {
       this.refreshQueued = true;
       return;
@@ -4051,6 +4675,20 @@ export class AppShell extends LitElement {
         } else if (!result.success) {
           showToast(result.error?.message ?? 'Failed to refresh repository', 'error');
         }
+      }
+      // Remotes are repository state a refresh must RE-READ, not a fact loaded
+      // once per tab. The store's `remotes` is what greys out Fetch/Pull/Push
+      // on both surfaces and what the runner refuses on, and its other writers
+      // run on tab activation, on session restore and on the `config-changed`
+      // watcher tick — so adding the first remote in the Remotes dialog (which
+      // asks for exactly this refresh, via `remotes-changed`) left every remote
+      // surface still insisting the repository had none, and removing the last
+      // one left them all bright, ending in git's own "remote 'origin' does
+      // not exist".
+      // Path-keyed and pinned like the rest of this method, so a tab switch
+      // mid-refresh writes the result to the repository it was read from.
+      if (refreshingPath) {
+        await this.loadRepositoryRemotes(refreshingPath);
       }
       // Trigger refresh of the graph
       this.graphCanvas?.refresh?.();
@@ -4085,27 +4723,27 @@ export class AppShell extends LitElement {
   // there (see handleProfileManagerClose), instead of a one-way teleport.
   private handleManageAccounts(e: CustomEvent<{ integrationType?: IntegrationType }>): void {
     const from = e.detail?.integrationType ?? null;
-    this.showGitHub = false;
-    this.showGitLab = false;
-    this.showBitbucket = false;
-    this.showAzureDevOps = false;
-    this.showOidc = false;
+    dialogs.close('gitHub');
+    dialogs.close('gitLab');
+    dialogs.close('bitbucket');
+    dialogs.close('azureDevOps');
+    dialogs.close('oidc');
     // If we're pivoting from a provider dialog that was stacked on top of the manager,
     // preserve the integrationContext so we can restore the stacked state later.
-    if (!this.showProfileManager) {
+    if (!dialogs.isOpen('profileManager')) {
       this.integrationContext = null;
     }
     this.manageAccountsReturnProvider = from;
-    this.profileManagerView = 'accounts';
+    dialogs.setContext('profileManager', { initialView: 'accounts' });
     // If the manager is ALREADY open (the provider dialog was launched FROM it,
     // so it's open & demoted), the `open` property won't transition false→true and
     // the manager's willUpdate/open-transition logic that applies `initialView`
     // never runs — it would reveal on its prior view (select-account/edit). Drive
     // the Accounts view explicitly instead so the click isn't a no-op.
-    if (this.showProfileManager) {
+    if (dialogs.isOpen('profileManager')) {
       this.profileManagerDialog?.showAccountsView(true);
     } else {
-      this.showProfileManager = true;
+      dialogs.open('profileManager');
     }
   }
 
@@ -4117,12 +4755,33 @@ export class AppShell extends LitElement {
   private handleProfileManagerClose(e: CustomEvent<{ fromView?: string }>): void {
     const returnProvider = this.manageAccountsReturnProvider;
     const closedFromAccounts = e.detail?.fromView === 'accounts';
-    this.showProfileManager = false;
-    this.profileManagerView = '';
+    dialogs.close('profileManager');
     this.manageAccountsReturnProvider = null;
     if (returnProvider && closedFromAccounts) {
       this.openIntegrationStandalone(returnProvider);
+      // ONE return at a time. The provider dialog is where the user most
+      // recently came from, so it is where this close takes them; a surface
+      // waiting further back (Clone → manager → provider → "Manage Accounts…"
+      // → manager → close) is told when that provider dialog closes, not now
+      // — announcing now would reopen it stacked under the provider dialog.
+      this.announceManagerClosedAfterProvider = true;
+      return;
     }
+    // No provider return, so any deferred announcement is settled by this one.
+    this.announceManagerClosedAfterProvider = false;
+    this.announceProfileManagerClosed();
+  }
+
+  /**
+   * Announced for surfaces that sent the user to the manager mid-task and owe
+   * them a way back — the clone dialog's account picker reopens on this. It
+   * is deliberately a plain notification rather than a second return target:
+   * whoever is waiting decides for itself whether to come back. Fired once
+   * per trip, when the trip is actually over (the manager closed and did not
+   * hand the user on to a provider dialog, or that provider dialog closed).
+   */
+  private announceProfileManagerClosed(): void {
+    window.dispatchEvent(new CustomEvent('profile-manager-closed'));
   }
 
   private handleRestoreProvider(): void {
@@ -4150,7 +4809,7 @@ export class AppShell extends LitElement {
     }
   }
 
-  private handleToggleSearch(): void {
+  handleToggleSearch(): void {
     const toolbar = this.shadowRoot?.querySelector('lv-toolbar');
     if (toolbar) {
       (toolbar as HTMLElement).dispatchEvent(new CustomEvent('focus-search'));
@@ -4158,16 +4817,16 @@ export class AppShell extends LitElement {
   }
 
   private handleCloseSettings(): void {
-    this.showSettings = false;
+    dialogs.close('settings');
   }
 
   private handleBlameCommitClick(e: CustomEvent<{ oid: string }>): void {
-    this.showBlame = false;
+    dialogs.close('blame');
     this.revealCommitInGraph(e.detail.oid);
   }
 
   private handleCloseBlame(): void {
-    this.showBlame = false;
+    dialogs.close('blame');
     this.blameFile = null;
     this.blameCommitOid = null;
   }
@@ -4177,18 +4836,17 @@ export class AppShell extends LitElement {
     // inline editor with it — same teardown as the × and a tab switch.
     this.warnIfDiscardingEdits();
     // Close diff if open
-    this.showDiff = false;
+    dialogs.close('diff');
     this.diffFile = null;
     this.diffCommitFile = null;
     // Open blame
     this.blameFile = e.detail.filePath;
     this.blameCommitOid = e.detail.commitOid ?? null;
-    this.showBlame = true;
+    dialogs.open('blame');
   }
 
-  private openSearchDialog(mode: SearchDialogMode): void {
-    this.searchDialogMode = mode;
-    this.showSearchDialog = true;
+  openSearchDialog(mode: SearchDialogMode): void {
+    dialogs.open('search', { mode });
   }
 
   /**
@@ -4224,7 +4882,15 @@ export class AppShell extends LitElement {
     this.searchFilter = e.detail.filter;
   }
 
-  private async openCommandPalette(): Promise<void> {
+  /**
+   * Open the command palette, optionally with the search box pre-filled.
+   *
+   * `initialQuery` is what makes the palette usable as a targeted picker: the
+   * branch entries are labelled "Switch to <branch>", so "Switch to " scores
+   * them 80 (prefix match) and every other command below them. Nothing is
+   * hidden — the user can still clear the box and reach the whole list.
+   */
+  private async openCommandPalette(initialQuery = ''): Promise<void> {
     const requestId = ++this.commandPaletteRequestId;
     // Fetch branches and tracked files for quick switching
     if (this.activeRepository) {
@@ -4265,8 +4931,13 @@ export class AppShell extends LitElement {
       this.commandPaletteRepositoryPath = null;
     }
     if (requestId !== this.commandPaletteRequestId) return;
-    this.showCommandPalette = true;
-  }
+    // Belt and braces on top of the graph-commits-changed subscription: the
+    // mirror is re-taken here so the palette can never open on a list the
+    // canvas has since moved past (a missed event, or a canvas that was
+    // mounted after the last one fired).
+    this.syncGraphPaletteData();
+    this.commandPaletteQuery = initialQuery;
+    dialogs.open('commandPalette');  }
 
   /**
    * Dismissal must also supersede an in-flight load. Ctrl+P stays live while
@@ -4278,10 +4949,10 @@ export class AppShell extends LitElement {
    */
   private handleCommandPaletteClose(): void {
     this.commandPaletteRequestId++;
-    this.showCommandPalette = false;
+    dialogs.close('commandPalette');
   }
 
-  private requiresRepository(action: () => void): () => void {
+  requiresRepository(action: () => void): () => void {
     return () => {
       if (!this.activeRepository) {
         uiStore.getState().addToast({
@@ -4295,523 +4966,166 @@ export class AppShell extends LitElement {
     };
   }
 
-  private getPaletteCommands(): PaletteCommand[] {
-    const isMac = navigator.platform.includes('Mac');
-    const mod = isMac ? '⌘' : 'Ctrl';
+  /**
+   * Wire the native application menu bar (built in `src-tauri/src/menu.rs`).
+   *
+   * The menu never implements an action of its own: an item's id arrives here
+   * and is resolved - through `app-menu.service` - to the very function its
+   * command-palette twin runs.
+   */
+  private async setupAppMenu(): Promise<void> {
+    // Watch key presses so a menu action triggered by its own accelerator is
+    // not run twice on platforms where the webview sees the key press too.
+    this.appMenuWatchDispose = startAcceleratorWatch();
 
-    const commands: PaletteCommand[] = [
-      {
-        id: 'fetch',
-        label: 'Fetch from remote',
-        category: 'action',
-        icon: 'fetch',
-        action: this.requiresRepository(() => this.handleFetch()),
-      },
-      {
-        id: 'pull',
-        label: 'Pull from remote',
-        category: 'action',
-        icon: 'pull',
-        action: this.requiresRepository(() => this.handlePull()),
-      },
-      {
-        id: 'push',
-        label: 'Push to remote',
-        category: 'action',
-        icon: 'push',
-        action: this.requiresRepository(() => this.handlePush()),
-      },
-      {
-        id: 'refresh',
-        label: 'Refresh repository',
-        category: 'action',
-        icon: 'refresh',
-        shortcut: `${mod}R`,
-        action: () => this.handleRefresh(),
-      },
-      {
-        id: 'graph-jump-head',
-        label: 'Graph: Jump to HEAD',
-        category: 'navigation',
-        icon: 'commit',
-        action: this.requiresRepository(() => {
-          if (this.graphCanvas?.jumpToHead()) {
-            return;
-          }
-          // Route the miss through the shared reveal helper so the toast
-          // distinguishes loaded-but-filtered from not-loaded
-          const headOid = this.graphCanvas?.getHeadOid();
-          if (headOid !== undefined) {
-            this.revealCommitInGraph(headOid);
-          } else {
-            showToast('HEAD commit is not loaded in the graph', 'info', 4000);
-          }
-        }),
-      },
-      {
-        id: 'toggle-output-panel',
-        label: 'Toggle Output Panel',
-        category: 'action',
-        icon: 'terminal',
-        action: () => { this.showOutputPanel = !this.showOutputPanel; },
-      },
-      {
-        id: 'stash',
-        label: 'Create stash',
-        category: 'action',
-        icon: 'stash',
-        action: this.requiresRepository(() => this.handleCreateStash()),
-      },
-      {
-        id: 'create-branch',
-        label: 'Create branch',
-        category: 'action',
-        icon: 'branch',
-        shortcut: `${mod}⇧N`,
-        action: this.requiresRepository(() => this.createBranchDialog?.open()),
-      },
-      {
-        id: 'create-tag',
-        label: 'Create tag',
-        category: 'action',
-        icon: 'tag',
-        action: this.requiresRepository(() => this.createTagDialog?.open()),
-      },
-      {
-        id: 'export-archive',
-        label: 'Export archive…',
-        category: 'action',
-        icon: 'file',
-        action: this.requiresRepository(() => this.exportImportDialog?.open({ tab: 'archive' })),
-      },
-      {
-        id: 'create-patch',
-        label: 'Create patch from commits…',
-        category: 'action',
-        icon: 'commit',
-        action: this.requiresRepository(() =>
-          this.exportImportDialog?.open({
-            tab: 'patch',
-            patchMode: 'create',
-            commitOid: this.selectedCommit?.oid,
-          }),
-        ),
-      },
-      {
-        id: 'apply-patch',
-        label: 'Apply patch file…',
-        category: 'action',
-        icon: 'commit',
-        action: this.requiresRepository(() =>
-          this.exportImportDialog?.open({ tab: 'patch', patchMode: 'apply' }),
-        ),
-      },
-      {
-        id: 'create-bundle',
-        label: 'Create bundle…',
-        category: 'action',
-        icon: 'file',
-        action: this.requiresRepository(() =>
-          this.exportImportDialog?.open({ tab: 'bundle', bundleMode: 'create' }),
-        ),
-      },
-      {
-        id: 'import-bundle',
-        label: 'Import bundle…',
-        category: 'action',
-        icon: 'file',
-        action: this.requiresRepository(() =>
-          this.exportImportDialog?.open({ tab: 'bundle', bundleMode: 'import' }),
-        ),
-      },
-      {
-        id: 'settings',
-        label: 'Open settings',
-        category: 'action',
-        icon: 'settings',
-        shortcut: `${mod},`,
-        action: () => { this.showSettings = true; },
-      },
-      {
-        id: 'remotes',
-        label: 'Manage remotes',
-        category: 'action',
-        icon: 'globe',
-        action: this.requiresRepository(() => { this.showRemotes = true; }),
-      },
-      {
-        id: 'changelog',
-        label: 'Generate Changelog',
-        category: 'action',
-        icon: 'tag',
-        action: this.requiresRepository(() => {
-          const dialog = this.shadowRoot?.querySelector('lv-changelog-dialog');
-          if (dialog) (dialog as import('./components/dialogs/lv-changelog-dialog.ts').LvChangelogDialog).open();
-        }),
-      },
-      {
-        id: 'smart-undo',
-        label: 'Smart Undo (AI)',
-        category: 'action',
-        icon: 'undo',
-        action: this.requiresRepository(async () => {
-          // Captured BEFORE the prompt/AI/confirm awaits (all yield): the
-          // reflog reset must run on the repo it was invoked on, even if the
-          // user switches tabs while any of those dialogs/calls are pending.
-          const repoPath = this.activeRepository!.repository.path;
-          const query = await showPrompt('Smart Undo (AI)', 'Describe what you want to undo (e.g., "before the rebase", "undo last 3 commits"):');
-          if (!query) return;
+    // Rebinding a shortcut in Settings must re-print it on the menu.
+    this.appMenuShortcutUnsubscribe = keyboardService.addSettingsChangeListener(() => {
+      this.syncAppMenuState(this.hasOpenRepository(), true);
+    });
 
-          const result = await import('./services/ai.service.ts').then(m =>
-            m.findReflogEntry(repoPath, query)
-          );
+    try {
+      const unlisten = await listenToEvent<string>(MENU_ACTION_EVENT, (id) => {
+        this.handleAppMenuAction(id);
+      });
+      this.updateUnlisteners.push(unlisten);
+    } catch (error) {
+      // No Tauri host (unit tests, a browser preview): there is no native menu
+      // to drive, and every action stays reachable from the palette.
+      log.warn('Application menu events are unavailable:', error);
+      return;
+    }
 
-          if (result.success && result.data) {
-            const match = result.data;
-
-            // Resolve the index to a commit BEFORE the confirm. An AI round
-            // trip plus a prompt plus a confirm all elapse between the reflog
-            // being read and the reset firing, and any commit or checkout in
-            // that window renumbers every entry. Pinning the oid means the
-            // reset either lands on the commit named here or is refused.
-            const git = await import('./services/git.service.ts');
-            const reflog = await git.getReflog(repoPath);
-            const target = reflog.success ? reflog.data?.[match.index] : undefined;
-
-            if (!target) {
-              showToast('Could not resolve that reflog entry — try again', 'error');
-              return;
-            }
-
-            const confirmed = await showConfirm(
-              'Smart Undo',
-              `${match.description}\n\nReset to ${target.shortId} (HEAD@{${match.index}})?\n\n` +
-                `This branch will point at ${target.shortId}. Any commit no longer ` +
-                `reachable from it is recoverable only through the reflog. Your ` +
-                `changes remain staged.`,
-              'warning'
-            );
-            if (confirmed) {
-              // The other caller of reset_to_reflog — lv-reflog-dialog — claims
-              // the shared working-tree lock; this palette route to the same
-              // command was missed by that sweep. The expected_oid pin guards
-              // against a STALE index, not against a checkout moving the branch
-              // underneath the reset.
-              // runRefExclusive returns silently when the lock is held, which
-              // suits context-menu items whose buttons carry a ?disabled
-              // binding. This one sits behind a prompt, an AI call and a
-              // confirm, so a silent return reads as "the reset happened".
-              if (!this.claimRefOperation(repoPath)) {
-                this.warnRepositoryBusy();
-                return;
-              }
-              try {
-                const resetResult = await git.resetToReflog(
-                  repoPath,
-                  match.index,
-                  'soft',
-                  target.oid
-                );
-                if (resetResult.success) {
-                  showToast('Undo successful', 'success');
-                  this.refreshConflictDialogRepo(repoPath);
-                } else {
-                  showToast(resetResult.error?.message ?? 'Undo failed', 'error');
-                }
-              } finally {
-                this.releaseRefOperation(repoPath);
-              }
-            }
-          } else {
-            showToast(result.error?.message ?? 'Could not find matching reflog entry', 'error');
-          }
-        }),
-      },
-      {
-        id: 'clean',
-        label: 'Clean working directory',
-        category: 'action',
-        icon: 'trash',
-        action: this.requiresRepository(() => { this.showClean = true; }),
-      },
-      {
-        id: 'branch-cleanup',
-        label: 'Clean up branches',
-        category: 'action',
-        icon: 'git-branch',
-        action: this.requiresRepository(() => { void this.openBranchCleanup(); }),
-      },
-      {
-        id: 'bisect',
-        label: 'Start bisect (find bug)',
-        category: 'action',
-        icon: 'search',
-        action: this.requiresRepository(() => { this.showBisect = true; }),
-      },
-      {
-        id: 'submodules',
-        label: 'Manage submodules',
-        category: 'action',
-        icon: 'folder',
-        action: this.requiresRepository(() => { this.showSubmodules = true; }),
-      },
-      {
-        id: 'worktrees',
-        label: 'Manage worktrees',
-        category: 'action',
-        icon: 'folder',
-        action: this.requiresRepository(() => { this.showWorktrees = true; }),
-      },
-      {
-        id: 'lfs',
-        label: 'Manage Git LFS',
-        category: 'action',
-        icon: 'folder',
-        action: this.requiresRepository(() => { this.showLfs = true; }),
-      },
-      {
-        id: 'gpg',
-        label: 'GPG Signing Settings',
-        category: 'action',
-        icon: 'key',
-        action: this.requiresRepository(() => { this.showGpg = true; }),
-      },
-      {
-        id: 'ssh',
-        label: 'SSH Key Management',
-        category: 'action',
-        icon: 'key',
-        action: () => { this.showSsh = true; },
-      },
-      {
-        id: 'config',
-        label: 'Git Configuration',
-        category: 'action',
-        icon: 'settings',
-        action: this.requiresRepository(() => { this.showConfig = true; }),
-      },
-      {
-        id: 'credentials',
-        label: 'Credential Management',
-        category: 'action',
-        icon: 'key',
-        action: this.requiresRepository(() => { this.showCredentials = true; }),
-      },
-      {
-        id: 'gc',
-        label: 'Run Garbage Collection',
-        category: 'action',
-        icon: 'trash',
-        action: this.requiresRepository(() => this.handleRunGc()),
-      },
-      {
-        id: 'gc-aggressive',
-        label: 'Run Garbage Collection (Aggressive)',
-        category: 'action',
-        icon: 'trash',
-        action: this.requiresRepository(() => this.handleRunGc(true)),
-      },
-      {
-        id: 'fsck',
-        label: 'Check Repository Integrity',
-        category: 'action',
-        icon: 'search',
-        action: this.requiresRepository(() => this.handleRunFsck()),
-      },
-      {
-        id: 'prune',
-        label: 'Prune Unreachable Objects',
-        category: 'action',
-        icon: 'trash',
-        action: this.requiresRepository(() => this.handleRunPrune()),
-      },
-      {
-        id: 'repository-health',
-        label: 'Repository Health & Maintenance',
-        category: 'action',
-        icon: 'activity',
-        action: this.requiresRepository(() => { this.showRepositoryHealth = true; }),
-      },
-      {
-        id: 'github',
-        label: 'GitHub Integration',
-        category: 'action',
-        icon: 'github',
-        // Account connection is repo-independent; only PR/issue/pipeline tabs guard themselves.
-        action: () => this.openIntegrationStandalone('github'),
-      },
-      {
-        id: 'gitlab',
-        label: 'GitLab Integration',
-        category: 'action',
-        icon: 'gitlab',
-        action: () => this.openIntegrationStandalone('gitlab'),
-      },
-      {
-        id: 'bitbucket',
-        label: 'Bitbucket Integration',
-        category: 'action',
-        icon: 'bitbucket',
-        action: () => this.openIntegrationStandalone('bitbucket'),
-      },
-      {
-        id: 'azure-devops',
-        label: 'Azure DevOps Integration',
-        category: 'action',
-        icon: 'azure',
-        action: () => this.openIntegrationStandalone('azure-devops'),
-      },
-      {
-        id: 'oidc',
-        label: 'Enterprise SSO (OIDC) Integration',
-        category: 'action',
-        icon: 'key',
-        action: () => this.openIntegrationStandalone('oidc'),
-      },
-      {
-        id: 'profiles',
-        label: 'Profiles & Accounts',
-        category: 'action',
-        icon: 'user',
-        action: () => { this.showProfileManager = true; },
-      },
-      {
-        id: 'search',
-        label: 'Search commits',
-        category: 'action',
-        icon: 'search',
-        shortcut: `${mod}F`,
-        action: () => this.handleToggleSearch(),
-      },
-      {
-        id: 'search-in-files',
-        label: 'Search in files',
-        category: 'action',
-        icon: 'search',
-        action: this.requiresRepository(() => this.openSearchDialog('files')),
-      },
-      {
-        id: 'search-in-diff',
-        label: 'Search in current diff',
-        category: 'action',
-        icon: 'search',
-        action: this.requiresRepository(() => this.openSearchDialog('diff')),
-      },
-      {
-        id: 'search-commit-content',
-        label: 'Find commits that changed text',
-        category: 'action',
-        icon: 'search',
-        action: this.requiresRepository(() => this.openSearchDialog('commits')),
-      },
-      {
-        id: 'stage-all',
-        label: 'Stage all changes',
-        category: 'action',
-        icon: 'commit',
-        action: this.requiresRepository(() => this.handleStageAll()),
-      },
-      {
-        id: 'unstage-all',
-        label: 'Unstage all changes',
-        category: 'action',
-        icon: 'commit',
-        action: this.requiresRepository(() => this.handleUnstageAll()),
-      },
-      {
-        id: 'toggle-left-panel',
-        label: 'Toggle left panel',
-        category: 'navigation',
-        shortcut: `${mod}B`,
-        action: () => this.toggleLeftPanel(),
-      },
-      {
-        id: 'toggle-right-panel',
-        label: 'Toggle right panel',
-        category: 'navigation',
-        shortcut: `${mod}J`,
-        action: () => uiStore.getState().togglePanel('right'),
-      },
-      {
-        id: 'undo',
-        label: 'Undo (open reflog)',
-        category: 'action',
-        icon: 'refresh',
-        shortcut: `${mod}Z`,
-        action: this.requiresRepository(() => { this.showReflog = true; }),
-      },
-      {
-        id: 'describe',
-        label: 'Describe commit (git describe)',
-        category: 'action',
-        icon: 'tag',
-        action: this.requiresRepository(() => { this.describeDialog?.open(); }),
-      },
-      {
-        id: 'compare-branches',
-        label: 'Compare branches',
-        category: 'action',
-        icon: 'branch',
-        action: this.requiresRepository(() => { this.compareBranchesDialog?.open(); }),
-      },
-      {
-        id: 'workspaces',
-        label: 'Manage workspaces',
-        category: 'action',
-        icon: 'folder',
-        action: () => { this.showWorkspaceManager = true; },
-      },
-      {
-        id: 'hooks',
-        label: 'Manage git hooks',
-        category: 'action',
-        icon: 'terminal',
-        action: this.requiresRepository(() => { this.showHooksDialog = true; }),
-      },
-      {
-        id: 'gitignore',
-        label: 'Edit .gitignore & .gitattributes',
-        category: 'action',
-        icon: 'file',
-        action: this.requiresRepository(() => { this.showGitignoreDialog = true; }),
-      },
-      // The palette acts on the ACTIVE repository; the same three actions are
-      // on the repository tab context menu for any open tab. Failures (no
-      // terminal emulator, a path that has gone away, an editor that cannot be
-      // spawned) are toasted by the shared service with the backend message.
-      {
-        id: 'open-in-terminal',
-        label: 'Open in Terminal',
-        category: 'action',
-        icon: 'terminal',
-        action: this.requiresRepository(() => {
-          void openRepositoryInTerminal(this.activeRepository!.repository.path);
-        }),
-      },
-      {
-        id: 'reveal-in-file-manager',
-        label: 'Reveal in File Manager',
-        category: 'action',
-        icon: 'folder',
-        action: this.requiresRepository(() => {
-          void openRepositoryInFileManager(this.activeRepository!.repository.path);
-        }),
-      },
-      {
-        id: 'open-in-editor',
-        label: 'Open in Editor',
-        category: 'action',
-        icon: 'file',
-        action: this.requiresRepository(() => {
-          void openRepositoryInEditor(this.activeRepository!.repository.path);
-        }),
-      },
-    ];
-
-    return commands;
+    this.syncAppMenuState(this.hasOpenRepository(), true);
   }
 
+  private hasOpenRepository(): boolean {
+    return repositoryStore.getState().openRepositories.length > 0;
+  }
+
+  /**
+   * Push the enabled state and current accelerators to the native menu.
+   *
+   * Repository-scoped items are disabled with no repository open, so they can
+   * never fire into nothing - the palette's "open a repository first" guard
+   * still backs them up for the keyboard route.
+   */
+  private syncAppMenuState(hasRepository: boolean, force = false): void {
+    if (!force && this.appMenuHasRepository === hasRepository) return;
+    this.appMenuHasRepository = hasRepository;
+    void syncAppMenu(hasRepository).then((result) => {
+      if (!result.success) {
+        // A stale menu is not worth interrupting the user for, but it must not
+        // disappear silently either.
+        log.warn('Failed to update the application menu:', result.error?.message);
+      }
+    });
+  }
+
+  /** Run the action a native menu item stands for. */
+  private handleAppMenuAction(id: string): void {
+    if (shouldSuppressMenuAction(id)) return;
+
+    const action = resolveMenuAction(id, this.getPaletteCommands(), this.appMenuShellHandlers());
+    if (!action) {
+      log.warn(`No handler for application menu item "${id}"`);
+      showToast('That menu action is not available', 'error');
+      return;
+    }
+    action();
+  }
+
+  /**
+   * The handful of menu actions with no command-palette entry. Each one calls
+   * the code that already owns the action - the toolbar's own handlers for
+   * open/clone/init, the repository store for closing a tab.
+   */
+  private appMenuShellHandlers(): MenuShellHandlers {
+    return {
+      openRepository: () => this.dispatchToToolbar('open-repository', 'Open Repository'),
+      cloneRepository: () => this.dispatchToToolbar('clone-repository', 'Clone Repository'),
+      initRepository: () => this.dispatchToToolbar('init-repository', 'New Repository'),
+      closeRepositoryTab: this.requiresRepository(() => {
+        repositoryStore.getState().removeRepository(this.activeRepository!.repository.path);
+      }),
+      // The palette lists every branch with its checkout action; opening it is
+      // the branch switcher, rather than a second one built for the menu. It
+      // opens PRE-FILTERED to those entries — a menu item named "Switch Branch…"
+      // that lands on the full command list and leaves the user to type is a
+      // dead end, not a switcher.
+      switchBranch: this.requiresRepository(() => {
+        void this.openCommandPalette(SWITCH_BRANCH_PALETTE_QUERY);
+      }),
+      commandPalette: () => {
+        void this.openCommandPalette();
+      },
+      keyboardShortcuts: () => {
+        dialogs.open('shortcuts');
+      },
+      about: () => {
+        void this.showAboutDialog();
+      },
+    };
+  }
+
+  /**
+   * Hand a menu action to the toolbar, which owns the Open/Clone/Init flows and
+   * their dialogs - the same route handleToggleSearch already uses.
+   */
+  private dispatchToToolbar(eventName: string, label: string): void {
+    const toolbar = this.shadowRoot?.querySelector('lv-toolbar');
+    if (!toolbar) {
+      showToast(`${label} is not available right now`, 'error');
+      return;
+    }
+    toolbar.dispatchEvent(new CustomEvent(eventName));
+  }
+
+  private async showAboutDialog(): Promise<void> {
+    try {
+      const version = await updateService.getAppVersion();
+      await showMessage(
+        'About Gitnado',
+        `Gitnado ${version}\n\nA fully-featured, open-source, cross-platform Git GUI client.`
+      );
+    } catch (error) {
+      log.warn('Failed to show the About dialog:', error);
+      showToast('Could not show application information', 'error');
+    }
+  }
+
+  /**
+   * The palette command table lives in palette-commands.ts — it is a long,
+   * flat list rather than behaviour, and the native menu bar resolves its own
+   * item ids against these entries' `action`s, so the ids and shapes here are
+   * a contract. The members it reaches for are declared by PaletteCommandHost,
+   * which is why they are not private on this class.
+   *
+   * Memoised: render() calls this on every update of a component with ~90
+   * reactive fields, and rebuilding the table handed lv-command-palette a new
+   * array identity each time, making it re-filter its whole list while closed.
+   * Nothing in the table varies with repository or dialog state — every action
+   * reads live state when it RUNS, which is also what lets the native menu
+   * resolve an id to a live action — so the modifier-key label is the entire
+   * cache key.
+   */
+  private getPaletteCommands(): PaletteCommand[] {
+    const mod = navigator.platform.includes('Mac') ? '⌘' : 'Ctrl';
+    if (this.paletteCommandsCache && this.paletteCommandsCacheKey === mod) {
+      return this.paletteCommandsCache;
+    }
+    const commands = buildPaletteCommands(this satisfies PaletteCommandHost);
+    this.paletteCommandsCacheKey = mod;
+    this.paletteCommandsCache = commands;
+    return commands;  }
+
   private async restorePersistedRepositories(): Promise<void> {
+    // "Reopen Last Repositories" off means start on the welcome screen. The
+    // persisted list is deliberately LEFT ALONE — not pruned, not cleared — so
+    // turning the setting back on brings the same tabs (and the same active
+    // one) back. Clearing it here would make the toggle destructive and
+    // one-way.
+    if (!settingsStore.getState().openLastRepository) return;
+
     const persistedRepos = repositoryStore.getState().getPersistedOpenRepos();
     if (persistedRepos.length === 0) return;
 
@@ -4935,6 +5249,10 @@ export class AppShell extends LitElement {
 
     // Send initial tray settings to backend
     emit('update-tray-settings', { minimizeToTray: settings.minimizeToTray });
+    // ...and the security settings the backend enforces for itself. The Rust
+    // side keeps its own copy so the very first operation after launch is
+    // guarded, but this push is what makes it agree with what Settings shows.
+    emitSecuritySettings(settings);
 
     // Subscribe to settings changes to start/stop auto-fetch and update tray.
     // Newly OPENED repos get auto-fetch from the store subscription's
@@ -4983,6 +5301,10 @@ export class AppShell extends LitElement {
       }
       // Update tray settings
       emit('update-tray-settings', { minimizeToTray: state.minimizeToTray });
+      // Offline mode and the allowlist are enforced in Rust as well as here,
+      // so every change has to reach it — the backend has no way to read the
+      // frontend's persisted settings.
+      emitSecuritySettings(state);
     });
   }
 
@@ -5094,6 +5416,11 @@ export class AppShell extends LitElement {
   private async loadRepositoryRemotes(repoPath: string): Promise<void> {
     try {
       const remotesResult = await gitService.getRemotes(repoPath);
+      // Only a successful read is written, so a failed one leaves
+      // `remotesLoaded` false rather than recording "no remotes": the
+      // no-remote rule refuses on a KNOWN absence, and a repository whose
+      // remotes could not be read must keep its buttons and fall back to
+      // git's own error rather than be told it has nowhere to push.
       if (remotesResult.success && remotesResult.data) {
         repositoryStore.getState().updateRepoData(repoPath, { remotes: remotesResult.data });
       }
@@ -5102,180 +5429,59 @@ export class AppShell extends LitElement {
     }
   }
 
-  private async handleFetch(): Promise<void> {
-    if (!this.activeRepository) return;
-    // Coalesced like its pull and push siblings. keyboardService has no
-    // e.repeat guard, so HOLDING Ctrl+Shift+F fires many times a second and
-    // every repeat launched a fully concurrent fetch — each with its own
-    // progress row, and a stacked toast per repeat from the backend's
-    // remote-operation-completed. Fetch must NOT take the working-tree lock
-    // (it touches no working tree), so it gets its own key.
-    const fetchRepo = this.activeRepository.repository.path;
-    const fetchKey = `fetch:${fetchRepo}`;
-    if (!tryAcquirePush(fetchKey)) return;
-    try {
-      await this.fetchRepository();
-    } finally {
-      releasePush(fetchKey);
-    }
+  handleFetch(): Promise<void> {
+    // Pinned before the runner's awaits: a fetch is a slow network op, so if
+    // the user switches tabs while it runs the refresh and any error must name
+    // the repo the fetch ran ON, not whichever tab is active when it returns.
+    const repoPath = this.activeRepository?.repository.path;
+    if (!repoPath) return Promise.resolve();
+    // The lock, the cancellable progress row, the failure reporting and the
+    // refresh all live in remote-operations.service, shared with the context
+    // dashboard's and the toolbar's Fetch/Pull/Push buttons — the only
+    // mouse-reachable routes to these three operations, which used to run
+    // their own divergent copies of all of it. The runner starts the row with
+    // `{cancellable: true}` and hands its id to the backend, so the row's
+    // Cancel button really aborts the transfer whichever surface started it.
+    // The coalescing that matters here is still in force: keyboardService has
+    // no e.repeat guard, so HOLDING Ctrl+Shift+F fires many times a second,
+    // and every repeat used to launch a fully concurrent fetch.
+    //
+    // No has-a-remote check here either, and deliberately: these three
+    // handlers are where the shortcut, the palette and the native menu
+    // converge, and a check written HERE would still leave the dashboard's
+    // direct calls to the runner out. The runner refuses a repository with no
+    // remote itself, with the toolbar's own wording.
+    return runFetch(repoPath);
   }
 
-  private async fetchRepository(): Promise<void> {
-    if (!this.activeRepository) return;
-    const opId = progressService.startOperation('fetch', 'Fetching from remote...', {
-      cancellable: true,
-    });
-    // gitService.fetch returns a CommandResult (invokeCommand never throws), so we
-    // must inspect result.success — a catch-only path always reported success and
-    // the backend emits remote-operation-completed only on success, so failures
-    // were fully silent.
-    // Pinned: fetch is a slow network op; if the user switches tabs while it
-    // runs, the refresh must target the repo that fetched, not the active tab.
-    const repoPath = this.activeRepository.repository.path;
-    // silent: this handler owns the messaging (and the backend's
-    // remote-operation-completed event toasts the success). Without it every
-    // toolbar fetch stacked two toasts, and every failure two errors.
-    const result = await gitService.fetch({ path: repoPath, silent: true, operationId: opId });
-    if (result.success) {
-      progressService.completeOperation(opId);
-      this.refreshConflictDialogRepo(repoPath);
-    } else {
-      progressService.failOperation(opId);
-      // A cancel the user asked for is not a failure — say it took effect
-      // rather than showing them a red error for their own click.
-      if (gitService.isOperationCancelled(result.error)) {
-        showToast('Fetch cancelled', 'info');
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        // A security-gate refusal already announced itself, and a declined
-        // confirm is the user's own decision — reporting either as a red error
-        // tells them their own click failed.
-        showToast(result.error?.message ?? 'Fetch failed', 'error');
-      }
-    }
-  }
-
-  private handlePull(pinnedRepoPath?: string): Promise<void> {
+  handlePull(pinnedRepoPath?: string): Promise<void> {
     // pinnedRepoPath comes from a suggestion toast's Pull Now, which must pull
     // the repo whose push failed even if the user has since switched tabs.
     const repoPath = pinnedRepoPath ?? this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
-    // Three surfaces reach this — Ctrl+Shift+P, the palette, and the Pull Now
-    // toast action — and none guarded against a second call. ensure_pullable
-    // in the backend only refuses when a merge is ALREADY unresolved; two pulls
-    // that both start clean both pass it, and the second calls repo.merge() on
-    // top of the first, which deletes MERGE_HEAD and leaves a conflicted index
-    // that abort_merge then refuses to clean up. Keyboard auto-repeat alone
-    // fires this ~30x a second.
-    //
-    // Held on the SHARED working-tree lock, not a private key: a pull's
-    // fast-forward runs checkout_tree and moves the branch ref, and its merge
-    // and rebase paths rewrite the tree outright. Keying it separately
-    // serialized pull against pull but left every sidebar checkout, discard
-    // and reset fully enabled beside it — the exact split ref-lock.ts exists
-    // to close. Claimed before the network-permission confirm so that round
-    // trip is covered too.
-    return this.runRefExclusive(repoPath, () => this.pullRepository(repoPath));
+    // Claims the SHARED working-tree lock inside the runner, not a private
+    // key: a pull's fast-forward runs checkout_tree and its merge and rebase
+    // paths rewrite the tree outright, so it must exclude every sidebar
+    // checkout, discard and reset — not just other pulls. The runner also owns
+    // the cancellable progress row and the MERGE_CONFLICT/REBASE_CONFLICT
+    // routing into the resolution dialog.
+    return runPull(repoPath);
   }
 
-  private async pullRepository(repoPath: string): Promise<void> {
-    // Cancellable, but only up to the point the merge starts: the backend's
-    // pull aborts during its fetch phase and refuses to begin a merge it
-    // cannot safely stop halfway. See commands/remote.rs::pull_branch.
-    const opId = progressService.startOperation('pull', 'Pulling from remote...', {
-      cancellable: true,
-    });
-    // gitService.pull returns a CommandResult (invokeCommand never throws), so we
-    // must inspect result.success — the old catch-only path always reported success.
-    const result = await gitService.pull({ path: repoPath, silent: true, operationId: opId });
-    if (result.success) {
-      progressService.completeOperation(opId);
-      // Pinned: a ref-only pull emits no working-tree watcher event, so a
-      // pull that completed on a now-backgrounded repo must be refreshed
-      // (or marked stale) by path, not via the active tab.
-      this.refreshConflictDialogRepo(repoPath);
-    } else if (result.error?.code === 'MERGE_CONFLICT') {
-      progressService.failOperation(opId);
-      // Not a failure from the user's side — the pull landed and now needs
-      // resolving. A red "Pull failed" here reads as "nothing happened".
-      showToast('Pull produced conflicts — resolve them to finish the merge', 'warning');
-      this.conflictOperationType = 'merge';
-      this.resetConflictDetailState();
-      this.openConflictDialogPinned(repoPath);
-      this.refreshConflictDialogRepo(repoPath);
-    } else if (result.error?.code === 'REBASE_CONFLICT') {
-      progressService.failOperation(opId);
-      showToast('Pull produced conflicts — resolve them to finish the rebase', 'warning');
-      this.conflictOperationType = 'rebase';
-      this.resetConflictDetailState();
-      this.openConflictDialogPinned(repoPath);
-      this.refreshConflictDialogRepo(repoPath);
-    } else {
-      progressService.failOperation(opId);
-      if (gitService.isOperationCancelled(result.error)) {
-        // Stopped during the fetch, so nothing was merged — the repository is
-        // exactly where a plain Fetch would have left it.
-        showToast('Pull cancelled', 'info');
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        // A security-gate refusal already announced itself, and a declined
-        // confirm is the user's own decision — reporting either as a red error
-        // tells them their own click failed.
-        showToast(result.error?.message ?? 'Pull failed', 'error');
-      }
-    }
-  }
-
-  private handlePush(): Promise<void> {
+  handlePush(): Promise<void> {
     const repoPath = this.activeRepository?.repository.path;
     if (!repoPath) return Promise.resolve();
-    // Keyed like the force-push sibling, which was hardened against exactly
-    // this: the shortcut has no e.repeat guard, so holding Ctrl+Shift+U fires
-    // it many times a second and every repeat launched a fully concurrent
-    // push. Sharing the key also makes Push and Force Push mutually exclusive
-    // on one repo.
-    return this.runPushExclusive(repoPath, () => this.pushRepository());
-  }
-
-  private async pushRepository(): Promise<void> {
-    if (!this.activeRepository) return;
-    const opId = progressService.startOperation('push', 'Pushing to remote...', {
-      cancellable: true,
-    });
-    // gitService.push returns a CommandResult (invokeCommand never throws), so we
-    // must inspect result.success — a catch-only path always reported success and
-    // the backend emits remote-operation-completed only on success, so failures
-    // were fully silent.
-    // Pinned: push is a slow network op; if the user switches tabs while it
-    // runs, the refresh must target the repo that pushed, not the active tab.
-    const repoPath = this.activeRepository.repository.path;
-    const result = await gitService.push({ path: repoPath, silent: true, operationId: opId });
-    if (result.success) {
-      progressService.completeOperation(opId);
-      this.refreshConflictDialogRepo(repoPath);
-    } else {
-      progressService.failOperation(opId);
-      if (gitService.isOperationCancelled(result.error)) {
-        showToast('Push cancelled', 'info');
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        // A security-gate refusal already announced itself, and a declined
-        // confirm is the user's own decision — reporting either as a red error
-        // tells them their own click failed.
-        //
-        // Through the suggestion service so a non-fast-forward rejection offers
-        // the Pull Now action the app already implements — a plain toast made
-        // that recovery unreachable from the only push surface there is.
-        showErrorWithSuggestion(result.error?.message ?? '', 'Push failed', {
-          operation: 'push',
-          repoPath,
-        });
-      }
-    }
+    // The runner claims the same push slot handleForcePush holds across its
+    // confirm, which is what keeps Push and Force Push mutually exclusive on
+    // one repository.
+    return runPush(repoPath);
   }
 
   private handleCancelOperation(e: CustomEvent<{ id: string }>): void {
     progressService.cancelOperation(e.detail.id);
   }
 
-  private handleCreateStash(): Promise<void> {
+  handleCreateStash(): Promise<void> {
     if (!this.activeRepository) return Promise.resolve();
     // Pinned: if the user switches tabs while the stash is being created, the
     // refresh must target the repo that was stashed, not the active tab.
@@ -5329,7 +5535,7 @@ export class AppShell extends LitElement {
     }
   }
 
-  private async handleRunGc(aggressive = false): Promise<void> {
+  async handleRunGc(aggressive = false): Promise<void> {
     if (!this.activeRepository) return;
 
     // Pinned before the confirm await, like every other destructive handler —
@@ -5387,7 +5593,7 @@ export class AppShell extends LitElement {
     }
   }
 
-  private async handleRunFsck(): Promise<void> {
+  async handleRunFsck(): Promise<void> {
     if (!this.activeRepository) return;
 
     const repoPath = this.activeRepository.repository.path;
@@ -5416,7 +5622,7 @@ export class AppShell extends LitElement {
     );
   }
 
-  private async handleRunPrune(): Promise<void> {
+  async handleRunPrune(): Promise<void> {
     if (!this.activeRepository) return;
 
     const repoPath = this.activeRepository.repository.path;
@@ -5511,7 +5717,7 @@ export class AppShell extends LitElement {
     const { repoPath, filePath, lineNumber } = e.detail;
 
     // Close the workspace manager
-    this.showWorkspaceManager = false;
+    dialogs.close('workspaceManager');
 
     try {
       const currentRepoPath = this.activeRepository?.repository.path;
@@ -5530,7 +5736,7 @@ export class AppShell extends LitElement {
       // Show blame view for the file
       this.blameFile = filePath;
       this.blameCommitOid = null;
-      this.showBlame = true;
+      dialogs.open('blame');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to open repository', 'error');
     }
@@ -5541,7 +5747,7 @@ export class AppShell extends LitElement {
    * (below the paginated window or hidden by a branch filter) instead of
    * silently doing nothing. ALL reveal-in-graph flows must go through this.
    */
-  private revealCommitInGraph(oid: string): void {
+  revealCommitInGraph(oid: string): void {
     if (this.graphCanvas?.selectCommit(oid)) {
       return;
     }
@@ -5571,21 +5777,19 @@ export class AppShell extends LitElement {
     // unmounts the inline editor with it, same teardown as the x button.
     this.warnIfDiscardingEdits();
     // Close diff if open
-    this.showDiff = false;
+    dialogs.close('diff');
     this.diffFile = null;
     this.diffCommitFile = null;
     // Close blame if open
-    this.showBlame = false;
+    dialogs.close('blame');
     this.blameFile = null;
     this.blameCommitOid = null;
     // Open file history
-    this.fileHistoryPath = e.detail.filePath;
-    this.showFileHistory = true;
+    dialogs.open('fileHistory', { filePath: e.detail.filePath });
   }
 
   private handleCloseFileHistory(): void {
-    this.showFileHistory = false;
-    this.fileHistoryPath = null;
+    dialogs.close('fileHistory');
   }
 
   private handleFileHistoryCommitSelected(e: CustomEvent<{ commit: Commit }>): void {
@@ -5600,7 +5804,7 @@ export class AppShell extends LitElement {
       commitOid: e.detail.commitOid,
       filePath: e.detail.filePath,
     };
-    this.showDiff = true;
+    dialogs.open('diff');
   }
 
   private handleVimModeChange(e: CustomEvent<{ enabled: boolean }>): void {
@@ -5645,6 +5849,32 @@ export class AppShell extends LitElement {
     `;
   }
 
+  /**
+   * The drag-over affordance for a window that already has a repository open.
+   *
+   * lv-welcome renders its own copy (via `.dragActive`), so this one is only
+   * for the other state — otherwise a drag over the welcome screen would show
+   * two dashed frames. Without it the window silently accepted a drop it gave
+   * no sign of accepting: `startRepositoryDropListener` is bound for the whole
+   * window, and dropping a folder with a repo open really does open it in a
+   * new tab.
+   */
+  private renderWindowDropOverlay() {
+    if (!this.fileDragActive || !this.activeRepository) return nothing;
+    return html`
+      <div class="window-drop-overlay" role="status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <div class="window-drop-overlay-title">Drop a folder to open it</div>
+        <div class="window-drop-overlay-hint">
+          It opens in a new tab. Git repositories open straight away; any other folder can be
+          scanned or initialized.
+        </div>
+      </div>
+    `;
+  }
+
   render() {
     return html`
       <a class="skip-link" href="#main-content" @click=${(e: Event) => {
@@ -5655,9 +5885,11 @@ export class AppShell extends LitElement {
 
       ${this.globalLoading ? html`<div class="global-loading-bar"></div>` : ''}
 
+      ${this.renderWindowDropOverlay()}
+
       <lv-toolbar
-        @open-settings=${() => { this.showSettings = true; }}
-        @open-shortcuts=${() => { this.showShortcuts = true; }}
+        @open-settings=${() => { dialogs.open('settings'); }}
+        @open-shortcuts=${() => { dialogs.open('shortcuts'); }}
         @open-command-palette=${() => {
             // Through openCommandPalette, like Ctrl+P. Setting the flag alone
             // skipped the loader, so the toolbar button opened a palette with
@@ -5668,15 +5900,26 @@ export class AppShell extends LitElement {
             // branch>" — the no-op the palette excludes on purpose.
             void this.openCommandPalette();
           }}
-        @open-profile-manager=${() => { this.showProfileManager = true; }}
-        @open-workspace-manager=${() => { this.showWorkspaceManager = true; }}
+        @open-profile-manager=${() => { dialogs.open('profileManager'); }}
+        @open-workspace-manager=${() => { dialogs.open('workspaceManager'); }}
         @search-change=${this.handleSearchChange}
+        @remote-fetch=${this.requiresRepository(() => {
+            // The toolbar's Fetch/Pull/Push buttons run the SAME handlers the
+            // keyboard shortcuts and the command palette do: the shared locks,
+            // the progress rows, the suggestion-toast recovery and the closing
+            // handleRefresh() all live there and must not be reimplemented per
+            // surface.
+            void this.handleFetch();
+          })}
+        @remote-pull=${this.requiresRepository(() => void this.handlePull())}
+        @remote-push=${this.requiresRepository(() => void this.handlePush())}
+        @manage-accounts=${this.handleManageAccounts}
       ></lv-toolbar>
 
       ${this.activeRepository
         ? html`
             <lv-context-dashboard
-              @open-profile-manager=${() => { this.showProfileManager = true; }}
+              @open-profile-manager=${() => { dialogs.open('profileManager'); }}
               @open-github=${() => this.openIntegrationStandalone('github')}
               @open-gitlab=${() => this.openIntegrationStandalone('gitlab')}
               @open-bitbucket=${() => this.openIntegrationStandalone('bitbucket')}
@@ -5703,6 +5946,11 @@ export class AppShell extends LitElement {
                 }}
                 @compare-branch=${(e: CustomEvent<{ compareRef?: string }>) =>
                   this.compareBranchesDialog?.open(e.detail?.compareRef)}
+                @create-pull-request=${this.handleCreatePullRequest}
+                @open-provider-connection=${(e: CustomEvent<{ provider?: PullRequestProviderId }>) => {
+                  const provider = e.detail?.provider;
+                  if (provider) this.openIntegrationStandalone(provider);
+                }}
               >
                 <lv-left-panel></lv-left-panel>
               </aside>
@@ -5774,7 +6022,7 @@ export class AppShell extends LitElement {
                             ? html`
                                 <button
                                   class="operation-btn operation-btn-primary"
-                                  @click=${() => { this.showBisect = true; }}
+                                  @click=${() => { dialogs.open('bisect'); }}
                                 >
                                   Manage Bisect
                                 </button>
@@ -5794,10 +6042,11 @@ export class AppShell extends LitElement {
                     @checkout-branch=${this.handleCheckoutBranchFromGraph}
                     @copy-sha=${this.handleCopySha}
                     @graph-notice=${this.handleGraphNotice}
+                    @graph-commits-changed=${this.handleGraphCommitsChanged}
                   ></lv-graph-canvas>
                 </div>
 
-                ${this.showDiff
+                ${dialogs.isOpen('diff')
                   ? html`
                       <div class="diff-area">
                         <div class="diff-header">
@@ -5829,7 +6078,7 @@ export class AppShell extends LitElement {
                         </div>
                       </div>
                     `
-                  : this.showBlame && this.blameFile
+                  : dialogs.isOpen('blame') && this.blameFile
                     ? html`
                         <div class="diff-area">
                           <lv-blame-view
@@ -5841,7 +6090,7 @@ export class AppShell extends LitElement {
                           ></lv-blame-view>
                         </div>
                       `
-                    : this.showFileHistory && this.fileHistoryPath
+                    : dialogs.isOpen('fileHistory') && this.fileHistoryPath
                       ? html`
                           <div class="diff-area">
                             <lv-file-history
@@ -5855,13 +6104,13 @@ export class AppShell extends LitElement {
                           </div>
                         `
                       : ''}
-                ${this.showOutputPanel
+                ${dialogs.isOpen('outputPanel')
                   ? html`
                       <div class="output-panel-container">
                         <lv-output-panel
                           closable
                           .repositoryPath=${this.activeRepository.repository.path}
-                          @close=${() => { this.showOutputPanel = false; }}
+                          @close=${() => { dialogs.close('outputPanel'); }}
                         ></lv-output-panel>
                       </div>
                     `
@@ -5889,7 +6138,7 @@ export class AppShell extends LitElement {
                   <lv-right-panel
                     .commit=${this.selectedCommit}
                     .refs=${this.selectedCommitRefs}
-                    @open-settings=${() => { this.showSettings = true; }}
+                    @open-settings=${() => { dialogs.open('settings'); }}
                     @tab-changed=${(e: CustomEvent) => { this.activeRightPanelTab = e.detail?.tab; }}
                   ></lv-right-panel>
                 </aside>
@@ -5902,26 +6151,29 @@ export class AppShell extends LitElement {
             </footer>
           `
         : html`<lv-welcome
-            @open-workspace-manager=${() => { this.showWorkspaceManager = true; }}
-            @open-profile-manager=${() => { this.showProfileManager = true; }}
+            .dragActive=${this.fileDragActive}
+            @open-workspace-manager=${() => { dialogs.open('workspaceManager'); }}
+            @open-profile-manager=${() => { dialogs.open('profileManager'); }}
+            @open-repository-scan=${this.handleOpenRepositoryScan}
+            @manage-accounts=${this.handleManageAccounts}
           ></lv-welcome>`}
 
-      ${this.showSettings
+      ${dialogs.isOpen('settings')
         ? html`
             <lv-modal
               open
-              modalTitle="Settings"
+              modalTitle=${msg('Settings')}
               @close=${this.handleCloseSettings}
             >
               <lv-settings-dialog
                 @close=${this.handleCloseSettings}
-                @open-profile-manager=${() => { this.showProfileManager = true; }}
+                @open-profile-manager=${() => { dialogs.open('profileManager'); }}
               ></lv-settings-dialog>
             </lv-modal>
           `
         : ''}
 
-      ${this.showConflictDialog && this.conflictDialogConfig
+      ${dialogs.isOpen('conflict') && this.conflictDialogConfig
         ? html`
             <lv-conflict-resolution-dialog
               open
@@ -5951,6 +6203,7 @@ export class AppShell extends LitElement {
                 <span class="context-menu-oid">${this.contextMenu.commit.oid.substring(0, 7)}</span>
                 <span class="context-menu-summary">${this.contextMenu.commit.summary}</span>
               </div>
+              ${this.renderMultiCommitActions()}
               <div class="context-menu-divider"></div>
               <button class="context-menu-item" ?disabled=${this.isRefOperationInFlight()} @click=${() => void this.handleQuickAmend()} title="Amend (edit) this commit">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -6197,13 +6450,14 @@ export class AppShell extends LitElement {
         : ''}
 
       <lv-command-palette
-        ?open=${this.showCommandPalette}
+        ?open=${dialogs.isOpen('commandPalette')}
         .repositoryPath=${this.commandPaletteRepositoryPath ?? ''}
+        .initialQuery=${this.commandPaletteQuery}
         .commands=${this.getPaletteCommands()}
         .branches=${this.paletteBranches}
         .files=${this.paletteTrackedFiles}
-        .commits=${this.graphCanvas?.getLoadedCommits() ?? []}
-        .tags=${this.graphCanvas?.getTagTips() ?? []}
+        .commits=${this.graphPaletteCommits}
+        .tags=${this.graphPaletteTags}
         @close=${() => { this.handleCommandPaletteClose(); }}
         @checkout-branch=${this.handleCheckoutBranch}
         @open-file=${this.handleOpenFileFromPalette}
@@ -6212,48 +6466,48 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository ? html`
         <lv-reflog-dialog
-          ?open=${this.showReflog}
+          ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showReflog = false; }}
+          @close=${() => { dialogs.close('reflog'); }}
           @undo-complete=${(e: CustomEvent<{ repositoryPath?: string }>) => {
-            this.showReflog = false;
+            dialogs.close('reflog');
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
-          @show-commit=${(e: CustomEvent<{ oid: string }>) => { this.showReflog = false; this.revealCommitInGraph(e.detail.oid); }}
+          @show-commit=${(e: CustomEvent<{ oid: string }>) => { dialogs.close('reflog'); this.revealCommitInGraph(e.detail.oid); }}
         ></lv-reflog-dialog>
 
         <lv-search-dialog
-          ?open=${this.showSearchDialog}
+          ?open=${dialogs.isOpen('search')}
           .mode=${this.searchDialogMode}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showSearchDialog = false; }}
-          @mode-changed=${(e: CustomEvent<{ mode: SearchDialogMode }>) => { this.searchDialogMode = e.detail.mode; }}
+          @close=${() => { dialogs.close('search'); }}
+          @mode-changed=${(e: CustomEvent<{ mode: SearchDialogMode }>) => { dialogs.setContext('search', { mode: e.detail.mode }); }}
           @show-blame=${this.handleShowBlame}
           @show-working-diff=${this.handleShowWorkingDiff}
         ></lv-search-dialog>
       ` : ''}
 
       <lv-keyboard-shortcuts-dialog
-        ?open=${this.showShortcuts}
+        ?open=${dialogs.isOpen('shortcuts')}
         ?vimMode=${this.vimMode}
-        @close=${() => { this.showShortcuts = false; }}
+        @close=${() => { dialogs.close('shortcuts'); }}
         @vim-mode-change=${this.handleVimModeChange}
       ></lv-keyboard-shortcuts-dialog>
 
       ${this.activeRepository ? html`
         <lv-remote-dialog
-          ?open=${this.showRemotes}
+          ?open=${dialogs.isOpen('remotes')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showRemotes = false; }}
+          @close=${() => { dialogs.close('remotes'); }}
           @remotes-changed=${() => this.handleRefresh()}
         ></lv-remote-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
         <lv-clean-dialog
-          ?open=${this.showClean}
+          ?open=${dialogs.isOpen('clean')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showClean = false; }}
+          @close=${() => { dialogs.close('clean'); }}
           @files-cleaned=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
         ></lv-clean-dialog>
@@ -6265,10 +6519,10 @@ export class AppShell extends LitElement {
         ></lv-changelog-dialog>
       ` : ''}
 
-      ${this.activeRepository && this.showRepositoryHealth ? html`
+      ${this.activeRepository && dialogs.isOpen('repositoryHealth') ? html`
         <lv-modal
           modalTitle="Repository Health"
-          ?open=${this.showRepositoryHealth}
+          ?open=${dialogs.isOpen('repositoryHealth')}
           @close=${this.handleRepositoryHealthClose}
         >
           <lv-repository-health-dialog
@@ -6280,13 +6534,13 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository ? html`
         <lv-bisect-dialog
-          ?open=${this.showBisect}
+          ?open=${dialogs.isOpen('bisect')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showBisect = false; }}
+          @close=${() => { dialogs.close('bisect'); }}
           @bisect-step=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
           @bisect-complete=${(e: CustomEvent<{ repositoryPath?: string }>) => {
-            this.showBisect = false;
+            dialogs.close('bisect');
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
         ></lv-bisect-dialog>
@@ -6294,9 +6548,9 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository ? html`
         <lv-submodule-dialog
-          ?open=${this.showSubmodules}
+          ?open=${dialogs.isOpen('submodules')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showSubmodules = false; }}
+          @close=${() => { dialogs.close('submodules'); }}
           @submodules-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             // Routed to the repo the operation RAN ON. handleRefresh resolves
             // activeRepository at call time, so a Ctrl+Tab during a slow
@@ -6308,9 +6562,9 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository ? html`
         <lv-worktree-dialog
-          ?open=${this.showWorktrees}
+          ?open=${dialogs.isOpen('worktrees')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showWorktrees = false; }}
+          @close=${() => { dialogs.close('worktrees'); }}
           @worktrees-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             // Routed to the repo the operation RAN ON. handleRefresh resolves
             // activeRepository at call time, so a Ctrl+Tab during a slow
@@ -6322,9 +6576,9 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository ? html`
         <lv-lfs-dialog
-          ?open=${this.showLfs}
+          ?open=${dialogs.isOpen('lfs')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showLfs = false; }}
+          @close=${() => { dialogs.close('lfs'); }}
           @lfs-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             // Routed to the repo the operation RAN ON. handleRefresh resolves
             // activeRepository at call time, so a Ctrl+Tab during a slow
@@ -6336,37 +6590,38 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository ? html`
         <lv-gpg-dialog
-          ?open=${this.showGpg}
+          ?open=${dialogs.isOpen('gpg')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showGpg = false; }}
+          @close=${() => { dialogs.close('gpg'); }}
           @gpg-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
         ></lv-gpg-dialog>
       ` : ''}
 
       <lv-ssh-dialog
-        ?open=${this.showSsh}
-        @close=${() => { this.showSsh = false; }}
+        ?open=${dialogs.isOpen('ssh')}
+        @close=${() => { dialogs.close('ssh'); }}
       ></lv-ssh-dialog>
 
       ${this.activeRepository ? html`
         <lv-config-dialog
-          ?open=${this.showConfig}
+          ?open=${dialogs.isOpen('config')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showConfig = false; }}
+          @git-identity-changed=${() => this.handleRefresh()}
+          @close=${() => { dialogs.close('config'); }}
         ></lv-config-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
         <lv-credentials-dialog
-          ?open=${this.showCredentials}
+          ?open=${dialogs.isOpen('credentials')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showCredentials = false; }}
+          @close=${() => { dialogs.close('credentials'); }}
         ></lv-credentials-dialog>
       ` : ''}
 
       <lv-github-dialog
-        ?open=${this.showGitHub}
+        ?open=${dialogs.isOpen('gitHub')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
@@ -6375,7 +6630,7 @@ export class AppShell extends LitElement {
       ></lv-github-dialog>
 
       <lv-gitlab-dialog
-        ?open=${this.showGitLab}
+        ?open=${dialogs.isOpen('gitLab')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
@@ -6384,7 +6639,7 @@ export class AppShell extends LitElement {
       ></lv-gitlab-dialog>
 
       <lv-bitbucket-dialog
-        ?open=${this.showBitbucket}
+        ?open=${dialogs.isOpen('bitbucket')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
@@ -6393,7 +6648,7 @@ export class AppShell extends LitElement {
       ></lv-bitbucket-dialog>
 
       <lv-azure-devops-dialog
-        ?open=${this.showAzureDevOps}
+        ?open=${dialogs.isOpen('azureDevOps')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
@@ -6402,7 +6657,7 @@ export class AppShell extends LitElement {
       ></lv-azure-devops-dialog>
 
       <lv-oidc-dialog
-        ?open=${this.showOidc}
+        ?open=${dialogs.isOpen('oidc')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         @close=${() => this.handleIntegrationDialogClose('oidc')}
@@ -6410,7 +6665,7 @@ export class AppShell extends LitElement {
       ></lv-oidc-dialog>
 
       <lv-profile-manager-dialog
-        ?open=${this.showProfileManager}
+        ?open=${dialogs.isOpen('profileManager')}
         ?demoted=${this.profileManagerDemoted}
         .repoPath=${this.activeRepository?.repository.path ?? ''}
         .initialView=${this.profileManagerView}
@@ -6420,35 +6675,50 @@ export class AppShell extends LitElement {
         @open-bitbucket=${(e: CustomEvent<IntegrationOpenContext>) => this.handleOpenIntegrationFromManager('bitbucket', e)}
         @open-azure-devops=${(e: CustomEvent<IntegrationOpenContext>) => this.handleOpenIntegrationFromManager('azure-devops', e)}
         @open-oidc=${(e: CustomEvent<IntegrationOpenContext>) => this.handleOpenIntegrationFromManager('oidc', e)}
-        @migration-needed=${() => { this.showMigrationDialog = true; }}
+        @migration-needed=${() => { dialogs.open('migration'); }}
         @request-restore-provider=${this.handleRestoreProvider}
       ></lv-profile-manager-dialog>
 
       <lv-migration-dialog
-        ?open=${this.showMigrationDialog}
-        @close=${() => { this.showMigrationDialog = false; }}
-        @open-profile-manager=${() => { this.showProfileManager = true; }}
+        ?open=${dialogs.isOpen('migration')}
+        @close=${() => { dialogs.close('migration'); }}
+        @open-profile-manager=${() => { dialogs.open('profileManager'); }}
       ></lv-migration-dialog>
 
       <lv-workspace-manager-dialog
-        ?open=${this.showWorkspaceManager}
-        @close=${() => { this.showWorkspaceManager = false; }}
+        ?open=${dialogs.isOpen('workspaceManager')}
+        @close=${() => { dialogs.close('workspaceManager'); }}
         @open-repo-file=${this.handleWorkspaceOpenRepoFile}
       ></lv-workspace-manager-dialog>
 
+      <lv-scan-repositories-dialog
+        ?open=${dialogs.isOpen('repositoryScan')}
+        .scanPath=${this.repositoryScanPath}
+        .mode=${this.repositoryScanMode}
+        .requestId=${this.repositoryScanRequest}
+        @close=${() => { dialogs.close('repositoryScan'); }}
+        @initialize-repository=${this.handleInitializeRepositoryRequest}
+      ></lv-scan-repositories-dialog>
+
+      ${this.activeRepository
+        // The welcome screen mounts its own init dialog, so this one exists
+        // only while a repository is open — never two at once.
+        ? html`<lv-init-dialog></lv-init-dialog>`
+        : ''}
+
       ${this.activeRepository ? html`
         <lv-hooks-dialog
-          ?open=${this.showHooksDialog}
+          ?open=${dialogs.isOpen('hooks')}
           .repoPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showHooksDialog = false; }}
+          @close=${() => { dialogs.close('hooks'); }}
         ></lv-hooks-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
         <lv-gitignore-dialog
-          ?open=${this.showGitignoreDialog}
+          ?open=${dialogs.isOpen('gitignore')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showGitignoreDialog = false; }}
+          @close=${() => { dialogs.close('gitignore'); }}
           @ignore-rules-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             // Writing .gitignore/.gitattributes changes the working tree, so the
             // file list must be reloaded. Routed to the repo the write RAN ON:
@@ -6479,10 +6749,10 @@ export class AppShell extends LitElement {
         ></lv-compare-branches-dialog>
         <lv-export-import-dialog
           .repositoryPath=${this.activeRepository.repository.path}
-          .graphRepositoryPath=${this.graphCanvas?.repositoryPath ?? ''}
+          .graphRepositoryPath=${this.graphPaletteRepositoryPath}
           .branches=${this.activeRepository?.branches ?? []}
-          .tags=${this.graphCanvas?.getTagTips() ?? []}
-          .commits=${this.graphCanvas?.getLoadedCommits() ?? []}
+          .tags=${this.graphPaletteTags}
+          .commits=${this.graphPaletteCommits}
           @patch-applied=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
           @bundle-imported=${(e: CustomEvent<{ repositoryPath?: string }>) =>

@@ -43,6 +43,12 @@ export interface ExportImportOpenOptions {
   ref?: string;
   /** Pre-check this commit on the Patch tab (from the commit menu). */
   commitOid?: string;
+  /**
+   * Pre-check a whole set on the Patch tab (from the graph's multi-selection
+   * menu). Deep-linked exactly like `commitOid`: each row is pinned visible so
+   * the filter and the row cap cannot hide a commit the dialog says is ticked.
+   */
+  commitOids?: string[];
 }
 
 /** How many rows of a potentially huge list are rendered at once. */
@@ -279,9 +285,9 @@ export class LvExportImportDialog extends LitElement {
   @state() private patchMode: PatchMode = 'create';
   @state() private commitFilter = '';
   @state() private selectedCommits: ReadonlySet<string> = new Set<string>();
-  /** Deep-linked commit, kept visible even when the filter or the row cap
-   * would otherwise hide the row the user just right-clicked. */
-  @state() private pinnedCommitOid = '';
+  /** Deep-linked commits, kept visible even when the filter or the row cap
+   * would otherwise hide the rows the user just right-clicked. */
+  @state() private pinnedCommitOids: ReadonlySet<string> = new Set<string>();
   @state() private patchFile = '';
   @state() private patchTarget: PatchTarget = 'worktree';
 
@@ -369,9 +375,10 @@ export class LvExportImportDialog extends LitElement {
       this.archiveRef = opts.ref;
       this.extraRef = this.knownRefs().includes(opts.ref) ? '' : opts.ref;
     }
-    if (opts.commitOid) {
-      this.pinnedCommitOid = opts.commitOid;
-      this.selectedCommits = new Set([...this.selectedCommits, opts.commitOid]);
+    const deepLinked = [...(opts.commitOids ?? []), ...(opts.commitOid ? [opts.commitOid] : [])];
+    if (deepLinked.length > 0) {
+      this.pinnedCommitOids = new Set([...this.pinnedCommitOids, ...deepLinked]);
+      this.selectedCommits = new Set([...this.selectedCommits, ...deepLinked]);
     }
     if (this.tab === 'archive') {
       void this.loadArchivePreview();
@@ -391,7 +398,7 @@ export class LvExportImportDialog extends LitElement {
     this.patchMode = 'create';
     this.commitFilter = '';
     this.selectedCommits = new Set<string>();
-    this.pinnedCommitOid = '';
+    this.pinnedCommitOids = new Set<string>();
     this.patchFile = '';
     this.patchTarget = 'worktree';
     this.bundleMode = 'create';
@@ -517,7 +524,7 @@ export class LvExportImportDialog extends LitElement {
 
   // ── Patch ────────────────────────────────────────────────────────────────
 
-  private visibleCommits(): { rows: Commit[]; total: number; pinned: Commit | null } {
+  private visibleCommits(): { rows: Commit[]; total: number; pinned: Commit[] } {
     const needle = this.commitFilter.trim().toLowerCase();
     const matches = needle
       ? this.scopedCommits.filter(
@@ -528,10 +535,12 @@ export class LvExportImportDialog extends LitElement {
         )
       : this.scopedCommits;
     const rows = matches.slice(0, MAX_ROWS);
-    const pinned =
-      this.pinnedCommitOid && !rows.some((c) => c.oid === this.pinnedCommitOid)
-        ? (this.scopedCommits.find((c) => c.oid === this.pinnedCommitOid) ?? null)
-        : null;
+    // Keep the graph's order for the pinned block: the deep link can carry a
+    // whole multi-selection, and listing it newest-first matches the rows
+    // below it.
+    const pinned = this.scopedCommits.filter(
+      (c) => this.pinnedCommitOids.has(c.oid) && !rows.some((row) => row.oid === c.oid),
+    );
     return { rows, total: matches.length, pinned };
   }
 
@@ -909,8 +918,8 @@ export class LvExportImportDialog extends LitElement {
           ?disabled=${this.operationRunning}
         />
         <div class="list">
-          ${pinned ? row(pinned, true) : nothing}
-          ${rows.length === 0 && !pinned
+          ${pinned.map((c) => row(c, true))}
+          ${rows.length === 0 && pinned.length === 0
             ? html`<div class="empty">No commits match</div>`
             : rows.map((c) => row(c, false))}
         </div>

@@ -1,15 +1,40 @@
 import { expect } from '@open-wc/testing';
 import {
+  applyPersistedLocale,
   settingsStore,
   getGraphColorSchemes,
+  getDiffWhitespaceModes,
+  DIFF_WHITESPACE_MODES,
+  clampDiffContextLines,
+  MIN_DIFF_CONTEXT_LINES,
+  MAX_DIFF_CONTEXT_LINES,
   migrateSettings,
   watchSystemContrast,
 } from '../settings.store.ts';
 import type { SettingsState } from '../settings.store.ts';
+import { detectSystemLocale } from '../../i18n/index.ts';
 
 describe('settings.store', () => {
   beforeEach(() => {
     settingsStore.getState().resetToDefaults();
+  });
+
+  describe('clampDiffContextLines', () => {
+    it('keeps in-range integers untouched', () => {
+      expect(clampDiffContextLines(0)).to.equal(MIN_DIFF_CONTEXT_LINES);
+      expect(clampDiffContextLines(3)).to.equal(3);
+      expect(clampDiffContextLines(20)).to.equal(MAX_DIFF_CONTEXT_LINES);
+    });
+
+    it('clamps out-of-range values to the bounds', () => {
+      expect(clampDiffContextLines(-1)).to.equal(MIN_DIFF_CONTEXT_LINES);
+      expect(clampDiffContextLines(21)).to.equal(MAX_DIFF_CONTEXT_LINES);
+    });
+
+    it('falls back to git’s default for a non-numeric value', () => {
+      expect(clampDiffContextLines(Number.NaN)).to.equal(3);
+      expect(clampDiffContextLines(Number.POSITIVE_INFINITY)).to.equal(3);
+    });
   });
 
   describe('initial state / defaults', () => {
@@ -29,16 +54,23 @@ describe('settings.store', () => {
       expect(settingsStore.getState().defaultBranchName).to.equal('main');
     });
 
-    it('should have origin as default remote name', () => {
-      expect(settingsStore.getState().defaultRemoteName).to.equal('origin');
+    it('no longer exposes a default remote name', () => {
+      // Removed rather than wired: fetch/pull/push resolve their remote from
+      // the branch's upstream and git's push config, so an app-level default
+      // would only ever override that resolution.
+      const state = settingsStore.getState() as unknown as Record<string, unknown>;
+      expect(state).to.not.have.property('defaultRemoteName');
+      expect(state).to.not.have.property('setDefaultRemoteName');
     });
 
     it('should have empty default clone path by default', () => {
       expect(settingsStore.getState().defaultClonePath).to.equal('');
     });
 
-    it('should show avatars by default', () => {
-      expect(settingsStore.getState().showAvatars).to.be.true;
+    it('should NOT show avatars by default', () => {
+      // Avatars are images fetched from gravatar.com, which hands a third
+      // party an MD5 of every commit author's email. Opt-in, not opt-out.
+      expect(settingsStore.getState().showAvatars).to.be.false;
     });
 
     it('should show commit size by default', () => {
@@ -55,8 +87,10 @@ describe('settings.store', () => {
       expect(settingsStore.getState().wordWrap).to.be.false;
     });
 
-    it('should not show whitespace by default', () => {
-      expect(settingsStore.getState().showWhitespace).to.be.false;
+    it('should not ignore any whitespace by default', () => {
+      // 'none' is what every diff has always rendered, so it must stay the
+      // default when the setting became live.
+      expect(settingsStore.getState().diffIgnoreWhitespace).to.equal('none');
     });
 
     it('should have auto fetch disabled by default', () => {
@@ -80,6 +114,12 @@ describe('settings.store', () => {
       // regardless. Defaulting to false would have silently turned a seamless
       // branch switch into a refusal for every existing user.
       expect(settingsStore.getState().autoStashOnCheckout).to.be.true;
+    });
+
+    it('should not always sign off by default', () => {
+      // Sign-off is a project requirement, not a universal one: defaulting it
+      // on would add a trailer to every commit message unasked.
+      expect(settingsStore.getState().alwaysSignOff).to.be.false;
     });
 
     it('should have 90 stale branch days by default', () => {
@@ -170,17 +210,14 @@ describe('settings.store', () => {
       expect(settingsStore.getState().defaultBranchName).to.equal('master');
     });
 
-    it('should set default remote name', () => {
-      settingsStore.getState().setDefaultRemoteName('upstream');
-      expect(settingsStore.getState().defaultRemoteName).to.equal('upstream');
-    });
-
     it('should set default clone path', () => {
       settingsStore.getState().setDefaultClonePath('/home/user/projects');
       expect(settingsStore.getState().defaultClonePath).to.equal('/home/user/projects');
     });
 
     it('should set show avatars', () => {
+      settingsStore.getState().setShowAvatars(true);
+      expect(settingsStore.getState().showAvatars).to.be.true;
       settingsStore.getState().setShowAvatars(false);
       expect(settingsStore.getState().showAvatars).to.be.false;
     });
@@ -200,14 +237,32 @@ describe('settings.store', () => {
       expect(settingsStore.getState().diffContextLines).to.equal(5);
     });
 
+    it('should clamp diff context lines into range', () => {
+      settingsStore.getState().setDiffContextLines(999);
+      expect(settingsStore.getState().diffContextLines).to.equal(MAX_DIFF_CONTEXT_LINES);
+
+      settingsStore.getState().setDiffContextLines(-4);
+      expect(settingsStore.getState().diffContextLines).to.equal(MIN_DIFF_CONTEXT_LINES);
+
+      // A cleared number input yields NaN; fall back to git's default.
+      settingsStore.getState().setDiffContextLines(Number.NaN);
+      expect(settingsStore.getState().diffContextLines).to.equal(3);
+
+      settingsStore.getState().setDiffContextLines(4.7);
+      expect(settingsStore.getState().diffContextLines).to.equal(4);
+    });
+
     it('should set word wrap', () => {
       settingsStore.getState().setWordWrap(false);
       expect(settingsStore.getState().wordWrap).to.be.false;
     });
 
-    it('should set show whitespace', () => {
-      settingsStore.getState().setShowWhitespace(true);
-      expect(settingsStore.getState().showWhitespace).to.be.true;
+    it('should set the diff whitespace mode', () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('all');
+      expect(settingsStore.getState().diffIgnoreWhitespace).to.equal('all');
+
+      settingsStore.getState().setDiffIgnoreWhitespace('none');
+      expect(settingsStore.getState().diffIgnoreWhitespace).to.equal('none');
     });
 
     it('should set auto fetch interval', () => {
@@ -233,6 +288,11 @@ describe('settings.store', () => {
     it('should set auto stash on checkout', () => {
       settingsStore.getState().setAutoStashOnCheckout(true);
       expect(settingsStore.getState().autoStashOnCheckout).to.be.true;
+    });
+
+    it('should set always sign off', () => {
+      settingsStore.getState().setAlwaysSignOff(true);
+      expect(settingsStore.getState().alwaysSignOff).to.be.true;
     });
 
     it('should set stale branch days', () => {
@@ -362,6 +422,45 @@ describe('settings.store', () => {
     });
   });
 
+  describe('getDiffWhitespaceModes', () => {
+    it('offers the same modes, in the same order, as the source-locale list', () => {
+      // Two lists exist only because the diff view's own toolbar has not been
+      // migrated to msg() yet. They must never drift apart.
+      expect(getDiffWhitespaceModes().map((m) => m.value)).to.deep.equal(
+        DIFF_WHITESPACE_MODES.map((m) => m.value)
+      );
+    });
+
+    it('labels every mode in the active locale (English by default)', () => {
+      expect(getDiffWhitespaceModes()).to.deep.equal(DIFF_WHITESPACE_MODES);
+    });
+  });
+
+  describe('applyPersistedLocale', () => {
+    afterEach(async () => {
+      await settingsStore.getState().setLanguage('en');
+    });
+
+    it('writes back the locale that actually rendered', async () => {
+      // A locale we no longer ship (or whose templates fail to load) must not
+      // survive in storage: Settings would keep naming a language the UI is
+      // not in. Written straight into state to stand in for such a blob.
+      settingsStore.setState({ language: 'de' as unknown as SettingsState['language'] });
+
+      const applied = await applyPersistedLocale();
+
+      expect(applied, 'the locale that ended up active').to.equal('en');
+      expect(settingsStore.getState().language, 'corrected in storage').to.equal('en');
+    });
+
+    it('leaves a locale we do ship alone', async () => {
+      settingsStore.setState({ language: 'en' });
+
+      expect(await applyPersistedLocale()).to.equal('en');
+      expect(settingsStore.getState().language).to.equal('en');
+    });
+  });
+
   describe('persisted-state migration', () => {
     it('v1 state carries autoStashOnCheckout forward as true', () => {
       // Changing a default only reaches installs with NO persisted state, and
@@ -420,6 +519,255 @@ describe('settings.store', () => {
 
       expect(migrated.wordWrap, 'a persisted wordWrap was never a user choice').to.equal(false);
       expect(migrated.autoStashOnCheckout, 'a v2 false is a real user choice').to.equal(false);
+    });
+
+    it('a pre-v5 state keeps a persisted showAvatars choice', () => {
+      // The v5 default flip (true -> false) must not reach anyone who already
+      // has settings: avatars were always drawn, so a persisted value IS a
+      // real user choice. zustand's shallow merge preserves it and the
+      // migration must not overwrite it.
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      expect((migrate({ showAvatars: true }, 3) as { showAvatars: boolean }).showAvatars).to.equal(
+        true
+      );
+      expect((migrate({ showAvatars: false }, 3) as { showAvatars: boolean }).showAvatars).to.equal(
+        false
+      );
+    });
+
+    it('a pre-v5 state with no showAvatars key gets the OLD default', () => {
+      // Such a state predates the key and was rendered with the old default
+      // of `true`; keep showing what those users saw rather than silently
+      // switching avatars off under them.
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate({ theme: 'light' }, 3) as {
+        showAvatars: boolean;
+        theme: string;
+      };
+      expect(migrated.showAvatars).to.equal(true);
+      expect(migrated.theme, 'other settings survive').to.equal('light');
+    });
+
+    it('a v4 state with no showAvatars key still gets the OLD default', () => {
+      // v4 was the last version whose default was `true`, so an absent key
+      // there means what it meant at v3: that user saw avatars.
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate({ theme: 'light' }, 4) as { showAvatars?: boolean };
+      expect(migrated.showAvatars).to.equal(true);
+    });
+
+    it('a v5 state is left to the store default', () => {
+      // v5 onwards the key is always written with the new default, so an
+      // absent one is not a pre-existing choice and must fall through.
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate({ theme: 'light' }, 5) as { showAvatars?: boolean };
+      expect(migrated.showAvatars, 'left to the store default').to.equal(undefined);
+    });
+
+    it('drops a persisted defaultRemoteName — the setting no longer exists', () => {
+      // Nothing ever read it; which remote fetch/pull/push contact comes from
+      // git's own config, so the key is stale rather than a user choice.
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate({ defaultRemoteName: 'upstream', theme: 'light' }, 3) as Record<
+        string,
+        unknown
+      >;
+
+      expect(migrated).to.not.have.property('defaultRemoteName');
+      expect(migrated.theme, 'other settings survive').to.equal('light');
+    });
+
+    it('leaves a v4 state alone apart from the dead remote key', () => {
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate(
+        { wordWrap: true, theme: 'light', defaultRemoteName: 'upstream' },
+        4
+      ) as Record<string, unknown>;
+
+      expect(migrated.wordWrap, 'a v4 value is a real user choice').to.equal(true);
+      expect(migrated.theme).to.equal('light');
+      expect(migrated, 'the v7 rule still runs at v4').to.not.have.property('defaultRemoteName');
+    });
+
+    it('applies every rule in order for a v1 install upgrading straight to v8', () => {
+      // The oldest persisted blob we support has to come out the other end with
+      // every rule applied: auto-stash forced on, the never-read wordWrap
+      // dropped, the graph scheme un-pinned because it was never chosen, the
+      // old avatar default filled in, the whitespace mode seeded, the dead
+      // remote key gone, and the UI language pinned to the English these
+      // installs have always rendered in.
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate(
+        {
+          autoStashOnCheckout: false,
+          wordWrap: true,
+          graphColorScheme: 'default',
+          defaultRemoteName: 'upstream',
+          theme: 'light',
+        },
+        1
+      ) as Record<string, unknown>;
+
+      expect(migrated.autoStashOnCheckout, 'v2 rule').to.equal(true);
+      expect(migrated.wordWrap, 'v3 rule').to.equal(false);
+      expect(migrated.graphColorSchemeAuto, 'v4 rule').to.equal(true);
+      expect(migrated.showAvatars, 'v5 rule').to.equal(true);
+      expect(migrated.diffIgnoreWhitespace, 'v6 rule').to.equal('none');
+      expect(migrated, 'v7 rule').to.not.have.property('defaultRemoteName');
+      expect(migrated.language, 'v8 rule').to.equal('en');
+      expect(migrated.theme, 'a real user choice survives all of it').to.equal('light');
+    });
+
+    /**
+     * The same upgrade path entered at EVERY version we have ever shipped.
+     *
+     * A rule must fire exactly once — for the installs that predate it — and
+     * never again: the blob a v4 install persists is a v4 blob, and re-running
+     * the v2/v3/v4 rules over it would overwrite choices the user really made.
+     * So every case below starts from the SAME blob, whose every value is the
+     * opposite of what its rule would write, and asserts that exactly the rules
+     * numbered ABOVE the entry version fired and the ones at or below it left
+     * the stored values alone. The numbering is load-bearing: a rule inserted
+     * out of order, or a version bump without a rule, shows up here.
+     */
+    describe('the full upgrade path, from every entry version', () => {
+      const migrateFrom = (fromVersion: number): Record<string, unknown> =>
+        migrateSettings(
+          {
+            autoStashOnCheckout: false,
+            wordWrap: true,
+            graphColorScheme: 'default',
+            showWhitespace: true,
+            defaultRemoteName: 'upstream',
+            theme: 'light',
+          } as unknown as Partial<SettingsState>,
+          fromVersion
+        ) as unknown as Record<string, unknown>;
+
+      for (const from of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        it(`fires exactly the rules above v${from}`, () => {
+          const migrated = migrateFrom(from);
+
+          // v2: auto-stash was never read before it, so a stored `false` is
+          // only a real choice from v2 onwards.
+          expect(migrated.autoStashOnCheckout, 'v2').to.equal(from < 2 ? true : false);
+          // v3: same story for word wrap.
+          expect(migrated.wordWrap, 'v3').to.equal(from < 3 ? false : true);
+          // v4: the scheme is un-pinned only for blobs that predate the flag.
+          expect(migrated.graphColorSchemeAuto, 'v4').to.equal(from < 4 ? true : undefined);
+          // v5: the OLD avatar default is filled in only where the key is absent
+          // AND the blob predates the flip.
+          expect(migrated.showAvatars, 'v5').to.equal(from < 5 ? true : undefined);
+          // v6: the dead flag is dropped and the mode seeded once.
+          expect(migrated.diffIgnoreWhitespace, 'v6').to.equal(from < 6 ? 'none' : undefined);
+          expect(migrated.showWhitespace, 'v6').to.equal(from < 6 ? undefined : true);
+          // v7: the dead remote key is dropped once.
+          expect(migrated.defaultRemoteName, 'v7').to.equal(from < 7 ? undefined : 'upstream');
+          // v8: the UI language is pinned to English for installs that predate
+          // the key, so an upgrade never switches language on its own.
+          expect(migrated.language, 'v8').to.equal(from < 8 ? 'en' : undefined);
+          // Nothing in the chain touches a genuine preference.
+          expect(migrated.theme, 'a real user choice survives every entry point').to.equal(
+            'light'
+          );
+        });
+      }
+
+      it('a fresh install has no persisted blob, so it follows the OS language', () => {
+        // The other half of the v8 rule: `detectSystemLocale()` is what a FIRST
+        // run does. `resetToDefaults()` re-applies exactly the fresh-install
+        // defaults, so it is the closest thing to a fresh install a test has.
+        settingsStore.getState().resetToDefaults();
+
+        expect(settingsStore.getState().language).to.equal(detectSystemLocale());
+      });
+    });
+
+    it('a pre-v8 state keeps English instead of adopting the OS language', () => {
+      // The upgrading user has been reading an English UI for as long as the
+      // app has existed. Filling the new key from the system locale would
+      // switch their whole UI to another language on first launch, unasked.
+      const migrated = migrateSettings({ theme: 'light' } as Partial<SettingsState>, 7);
+
+      expect(migrated.language).to.equal('en');
+      expect(migrated.theme, 'other settings survive').to.equal('light');
+    });
+
+    it('a persisted language is a real choice and is never overwritten', () => {
+      const migrated = migrateSettings(
+        { language: 'fr' } as unknown as Partial<SettingsState>,
+        1
+      );
+
+      expect(migrated.language).to.equal('fr');
+    });
+
+    it('a v8 state is left to the store default', () => {
+      // From v8 the key is always written, so an absent one is not a
+      // pre-existing choice and must fall through to the default.
+      const migrated = migrateSettings({ theme: 'light' } as Partial<SettingsState>, 8);
+
+      expect(migrated.language, 'left to the store default').to.equal(undefined);
+    });
+
+    it('a v1 install that pinned a non-default scheme keeps it through the chain', () => {
+      const persist = (
+        settingsStore as unknown as {
+          persist: { getOptions: () => { migrate?: (s: unknown, v: number) => unknown } };
+        }
+      ).persist;
+      const migrate = persist.getOptions().migrate!;
+
+      const migrated = migrate(
+        { graphColorScheme: 'high-contrast', defaultRemoteName: 'upstream' },
+        1
+      ) as Record<string, unknown>;
+
+      expect(migrated.graphColorScheme).to.equal('high-contrast');
+      expect(migrated.graphColorSchemeAuto, 'a deliberate scheme stays pinned').to.equal(false);
+      expect(migrated).to.not.have.property('defaultRemoteName');
     });
 
     it('leaves a v3 wordWrap alone', () => {
@@ -649,13 +997,203 @@ describe('settings.store', () => {
       expect(migrated.graphColorSchemeAuto).to.be.true;
     });
 
-    it('does not re-run the rule for state already at the current version', () => {
+    it('does not re-run the colour-scheme rule for state already at v4', () => {
       const migrated = migrateSettings(
         { graphColorScheme: 'default', graphColorSchemeAuto: false } as Partial<SettingsState>,
         4
       );
 
       expect(migrated.graphColorSchemeAuto, 'a pinned default stays pinned').to.be.false;
+    });
+
+    // The rules stack: a user who has not opened the app for several releases
+    // arrives with an old version number and must pick up EVERY step, not just
+    // the newest one.
+    it('applies every rule for a user upgrading all the way from v1', () => {
+      const migrated = migrateSettings(
+        {
+          autoStashOnCheckout: false,
+          wordWrap: true,
+          graphColorScheme: 'default',
+          theme: 'light',
+        } as Partial<SettingsState>,
+        1
+      );
+
+      expect(migrated.autoStashOnCheckout, 'v2 rule').to.be.true;
+      expect(migrated.wordWrap, 'v3 rule').to.be.false;
+      expect(migrated.graphColorSchemeAuto, 'v4 rule').to.be.true;
+      expect(migrated.showAvatars, 'v5 rule').to.equal(true);
+      expect(migrated.theme, 'unrelated settings are untouched').to.equal('light');
+    });
+
+    it('applies only the v5 rule to a state already at v4', () => {
+      const migrated = migrateSettings(
+        {
+          autoStashOnCheckout: false,
+          wordWrap: true,
+          graphColorScheme: 'pastel',
+          graphColorSchemeAuto: false,
+        } as Partial<SettingsState>,
+        4
+      );
+
+      expect(migrated.autoStashOnCheckout, 'a post-v2 choice stands').to.be.false;
+      expect(migrated.wordWrap, 'a post-v3 choice stands').to.be.true;
+      expect(migrated.graphColorSchemeAuto, 'the v4 pin stands').to.be.false;
+      expect(migrated.showAvatars, 'v5 fills in the old default').to.equal(true);
+    });
+
+    it('never overwrites a showAvatars the user actually chose', () => {
+      expect(migrateSettings({ showAvatars: false } as Partial<SettingsState>, 1).showAvatars).to.be
+        .false;
+      expect(migrateSettings({ showAvatars: true } as Partial<SettingsState>, 1).showAvatars).to.be
+        .true;
+    });
+
+    it('does not re-run the avatar rule for state already at the current version', () => {
+      expect(migrateSettings({}, 5).showAvatars, 'left to the store default').to.equal(undefined);
+    });
+
+    it('replaces the dead showWhitespace flag with the whitespace mode', () => {
+      const migrated = migrateSettings({ showWhitespace: true } as Partial<SettingsState>, 4);
+
+      expect(migrated.diffIgnoreWhitespace).to.equal('none');
+      expect(
+        (migrated as unknown as Record<string, unknown>).showWhitespace,
+        'the dead flag is dropped, not carried over'
+      ).to.equal(undefined);
+    });
+
+    it('leaves an already-current whitespace mode alone', () => {
+      const migrated = migrateSettings(
+        { diffIgnoreWhitespace: 'all' } as Partial<SettingsState>,
+        6
+      );
+
+      expect(migrated.diffIgnoreWhitespace).to.equal('all');
+    });
+
+    it('clamps a stored context-line count into range', () => {
+      expect(migrateSettings({ diffContextLines: 999 } as Partial<SettingsState>, 4).diffContextLines).to.equal(
+        MAX_DIFF_CONTEXT_LINES
+      );
+      expect(migrateSettings({ diffContextLines: -8 } as Partial<SettingsState>, 4).diffContextLines).to.equal(
+        MIN_DIFF_CONTEXT_LINES
+      );
+      expect(
+        migrateSettings({ diffContextLines: 7 } as Partial<SettingsState>, 4).diffContextLines,
+        'an in-range value is untouched'
+      ).to.equal(7);
+    });
+
+    it('applies every step for a v3 install upgrading to the current version', () => {
+      // One existing user's whole persisted blob, as v3 wrote it: a deliberate
+      // non-default palette, the dead whitespace flag, and an out-of-range
+      // context count. Both the colour-scheme rule and the whitespace
+      // replacement must land in the same upgrade.
+      const migrated = migrateSettings(
+        {
+          graphColorScheme: 'vibrant',
+          showWhitespace: true,
+          diffContextLines: 99,
+          autoStashOnCheckout: false,
+          wordWrap: true,
+          theme: 'light',
+        } as Partial<SettingsState>,
+        3
+      );
+
+      expect(migrated.graphColorSchemeAuto, 'v4: a chosen palette stays pinned').to.be.false;
+      expect(migrated.graphColorScheme).to.equal('vibrant');
+      expect(migrated.diffIgnoreWhitespace, 'v6: the whitespace mode is seeded').to.equal('none');
+      expect((migrated as unknown as Record<string, unknown>).showWhitespace).to.equal(undefined);
+      expect(migrated.diffContextLines).to.equal(MAX_DIFF_CONTEXT_LINES);
+      expect(migrated.wordWrap, 'already at v3, so the v3 rule does not re-run').to.be.true;
+      expect(migrated.theme, 'unrelated settings survive').to.equal('light');
+    });
+
+    it('applies every step for a pre-v2 install upgrading to the current version', () => {
+      const migrated = migrateSettings(
+        { showWhitespace: false, wordWrap: true } as Partial<SettingsState>,
+        1
+      );
+
+      expect(migrated.autoStashOnCheckout, 'v2').to.be.true;
+      expect(migrated.wordWrap, 'v3 drops the never-read flag').to.be.false;
+      expect(migrated.graphColorSchemeAuto, 'v4').to.be.true;
+      expect(migrated.diffIgnoreWhitespace, 'v6').to.equal('none');
+    });
+
+    // Three independent changes each wanted to be "the next version". Giving
+    // them one shared number would have meant a user migrated by the first
+    // never running the other two — silently, and forever, because the stored
+    // version would already be current. Each rule therefore owns its own step,
+    // and these two tests are what pins that down.
+    it('runs every rule from v5, v6 and v7 for a v3 install', () => {
+      const migrated = migrateSettings(
+        {
+          graphColorScheme: 'default',
+          showWhitespace: true,
+          defaultRemoteName: 'upstream',
+          theme: 'light',
+        } as Partial<SettingsState>,
+        3
+      );
+
+      expect(migrated.graphColorSchemeAuto, 'v4: graphColorSchemeAuto').to.be.true;
+      expect(migrated.showAvatars, 'v5: the old avatar default is filled in').to.equal(true);
+      expect(migrated.diffIgnoreWhitespace, 'v6: diffIgnoreWhitespace is seeded').to.equal('none');
+      expect(
+        (migrated as unknown as Record<string, unknown>).showWhitespace,
+        'v6: the dead whitespace flag is dropped'
+      ).to.equal(undefined);
+      expect(
+        migrated as unknown as Record<string, unknown>,
+        'v7: the dead remote key is dropped'
+      ).to.not.have.property('defaultRemoteName');
+      expect(migrated.theme, 'unrelated settings survive the whole chain').to.equal('light');
+    });
+
+    it('a state already at v5 still receives the v6 and v7 rules', () => {
+      // The collision case: had all three changes shared `version: 5`, this
+      // state would be considered current and would keep both dead keys.
+      const migrated = migrateSettings(
+        {
+          showAvatars: false,
+          showWhitespace: true,
+          defaultRemoteName: 'upstream',
+          theme: 'light',
+        } as Partial<SettingsState>,
+        5
+      );
+
+      expect(migrated.showAvatars, 'the v5 rule does not re-run over a real choice').to.equal(
+        false
+      );
+      expect(migrated.diffIgnoreWhitespace, 'v6 still runs').to.equal('none');
+      expect(
+        (migrated as unknown as Record<string, unknown>).showWhitespace,
+        'v6 still runs'
+      ).to.equal(undefined);
+      expect(
+        migrated as unknown as Record<string, unknown>,
+        'v7 still runs'
+      ).to.not.have.property('defaultRemoteName');
+      expect(migrated.theme).to.equal('light');
+    });
+
+    it('a state already at v7 is left alone', () => {
+      const migrated = migrateSettings(
+        { showAvatars: false, diffIgnoreWhitespace: 'all', theme: 'light' } as Partial<
+          SettingsState
+        >,
+        7
+      );
+
+      expect(migrated.showAvatars).to.equal(false);
+      expect(migrated.diffIgnoreWhitespace, 'a chosen mode is not reset').to.equal('all');
+      expect(migrated.theme).to.equal('light');
     });
   });
 });

@@ -5,11 +5,20 @@
 //! All API functions accept optional credentials from the frontend.
 
 use crate::error::{GitnadoError, Result};
+use crate::models::{ProviderRepository, ProviderRepositoryPage};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
 const BITBUCKET_API_BASE: &str = "https://api.bitbucket.org/2.0";
+
+/// The HTTP client every outbound Bitbucket API call in this module goes
+/// through — see the note on GitHub's `api_client` for why the gate lives on
+/// the client constructor rather than on each command.
+fn api_client() -> Result<reqwest::Client> {
+    crate::services::security::guard_url(BITBUCKET_API_BASE)?;
+    Ok(reqwest::Client::new())
+}
 
 /// Sentinel prefix marking a per-account token slot that actually holds an
 /// app-password credential of the form `<PREFIX><username>:<app_password>`.
@@ -239,7 +248,7 @@ pub async fn check_bitbucket_connection(
         },
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
 
     let response = client
         .get(format!("{}/user", BITBUCKET_API_BASE))
@@ -307,7 +316,7 @@ pub async fn check_bitbucket_connection_with_token(
         }
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
 
     let response = client
         .get(format!("{}/user", BITBUCKET_API_BASE))
@@ -461,7 +470,7 @@ pub async fn list_bitbucket_pull_requests(
         token.is_some()
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", auth_header)
@@ -578,7 +587,7 @@ pub async fn get_bitbucket_pull_request(
         BITBUCKET_API_BASE, workspace, repo_slug, pr_id
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", auth_header)
@@ -723,7 +732,7 @@ pub async fn create_bitbucket_pull_request(
         close_source_branch: input.close_source_branch,
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(&url)
         .header("Authorization", auth_header)
@@ -845,7 +854,7 @@ pub async fn list_bitbucket_issues(
         url.push_str(&format!("&q=state=\"{}\"", state_str));
     }
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", auth_header)
@@ -971,7 +980,7 @@ pub async fn create_bitbucket_issue(
 
     let body = build_create_issue_body(&input);
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(&url)
         .header("Authorization", auth_header)
@@ -1122,7 +1131,7 @@ pub async fn list_bitbucket_pipelines(
         pagelen_query_param(pagelen, PIPELINES_DEFAULT_PAGELEN)
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", auth_header)
@@ -1213,9 +1222,196 @@ pub async fn list_bitbucket_pipelines(
         .collect())
 }
 
+// ============================================================================
+// Repository Listing Commands
+// ============================================================================
+
+/// Default page size for the account repository listing.
+///
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// discloses it to the user.
+const REPOSITORIES_DEFAULT_PAGELEN: u32 = 30;
+
+/// The error a failed repository listing reports.
+///
+/// A 401 means the account's stored credential is dead — reported as
+/// `AUTH_REQUIRED` so the picker can offer "reconnect this account" instead of
+/// a raw API string. Anything else keeps the module's usual message shape.
+fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return GitnadoError::AuthenticationRequired;
+    }
+    GitnadoError::OperationFailed(format!("Bitbucket API error {}: {}", status, body))
+}
+
+#[derive(Deserialize)]
+struct ApiRepoListResponse {
+    values: Vec<ApiRepoListEntry>,
+    /// Bitbucket returns the URL of the following page, absent on the last one.
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ApiRepoListEntry {
+    uuid: String,
+    name: String,
+    full_name: String,
+    description: Option<String>,
+    is_private: bool,
+    updated_on: Option<String>,
+    mainbranch: Option<ApiMainBranch>,
+    links: ApiRepoLinks,
+    workspace: Option<ApiWorkspace>,
+}
+
+#[derive(Deserialize)]
+struct ApiMainBranch {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct ApiWorkspace {
+    slug: String,
+}
+
+#[derive(Deserialize)]
+struct ApiRepoLinks {
+    clone: Option<Vec<ApiCloneLink>>,
+    html: Option<ApiLinkHref>,
+}
+
+#[derive(Deserialize)]
+struct ApiCloneLink {
+    name: String,
+    href: String,
+}
+
+#[derive(Deserialize)]
+struct ApiLinkHref {
+    href: String,
+}
+
+/// Turn one page of `/repositories` into the shared listing shape.
+///
+/// Split out from the request so the mapping, the empty case and the next-page
+/// arithmetic are testable without a network.
+fn parse_bitbucket_repository_page(body: &str, page: u32) -> Result<ProviderRepositoryPage> {
+    let data: ApiRepoListResponse = serde_json::from_str(body).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
+    })?;
+
+    // Bitbucket states the next page itself, so page length is not consulted.
+    let next_page = data.next.as_ref().map(|_| page + 1);
+
+    Ok(ProviderRepositoryPage {
+        repositories: data
+            .values
+            .into_iter()
+            .filter_map(|repo| {
+                // Without an HTTPS clone link there is nothing to hand the
+                // clone dialog (an SSH-only entry would fill in a URL the
+                // account's token cannot authenticate), so skip it.
+                let clone_url = repo
+                    .links
+                    .clone
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|l| l.name == "https")
+                    .map(|l| l.href)?;
+                let owner = repo
+                    .workspace
+                    .map(|w| w.slug)
+                    .or_else(|| {
+                        repo.full_name
+                            .rsplit_once('/')
+                            .map(|(workspace, _)| workspace.to_string())
+                    })
+                    .unwrap_or_default();
+                Some(ProviderRepository {
+                    id: repo.uuid,
+                    name: repo.name,
+                    owner,
+                    full_name: repo.full_name,
+                    description: repo.description,
+                    is_private: repo.is_private,
+                    clone_url,
+                    web_url: repo.links.html.map(|l| l.href),
+                    default_branch: repo.mainbranch.map(|b| b.name),
+                    last_pushed_at: repo.updated_on,
+                })
+            })
+            .collect(),
+        next_page,
+    })
+}
+
+/// List the repositories the authenticated account has access to.
+///
+/// One page per call — the picker asks for the next page only when the user
+/// wants it. Ordered by last update so the most recently touched repository
+/// comes first. `workspace` narrows the listing to one workspace; omitting it
+/// lists every workspace the account belongs to.
+#[command]
+pub async fn list_bitbucket_repositories(
+    workspace: Option<String>,
+    pagelen: Option<u32>,
+    page: Option<u32>,
+    token: Option<String>,
+    username: Option<String>,
+    app_password: Option<String>,
+) -> Result<ProviderRepositoryPage> {
+    let auth_header = get_auth_header_with_token(
+        token.as_deref(),
+        username.as_deref(),
+        app_password.as_deref(),
+    )?;
+    let pagelen = pagelen.unwrap_or(REPOSITORIES_DEFAULT_PAGELEN);
+    let page = page.unwrap_or(1).max(1);
+
+    // `/repositories` with no workspace segment lists everything the caller is a
+    // member of; with one it lists that workspace only.
+    let base = match workspace
+        .as_deref()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+    {
+        Some(w) => format!("{}/repositories/{}", BITBUCKET_API_BASE, w),
+        None => format!("{}/repositories", BITBUCKET_API_BASE),
+    };
+    let url = format!(
+        "{}?{}&page={}&role=member&sort=-updated_on",
+        base,
+        pagelen_query_param(Some(pagelen), REPOSITORIES_DEFAULT_PAGELEN),
+        page
+    );
+
+    let client = api_client()?;
+    let response = client
+        .get(&url)
+        .header("Authorization", auth_header)
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to fetch repositories: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(map_repository_list_error(status, &body));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read repositories: {}", e))
+    })?;
+
+    parse_bitbucket_repository_page(&body, page)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
 
     #[test]
@@ -1227,6 +1423,100 @@ mod tests {
         // No caller size falls back to this file's default.
         assert_eq!(pagelen_query_param(None, 30), "pagelen=30");
         assert_eq!(pagelen_query_param(None, 20), "pagelen=20");
+    }
+
+    // ========================================================================
+    // Repository Listing Tests
+    // ========================================================================
+
+    const REPO_PAGE_JSON: &str = r#"{
+        "values": [
+            {
+                "uuid": "{abc}",
+                "name": "gitnado",
+                "full_name": "team/gitnado",
+                "description": "A git client",
+                "is_private": true,
+                "updated_on": "2024-05-01T10:00:00Z",
+                "mainbranch": { "name": "main" },
+                "workspace": { "slug": "team" },
+                "links": {
+                    "clone": [
+                        { "name": "https", "href": "https://bitbucket.org/team/gitnado.git" },
+                        { "name": "ssh", "href": "git@bitbucket.org:team/gitnado.git" }
+                    ],
+                    "html": { "href": "https://bitbucket.org/team/gitnado" }
+                }
+            }
+        ],
+        "next": "https://api.bitbucket.org/2.0/repositories?page=2"
+    }"#;
+
+    #[test]
+    fn test_parse_bitbucket_repository_page_maps_fields() {
+        let page = parse_bitbucket_repository_page(REPO_PAGE_JSON, 1).expect("page should parse");
+
+        assert_eq!(page.repositories.len(), 1);
+        let repo = &page.repositories[0];
+        assert_eq!(repo.id, "{abc}");
+        assert_eq!(repo.name, "gitnado");
+        assert_eq!(repo.owner, "team");
+        assert_eq!(repo.full_name, "team/gitnado");
+        assert!(repo.is_private);
+        // The HTTPS clone link is the one the clone dialog can authenticate.
+        assert_eq!(repo.clone_url, "https://bitbucket.org/team/gitnado.git");
+        assert_eq!(repo.default_branch.as_deref(), Some("main"));
+        assert_eq!(repo.last_pushed_at.as_deref(), Some("2024-05-01T10:00:00Z"));
+        // Bitbucket states the next page itself.
+        assert_eq!(page.next_page, Some(2));
+    }
+
+    #[test]
+    fn test_parse_bitbucket_repository_page_last_page() {
+        let json = r#"{ "values": [], "next": null }"#;
+        let page = parse_bitbucket_repository_page(json, 3).expect("page should parse");
+        assert!(page.repositories.is_empty());
+        assert_eq!(page.next_page, None);
+    }
+
+    #[test]
+    fn test_parse_bitbucket_repository_page_skips_ssh_only() {
+        // With no HTTPS clone link there is no URL the account's token could
+        // authenticate, so the entry is left out rather than filled in broken.
+        let json = r#"{
+            "values": [{
+                "uuid": "{x}",
+                "name": "sshonly",
+                "full_name": "team/sshonly",
+                "description": null,
+                "is_private": false,
+                "updated_on": null,
+                "mainbranch": null,
+                "workspace": null,
+                "links": { "clone": [{ "name": "ssh", "href": "git@bitbucket.org:team/sshonly.git" }] }
+            }]
+        }"#;
+        let page = parse_bitbucket_repository_page(json, 1).expect("page should parse");
+        assert!(page.repositories.is_empty());
+    }
+
+    #[test]
+    fn test_map_repository_list_error_auth() {
+        let err = map_repository_list_error(reqwest::StatusCode::UNAUTHORIZED, "unauthorized");
+        assert!(matches!(err, GitnadoError::AuthenticationRequired));
+
+        let other = map_repository_list_error(reqwest::StatusCode::NOT_FOUND, "no such workspace");
+        assert!(matches!(other, GitnadoError::OperationFailed(_)));
+        assert!(other.to_string().contains("no such workspace"));
+    }
+
+    #[tokio::test]
+    async fn test_list_bitbucket_repositories_no_credentials() {
+        let _policy = no_policy();
+        // No token and no app password: refuse rather than call the API
+        // unauthenticated.
+        let result = list_bitbucket_repositories(None, None, None, None, None, None).await;
+        assert!(result.is_err());
     }
 
     // ========================================================================

@@ -7,13 +7,14 @@ import {
   injectCommandMock,
   openViaCommandPalette,
   autoConfirmDialogs,
+  isAppDialogOpen,
 } from '../fixtures/test-helpers';
 
 /**
  * E2E tests for the Git Configuration Dialog (lv-config-dialog).
  *
  * The dialog has three tabs: Identity, Settings, and Aliases.
- * It is opened by setting showConfig = true on the app-shell and renders
+ * It is opened from the command palette (or the native menu) and renders
  * inside an lv-modal with the title "Git Configuration".
  */
 
@@ -507,19 +508,15 @@ test.describe('Config Dialog - Tab Navigation', () => {
     await expect(page.locator('lv-config-dialog .alias-list, lv-config-dialog .add-alias-form').first()).toBeVisible();
   });
 
-  test('dialog should close when modal close event fires', async ({ page }) => {
-    await page.evaluate(() => {
-      const el = document.querySelector('lv-config-dialog');
-      if (el) {
-        el.dispatchEvent(new CustomEvent('close', { bubbles: true }));
-      }
-    });
+  test('dialog should close when the modal close button is pressed', async ({ page }) => {
+    // Driven through the real affordance: the modal's × dispatches `close`,
+    // which app-shell's binding turns into a dialog-store close. The previous
+    // version of this test dispatched the event at `document.querySelector`,
+    // which never pierces app-shell's shadow root, so it asserted nothing.
+    await page.locator('lv-config-dialog lv-modal .close-btn').click();
 
-    const isOpen = await page.evaluate(() => {
-      const appShell = document.querySelector('app-shell') as HTMLElement & { showConfig: boolean };
-      return appShell?.showConfig ?? false;
-    });
-    expect(isOpen).toBe(false);
+    await expect(page.locator('lv-config-dialog .tab').first()).toBeHidden();
+    expect(await isAppDialogOpen(page, 'config')).toBe(false);
   });
 });
 

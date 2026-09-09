@@ -1155,3 +1155,201 @@ test.describe('Word Wrap setting', () => {
     await expect(page.locator(DIFF_CONTENT)).toHaveClass(/word-wrap/);
   });
 });
+
+test.describe('Diff whitespace and context settings', () => {
+  let rightPanel: RightPanelPage;
+  let graph: GraphPanelPage;
+
+  const WHITESPACE_SELECT = 'lv-diff-view #diff-ignore-whitespace';
+  const CONTEXT_INPUT = 'lv-diff-view #diff-context-lines';
+  const SETTINGS_WHITESPACE = 'lv-settings-dialog #diff-whitespace-select';
+  const SETTINGS_CONTEXT = 'lv-settings-dialog #diff-context-lines-input';
+
+  /**
+   * A get_file_diff mock that actually reacts to the two new arguments: one
+   * context line per requested context line, and an empty diff once any
+   * whitespace mode is active — exactly what libgit2 does for a change the mode
+   * swallows. That lets the assertions check the rendered result, not merely
+   * that a command was sent.
+   */
+  async function mockOptionAwareDiff(page: import('@playwright/test').Page) {
+    await page.evaluate(() => {
+      type Invoke = (cmd: string, args?: unknown) => Promise<unknown>;
+      const w = window as unknown as {
+        __TAURI_INTERNALS__: { invoke: Invoke };
+        __INVOKED_COMMANDS__?: { command: string; args: unknown }[];
+      };
+      const original = w.__TAURI_INTERNALS__.invoke;
+      w.__TAURI_INTERNALS__.invoke = async (command: string, args?: unknown) => {
+        if (command !== 'get_file_diff') return original(command, args);
+        w.__INVOKED_COMMANDS__?.push({ command, args });
+
+        const a = (args ?? {}) as { ignoreWhitespace?: string; contextLines?: number };
+        const ignoring = !!a.ignoreWhitespace && a.ignoreWhitespace !== 'none';
+        const contextLines = typeof a.contextLines === 'number' ? a.contextLines : 3;
+
+        const lines: unknown[] = [];
+        for (let i = 0; i < contextLines; i++) {
+          lines.push({
+            content: `context ${i + 1}`,
+            origin: 'context',
+            oldLineNo: i + 1,
+            newLineNo: i + 1,
+          });
+        }
+        // Deliberately NOT a whitespace-only pair: those render as a single
+        // combined row, which would hide the addition line this spec counts.
+        lines.push({
+          content: 'old value',
+          origin: 'deletion',
+          oldLineNo: contextLines + 1,
+          newLineNo: null,
+        });
+        lines.push({
+          content: 'new value',
+          origin: 'addition',
+          oldLineNo: null,
+          newLineNo: contextLines + 1,
+        });
+
+        return {
+          path: 'src/main.ts',
+          oldPath: null,
+          status: 'modified',
+          hunks: ignoring
+            ? []
+            : [
+                {
+                  header: '@@ -1,5 +1,6 @@',
+                  oldStart: 1,
+                  oldLines: 5,
+                  newStart: 1,
+                  newLines: 6,
+                  lines,
+                },
+              ],
+          isBinary: false,
+          isImage: false,
+          imageType: null,
+          additions: ignoring ? 0 : 1,
+          deletions: ignoring ? 0 : 1,
+        };
+      };
+    });
+  }
+
+  /** The arguments of the most recent get_file_diff invoke. */
+  async function lastDiffArgs(page: import('@playwright/test').Page) {
+    const calls = await findCommand(page, 'get_file_diff');
+    expect(calls.length).toBeGreaterThan(0);
+    return calls[calls.length - 1].args as {
+      ignoreWhitespace?: string;
+      contextLines?: number;
+    };
+  }
+
+  test.beforeEach(async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    graph = new GraphPanelPage(page);
+    await setupOpenRepository(
+      page,
+      withModifiedFiles([
+        { path: 'src/main.ts', status: 'modified', isStaged: false, isConflicted: false },
+      ])
+    );
+    await startCommandCapture(page);
+    await mockOptionAwareDiff(page);
+  });
+
+  test('the diff is fetched with the current whitespace and context settings', async ({ page }) => {
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+
+    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(3);
+    const args = await lastDiffArgs(page);
+    expect(args.ignoreWhitespace).toBe('none');
+    expect(args.contextLines).toBe(3);
+  });
+
+  test('the toolbar whitespace control re-fetches and explains an empty result', async ({
+    page,
+  }) => {
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('lv-diff-view .line.code-addition')).toHaveCount(1);
+
+    await page.locator(WHITESPACE_SELECT).selectOption('all');
+
+    // The diff really re-rendered: no lines, and the reason is on screen.
+    await expect(page.locator('lv-diff-view .line.code-addition')).toHaveCount(0);
+    await expect(page.locator('lv-diff-view .empty')).toContainText('Ignore all whitespace');
+    expect((await lastDiffArgs(page)).ignoreWhitespace).toBe('all');
+  });
+
+  test('the toolbar context control re-fetches with the new count', async ({ page }) => {
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(3);
+
+    await page.locator(CONTEXT_INPUT).fill('1');
+    await page.locator(CONTEXT_INPUT).blur();
+
+    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(1);
+    expect((await lastDiffArgs(page)).contextLines).toBe(1);
+  });
+
+  test('an out-of-range context entry is clamped in the field and the request', async ({
+    page,
+  }) => {
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+
+    await page.locator(CONTEXT_INPUT).fill('99');
+    await page.locator(CONTEXT_INPUT).blur();
+
+    await expect(page.locator(CONTEXT_INPUT)).toHaveValue('20');
+    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(20);
+    expect((await lastDiffArgs(page)).contextLines).toBe(20);
+  });
+
+  test('Settings > Diff and the toolbar are the same preference', async ({ page }) => {
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+
+    await page.keyboard.press('Meta+,');
+    await expect(page.locator('lv-settings-dialog')).toBeVisible();
+    await expect(page.locator(SETTINGS_WHITESPACE)).toHaveValue('none');
+    await page.locator(SETTINGS_WHITESPACE).selectOption('change');
+    await page.locator(SETTINGS_CONTEXT).fill('5');
+    await page.locator(SETTINGS_CONTEXT).blur();
+    await page.locator('lv-settings-dialog button:has-text("Done")').click();
+
+    await expect(page.locator(WHITESPACE_SELECT)).toHaveValue('change');
+    await expect(page.locator(CONTEXT_INPUT)).toHaveValue('5');
+    const args = await lastDiffArgs(page);
+    expect(args.ignoreWhitespace).toBe('change');
+    expect(args.contextLines).toBe(5);
+  });
+
+  test('both choices survive closing and reopening the diff', async ({ page }) => {
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+
+    await page.locator(WHITESPACE_SELECT).selectOption('eol');
+    await page.locator(CONTEXT_INPUT).fill('2');
+    await page.locator(CONTEXT_INPUT).blur();
+    await expect(page.locator(CONTEXT_INPUT)).toHaveValue('2');
+
+    await graph.closeDiff();
+    await expect(graph.diffOverlay).not.toBeVisible();
+
+    await rightPanel.openFileDiff('src/main.ts');
+    await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
+
+    await expect(page.locator(WHITESPACE_SELECT)).toHaveValue('eol');
+    await expect(page.locator(CONTEXT_INPUT)).toHaveValue('2');
+    const args = await lastDiffArgs(page);
+    expect(args.ignoreWhitespace).toBe('eol');
+    expect(args.contextLines).toBe(2);
+  });
+});

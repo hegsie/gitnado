@@ -263,3 +263,66 @@ describe('lv-graph-canvas right-click selection', () => {
     expect(menus.length, 'a miss opens no commit context menu').to.equal(0);
   });
 });
+
+
+/**
+ * A multi-selection has to be AUDIBLE, not just painted.
+ *
+ * The live region named only the primary commit, so Ctrl+clicking a second,
+ * third and fourth commit announced four ordinary single selections — the size
+ * of the set the context menu's batch actions run over was invisible to a
+ * screen reader.
+ */
+describe('lv-graph-canvas multi-selection announcement', () => {
+  const statusText = (h: Harness): string =>
+    h.el.shadowRoot!.querySelector('[role="status"]')?.textContent?.trim() ?? '';
+
+  it('names only the commit for a single selection', async () => {
+    const h = await mountCanvas();
+
+    h.setHit(commitC.oid);
+    await h.click();
+
+    expect(statusText(h)).to.contain('Commit C');
+    expect(statusText(h), 'one commit is not a set').to.not.contain('selected');
+  });
+
+  it('leads with the count once a second commit is Ctrl+clicked', async () => {
+    const h = await mountCanvas();
+
+    h.setHit(commitC.oid);
+    await h.click();
+    h.setHit(commitB.oid);
+    await h.click({ ctrlKey: true });
+
+    expect(statusText(h)).to.contain('2 commits selected');
+    expect(statusText(h), 'the primary is still named after the count').to.contain('Commit B');
+  });
+
+  it('counts a Shift+click range', async () => {
+    const h = await mountCanvas();
+
+    h.setHit(commitC.oid);
+    await h.click();
+    h.setHit(commitA.oid);
+    await h.click({ shiftKey: true });
+
+    expect(statusText(h)).to.contain('3 commits selected');
+  });
+
+  it('drops the count when the selection falls back to one commit', async () => {
+    const h = await mountCanvas();
+
+    h.setHit(commitC.oid);
+    await h.click();
+    h.setHit(commitB.oid);
+    await h.click({ ctrlKey: true });
+    expect(statusText(h)).to.contain('2 commits selected');
+
+    // Ctrl+click the same commit again to deselect it.
+    await h.click({ ctrlKey: true });
+
+    expect(h.selectedOids(), 'precondition: one commit left').to.have.length(1);
+    expect(statusText(h)).to.not.contain('selected');
+  });
+});

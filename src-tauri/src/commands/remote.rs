@@ -195,6 +195,57 @@ pub async fn get_remotes(path: String) -> Result<Vec<Remote>> {
     Ok(result)
 }
 
+/// Backend half of the offline/allowlist gate for a remote operation.
+///
+/// The frontend gate (`checkNetworkAllowed`) still runs first and is the half
+/// that can explain the refusal before any work starts; this is the backstop
+/// for a call site that forgets it. `resolve` names the remote the operation
+/// will ACTUALLY contact — assuming "origin" evaluates the allowlist against
+/// the wrong host in the ordinary fork layout, which is the same reason
+/// `get_pull_remote` and `get_push_remote` exist. `for_push` judges the
+/// remote's `pushurl` when it has one, which is where a push really goes.
+///
+/// Offline mode used to short-circuit here to `guard_remote(path, None)`, on
+/// the belief that it "refuses everything" so naming the remote was wasted
+/// work. It does not: `check` permits a target that never leaves the machine.
+/// That fast path threw away both the remote `resolve` had just named and the
+/// push/fetch distinction, and judged the CURRENT BRANCH's tracking remote and
+/// its FETCH url instead — so with a branch tracking a local `/mnt/usb` remote
+/// it let a `fetch` from `origin` on github.com through (the backstop failing
+/// OPEN, with nothing behind it to re-check), and with a branch tracking
+/// `origin` it refused a push to `/mnt/usb`. Nothing is paid for on the hot
+/// path regardless: `guard_remote`/`guard_push_remote` return immediately when
+/// no policy is in force, and the repository is only opened past this point.
+fn guard_remote_op(
+    path: &str,
+    for_push: bool,
+    resolve: impl FnOnce(&git2::Repository) -> Option<String>,
+) -> Result<()> {
+    let settings = crate::services::security::global().snapshot();
+    if !settings.offline_mode && settings.remote_allowlist.is_empty() {
+        return Ok(());
+    }
+    let repo = git2::Repository::open(Path::new(path)).ok();
+    let remote = repo.as_ref().and_then(resolve);
+    if for_push {
+        crate::services::security::guard_push_remote(path, remote.as_deref())
+    } else {
+        crate::services::security::guard_remote(path, remote.as_deref())
+    }
+}
+
+/// The gate for a push to SEVERAL remotes: every destination is checked
+/// before any is contacted, so one disallowed remote refuses the whole
+/// gesture rather than half-pushing. Judged on each remote's push URL.
+fn guard_push_destinations(path: &str, remotes: &[String]) -> Result<()> {
+    for r in remotes {
+        crate::services::security::guard_push_remote(path, Some(r))?;
+        // ...and the LFS endpoint its pre-push upload would reach.
+        crate::commands::lfs::guard_lfs_upload(path, Some(r))?;
+    }
+    Ok(())
+}
+
 /// Fetch from remote
 #[allow(clippy::too_many_arguments)]
 #[command]
@@ -217,6 +268,9 @@ pub async fn fetch(
     // alt-tabbed back into the app. That is exactly the noise the background
     // fetch is documented to avoid.
     let quiet = quiet.unwrap_or(false);
+    guard_remote_op(&path, false, |repo| {
+        Some(resolve_fetch_remote(repo, remote.clone()))
+    })?;
     // Claimed BEFORE the timeout wrapper, and handed to the blocking task
     // below so it outlives a timed-out caller — see services/remote_ops.rs.
     //
@@ -1022,6 +1076,10 @@ pub async fn pull(
     timeout_secs: Option<u64>,
     operation_id: Option<String>,
 ) -> Result<()> {
+    guard_remote_op(&path, false, |repo| {
+        let (_, head_refname) = resolve_pull_branch(repo, branch.as_deref()).ok()?;
+        Some(resolve_pull_remote(repo, remote.clone(), &head_refname))
+    })?;
     // Claimed before the timeout wrapper and released by the blocking task,
     // not by this future — see services/remote_ops.rs. The ensure_pullable
     // guard inside pull_branch only refuses a repository that is ALREADY
@@ -1409,6 +1467,13 @@ pub async fn push(
     if let Some(ref r) = remote {
         reject_flag_like(r, "Remote name")?;
     }
+    guard_remote_op(&path, true, |repo| {
+        Some(resolve_push_remote(repo, remote.clone()))
+    })?;
+    // In an LFS repository the pre-push hook uploads objects BEFORE any ref
+    // is sent, to an endpoint a committed `.lfsconfig` may choose — gated on
+    // that endpoint, for the same destination the gate above just judged.
+    crate::commands::lfs::guard_lfs_upload(&path, remote.as_deref())?;
 
     // The claim the racing retry is about. Push has no abort point at all, so
     // when the network timeout fires the git2/CLI push keeps running against
@@ -1540,6 +1605,64 @@ fn push_remote_url(path: &str, remote_name: &str) -> Option<String> {
         .map(|u| u.to_string())
 }
 
+/// How polling a spawned `git push` ended.
+enum PushOutcome {
+    Finished(std::process::ExitStatus),
+    Cancelled,
+    WaitFailed(String),
+}
+
+/// Poll a spawned `git push` to completion, honouring a cancellation only for
+/// as long as the child is genuinely still running.
+///
+/// The reap comes FIRST and the sleep last, deliberately. Reading the cancel
+/// flag before `try_wait` reported pushes that had already landed as
+/// cancelled: the poll sleeps 100ms between iterations, so a push that exited
+/// during a sleep, followed by a Cancel click before the loop woke, took the
+/// cancel branch on the next iteration — `kill` was a no-op on the exited
+/// child, the real exit status was thrown away, and the user was told "Push
+/// cancelled" for a `--force-with-lease` that had already overwritten the
+/// remote branch (no Output panel entry, no sidebar refresh). Reaping first
+/// keeps the invariant the frontend is documented on in
+/// `services/git.service.ts`: OPERATION_CANCELLED is only ever returned for a
+/// push that really was aborted. `commands::repository`'s CLI clone polls the
+/// same way.
+fn poll_push_child(child: &mut std::process::Child, monitor: &TransferMonitor) -> PushOutcome {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return PushOutcome::Finished(status),
+            Ok(None) => {}
+            Err(e) => return PushOutcome::WaitFailed(e.to_string()),
+        }
+
+        if monitor.is_cancelled() {
+            return PushOutcome::Cancelled;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Kill and reap a child the poll gave up on, and say what it really was.
+///
+/// `poll_push_child` reads the cancel flag AFTER `try_wait` reports the child
+/// still running, so a push that exits between those two reads is handed over
+/// as `Cancelled`: the kill below is a no-op on it, and reaping it as
+/// cancelled would throw its real exit status away — the same misreport the
+/// reap-first ordering exists to prevent, shrunk from the 100ms sleep to a
+/// few instructions but not closed. The status `wait` returns after the kill
+/// is the truth: a `success()` there is a push that landed on the remote, and
+/// the user has to be told so. A killed child does not report success (it is
+/// signalled on Unix and exits non-zero on Windows), so a push that really
+/// was stopped stays cancelled.
+fn reap_abandoned_push(child: &mut std::process::Child, abnormal: PushOutcome) -> PushOutcome {
+    let _ = child.kill();
+    match child.wait() {
+        Ok(status) if status.success() => PushOutcome::Finished(status),
+        _ => abnormal,
+    }
+}
+
 /// Run a prepared `git push` to completion, killing it if the user cancels.
 ///
 /// `Command::output()` blocks until the child exits, which is why the force
@@ -1548,12 +1671,17 @@ fn push_remote_url(path: &str, remote_name: &str) -> Option<String> {
 /// to stderr, and leaving a piped stream unread deadlocks the child once the
 /// pipe buffer fills — the same trap `clone_repository` documents.
 fn run_push_command(
-    mut cmd: std::process::Command,
+    mut cmd: crate::utils::GitCommand,
     monitor: &TransferMonitor,
 ) -> Result<std::process::Output> {
     if monitor.is_cancelled() {
         return Err(GitnadoError::OperationCancelled);
     }
+
+    // The child is driven by hand below so a cancellation can kill it, which
+    // means `GitCommand::output()` never runs and never reports the push to the
+    // Output panel. Time it here and report the result explicitly instead.
+    let started = std::time::Instant::now();
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -1585,37 +1713,37 @@ fn run_push_command(
             .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
     );
 
-    let status = loop {
-        if monitor.is_cancelled() {
-            // Killed and reaped before returning: an orphaned `git push` would
-            // keep talking to the remote after the user was told it stopped.
-            let _ = child.kill();
-            let _ = child.wait();
+    // Single exit path for every abnormal outcome, the shape the CLI clone in
+    // `commands::repository` uses: kill the child and join the drain threads
+    // once, instead of repeating that in each early return.
+    let outcome = match poll_push_child(&mut child, monitor) {
+        finished @ PushOutcome::Finished(_) => finished,
+        // Killed and reaped before returning: an orphaned `git push` would
+        // keep talking to the remote after the user was told it stopped.
+        abnormal => reap_abandoned_push(&mut child, abnormal),
+    };
+    let status = match outcome {
+        PushOutcome::Finished(status) => status,
+        abnormal => {
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
-            return Err(GitnadoError::OperationCancelled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(GitnadoError::OperationFailed(format!(
-                    "Failed to wait for git push: {}",
-                    e
-                )));
-            }
+            return Err(match abnormal {
+                PushOutcome::Cancelled => GitnadoError::OperationCancelled,
+                PushOutcome::WaitFailed(e) => {
+                    GitnadoError::OperationFailed(format!("Failed to wait for git push: {}", e))
+                }
+                PushOutcome::Finished(_) => unreachable!("handled above"),
+            });
         }
     };
 
-    Ok(std::process::Output {
+    let output = std::process::Output {
         status,
         stdout: stdout_reader.join().unwrap_or_default(),
         stderr: stderr_reader.join().unwrap_or_default(),
-    })
+    };
+    cmd.report_run(started, &output);
+    Ok(output)
 }
 
 /// Push via git CLI (used for --force-with-lease and --tags which git2 doesn't support)
@@ -1806,6 +1934,7 @@ pub async fn push_to_multiple_remotes(
     for r in &remotes {
         reject_flag_like(r, "Remote name")?;
     }
+    guard_push_destinations(&path, &remotes)?;
 
     // Each push is blocking network I/O for potentially seconds; running them
     // sequentially on the async executor blocks a Tokio worker for the full
@@ -1918,6 +2047,13 @@ pub async fn fetch_all_remotes(
     tags: bool,
     token: Option<String>,
 ) -> Result<FetchAllResult> {
+    {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        for remote_name in repo.remotes()?.iter().filter_map(|s| s.ok().flatten()) {
+            crate::services::security::guard_remote(&path, Some(remote_name))?;
+        }
+    }
+
     // Multiple sequential blocking fetches; run on a blocking thread to keep
     // the Tokio runtime responsive.
     let path_for_task = path.clone();
@@ -2120,6 +2256,139 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    // ---- the push gate judges the push URL, the fetch gate the fetch URL ----
+    //
+    // git2 and `git push` contact `remote.<n>.pushurl` when one is set; the
+    // token scoping (`push_remote_url`) knew that and the allowlist did not.
+
+    /// origin fetches from github.com and pushes to gitlab.example.
+    fn repo_with_split_push_url() -> TestRepo {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/org/x.git");
+        repo.add_remote("mirror", "https://github.com/org/mirror.git");
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("remote.origin.pushurl", "https://gitlab.example/org/x.git")
+            .unwrap();
+        repo
+    }
+
+    fn blocked_host(result: Result<()>) -> String {
+        match result {
+            Err(GitnadoError::NetworkBlocked(message)) => message,
+            other => panic!("expected a NetworkBlocked refusal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn a_push_is_refused_on_its_push_url_while_a_fetch_passes_on_its_fetch_url() {
+        let repo = repo_with_split_push_url();
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let fetch = guard_remote_op(&repo.path_str(), false, |repo| {
+            Some(resolve_fetch_remote(repo, None))
+        });
+        assert!(fetch.is_ok(), "the fetch URL is on the list: {:?}", fetch);
+
+        let push = guard_remote_op(&repo.path_str(), true, |repo| {
+            Some(resolve_push_remote(repo, None))
+        });
+        assert!(
+            blocked_host(push).contains("gitlab.example"),
+            "the refusal must name the host the push would have reached"
+        );
+    }
+
+    #[test]
+    fn a_push_to_a_remote_without_a_push_url_is_judged_on_its_url() {
+        let repo = repo_with_split_push_url();
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        let push = guard_remote_op(&repo.path_str(), true, |repo| {
+            Some(resolve_push_remote(repo, Some("mirror".to_string())))
+        });
+        assert!(push.is_ok(), "no pushurl falls back to the url: {:?}", push);
+    }
+
+    #[test]
+    fn a_multi_remote_push_is_refused_when_any_push_url_is_off_the_allowlist() {
+        let repo = repo_with_split_push_url();
+        let _guard = crate::services::security::test_support::allowlist(&["github.com"]);
+
+        assert!(guard_push_destinations(&repo.path_str(), &["mirror".to_string()]).is_ok());
+        let refused = guard_push_destinations(
+            &repo.path_str(),
+            &["mirror".to_string(), "origin".to_string()],
+        );
+        assert!(blocked_host(refused).contains("gitlab.example"));
+    }
+
+    /// `origin` on github.com, `backup` on a USB disk, and the current branch
+    /// tracking whichever `tracks` names.
+    fn repo_tracking(tracks: &str) -> TestRepo {
+        let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://github.com/me/app.git");
+        repo.add_remote("backup", "/mnt/usb/app.git");
+        let branch = repo.current_branch();
+        let git = repo.repo();
+        let mut cfg = git.config().unwrap();
+        cfg.set_str(&format!("branch.{}.remote", branch), tracks)
+            .unwrap();
+        cfg.set_str(
+            &format!("branch.{}.merge", branch),
+            &format!("refs/heads/{}", branch),
+        )
+        .unwrap();
+        drop(cfg);
+        repo
+    }
+
+    /// Offline mode used to short-circuit this guard to
+    /// `guard_remote(path, None)` on the belief that it "refuses everything" —
+    /// which stopped being true when `check` grew the local-target carve-out.
+    /// The short-circuit threw away both the remote the caller had just
+    /// resolved and the push/fetch distinction, and judged the CURRENT
+    /// BRANCH's tracking remote and its FETCH url instead.
+    ///
+    /// The serious direction is fail-OPEN: with the branch tracking a remote on
+    /// a USB disk, a `fetch` from `origin` on github.com was judged on
+    /// `/mnt/usb/app.git`, found local, and permitted — with offline mode on.
+    /// Nothing downstream re-checks it: fetch and pull have no LFS guard behind
+    /// them, so this backstop was the only gate left.
+    #[test]
+    fn offline_mode_judges_the_remote_the_caller_named_not_the_tracked_one() {
+        let repo = repo_tracking("backup");
+        let _guard = crate::services::security::test_support::offline();
+
+        let fetch = guard_remote_op(&repo.path_str(), false, |repo| {
+            Some(resolve_fetch_remote(repo, Some("origin".to_string())))
+        });
+        assert!(
+            blocked_host(fetch).contains("Offline mode"),
+            "a fetch from github.com is not excused by a local tracking remote"
+        );
+    }
+
+    /// ...and the fail-CLOSED direction of the same line: the branch tracks
+    /// `origin` on github.com, the user pushes to the USB disk, and the guard
+    /// judged origin's github url and refused a push that never leaves the
+    /// machine — the refusal the local-target carve-out exists to remove.
+    #[test]
+    fn offline_mode_permits_a_push_to_a_local_remote_the_branch_does_not_track() {
+        let repo = repo_tracking("origin");
+        let _guard = crate::services::security::test_support::offline();
+
+        let push = guard_remote_op(&repo.path_str(), true, |repo| {
+            Some(resolve_push_remote(repo, Some("backup".to_string())))
+        });
+        assert!(
+            push.is_ok(),
+            "a push to a USB disk opens no socket: {:?}",
+            push
+        );
+    }
+
     // ---- a timed-out remote operation is never abandoned silently ----
 
     /// Collects whatever the late reporter is handed, so a test can assert on
@@ -2149,19 +2418,65 @@ mod tests {
         seen.lock().unwrap().take()
     }
 
+    /// A blocking task that cannot finish until the test says so.
+    ///
+    /// The timing these tests care about is causal, not measured: the caller
+    /// gives up FIRST, the work lands LATER. A task that sleeps for "long
+    /// enough" only reproduces that order when the machine honours the
+    /// numbers, and under a loaded test run it does not — the blocking pool
+    /// may not even have started the task by the time the timeout fires, or
+    /// may finish it after the fixed wait the test then spends looking for
+    /// the late report. Gating the task on a channel makes the order a fact:
+    /// the timeout has already been reported when `release` is sent.
+    fn gated_task<T: Send + 'static>(
+        outcome: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> (
+        std::sync::mpsc::Sender<()>,
+        tokio::task::JoinHandle<Result<T>>,
+    ) {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let handle = tokio::task::spawn_blocking(move || {
+            let _ = gate.recv();
+            outcome()
+        });
+        (release, handle)
+    }
+
+    /// A short timeout that the gated task above is guaranteed to miss.
+    const ELAPSES_FIRST: Option<Duration> = Some(Duration::from_millis(10));
+
+    /// Hand a task back once it has really finished, so awaiting it under a
+    /// timeout exercises the "made the deadline" branch deterministically
+    /// instead of racing the blocking pool against the clock.
+    async fn settled<T>(handle: tokio::task::JoinHandle<T>) -> tokio::task::JoinHandle<T> {
+        for _ in 0..1500 {
+            if handle.is_finished() {
+                return handle;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the blocking task never finished");
+    }
+
+    /// Panic out of a task the way `panic!` does — tokio catches the unwind
+    /// and the `JoinError` reports it as a panic — but WITHOUT the panic hook.
+    /// The hook is process-global: with `RUST_BACKTRACE` set it symbolicates
+    /// the whole stack under a lock every other panicking test contends for,
+    /// which on this binary costs seconds — spent before the task's join
+    /// handle resolves, inside the window these tests are timing.
+    fn unwind<T>(message: &'static str) -> T {
+        std::panic::resume_unwind(Box::new(message))
+    }
+
     /// `tokio::time::timeout` only DROPS the future it wraps — a
     /// `spawn_blocking` task keeps running. The merge landed minutes after the
     /// user was told the pull timed out, with no event and no refresh.
     #[tokio::test]
     async fn test_timed_out_task_still_reports_its_completion() {
         let (seen, on_late) = late_slot::<String>();
-        let handle = tokio::task::spawn_blocking(|| {
-            std::thread::sleep(Duration::from_millis(120));
-            Ok("Merge completed".to_string())
-        });
+        let (release, handle) = gated_task(|| Ok("Merge completed".to_string()));
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
 
         match result {
             Err(GitnadoError::OperationTimeout(m)) => {
@@ -2170,9 +2485,8 @@ mod tests {
             other => panic!("expected a Pull timeout, got {:?}", other.map(|_| ())),
         }
 
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        let late = seen.lock().unwrap();
-        match late.as_ref() {
+        release.send(()).unwrap();
+        match late_outcome(&seen).await {
             Some(Ok(message)) => assert_eq!(message, "Merge completed"),
             Some(Err(e)) => panic!("the abandoned task reported a failure: {}", e),
             None => panic!("the abandoned task's completion was never reported at all"),
@@ -2204,8 +2518,7 @@ mod tests {
             Ok("Pushed to origin/main".to_string())
         });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Push", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Push", handle, on_late).await;
         match result {
             Err(GitnadoError::OperationTimeout(m)) => assert_eq!(m, "Push operation timed out"),
             other => panic!("expected a Push timeout, got {:?}", other.map(|_| ())),
@@ -2248,7 +2561,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_that_finishes_in_time_is_never_reported_late() {
         let (seen, on_late) = late_slot::<u32>();
-        let handle = tokio::task::spawn_blocking(|| Ok(7u32));
+        let handle = settled(tokio::task::spawn_blocking(|| Ok(7u32))).await;
 
         let result = await_remote_task(Some(Duration::from_secs(5)), "Pull", handle, on_late).await;
 
@@ -2280,18 +2593,28 @@ mod tests {
     #[tokio::test]
     async fn test_a_late_deadline_abort_is_not_reported_twice() {
         let (seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| {
-            std::thread::sleep(Duration::from_millis(120));
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mark_ended = Arc::clone(&ended);
+        let (release, handle) = gated_task(move || {
+            mark_ended.store(true, std::sync::atomic::Ordering::SeqCst);
             Err(GitnadoError::OperationTimeout(
                 "Pull operation timed out".to_string(),
             ))
         });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
         assert!(matches!(result, Err(GitnadoError::OperationTimeout(_))));
 
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        // Let the abandoned task end, and give the reporter its turn to
+        // decide what to do with the outcome.
+        release.send(()).unwrap();
+        for _ in 0..250 {
+            if ended.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(seen.lock().unwrap().is_none());
     }
 
@@ -2302,17 +2625,16 @@ mod tests {
     #[tokio::test]
     async fn test_a_timeout_after_the_repository_changed_is_still_reported() {
         let (seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| {
-            std::thread::sleep(Duration::from_millis(120));
+        let (release, handle) = gated_task(|| {
             Err(GitnadoError::OperationTimeoutAfterChange(
                 "Pull operation timed out".to_string(),
             ))
         });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
         assert!(matches!(result, Err(GitnadoError::OperationTimeout(_))));
 
+        release.send(()).unwrap();
         match late_outcome(&seen).await {
             Some(Err(GitnadoError::OperationTimeoutAfterChange(_))) => {}
             Some(other) => panic!("unexpected late outcome: {:?}", other.err()),
@@ -2336,15 +2658,12 @@ mod tests {
     #[tokio::test]
     async fn test_a_panicking_abandoned_task_is_reported_not_just_logged() {
         let (seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| -> Result<()> {
-            std::thread::sleep(Duration::from_millis(120));
-            panic!("boom")
-        });
+        let (release, handle) = gated_task(|| -> Result<()> { unwind("boom") });
 
-        let result =
-            await_remote_task(Some(Duration::from_millis(10)), "Pull", handle, on_late).await;
+        let result = await_remote_task(ELAPSES_FIRST, "Pull", handle, on_late).await;
         assert!(matches!(result, Err(GitnadoError::OperationTimeout(_))));
 
+        release.send(()).unwrap();
         match late_outcome(&seen).await {
             Some(Err(GitnadoError::Custom(m))) => assert!(
                 m.starts_with("Pull task failed:"),
@@ -2434,7 +2753,10 @@ mod tests {
     #[tokio::test]
     async fn test_join_failure_keeps_the_operation_label() {
         let (_seen, on_late) = late_slot::<()>();
-        let handle = tokio::task::spawn_blocking(|| -> Result<()> { panic!("boom") });
+        let handle = settled(tokio::task::spawn_blocking(|| -> Result<()> {
+            unwind("boom")
+        }))
+        .await;
 
         let result = await_remote_task(Some(Duration::from_secs(5)), "Push", handle, on_late).await;
 
@@ -4867,6 +5189,173 @@ mod tests {
         assert!(matches!(err, GitnadoError::OperationCancelled));
     }
 
+    // ---- the push poll: reap first, cancel only what is still running ----
+    //
+    // `run_push_command` drives the `git push` child by hand so a Cancel can
+    // kill it. Which of the two things it looks at first — the exit status or
+    // the cancel flag — decides whether a push that already landed on the
+    // remote is reported as the success it was.
+
+    /// A child that has already exited, along with the status it exited with.
+    fn already_exited_child(repo: &TestRepo) -> (std::process::Child, i32) {
+        // Exits 128 without touching the network or the working tree.
+        let mut child = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path_str())
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("refs/heads/gitnado-no-such-branch")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("git must be on PATH");
+        let status = child.wait().expect("the child must exit");
+        (child, status.code().expect("a normal exit"))
+    }
+
+    /// A child that is still running, and stays running until it is killed.
+    fn still_running_child() -> std::process::Child {
+        // Reads stdin until EOF; the pipe is held open here, so EOF never
+        // comes and the child is reliably alive when the cancel lands.
+        std::process::Command::new("git")
+            .arg("hash-object")
+            .arg("--stdin")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("git must be on PATH")
+    }
+
+    /// The regression. The poll sleeps 100ms between iterations, so a push can
+    /// finish during a sleep and the user can click Cancel before the loop
+    /// wakes. Reading the flag first turned that into `OperationCancelled` for
+    /// a `--force-with-lease` that HAD already overwritten the remote branch:
+    /// "Push cancelled" in the toast, no Output panel entry, no refresh, and a
+    /// user who believes nothing reached the remote. The real exit status must
+    /// win over a cancel that arrived too late.
+    #[test]
+    fn a_push_that_already_exited_is_reported_with_its_real_status() {
+        let repo = TestRepo::with_initial_commit();
+        let (mut child, real_code) = already_exited_child(&repo);
+
+        let (monitor, token, _events) = cancellable_monitor("op-late-cancel");
+        token.cancel();
+
+        match poll_push_child(&mut child, &monitor) {
+            PushOutcome::Finished(status) => assert_eq!(
+                status.code(),
+                Some(real_code),
+                "the status the push really exited with must survive"
+            ),
+            PushOutcome::Cancelled => panic!(
+                "a push that had already finished was reported as cancelled — \
+                 the remote has been written, the user is told it was not"
+            ),
+            PushOutcome::WaitFailed(e) => panic!("unexpected wait failure: {}", e),
+        }
+    }
+
+    /// The other direction, which the fix above must not break: a Cancel that
+    /// arrives while the push is genuinely still running still stops it.
+    #[test]
+    fn a_push_still_running_when_the_cancel_arrives_is_cancelled() {
+        let mut child = still_running_child();
+
+        let (monitor, token, _events) = cancellable_monitor("op-live-cancel");
+        token.cancel();
+
+        let outcome = poll_push_child(&mut child, &monitor);
+
+        // Clean up before asserting, so a failure does not leak the child.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(
+            matches!(outcome, PushOutcome::Cancelled),
+            "a push still in flight must be stoppable"
+        );
+    }
+
+    /// A child that exited successfully, already reaped.
+    fn exited_successfully_child(repo: &TestRepo) -> std::process::Child {
+        let mut child = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path_str())
+            .arg("rev-parse")
+            .arg("HEAD")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("git must be on PATH");
+        assert!(child.wait().expect("the child must exit").success());
+        child
+    }
+
+    /// The residual window the reap-first ordering left open: the poll reads
+    /// the cancel flag AFTER `try_wait` reports the child still running, and a
+    /// push that exits between those two reads is handed over as `Cancelled`.
+    /// That interleaving is a few instructions wide and cannot be driven
+    /// deterministically from outside the loop, so the property is pinned at
+    /// the point of decision: a child handed over as cancelled that `wait`
+    /// then reports as a success is a push that landed, and is reported with
+    /// that status rather than as "Push cancelled".
+    #[test]
+    fn a_push_that_exited_successfully_before_the_kill_is_reported_as_finished() {
+        let repo = TestRepo::with_initial_commit();
+        let mut child = exited_successfully_child(&repo);
+
+        match reap_abandoned_push(&mut child, PushOutcome::Cancelled) {
+            PushOutcome::Finished(status) => assert!(status.success()),
+            PushOutcome::Cancelled => panic!(
+                "a push that had exited 0 was reported as cancelled — the remote has been \
+                 written, the user is told it was not"
+            ),
+            PushOutcome::WaitFailed(e) => panic!("unexpected wait failure: {}", e),
+        }
+    }
+
+    /// The balancing half: a child that really was still running is killed,
+    /// and the kill's status must not be mistaken for a landed push.
+    #[test]
+    fn a_push_killed_while_still_running_stays_cancelled() {
+        let mut child = still_running_child();
+
+        let outcome = reap_abandoned_push(&mut child, PushOutcome::Cancelled);
+
+        assert!(
+            matches!(outcome, PushOutcome::Cancelled),
+            "a killed push must not be reported as landed"
+        );
+        assert!(
+            child.try_wait().expect("reaped").is_some(),
+            "the child must have been reaped"
+        );
+    }
+
+    /// An uncancelled run reaches the end of `run_push_command`: the output is
+    /// collected from the drain threads and the run is reported to the Output
+    /// panel (`report_run`), which is exactly what the late-cancel bug skipped.
+    #[test]
+    fn a_finished_push_command_returns_its_captured_output() {
+        let repo = TestRepo::with_initial_commit();
+        let mut cmd = create_command("git");
+        cmd.arg("-C")
+            .arg(repo.path_str())
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("refs/heads/gitnado-no-such-branch");
+
+        let output = run_push_command(cmd, &TransferMonitor::disabled())
+            .expect("a completed command must be returned, not an error");
+
+        assert_eq!(output.status.code(), Some(128));
+        assert!(
+            !output.stderr.is_empty(),
+            "stderr must be drained and carried into the reported output"
+        );
+    }
+
     /// A cancelled pull must leave the working tree exactly where it was —
     /// never half-merged. Cancelling before the fetch is the easy half of
     /// that; the merge itself is deliberately not interruptible.
@@ -4951,7 +5440,11 @@ mod tests {
 /// Deepen a shallow repository by fetching more history
 #[command]
 pub async fn deepen_repository(path: String, depth: u32) -> Result<()> {
-    let output = std::process::Command::new("git")
+    // `git fetch --deepen` is a fetch.
+    crate::services::security::guard_remote(&path, None)?;
+    // Through `create_command` like every other user operation: no credential
+    // prompt can hang it, and the panel shows the fetch it ran.
+    let output = crate::utils::create_command("git")
         .arg("-C")
         .arg(&path)
         .arg("fetch")
@@ -4973,7 +5466,8 @@ pub async fn deepen_repository(path: String, depth: u32) -> Result<()> {
 /// Convert a shallow repository to a full clone by fetching all history
 #[command]
 pub async fn unshallow_repository(path: String) -> Result<()> {
-    let output = std::process::Command::new("git")
+    crate::services::security::guard_remote(&path, None)?;
+    let output = crate::utils::create_command("git")
         .arg("-C")
         .arg(&path)
         .arg("fetch")

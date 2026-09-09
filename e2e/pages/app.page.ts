@@ -24,6 +24,7 @@ export class AppPage {
   readonly openButton: Locator;
   readonly cloneButton: Locator;
   readonly initButton: Locator;
+  readonly scanButton: Locator;
 
   // Recent repositories
   readonly recentSection: Locator;
@@ -59,6 +60,7 @@ export class AppPage {
     this.openButton = this.welcomeScreen.locator('.action-btn', { hasText: 'Open' });
     this.cloneButton = this.welcomeScreen.locator('.action-btn', { hasText: 'Clone' });
     this.initButton = this.welcomeScreen.locator('.action-btn', { hasText: 'Init' });
+    this.scanButton = this.welcomeScreen.locator('.action-btn', { hasText: 'Scan' });
 
     // Recent repos
     this.recentSection = this.welcomeScreen.locator('.recent-section');
@@ -67,7 +69,16 @@ export class AppPage {
 
     // Dialogs
     this.cloneDialog = page.locator('lv-clone-dialog');
-    this.initDialog = page.locator('lv-init-dialog');
+    // More than one <lv-init-dialog> is mounted at a time: the toolbar keeps
+    // its own for the Init button, and the welcome screen (no repository) or
+    // app-shell (a repository open) mounts the one the scan/drop flows use. A
+    // bare `lv-init-dialog` locator therefore matches all of them and trips
+    // Playwright's strict mode. This resolves to the one actually on screen —
+    // `open` is reflected onto the inner <lv-modal>, and the host itself has
+    // no box of its own to be "visible". Its fields are slotted, so they are
+    // NOT descendants of this locator: reach them through
+    // `DialogsPage.init`'s role-based locators.
+    this.initDialog = page.locator('lv-init-dialog lv-modal[open]');
     this.settingsDialog = page.locator('lv-settings-dialog');
 
     // Command palette

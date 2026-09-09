@@ -152,6 +152,47 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+  # macOS has its own credential-handling path (Cargo.toml shells out to the
+  # `security` CLI instead of the `keyring` crate to avoid keychain ACL
+  # prompts on dev builds) plus several other `#[cfg(target_os = "macos")]`
+  # code paths (terminal opening, Finder "reveal", system detection). None of
+  # that was exercised by a Linux or Windows runner, so it was only ever
+  # verified by hand. This job is what makes "it works on macOS" a claim CI
+  # can check.
+  test-backend-macos:
+    name: Test Backend (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+          prefix-key: macos-latest
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test
+
   # The rebase flows reach git through GIT_SEQUENCE_EDITOR/GIT_EDITOR, which
   # Git for Windows evaluates with its own bundled POSIX shell and its own path
   # rules. Nothing about that is exercised by a Linux runner, so the Windows

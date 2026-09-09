@@ -18,9 +18,32 @@ pub struct CommitTemplate {
     pub created_at: i64,
 }
 
+// The test-only directory override behind `templates_dir` below.
+#[cfg(test)]
+thread_local! {
+    static TEMPLATES_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The directory `commit-templates.json` lives in.
+///
+/// Tests point this at a `TempDir` (see `TemplatesSandbox`). Without an
+/// override, `data_dir()` resolves the REAL user data directory — it
+/// `create_dir_all`s `~/.local/share/gitnado` and renames a pre-0.9.0
+/// `~/.local/share/leviathan` into it on the way — so a plain `cargo test`
+/// migrated the developer's own app data and read-modify-wrote their own
+/// templates file, from several threads at once.
+fn templates_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = TEMPLATES_DIR_OVERRIDE.with(|dir| dir.borrow().clone()) {
+        return Ok(dir);
+    }
+    crate::utils::app_paths::data_dir()
+}
+
 /// Get the templates file path
 fn get_templates_path() -> Result<PathBuf> {
-    Ok(crate::utils::app_paths::data_dir()?.join("commit-templates.json"))
+    Ok(templates_dir()?.join("commit-templates.json"))
 }
 
 /// Load templates from file
@@ -224,6 +247,76 @@ mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
 
+    /// The suite must never read or write the developer's own templates.
+    ///
+    /// `get_templates_path` resolves through `app_paths::data_dir()`, which
+    /// `create_dir_all`s the real `~/.local/share/gitnado` AND renames a
+    /// pre-0.9.0 `~/.local/share/leviathan` into it on the way. Three tests
+    /// reached it, two of them read-modify-WRITING the real
+    /// `commit-templates.json` with no lock between them — so a plain
+    /// `cargo test` migrated a real app-data directory and could drop the
+    /// user's own template entries.
+    /// Points `templates_dir()` at a temporary directory for the rest of this
+    /// test, and puts it back on drop.
+    ///
+    /// Per THREAD, not per process: `#[tokio::test]` runs its future on the
+    /// thread cargo gave the test, so every test gets its own directory and
+    /// none of them can lose another's writes — which two of the tests below
+    /// could do to each other, and to the real file, at `--test-threads=32`.
+    struct TemplatesSandbox {
+        /// Held, never read: dropping the `TempDir` deletes the directory, so
+        /// it has to outlive the test that writes into it.
+        #[allow(dead_code)]
+        dir: tempfile::TempDir,
+    }
+
+    impl TemplatesSandbox {
+        fn new() -> Self {
+            let dir = tempfile::TempDir::new().expect("Failed to create a templates sandbox");
+            TEMPLATES_DIR_OVERRIDE
+                .with(|current| *current.borrow_mut() = Some(dir.path().to_path_buf()));
+            Self { dir }
+        }
+    }
+
+    impl Drop for TemplatesSandbox {
+        fn drop(&mut self) {
+            TEMPLATES_DIR_OVERRIDE.with(|current| *current.borrow_mut() = None);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_templates_file_never_resolves_into_the_real_data_directory() {
+        let sandbox = TemplatesSandbox::new();
+        let path = get_templates_path().expect("a sandboxed templates path");
+        let real = dirs::data_dir().expect("a data directory on this platform");
+        assert!(
+            !path.starts_with(&real),
+            "tests must not touch {}, they got {}",
+            real.display(),
+            path.display()
+        );
+        assert!(path.starts_with(sandbox.dir.path()), "{}", path.display());
+
+        // And the write really does land there: a sandbox the writes miss is
+        // no sandbox at all.
+        save_template(CommitTemplate {
+            id: "sandboxed".to_string(),
+            name: "Sandboxed".to_string(),
+            content: "chore: sandboxed".to_string(),
+            is_conventional: false,
+            created_at: 0,
+        })
+        .await
+        .expect("saving into the sandbox");
+        assert!(path.exists(), "{} was never written", path.display());
+
+        // The override is per thread and lifted on drop, so nothing else in
+        // the suite inherits it.
+        drop(sandbox);
+        assert!(TEMPLATES_DIR_OVERRIDE.with(|dir| dir.borrow().is_none()));
+    }
+
     #[test]
     fn test_commit_template_serialization() {
         let template = CommitTemplate {
@@ -372,16 +465,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_templates_integration() {
-        // This tests the actual list_templates function
-        // Note: This may affect actual user data if templates exist
+        // This tests the actual list_templates function against a sandboxed
+        // data directory — it used to read the developer's own templates file.
+        let _sandbox = TemplatesSandbox::new();
         let result = list_templates().await;
         assert!(result.is_ok());
         // Should return a vector (empty or with templates)
     }
 
+    /// No longer ignored: "depends on system data directory" was true, and it
+    /// is the sandbox's whole purpose that it no longer is.
     #[tokio::test]
-    #[ignore] // Flaky in CI - depends on system data directory
     async fn test_save_and_delete_template_integration() {
+        let _sandbox = TemplatesSandbox::new();
         let template = CommitTemplate {
             id: format!(
                 "test-{}",
@@ -418,6 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_template_updates_existing() {
+        let _sandbox = TemplatesSandbox::new();
         let template_id = format!(
             "test-update-{}",
             std::time::SystemTime::now()
@@ -463,6 +560,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_nonexistent_template() {
         // Deleting a non-existent template should succeed (no-op)
+        let _sandbox = TemplatesSandbox::new();
         let result = delete_template("nonexistent-template-id".to_string()).await;
         assert!(result.is_ok());
     }

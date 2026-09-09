@@ -24,6 +24,7 @@ Object.defineProperty(navigator, 'clipboard', {
     },
     readText: () => Promise.resolve(clipboardText),
   },
+  configurable: true,
   writable: true,
 });
 
@@ -37,6 +38,50 @@ import {
   copyFilePath,
   type CopyResult,
 } from '../git.service.ts';
+
+/**
+ * Swap navigator.clipboard for the duration of a test. Pass undefined to
+ * simulate a browser/WebView that exposes no async clipboard API at all.
+ */
+function replaceClipboard(value: { writeText: (text: string) => Promise<void> } | undefined) {
+  const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', { value, configurable: true, writable: true });
+  return () => {
+    if (original) {
+      Object.defineProperty(navigator, 'clipboard', original);
+    } else {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+    }
+  };
+}
+
+/**
+ * Stub document.execCommand so the legacy fallback path is observable and
+ * deterministic — a real execCommand('copy') depends on browser policy.
+ * Records the value staged in the off-screen textarea at call time.
+ */
+function stubExecCommand(result: boolean) {
+  const original = document.execCommand;
+  const calls: string[] = [];
+  const stagedValues: string[] = [];
+  document.execCommand = ((command: string) => {
+    calls.push(command);
+    const staged = document.activeElement;
+    if (staged instanceof HTMLTextAreaElement) stagedValues.push(staged.value);
+    return result;
+  }) as typeof document.execCommand;
+  return {
+    calls,
+    stagedValues,
+    restore: () => {
+      document.execCommand = original;
+    },
+  };
+}
 
 describe('git.service - Clipboard operations', () => {
   beforeEach(() => {
@@ -55,26 +100,86 @@ describe('git.service - Clipboard operations', () => {
       expect(clipboardText).to.equal('test text');
     });
 
-    it('handles clipboard errors', async () => {
-      // Temporarily break clipboard
-      const originalClipboard = navigator.clipboard;
-      Object.defineProperty(navigator, 'clipboard', {
-        value: {
-          writeText: () => Promise.reject(new Error('Clipboard access denied')),
-        },
-        writable: true,
+    it('falls back to the legacy copy when the async API rejects', async () => {
+      const restoreClipboard = replaceClipboard({
+        writeText: () => Promise.reject(new Error('Clipboard access denied')),
       });
+      const execCommand = stubExecCommand(true);
+
+      const result = await copyToClipboard('fallback text');
+
+      expect(result.success).to.be.true;
+      expect(result.data?.text).to.equal('fallback text');
+      expect(execCommand.calls).to.deep.equal(['copy']);
+      expect(execCommand.stagedValues).to.deep.equal(['fallback text']);
+
+      execCommand.restore();
+      restoreClipboard();
+    });
+
+    it('falls back to the legacy copy when navigator.clipboard is unavailable', async () => {
+      const restoreClipboard = replaceClipboard(undefined);
+      const execCommand = stubExecCommand(true);
+
+      const result = await copyToClipboard('no async api');
+
+      expect(result.success).to.be.true;
+      expect(execCommand.stagedValues).to.deep.equal(['no async api']);
+
+      execCommand.restore();
+      restoreClipboard();
+    });
+
+    it('does not hang when the async API never settles', async () => {
+      // Headless browsers (and WebViews without clipboard-write permission)
+      // leave writeText pending forever rather than rejecting. The call must
+      // still resolve, via the fallback.
+      const restoreClipboard = replaceClipboard({
+        writeText: () => new Promise<void>(() => {}),
+      });
+      const execCommand = stubExecCommand(true);
+
+      const result = await copyToClipboard('never settles');
+
+      expect(result.success).to.be.true;
+      expect(execCommand.stagedValues).to.deep.equal(['never settles']);
+
+      execCommand.restore();
+      restoreClipboard();
+    });
+
+    it('reports a clipboard error when both the async API and the fallback fail', async () => {
+      const restoreClipboard = replaceClipboard({
+        writeText: () => Promise.reject(new Error('Clipboard access denied')),
+      });
+      const execCommand = stubExecCommand(false);
 
       const result = await copyToClipboard('test');
 
       expect(result.success).to.be.false;
       expect(result.error?.code).to.equal('CLIPBOARD_ERROR');
+      expect(result.error?.message).to.equal('Clipboard access denied');
 
-      // Restore clipboard
-      Object.defineProperty(navigator, 'clipboard', {
-        value: originalClipboard,
-        writable: true,
-      });
+      execCommand.restore();
+      restoreClipboard();
+    });
+
+    it('leaves no staging element behind and restores focus', async () => {
+      const focusTarget = document.createElement('button');
+      document.body.appendChild(focusTarget);
+      focusTarget.focus();
+
+      const restoreClipboard = replaceClipboard(undefined);
+      const execCommand = stubExecCommand(true);
+
+      await copyToClipboard('tidy up');
+
+      expect(document.querySelectorAll('textarea[aria-hidden="true"]').length).to.equal(0);
+      expect(document.activeElement).to.equal(focusTarget);
+
+      execCommand.restore();
+      restoreClipboard();
+      focusTarget.remove();
     });
   });
 

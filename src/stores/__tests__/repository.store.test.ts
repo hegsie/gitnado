@@ -126,6 +126,50 @@ describe('repository.store', () => {
       expect(state.openRepositories[1].branches).to.deep.equal([]);
     });
 
+    /**
+     * "Not read yet" and "read, and there are none" are the same empty list,
+     * and the rule that greys out Fetch/Pull/Push and refuses the shortcuts
+     * reads it — so the store records which of the two it is holding.
+     */
+    describe('remotesLoaded', () => {
+      it('is false for a freshly opened tab, whose empty list is only a seed', () => {
+        repositoryStore.getState().addRepository(createMockRepo('/repo/one'));
+
+        const repo = repositoryStore.getState().openRepositories[0];
+        expect(repo.remotes).to.deep.equal([]);
+        expect(repo.remotesLoaded, 'nothing has asked git yet').to.equal(false);
+      });
+
+      it('is set by any write that carries remotes, including an empty answer', () => {
+        repositoryStore.getState().addRepository(createMockRepo('/repo/one'));
+
+        repositoryStore.getState().updateRepoData('/repo/one', { remotes: [] });
+
+        expect(
+          repositoryStore.getState().openRepositories[0].remotesLoaded,
+          'git answered: there are none',
+        ).to.equal(true);
+      });
+
+      it('is set through the active-repo setter too', () => {
+        repositoryStore.getState().addRepository(createMockRepo('/repo/one'));
+
+        repositoryStore
+          .getState()
+          .setRemotes([{ name: 'origin', url: 'https://example.test/o/r.git', pushUrl: null }]);
+
+        expect(repositoryStore.getState().openRepositories[0].remotesLoaded).to.equal(true);
+      });
+
+      it('is left alone by a write that says nothing about remotes', () => {
+        repositoryStore.getState().addRepository(createMockRepo('/repo/one'));
+
+        repositoryStore.getState().updateRepoData('/repo/one', { branches: [branch] });
+
+        expect(repositoryStore.getState().openRepositories[0].remotesLoaded).to.equal(false);
+      });
+    });
+
     it('is a no-op for a path that is not open', () => {
       repositoryStore.getState().addRepository(createMockRepo('/repo/one'));
       const before = repositoryStore.getState().openRepositories;

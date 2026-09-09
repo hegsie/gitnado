@@ -24,6 +24,7 @@ import { expect } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import { uiStore } from '../stores/ui.store.ts';
 import '../app-shell.ts';
+import { dialogs } from '../stores/dialog.store.ts';
 
 interface PaletteCommand {
   id: string;
@@ -60,6 +61,14 @@ const MODES: Array<{ id: string; mode: string }> = [
   { id: 'search-commit-content', mode: 'commits' },
 ];
 
+// Which dialogs are open is module state, and several tests here drive a shell
+// that is never connected to the document (so its connectedCallback reset never
+// runs). Clear it per test to keep the isolation each instance used to get for
+// free from its own `@state()` flags.
+beforeEach(() => {
+  dialogs.reset();
+});
+
 describe('app-shell search dialog wiring', () => {
   beforeEach(() => {
     uiStore.setState({ toasts: [] });
@@ -70,7 +79,7 @@ describe('app-shell search dialog wiring', () => {
       const el = createAppShell(true);
       getCommand(el, id).action();
 
-      expect((el as any).showSearchDialog, 'dialog opened').to.equal(true);
+      expect(dialogs.isOpen('search'), 'dialog opened').to.equal(true);
       expect((el as any).searchDialogMode, 'mode preselected').to.equal(mode);
     });
 
@@ -78,7 +87,7 @@ describe('app-shell search dialog wiring', () => {
       const el = createAppShell(false);
       getCommand(el, id).action();
 
-      expect((el as any).showSearchDialog, 'dialog stays shut').to.not.equal(true);
+      expect(dialogs.isOpen('search'), 'dialog stays shut').to.not.equal(true);
       const warnings = uiStore
         .getState()
         .toasts.filter((t) => t.message === 'Please open a repository first');
@@ -116,7 +125,7 @@ describe('app-shell search dialog wiring', () => {
       new CustomEvent('show-working-diff', { detail: { filePath: 'src/a.ts', staged: false } })
     );
 
-    expect((el as any).showDiff, 'diff pane opened').to.equal(true);
+    expect(dialogs.isOpen('diff'), 'diff pane opened').to.equal(true);
     expect((el as any).diffFile?.path).to.equal('src/a.ts');
     expect((el as any).diffFile?.isStaged, 'matched the staged flag from the search').to.equal(false);
   });
@@ -137,7 +146,7 @@ describe('app-shell search dialog wiring', () => {
       new CustomEvent('show-working-diff', { detail: { filePath: 'gone.ts', staged: false } })
     );
 
-    expect((el as any).showDiff, 'no diff opened').to.not.equal(true);
+    expect(dialogs.isOpen('diff'), 'no diff opened').to.not.equal(true);
     const infos = uiStore
       .getState()
       .toasts.filter((t) => t.message.includes('no longer in the working-tree changes'));

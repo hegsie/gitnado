@@ -121,6 +121,56 @@ describe('lv-config-dialog', () => {
     expect(successToast!.message).to.equal('Identity saved');
   });
 
+  it('announces a saved identity so the rest of the app stops using the old one', async () => {
+    // The commit panel's "No git identity configured" hint opens THIS dialog,
+    // so a save that stays silent leaves the user back at the same disabled
+    // Sign off control they came here to fix.
+    const el = await fixture<LvConfigDialog>(
+      html`<lv-config-dialog ?open=${true} .repositoryPath=${'/test/repo'}></lv-config-dialog>`,
+    );
+
+    const seen: CustomEvent[] = [];
+    const listener = (e: Event): void => { seen.push(e as CustomEvent); };
+    window.addEventListener('git-identity-changed', listener);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).editName = 'New Name';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).editEmail = 'new@example.com';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (el as any).handleSaveIdentity();
+    window.removeEventListener('git-identity-changed', listener);
+
+    expect(seen.length).to.equal(1);
+    expect(seen[0].detail).to.deep.equal({
+      name: 'New Name',
+      email: 'new@example.com',
+      scope: 'local',
+    });
+  });
+
+  it('does not announce an identity the save rejected', async () => {
+    failingCommands.add('set_user_identity');
+
+    const el = await fixture<LvConfigDialog>(
+      html`<lv-config-dialog ?open=${true} .repositoryPath=${'/test/repo'}></lv-config-dialog>`,
+    );
+
+    let announced = false;
+    const listener = (): void => { announced = true; };
+    window.addEventListener('git-identity-changed', listener);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).editName = 'New Name';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).editEmail = 'new@example.com';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (el as any).handleSaveIdentity();
+    window.removeEventListener('git-identity-changed', listener);
+
+    expect(announced).to.be.false;
+  });
+
   it('shows error on identity save failure', async () => {
     failingCommands.add('set_user_identity');
 

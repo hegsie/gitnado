@@ -71,7 +71,7 @@ pub struct CulpritCommit {
 /// never advanced to its result step, and the finished search was reachable
 /// only through the danger-styled "Abort Bisect" that discards it. The sibling
 /// CLI shell-outs in merge.rs and worktree.rs already pin this.
-fn git_command(repo_path: &Path) -> std::process::Command {
+fn git_command(repo_path: &Path) -> crate::utils::GitCommand {
     let mut cmd = create_command("git");
     cmd.current_dir(repo_path).env("LC_ALL", "C");
     cmd

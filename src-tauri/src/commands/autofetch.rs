@@ -20,6 +20,11 @@ pub async fn start_auto_fetch(
             "Interval must be greater than 0".to_string(),
         ));
     }
+    // The loop this starts fetches on a timer; refusing to start it is the
+    // only point at which the user's answer is still cheap. The loop itself
+    // re-checks (services/autofetch_service.rs) because settings can change
+    // while it runs.
+    crate::services::security::guard_remote_url(&remote_url)?;
 
     let mut service = state.write().await;
     service.start(path, interval_minutes, remote, remote_url, token, app);

@@ -55,9 +55,14 @@ export class LvAccountSelector extends LitElement {
         transition: all var(--transition-fast);
       }
 
-      .selector-btn:hover {
+      .selector-btn:hover:not(:disabled) {
         border-color: var(--color-border-hover);
         background: var(--color-bg-hover);
+      }
+
+      .selector-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
       }
 
       .selector-btn svg {
@@ -252,6 +257,15 @@ export class LvAccountSelector extends LitElement {
   @property({ type: String }) integrationType: IntegrationType = 'github';
   @property({ type: String }) selectedAccountId: string | null = null;
   @property({ type: Boolean }) compact = false;
+  /**
+   * Makes the whole selector inert: the dropdown cannot be opened and its
+   * "Add Account" / "Manage Accounts…" actions neither fire nor dispatch.
+   * A host that is busy (the clone dialog mid-clone) disables its picker,
+   * and the picker's own controls honour that — this selector, nested inside
+   * it, must too, or its account actions stay live while everything around
+   * them is locked and can walk the user out of the operation in flight.
+   */
+  @property({ type: Boolean }) disabled = false;
 
   @state() private accounts: IntegrationAccount[] = [];
   @state() private isOpen = false;
@@ -293,8 +307,18 @@ export class LvAccountSelector extends LitElement {
     }
   };
 
+  willUpdate(changed: Map<PropertyKey, unknown>): void {
+    // Disabled while the dropdown is up: fold it away, so the actions inside
+    // it are not left on screen for a host that has locked everything else.
+    if (changed.has('disabled') && this.disabled && this.isOpen) {
+      this.isOpen = false;
+      this.clearPendingAction();
+    }
+  }
+
   private toggleDropdown(e: Event): void {
     e.stopPropagation();
+    if (this.disabled) return;
     this.isOpen = !this.isOpen;
     // Reopening the selector clears any stale "Opening…" busy state.
     if (this.isOpen) this.clearPendingAction();
@@ -338,6 +362,7 @@ export class LvAccountSelector extends LitElement {
   }
 
   private handleAddAccount(): void {
+    if (this.disabled) return;
     // D7: show a brief inline busy state before the parent opens the add flow.
     // Keep the dropdown open so the "Opening…" label is actually visible; the
     // parent dialog's navigation supersedes this selector shortly after.
@@ -352,6 +377,7 @@ export class LvAccountSelector extends LitElement {
   }
 
   private handleManageAccounts(): void {
+    if (this.disabled) return;
     // D7: show a brief inline busy state before the parent opens the manage flow.
     // Keep the dropdown open so the "Opening…" label is visible; the parent
     // dialog's navigation supersedes this selector shortly after.
@@ -379,6 +405,7 @@ export class LvAccountSelector extends LitElement {
         <button
           class="selector-btn"
           @click=${this.toggleDropdown}
+          ?disabled=${this.disabled}
           title="Select ${integrationName} Account"
         >
           ${this.renderSelectedAccount()}
@@ -446,7 +473,7 @@ export class LvAccountSelector extends LitElement {
         <button
           class="dropdown-action primary"
           @click=${this.handleAddAccount}
-          ?disabled=${this.pendingAction !== null}
+          ?disabled=${this.disabled || this.pendingAction !== null}
         >
           <svg
             viewBox="0 0 24 24"
@@ -464,7 +491,7 @@ export class LvAccountSelector extends LitElement {
               <button
                 class="dropdown-action"
                 @click=${this.handleManageAccounts}
-                ?disabled=${this.pendingAction !== null}
+                ?disabled=${this.disabled || this.pendingAction !== null}
               >
                 <svg
                   viewBox="0 0 24 24"

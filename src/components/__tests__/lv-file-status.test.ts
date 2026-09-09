@@ -22,7 +22,7 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvFileStatus } from '../sidebar/lv-file-status.ts';
 import '../sidebar/lv-file-status.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
@@ -1356,13 +1356,50 @@ describe('lv-file-status', () => {
       expect(args.paths).to.deep.equal(['src/app.ts']);
     });
 
-    it('leaves the global "Stage all changes" command on the full set', async () => {
-      // The command palette entry and the global shortcut say ALL, and they
-      // are invoked from outside this panel — they must not be silently
-      // narrowed by a filter typed here.
+    it('gives the global "stage-all" event the same set as the header button', async () => {
+      // The palette entry and the s shortcut arrive as this window event.
+      // They used to stage EVERYTHING while the header button next to the list
+      // staged only the matches, so "stage all" meant two different things in
+      // the same repo at the same moment.
       const el = await renderFileStatus();
       await typeFilter(el, 'helper');
       clearHistory();
+      uiStore.setState({ toasts: [] });
+
+      window.dispatchEvent(new CustomEvent('stage-all'));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
+      await el.updateComplete;
+
+      const args = findCommands('stage_files')[0].args as { paths: string[] };
+      expect(args.paths).to.deep.equal(['src/utils/helper.ts']);
+
+      // And says what "all" meant, because the surface that fired it says ALL.
+      const messages = uiStore.getState().toasts.map((t) => t.message);
+      expect(messages.some((m) => m.includes('Staged 1 of 4 files'))).to.equal(true);
+      expect(messages.some((m) => m.includes('helper'))).to.equal(true);
+    });
+
+    it('gives the global "unstage-all" event the same set as the header button', async () => {
+      const el = await renderFileStatus();
+      await typeFilter(el, 'app.ts');
+      clearHistory();
+      uiStore.setState({ toasts: [] });
+
+      window.dispatchEvent(new CustomEvent('unstage-all'));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
+      await el.updateComplete;
+
+      const args = findCommands('unstage_files')[0].args as { paths: string[] };
+      expect(args.paths).to.deep.equal(['src/app.ts']);
+
+      const messages = uiStore.getState().toasts.map((t) => t.message);
+      expect(messages.some((m) => m.includes('Unstaged 1 of 4 files'))).to.equal(true);
+    });
+
+    it('says nothing extra when the filter is not hiding anything', async () => {
+      const el = await renderFileStatus();
+      clearHistory();
+      uiStore.setState({ toasts: [] });
 
       window.dispatchEvent(new CustomEvent('stage-all'));
       await new Promise((r) => setTimeout(r, 100));
@@ -1370,6 +1407,48 @@ describe('lv-file-status', () => {
 
       const args = findCommands('stage_files')[0].args as { paths: string[] };
       expect(args.paths.length).to.equal(4);
+      expect(uiStore.getState().toasts.length).to.equal(0);
+    });
+
+    it('reports a global stage-all that a filter narrowed to nothing', async () => {
+      // Previously this staged all 4 unstaged files; now it stages none, so
+      // the shortcut must not simply do nothing in silence.
+      const el = await renderFileStatus();
+      await typeFilter(el, 'no-such-file');
+      clearHistory();
+      uiStore.setState({ toasts: [] });
+
+      window.dispatchEvent(new CustomEvent('stage-all'));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
+      await el.updateComplete;
+
+      expect(findCommands('stage_files').length).to.equal(0);
+      const messages = uiStore.getState().toasts.map((t) => t.message);
+      expect(messages.some((m) => m.includes('Nothing to stage'))).to.equal(true);
+      expect(messages.some((m) => m.includes('no-such-file'))).to.equal(true);
+    });
+
+    it('says what the section header button covered too, so all three agree', async () => {
+      const el = await renderFileStatus();
+      await typeFilter(el, 'helper');
+      clearHistory();
+      uiStore.setState({ toasts: [] });
+
+      const unstagedSection = el.shadowRoot!.querySelectorAll('.section')[1];
+      unstagedSection
+        .querySelector('.section-actions .section-action')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await waitUntil(() => uiStore.getState().toasts.length > 0, 'the scope toast');
+      await el.updateComplete;
+
+      const args = findCommands('stage_files')[0].args as { paths: string[] };
+      expect(args.paths).to.deep.equal(['src/utils/helper.ts']);
+      expect(
+        uiStore
+          .getState()
+          .toasts.map((t) => t.message)
+          .some((m) => m.includes('Staged 1 of 4 files')),
+      ).to.equal(true);
     });
 
     it('drops selected files the filter hides, so batch actions cannot reach them', async () => {

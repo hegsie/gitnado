@@ -27,6 +27,13 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
   transformCallback: () => cbId++,
 };
 
+// A mounted shell tears its backend listeners down in disconnectedCallback,
+// and @tauri-apps/api reaches for this to do it. Without the stub every
+// unmount raises an unhandled rejection that has nothing to do with the test.
+(globalThis as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+  unregisterListener: () => {},
+};
+
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
 import { expect } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
@@ -36,6 +43,7 @@ import { uiStore } from '../stores/ui.store.ts';
 
 // Import the real component
 import '../app-shell.ts';
+import { dialogs } from '../stores/dialog.store.ts';
 
 // Side-effect import so showPrompt finds the singleton already in the DOM.
 import '../components/dialogs/lv-prompt-dialog.ts';
@@ -116,7 +124,40 @@ function createAppShell(): AppShell {
   return el;
 }
 
+const mountedShells: AppShell[] = [];
+
+/**
+ * A CONNECTED shell, for the handlers that reach it through an event.
+ *
+ * Fetch, pull and push run in remote-operations.service — the one runner both
+ * this surface and the context dashboard's buttons call — which asks for the
+ * refresh and for the conflict dialog with events rather than by reaching into
+ * a component it cannot see. app-shell registers those listeners in
+ * `connectedCallback`, so a detached element receives neither. Mounting is
+ * also what the app really does.
+ *
+ * The invoke history and the toasts are cleared after mounting so the shell's
+ * own start-up chatter cannot be mistaken for the handler's work.
+ */
+async function mountAppShell(): Promise<AppShell> {
+  const el = createAppShell();
+  document.body.appendChild(el);
+  mountedShells.push(el);
+  await el.updateComplete;
+  clearHistory();
+  uiStore.setState({ toasts: [] });
+  return el;
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
+// Which dialogs are open is module state, and several tests here drive a shell
+// that is never connected to the document (so its connectedCallback reset never
+// runs). Clear it per test to keep the isolation each instance used to get for
+// free from its own `@state()` flags.
+beforeEach(() => {
+  dialogs.reset();
+});
+
 describe('app-shell pull/stash/copy handlers (integration)', () => {
   beforeEach(() => {
     clearHistory();
@@ -127,19 +168,19 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
 
   afterEach(() => {
     cleanupMockPrompt();
+    for (const shell of mountedShells.splice(0)) shell.remove();
   });
 
   describe('handlePull', () => {
     it('refreshes the repository on success', async () => {
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePull();
 
       expect(findCommands('pull').length).to.equal(1);
       // handleRefresh -> open_repository
       expect(findCommands('open_repository').length).to.be.greaterThan(0);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.false;
+      expect(dialogs.isOpen('conflict')).to.be.false;
     });
 
     it('opens the merge conflict dialog on MERGE_CONFLICT', async () => {
@@ -149,12 +190,11 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         return null;
       };
 
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePull();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.true;
+      expect(dialogs.isOpen('conflict')).to.be.true;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((el as any).conflictOperationType).to.equal('merge');
       // Still refreshes so the working tree reflects the conflicted state
@@ -168,12 +208,11 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         return null;
       };
 
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePull();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.true;
+      expect(dialogs.isOpen('conflict')).to.be.true;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((el as any).conflictOperationType).to.equal('rebase');
     });
@@ -184,12 +223,11 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         return null;
       };
 
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePull();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.false;
+      expect(dialogs.isOpen('conflict')).to.be.false;
       const toasts = uiStore.getState().toasts;
       expect(toasts.some((t) => t.type === 'error' && /Could not reach remote/.test(t.message))).to.be.true;
     });
@@ -197,7 +235,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
 
   describe('handleFetch', () => {
     it('completes and refreshes on success', async () => {
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handleFetch();
 
@@ -213,7 +251,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         return null;
       };
 
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handleFetch();
 
@@ -225,7 +263,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
 
   describe('handlePush', () => {
     it('completes and refreshes on success', async () => {
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePush();
 
@@ -241,7 +279,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         return null;
       };
 
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePush();
 
@@ -264,7 +302,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         return null;
       };
 
-      const el = createAppShell();
+      const el = await mountAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (el as any).handlePush();
 
@@ -349,17 +387,17 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showDiff = true;
+      dialogs.open('diff');
       shell.diffFile = { path: 'src/x.ts', status: 'modified', isStaged: false, isConflicted: false };
 
       shell.handleShowBlame(
         new CustomEvent('show-blame', { detail: { filePath: 'src/x.ts', commitOid: 'abc123' } })
       );
 
-      expect(shell.showBlame).to.be.true;
+      expect(dialogs.isOpen('blame')).to.be.true;
       expect(shell.blameFile).to.equal('src/x.ts');
       expect(shell.blameCommitOid).to.equal('abc123');
-      expect(shell.showDiff).to.be.false;
+      expect(dialogs.isOpen('diff')).to.be.false;
       expect(shell.diffFile).to.be.null;
     });
   });
@@ -372,16 +410,16 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showDiff = true;
+      dialogs.open('diff');
       shell.diffFile = { path: 'src/x.ts', status: 'modified', isStaged: false, isConflicted: false };
 
       shell.handleShowFileHistory(
         new CustomEvent('show-file-history', { detail: { filePath: 'src/x.ts' } })
       );
 
-      expect(shell.showFileHistory).to.be.true;
+      expect(dialogs.isOpen('fileHistory')).to.be.true;
       expect(shell.fileHistoryPath).to.equal('src/x.ts');
-      expect(shell.showDiff, 'the diff no longer covers the history pane').to.be.false;
+      expect(dialogs.isOpen('diff'), 'the diff no longer covers the history pane').to.be.false;
       expect(shell.diffFile).to.be.null;
     });
 
@@ -389,10 +427,10 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showDiff = true;
+      dialogs.open('diff');
       shell.diffFile = null;
       shell.diffCommitFile = { commitOid: 'abc123', filePath: 'src/x.ts' };
-      shell.showBlame = true;
+      dialogs.open('blame');
       shell.blameFile = 'src/y.ts';
       shell.blameCommitOid = 'abc123';
 
@@ -400,12 +438,12 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         new CustomEvent('show-file-history', { detail: { filePath: 'src/z.ts' } })
       );
 
-      expect(shell.showFileHistory).to.be.true;
+      expect(dialogs.isOpen('fileHistory')).to.be.true;
       expect(shell.fileHistoryPath).to.equal('src/z.ts');
-      expect(shell.showDiff).to.be.false;
+      expect(dialogs.isOpen('diff')).to.be.false;
       expect(shell.diffCommitFile).to.be.null;
       // Blame also outranks file history in the center pane
-      expect(shell.showBlame).to.be.false;
+      expect(dialogs.isOpen('blame')).to.be.false;
       expect(shell.blameFile).to.be.null;
       expect(shell.blameCommitOid).to.be.null;
     });
@@ -419,10 +457,10 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         new CustomEvent('show-file-history', { detail: { filePath: 'src/a.ts' } })
       );
 
-      expect(shell.showFileHistory).to.be.true;
+      expect(dialogs.isOpen('fileHistory')).to.be.true;
       expect(shell.fileHistoryPath).to.equal('src/a.ts');
-      expect(shell.showDiff).to.be.false;
-      expect(shell.showBlame).to.be.false;
+      expect(dialogs.isOpen('diff')).to.be.false;
+      expect(dialogs.isOpen('blame')).to.be.false;
       expect(uiStore.getState().toasts.length, 'nothing was lost, so nothing is said').to.equal(0);
     });
   });
@@ -431,13 +469,12 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
     it('handleFileSelected clears the history pane so closing the diff does not uncover it', () => {
       // Open history for one file, then click a different file in Changes.
       // The diff outranks history in the center pane, so a stale
-      // showFileHistory is invisible right up until the diff closes — and
+      // open file-history pane is invisible right up until the diff closes — and
       // then the old file's history appears unbidden.
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showFileHistory = true;
-      shell.fileHistoryPath = 'src/old.ts';
+      dialogs.open('fileHistory', { filePath: 'src/old.ts' });
 
       shell.handleFileSelected(
         new CustomEvent('file-selected', {
@@ -447,22 +484,21 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         })
       );
 
-      expect(shell.showDiff).to.be.true;
-      expect(shell.showFileHistory, 'the unrelated history pane is gone').to.be.false;
+      expect(dialogs.isOpen('diff')).to.be.true;
+      expect(dialogs.isOpen('fileHistory'), 'the unrelated history pane is gone').to.be.false;
       expect(shell.fileHistoryPath).to.be.null;
 
       // Closing the diff must leave the center pane empty, not reveal history.
       shell.handleCloseDiff();
-      expect(shell.showDiff).to.be.false;
-      expect(shell.showFileHistory).to.be.false;
+      expect(dialogs.isOpen('diff')).to.be.false;
+      expect(dialogs.isOpen('fileHistory')).to.be.false;
     });
 
     it('handleCommitFileSelected clears the history pane too', () => {
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showFileHistory = true;
-      shell.fileHistoryPath = 'src/old.ts';
+      dialogs.open('fileHistory', { filePath: 'src/old.ts' });
 
       shell.handleCommitFileSelected(
         new CustomEvent('commit-file-selected', {
@@ -470,9 +506,9 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
         })
       );
 
-      expect(shell.showDiff).to.be.true;
+      expect(dialogs.isOpen('diff')).to.be.true;
       expect(shell.diffCommitFile).to.deep.equal({ commitOid: 'abc123', filePath: 'src/new.ts' });
-      expect(shell.showFileHistory, 'the unrelated history pane is gone').to.be.false;
+      expect(dialogs.isOpen('fileHistory'), 'the unrelated history pane is gone').to.be.false;
       expect(shell.fileHistoryPath).to.be.null;
     });
 
@@ -483,8 +519,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showFileHistory = true;
-      shell.fileHistoryPath = 'src/old.ts';
+      dialogs.open('fileHistory', { filePath: 'src/old.ts' });
       let openedPath: string | null = null;
       shell.openConflictDialogFromState = (path: string) => {
         openedPath = path;
@@ -499,8 +534,8 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       );
 
       expect(openedPath).to.equal('src/conflict.ts');
-      expect(shell.showDiff, 'no diff was opened').to.be.false;
-      expect(shell.showFileHistory).to.be.true;
+      expect(dialogs.isOpen('diff'), 'no diff was opened').to.be.false;
+      expect(dialogs.isOpen('fileHistory')).to.be.true;
       expect(shell.fileHistoryPath).to.equal('src/old.ts');
     });
   });
@@ -510,13 +545,13 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       const el = createAppShell();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const shell = el as any;
-      shell.showDiff = true;
+      dialogs.open('diff');
       shell.diffFile = { path: 'src/x.ts', status: 'modified', isStaged: false, isConflicted: false };
       shell.diffCommitFile = null;
 
       shell.handleCloseDiff();
 
-      expect(shell.showDiff).to.be.false;
+      expect(dialogs.isOpen('diff')).to.be.false;
       expect(shell.diffFile).to.be.null;
       expect(shell.diffCommitFile).to.be.null;
     });
@@ -533,8 +568,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       // Let the async handleRefresh run
       await new Promise((r) => setTimeout(r, 0));
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.true;
+      expect(dialogs.isOpen('conflict')).to.be.true;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((el as any).conflictOperationType).to.equal('rebase');
       expect(findCommands('open_repository').length).to.be.greaterThan(0);
@@ -548,8 +582,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       );
       await new Promise((r) => setTimeout(r, 0));
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.true;
+      expect(dialogs.isOpen('conflict')).to.be.true;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((el as any).conflictOperationType).to.equal('stash');
     });
@@ -623,8 +656,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       );
       await new Promise((r) => setTimeout(r, 0));
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.true;
+      expect(dialogs.isOpen('conflict')).to.be.true;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((el as any).conflictOperationType).to.equal('stash');
       // Warns the user AND opens the dialog.
@@ -658,8 +690,7 @@ describe('app-shell pull/stash/copy handlers (integration)', () => {
       );
       await new Promise((r) => setTimeout(r, 0));
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any).showConflictDialog).to.be.false;
+      expect(dialogs.isOpen('conflict')).to.be.false;
     });
   });
 });

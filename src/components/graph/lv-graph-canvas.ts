@@ -34,6 +34,7 @@ import type { GraphPullRequest } from '../../graph/virtual-scroll.ts';
 import { searchIndexService } from '../../services/search-index.service.ts';
 import { embeddingIndexService } from '../../services/embedding-index.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
+import { shouldFetchAvatars } from '../../utils/avatar-policy.ts';
 
 /**
  * Per-repository cache of the last loaded commit page. Switching back to an
@@ -752,6 +753,8 @@ export class LvGraphCanvas extends LitElement {
   private relativeTimeTimer: ReturnType<typeof setInterval> | null = null;
   private lastLoadedRepoPath: string | null = null; // Track the last repo that completed loading
   private inFlightLoadPath: string | null = null; // Repo whose loadCommits is currently in flight
+  // Coalesces graph-commits-changed dispatches to one per microtask
+  private loadedCommitsNotifyQueued = false;
   // A refresh arrived while a load was in flight; that load's snapshot may
   // predate the mutation the refresh was for, so one follow-up load runs
   // when it finishes
@@ -991,6 +994,7 @@ export class LvGraphCanvas extends LitElement {
       this.hoveredNode = null;
       this.realCommits.clear();
       this.refsByCommit = {};
+      this.notifyLoadedCommitsChanged();
       // A catch-up load in flight for the previous repo must not block the
       // new repo's pagination (its own version guard discards its results)
       this.isLoadingMore = false;
@@ -1111,8 +1115,11 @@ export class LvGraphCanvas extends LitElement {
         showAuthorColumn: this.showAuthorColumn,
         showDateColumn: this.showDateColumn,
         // The "Show Avatars" app setting controls whether author avatars
-        // are fetched from Gravatar (off = colored initials only)
-        fetchAvatars: settingsStore.getState().showAvatars,
+        // are fetched from Gravatar (off = colored initials only). The
+        // request is a plain image load, so it never reaches git.service's
+        // network gate — `shouldFetchAvatars` applies Offline Mode and the
+        // remote allowlist to it here instead.
+        fetchAvatars: shouldFetchAvatars(settingsStore.getState()),
         // The "Show Commit Size" app setting scales node radius by how much
         // each commit changed (off = uniform nodes)
         scaleNodesByCommitSize: settingsStore.getState().showCommitSize,
@@ -1120,10 +1127,12 @@ export class LvGraphCanvas extends LitElement {
       getThemeFromCSS()
     );
 
-    // Keep avatar fetching and node scaling in sync with the settings toggles
+    // Keep avatar fetching and node scaling in sync with the settings toggles.
+    // Offline Mode and the remote allowlist feed the same effective flag, so
+    // switching Offline Mode on stops further avatar loads immediately.
     this.settingsUnsubscribe = settingsStore.subscribe((state) => {
       this.renderer?.setConfig({
-        fetchAvatars: state.showAvatars,
+        fetchAvatars: shouldFetchAvatars(state),
         scaleNodesByCommitSize: state.showCommitSize,
       });
       this.renderer?.markDirty();
@@ -1259,6 +1268,7 @@ export class LvGraphCanvas extends LitElement {
       this.realCommits.set(commit.oid, commit);
     }
     this.refsByCommit = cached.refsByCommit;
+    this.notifyLoadedCommitsChanged();
     this.commits = cached.commits.map(commitToGraphCommit);
     this.totalLoadedCommits = cached.commits.length;
     this.hasMoreCommits = cached.hasMore;
@@ -1346,6 +1356,7 @@ export class LvGraphCanvas extends LitElement {
 
       // Store refs
       this.refsByCommit = refsResult.success && refsResult.data ? refsResult.data : {};
+      this.notifyLoadedCommitsChanged();
 
       // If search is active, also fetch matching commits for highlighting
       this.matchedCommitOids.clear();
@@ -1639,6 +1650,7 @@ export class LvGraphCanvas extends LitElement {
       for (const commit of result.data) {
         this.realCommits.set(commit.oid, commit);
       }
+      this.notifyLoadedCommitsChanged();
       const newGraphCommits = result.data.map(commitToGraphCommit);
       this.commits = [...this.commits, ...newGraphCommits];
       this.totalLoadedCommits += result.data.length;
@@ -2859,6 +2871,30 @@ export class LvGraphCanvas extends LitElement {
   }
 
   /**
+   * Announce that the loaded commit set and/or the loaded refs changed.
+   *
+   * app-shell used to call getLoadedCommits()/getTagTips() straight from its
+   * render(), which copied up to a full page of commits and walked the whole
+   * ref map on EVERY re-render — and handed the palette a new array identity
+   * each time, so it rebuilt its list even while closed. It now mirrors both
+   * into state and refreshes that mirror from this event instead.
+   *
+   * Coalesced into a single dispatch per microtask: a repository switch
+   * clears the maps and then applies the cached page synchronously in the
+   * same update, and a listener only ever wants the settled result.
+   */
+  private notifyLoadedCommitsChanged(): void {
+    if (this.loadedCommitsNotifyQueued) return;
+    this.loadedCommitsNotifyQueued = true;
+    queueMicrotask(() => {
+      this.loadedCommitsNotifyQueued = false;
+      this.dispatchEvent(
+        new CustomEvent('graph-commits-changed', { bubbles: true, composed: true })
+      );
+    });
+  }
+
+  /**
    * Whether a commit is loaded (fetched from the backend), regardless of
    * whether the branch-visibility filter currently shows it. Lets callers
    * distinguish "not loaded yet — scroll/load more" from "loaded but
@@ -3154,11 +3190,23 @@ export class LvGraphCanvas extends LitElement {
       })
     );
 
-    // Announce the selection to assistive technology
+    // Announce the selection to assistive technology.
+    //
+    // A multi-selection is announced as a COUNT first: Ctrl/Shift+click is the
+    // gesture that builds one, and naming only the commit that happens to be
+    // primary made every added commit sound like a plain single selection —
+    // the size of the set (the thing the batch actions in the context menu act
+    // on) was invisible to a screen reader.
     if (this.selectedNode && commit) {
       const position = this.selectedNode.row + 1;
       const total = this.layout?.totalRows ?? this.sortedNodesByRow.length;
-      this.srAnnouncement = `Commit ${position} of ${total}: ${commit.summary} by ${commit.author.name}`;
+      const selectedCount = this.selectedNodes.size;
+      const prefix = selectedCount > 1 ? `${selectedCount} commits selected. ` : '';
+      this.srAnnouncement = `${prefix}Commit ${position} of ${total}: ${commit.summary} by ${commit.author.name}`;
+    } else if (this.selectedNodes.size > 1) {
+      // No primary (its commit is not loaded) but the set is not empty — say
+      // so rather than going silent while the graph paints a highlight.
+      this.srAnnouncement = `${this.selectedNodes.size} commits selected`;
     } else {
       this.srAnnouncement = '';
     }

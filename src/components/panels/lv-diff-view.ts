@@ -5,7 +5,14 @@ import { codeStyles } from '../../styles/code-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
-import { settingsStore } from '../../stores/settings.store.ts';
+import {
+  settingsStore,
+  clampDiffContextLines,
+  DIFF_WHITESPACE_MODES,
+  MIN_DIFF_CONTEXT_LINES,
+  MAX_DIFF_CONTEXT_LINES,
+} from '../../stores/settings.store.ts';
+import type { DiffWhitespaceMode } from '../../types/api.types.ts';
 import { CodeRenderMixin } from '../../mixins/code-render-mixin.ts';
 import type { DiffFile, DiffHunk, DiffLine, StatusEntry } from '../../types/git.types.ts';
 import {
@@ -285,6 +292,46 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
       .view-btn svg {
         width: 14px;
         height: 14px;
+      }
+
+      .diff-option {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .diff-option select,
+      .diff-option input {
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        font-family: inherit;
+        cursor: pointer;
+      }
+
+      .diff-option input {
+        width: 48px;
+        cursor: text;
+      }
+
+      .diff-option select:hover,
+      .diff-option input:hover {
+        color: var(--color-text-primary);
+      }
+
+      .diff-option select:focus-visible,
+      .diff-option input:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 1px;
+      }
+
+      .diff-option-label {
+        color: var(--color-text-muted);
+        font-size: var(--font-size-xs);
+        white-space: nowrap;
       }
 
       .diff-content {
@@ -1000,9 +1047,15 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
   @state() private loading = false;
   @state() private error: string | null = null;
   @state() private viewMode: DiffViewMode = 'unified';
-  // Word wrap is an app setting (Settings > Editor); the toolbar button below is
+  // Word wrap is an app setting (Settings > Diff); the toolbar button below is
   // the same preference, not a second one.
   @state() private wordWrap: boolean = settingsStore.getState().wordWrap;
+  // Whitespace mode and context lines are app settings too (Settings > Diff);
+  // the toolbar controls below write the same preferences, so a choice made in
+  // either place survives a restart and applies to the very next diff.
+  @state() private ignoreWhitespace: DiffWhitespaceMode =
+    settingsStore.getState().diffIgnoreWhitespace;
+  @state() private contextLines: number = settingsStore.getState().diffContextLines;
   @state() private editMode = false;
   @state() private editContent = '';
   @state() private originalContent = '';
@@ -1071,9 +1124,21 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
     document.addEventListener('click', this.handleDocumentClick);
     // Word wrap comes from the shared setting, so the Settings dialog toggle and
     // the toolbar button below stay in step.
-    this.wordWrap = settingsStore.getState().wordWrap;
+    const initial = settingsStore.getState();
+    this.wordWrap = initial.wordWrap;
+    this.ignoreWhitespace = initial.diffIgnoreWhitespace;
+    this.contextLines = initial.diffContextLines;
     this.settingsUnsubscribe = settingsStore.subscribe((state) => {
       this.wordWrap = state.wordWrap;
+      // Whitespace mode and context lines change what the backend renders, so
+      // they need a re-fetch — but only when they actually changed, or every
+      // unrelated settings write (theme, font size, ...) would reload the diff.
+      const diffOptionsChanged =
+        state.diffIgnoreWhitespace !== this.ignoreWhitespace ||
+        state.diffContextLines !== this.contextLines;
+      this.ignoreWhitespace = state.diffIgnoreWhitespace;
+      this.contextLines = state.diffContextLines;
+      if (diffOptionsChanged) void this.reloadDiff();
     });
     this.addEventListener('keydown', this.handleKeydown);
     // Make host focusable for keyboard shortcuts
@@ -1098,6 +1163,16 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
   }
 
   async updated(changedProperties: Map<string, unknown>): Promise<void> {
+    // A <select>'s `.value` is applied before its <option> children exist, so
+    // the property binding alone cannot select the stored mode on first render.
+    // Push it in after the options are in the DOM.
+    const whitespaceSelect = this.shadowRoot?.querySelector<HTMLSelectElement>(
+      '#diff-ignore-whitespace'
+    );
+    if (whitespaceSelect && whitespaceSelect.value !== this.ignoreWhitespace) {
+      whitespaceSelect.value = this.ignoreWhitespace;
+    }
+
     // A different file/commit resets the "show full diff" opt-in so large diffs
     // are re-truncated by default.
     if (
@@ -1252,6 +1327,27 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
     }));
   }
 
+  /**
+   * The whitespace/context options every diff fetch carries. Sent on all three
+   * paths (unstaged, staged and commit-file) so the toolbar controls mean the
+   * same thing wherever the pane is used.
+   */
+  private diffRenderOptions(): gitService.DiffRenderOptions {
+    return {
+      contextLines: this.contextLines,
+      ignoreWhitespace: this.ignoreWhitespace,
+    };
+  }
+
+  /** Re-fetch the currently shown diff (used when a render option changes). */
+  private async reloadDiff(): Promise<void> {
+    if (this.commitFile) {
+      await this.loadCommitDiff();
+    } else if (this.file) {
+      await this.loadWorkingDiff();
+    }
+  }
+
   private async loadWorkingDiff(): Promise<void> {
     if (!this.repositoryPath || !this.file) return;
     const requestId = ++this.diffRequestId;
@@ -1282,7 +1378,8 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
         repositoryPath,
         filePath,
         isStaged,
-        this.showFullDiff ? undefined : DEFAULT_MAX_DIFF_LINES
+        this.showFullDiff ? undefined : DEFAULT_MAX_DIFF_LINES,
+        this.diffRenderOptions()
       );
 
       if (requestId !== this.diffRequestId) return;
@@ -1322,7 +1419,8 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
         repositoryPath,
         commitOid,
         filePath,
-        this.showFullDiff ? undefined : DEFAULT_MAX_DIFF_LINES
+        this.showFullDiff ? undefined : DEFAULT_MAX_DIFF_LINES,
+        this.diffRenderOptions()
       );
 
       if (requestId !== this.diffRequestId) return;
@@ -1377,6 +1475,34 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
     // Writing the shared setting keeps the Settings dialog toggle and this button
     // in step; the store subscription updates `this.wordWrap`.
     settingsStore.getState().setWordWrap(!this.wordWrap);
+  }
+
+  private handleIgnoreWhitespaceChange(e: Event): void {
+    const select = e.target as HTMLSelectElement;
+    // The store subscription updates `this.ignoreWhitespace` and re-fetches, so
+    // the Settings dialog row and this control never drift apart.
+    settingsStore.getState().setDiffIgnoreWhitespace(select.value as DiffWhitespaceMode);
+  }
+
+  private handleContextLinesChange(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const clamped = clampDiffContextLines(parseInt(input.value, 10));
+    // A number input accepts out-of-range text; write the clamped value back so
+    // the field never shows a number the diff was not rendered with.
+    input.value = String(clamped);
+    settingsStore.getState().setDiffContextLines(clamped);
+  }
+
+  /**
+   * The empty-diff message. When a whitespace mode is active, "no changes" is
+   * misleading on its own — the file does differ, git is just not showing it.
+   */
+  private get emptyDiffMessage(): string {
+    if (this.ignoreWhitespace === 'none') return 'No changes in this file';
+    const label =
+      DIFF_WHITESPACE_MODES.find((m) => m.value === this.ignoreWhitespace)?.label ??
+      this.ignoreWhitespace;
+    return `No changes in this file with "${label}" applied`;
   }
 
   /**
@@ -2924,6 +3050,13 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
   private renderSplitView() {
     if (!this.diff) return nothing;
 
+    // Two blank panes are a dead end — say why there is nothing to compare.
+    // Ignoring whitespace routinely empties a diff, so this is now reachable
+    // from the toolbar, not just from a pure rename.
+    if (this.diff.hunks.length === 0) {
+      return html`<div class="empty">${this.emptyDiffMessage}</div>`;
+    }
+
     const splitLines = this.convertToSplitLines(this.diff.hunks);
 
     return html`
@@ -2994,7 +3127,7 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
     return html`
       <div class="diff-content ${this.wordWrap ? 'word-wrap' : ''} ${this.lineSelectionMode ? 'line-selection-mode' : ''}">
         ${this.diff.hunks.length === 0
-          ? html`<div class="empty">No changes in this file</div>`
+          ? html`<div class="empty">${this.emptyDiffMessage}</div>`
           : this.diff.hunks.map((hunk, i) => this.renderHunk(hunk, i))}
       </div>
     `;
@@ -3252,6 +3385,40 @@ export class LvDiffView extends CodeRenderMixin(LitElement) {
                 </button>
               `
             : nothing}
+          <div class="diff-option">
+            <select
+              id="diff-ignore-whitespace"
+              class="diff-whitespace-select"
+              aria-label="Whitespace handling"
+              title="How whitespace-only changes are treated in this diff"
+              .value=${this.ignoreWhitespace}
+              @change=${this.handleIgnoreWhitespaceChange}
+            >
+              ${DIFF_WHITESPACE_MODES.map(
+                (mode) => html`
+                  <option value=${mode.value} ?selected=${mode.value === this.ignoreWhitespace}>
+                    ${mode.label}
+                  </option>
+                `
+              )}
+            </select>
+          </div>
+          <div class="diff-option">
+            <label class="diff-option-label" for="diff-context-lines">Context</label>
+            <input
+              id="diff-context-lines"
+              class="diff-context-input"
+              type="number"
+              inputmode="numeric"
+              min=${MIN_DIFF_CONTEXT_LINES}
+              max=${MAX_DIFF_CONTEXT_LINES}
+              step="1"
+              aria-label="Lines of context around each change"
+              title="Lines of unchanged context shown around each change (${MIN_DIFF_CONTEXT_LINES}-${MAX_DIFF_CONTEXT_LINES})"
+              .value=${String(this.contextLines)}
+              @change=${this.handleContextLinesChange}
+            />
+          </div>
           <button
             class="view-btn ${this.wordWrap ? 'active' : ''}"
             @click=${this.toggleWordWrap}

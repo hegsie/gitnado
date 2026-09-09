@@ -1,11 +1,88 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository, setupTauriMocks } from '../fixtures/tauri-mock';
-import { startCommandCapture, startCommandCaptureWithMocks, findCommand, waitForCommand, injectCommandError, injectCommandMock } from '../fixtures/test-helpers';
+import { startCommandCapture, startCommandCaptureWithMocks, findCommand, waitForCommand, injectCommandError, injectCommandHang, injectCommandMock } from '../fixtures/test-helpers';
 
 /**
  * E2E tests for Toolbar
  * Tests toolbar buttons, repository tabs, and actions
  */
+
+/**
+ * Fetch/Pull/Push exist on two surfaces — the toolbar and the context
+ * dashboard — so every locator for them must say which one it means. The
+ * dashboard's copies are covered in remote-operations.spec.ts.
+ */
+function toolbarButton(page: import('@playwright/test').Page, name: RegExp) {
+  return page.locator('lv-toolbar').getByRole('button', { name });
+}
+
+/**
+ * One of the toolbar's remote buttons, by class rather than accessible name.
+ *
+ * While an operation is running every one of the three tooltips names it
+ * ("Pull — a fetch is already running in this repository"), so a `/Fetch/i`
+ * name matches all three and Playwright's strict mode rejects it. The name
+ * lookup above stays right for the idle states the other tests assert.
+ */
+function remoteButton(page: import('@playwright/test').Page, op: 'fetch' | 'pull' | 'push') {
+  return page.locator(`lv-toolbar .remote-btn.${op}`);
+}
+
+/**
+ * Fail `command`, but only after `delayMs` — long enough to observe the
+ * in-flight state before the failure lands.
+ *
+ * `injectCommandError` rejects synchronously, so the button is disabled and
+ * enabled again inside one microtask queue and "the button comes back" cannot
+ * be told apart from "the button never went away".
+ */
+async function injectDelayedCommandError(
+  page: import('@playwright/test').Page,
+  command: string,
+  message: string,
+  delayMs = 600
+): Promise<void> {
+  await page.evaluate(
+    ({ cmd, msg, delay }) => {
+      const internals = (window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (c: string, args?: unknown) => Promise<unknown> };
+      }).__TAURI_INTERNALS__;
+      const originalInvoke = internals.invoke;
+      internals.invoke = (c: string, args?: unknown) => {
+        if (c === cmd) {
+          const captured = (window as unknown as {
+            __INVOKED_COMMANDS__?: { command: string; args: unknown }[];
+          }).__INVOKED_COMMANDS__;
+          if (captured) captured.push({ command: c, args });
+          return new Promise<unknown>((_resolve, reject) => {
+            setTimeout(() => reject(new Error(msg)), delay);
+          });
+        }
+        return originalInvoke(c, args);
+      };
+    },
+    { cmd: command, msg: message, delay: delayMs }
+  );
+}
+
+/** Ahead/behind values for the current branch, as the store holds them. */
+function withAheadBehind(ahead: number, behind: number, upstream: string | null = 'origin/main') {
+  return {
+    branches: [
+      {
+        name: 'main',
+        shorthand: 'main',
+        isHead: true,
+        isRemote: false,
+        upstream,
+        targetOid: 'abc123def456',
+        aheadBehind: upstream ? { ahead, behind } : undefined,
+        lastCommitTimestamp: Date.now() / 1000,
+        isStale: false,
+      },
+    ],
+  };
+}
 test.describe('Toolbar Buttons', () => {
   test.beforeEach(async ({ page }) => {
     await setupOpenRepository(page);
@@ -410,7 +487,7 @@ test.describe('Toolbar Error Scenarios', () => {
     // Inject error for the fetch command
     await injectCommandError(page, 'fetch', 'Network error: could not resolve host');
 
-    const fetchButton = page.getByRole('button', { name: /Fetch/i });
+    const fetchButton = remoteButton(page, 'fetch');
     await fetchButton.click();
 
     // Error toast should appear with informative message
@@ -426,7 +503,7 @@ test.describe('Toolbar Error Scenarios', () => {
     // Inject error for the push command
     await injectCommandError(page, 'push', 'Push rejected: non-fast-forward update');
 
-    const pushButton = page.getByRole('button', { name: /Push/i });
+    const pushButton = remoteButton(page, 'push');
     await pushButton.click();
 
     // Error toast should appear with informative message. A non-fast-forward
@@ -452,7 +529,7 @@ test.describe('Toolbar - Extended Tests', () => {
     await injectCommandError(page, 'fetch', 'Network error: could not resolve host');
 
     // Click the Fetch button
-    const fetchButton = page.getByRole('button', { name: /Fetch/i });
+    const fetchButton = remoteButton(page, 'fetch');
     await fetchButton.click();
 
     // Error toast should appear within a reasonable time and contain the error message
@@ -563,5 +640,263 @@ test.describe('Toolbar - Extended Tests', () => {
     // After successful init, the toolbar should show the new repo name
     const newRepoTab = page.locator('lv-toolbar .tab', { hasText: 'new-init-repo' });
     await expect(newRepoTab).toBeVisible({ timeout: 5000 });
+  });
+});
+
+
+// ============================================================================
+// Toolbar remote operations (Fetch / Pull / Push)
+//
+// The three most frequent remote operations used to have no toolbar presence
+// at all: their only mouse route was the context dashboard, which collapses
+// and remembers that it is collapsed — so a user who collapsed it had no way
+// to push without the keyboard or the command palette.
+// ============================================================================
+
+test.describe('Toolbar Remote Operations', () => {
+  test('shows Fetch, Pull and Push in the toolbar', async ({ page }) => {
+    await setupOpenRepository(page);
+
+    for (const name of [/Fetch/i, /Pull/i, /Push/i]) {
+      await expect(toolbarButton(page, name)).toBeVisible();
+    }
+  });
+
+  test('shows the behind count on Pull and the ahead count on Push', async ({ page }) => {
+    await setupOpenRepository(page, withAheadBehind(2, 5));
+
+    const pull = toolbarButton(page, /Pull/i);
+    const push = toolbarButton(page, /Push/i);
+    await expect(pull.locator('.remote-count')).toHaveText('5');
+    await expect(push.locator('.remote-count')).toHaveText('2');
+    await expect(pull).toHaveAttribute('title', /5 incoming commits/);
+    await expect(push).toHaveAttribute('title', /2 local commits/);
+  });
+
+  test('dims Pull and Push, without disabling them, when there is nothing to do', async ({ page }) => {
+    await setupOpenRepository(page, withAheadBehind(0, 0));
+
+    const pull = toolbarButton(page, /Pull/i);
+    const push = toolbarButton(page, /Push/i);
+    await expect(pull).toHaveClass(/idle/);
+    await expect(push).toHaveClass(/idle/);
+    await expect(pull).toBeEnabled();
+    await expect(push).toBeEnabled();
+    await expect(pull.locator('.remote-count')).toHaveCount(0);
+    await expect(push.locator('.remote-count')).toHaveCount(0);
+  });
+
+  test('disables all three when the repository has no remote', async ({ page }) => {
+    await setupOpenRepository(page, { remotes: [] });
+
+    for (const name of [/Fetch/i, /Pull/i, /Push/i]) {
+      const btn = toolbarButton(page, name);
+      await expect(btn).toBeDisabled();
+      await expect(btn).toHaveAttribute('title', /no remote configured/);
+    }
+  });
+
+  test('disables all three on the welcome screen, explaining why', async ({ page }) => {
+    // No repository opened at all — mocks only.
+    await setupTauriMocks(page);
+    await page.goto('/');
+
+    for (const name of [/Fetch/i, /Pull/i, /Push/i]) {
+      const btn = toolbarButton(page, name);
+      await expect(btn).toBeDisabled();
+      await expect(btn).toHaveAttribute('title', /open a repository first/);
+    }
+  });
+
+  test('clicking Fetch runs a fetch and refreshes the counts', async ({ page }) => {
+    await setupOpenRepository(page, withAheadBehind(0, 3));
+    await expect(remoteButton(page, 'pull').locator('.remote-count')).toHaveText('3');
+
+    // After the fetch the branch is up to date, so the refresh that follows
+    // must clear the toolbar's badge.
+    await startCommandCaptureWithMocks(page, {
+      fetch: null,
+      get_branches: [
+        {
+          name: 'main',
+          shorthand: 'main',
+          isHead: true,
+          isRemote: false,
+          upstream: 'origin/main',
+          targetOid: 'abc123def456',
+          aheadBehind: { ahead: 0, behind: 0 },
+          isStale: false,
+        },
+      ],
+    });
+
+    await remoteButton(page, 'fetch').click();
+    await waitForCommand(page, 'fetch');
+
+    expect(findCommand(page, 'fetch')).toBeTruthy();
+    await expect(remoteButton(page, 'pull').locator('.remote-count')).toHaveCount(0);
+    await expect(remoteButton(page, 'pull')).toHaveClass(/idle/);
+  });
+
+  test('clicking Pull runs a pull and clears the behind badge it landed on', async ({ page }) => {
+    await setupOpenRepository(page, withAheadBehind(0, 2));
+    await expect(remoteButton(page, 'pull').locator('.remote-count')).toHaveText('2');
+
+    // The pull lands, so the refresh behind it must clear the badge — "the
+    // command was called" is not the outcome the user sees.
+    await startCommandCaptureWithMocks(page, {
+      pull: null,
+      get_branches: [
+        {
+          name: 'main',
+          shorthand: 'main',
+          isHead: true,
+          isRemote: false,
+          upstream: 'origin/main',
+          targetOid: 'abc123def456',
+          aheadBehind: { ahead: 0, behind: 0 },
+          isStale: false,
+        },
+      ],
+    });
+
+    await remoteButton(page, 'pull').click();
+    await waitForCommand(page, 'pull');
+
+    await expect(remoteButton(page, 'pull').locator('.remote-count')).toHaveCount(0);
+    await expect(remoteButton(page, 'pull')).toHaveClass(/idle/);
+    // The row the runner opened is torn down again, and the buttons come back.
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(remoteButton(page, 'pull')).toBeEnabled();
+  });
+
+  test('clicking Push runs a push and clears the ahead badge it landed on', async ({ page }) => {
+    await setupOpenRepository(page, withAheadBehind(2, 0));
+    await expect(remoteButton(page, 'push').locator('.remote-count')).toHaveText('2');
+
+    await startCommandCaptureWithMocks(page, {
+      push: null,
+      get_branches: [
+        {
+          name: 'main',
+          shorthand: 'main',
+          isHead: true,
+          isRemote: false,
+          upstream: 'origin/main',
+          targetOid: 'abc123def456',
+          aheadBehind: { ahead: 0, behind: 0 },
+          isStale: false,
+        },
+      ],
+    });
+
+    await remoteButton(page, 'push').click();
+    await waitForCommand(page, 'push');
+
+    await expect(remoteButton(page, 'push').locator('.remote-count')).toHaveCount(0);
+    await expect(remoteButton(page, 'push')).toHaveClass(/idle/);
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(remoteButton(page, 'push')).toBeEnabled();
+  });
+
+  test('a push the BACKEND gate refuses says so instead of vanishing', async ({ page }) => {
+    // The backend refuses pushes the frontend gate cannot see: `remote.rs`
+    // runs `guard_lfs_upload` on every push, judging the LFS UPLOAD endpoint
+    // that a committed `.lfsconfig` chooses — a target nothing on the frontend
+    // ever resolves. That refusal comes back as `BLOCKED`, which the runner
+    // suppresses on the understanding that the gate already explained itself.
+    // It had not: the row appeared, the row vanished, and nothing was said.
+    await setupOpenRepository(page, withAheadBehind(2, 0));
+    await startCommandCapture(page);
+    await injectCommandError(
+      page,
+      'push',
+      'Remote "https://lfs.evil.test/repo" is not in your allowlist',
+      'BLOCKED'
+    );
+
+    await remoteButton(page, 'push').click();
+    await waitForCommand(page, 'push');
+
+    const toast = page.locator('.toast').first();
+    await expect(toast).toBeVisible();
+    await expect(toast, 'the backend reason reaches the user').toContainText('lfs.evil.test');
+    // And the button comes back rather than being left mid-operation.
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(remoteButton(page, 'push')).toBeEnabled();
+  });
+
+  test('a running fetch disables the toolbar trio and says which operation holds them', async ({
+    page,
+  }) => {
+    // The toolbar read three private lock keys that nothing claims any more,
+    // so its buttons stayed lit through an operation the dashboard's copies
+    // greyed out — and a second Fetch click reached a runner that refuses a
+    // fetch SILENTLY (no toast, by design, because holding Ctrl+Shift+F
+    // repeats). A dead-looking button with no feedback is what this pins.
+    await setupOpenRepository(page, withAheadBehind(2, 3));
+    await startCommandCapture(page);
+    await injectCommandHang(page, 'fetch');
+
+    const fetchButton = remoteButton(page, 'fetch');
+    await fetchButton.click();
+    await waitForCommand(page, 'fetch');
+
+    // The operation is visible…
+    await expect(page.locator('.progress-message')).toHaveText('Fetching from remote...');
+    // …and every remote control is refused for its duration, with a tooltip
+    // that names the operation actually holding the repository.
+    await expect(fetchButton).toBeDisabled();
+    await expect(fetchButton).toHaveAttribute('title', /already in progress/);
+    for (const op of ['pull', 'push'] as const) {
+      await expect(remoteButton(page, op)).toBeDisabled();
+      await expect(remoteButton(page, op)).toHaveAttribute('title', /a fetch is already running/);
+    }
+
+    // A second gesture that LANDS ANYWAY.
+    //
+    // `click({ force: true })` on a disabled <button> is not a click at all —
+    // Chromium never dispatches one, force or no force — so the assertion
+    // that used to stand here was decided by the single real click above and
+    // held with `?disabled` and the runner's coalescing both deleted. The
+    // sibling spec had already written this down (remote-operations.spec.ts,
+    // "a click that lands anyway"); this one was not brought along.
+    // `dispatchEvent` IS the click: the race window between a render and the
+    // button going grey.
+    await fetchButton.dispatchEvent('click');
+    // Push, from the same greyed-out trio, is what makes the absences below
+    // real. The runner refuses a second FETCH silently by design (holding
+    // Ctrl+Shift+F repeats, and one toast per repeat would bury the screen),
+    // so a swallowed fetch has no outcome to settle on; a push while a fetch
+    // holds the repository is refused WITH a message, and both gestures have
+    // been processed end to end once that message is on screen.
+    await remoteButton(page, 'push').dispatchEvent('click');
+    await expect(page.locator('.toast')).toContainText(/Another operation is already running/i);
+
+    expect((await findCommand(page, 'fetch')).length, 'one fetch, not two').toBe(1);
+    expect((await findCommand(page, 'push')).length, 'and no push behind it').toBe(0);
+    // One row, not a second "Fetching from remote..." stacked on the first.
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(1);
+  });
+
+  test('a failed toolbar fetch is reported and the button comes back', async ({ page }) => {
+    await setupOpenRepository(page);
+    await startCommandCapture(page);
+    await injectDelayedCommandError(page, 'fetch', 'Network error: could not resolve host');
+
+    const fetchButton = remoteButton(page, 'fetch');
+    await fetchButton.click();
+    await waitForCommand(page, 'fetch');
+
+    // "Comes back" means something only because it went away first.
+    await expect(fetchButton).toBeDisabled();
+
+    const toast = page.locator('.toast').first();
+    await expect(toast).toBeVisible({ timeout: 5000 });
+    await expect(toast).toContainText(/error|network|resolve/i);
+
+    await expect(fetchButton).toBeEnabled();
+    await expect(fetchButton).toHaveAttribute('title', /Fetch from remote/);
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
   });
 });

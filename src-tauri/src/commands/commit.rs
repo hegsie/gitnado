@@ -256,47 +256,50 @@ pub async fn get_commit_history(
     skip: Option<usize>,
     all_branches: Option<bool>,
 ) -> Result<Vec<Commit>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let skip_count = skip.unwrap_or(0);
-    let limit_count = limit.unwrap_or(100);
+        let skip_count = skip.unwrap_or(0);
+        let limit_count = limit.unwrap_or(100);
 
-    if all_branches.unwrap_or(false) {
-        // All-branches graph walk: served from the cached walk so deep
-        // pagination doesn't re-walk from the roots on every page
-        let (page, _total) = cached_walk_page(&repo, &path, skip_count, limit_count)?;
-        let commits: Vec<Commit> = page
-            .into_iter()
-            .filter_map(|oid| repo.find_commit(oid).ok().map(|c| Commit::from_git2(&c)))
+        if all_branches.unwrap_or(false) {
+            // All-branches graph walk: served from the cached walk so deep
+            // pagination doesn't re-walk from the roots on every page
+            let (page, _total) = cached_walk_page(&repo, &path, skip_count, limit_count)?;
+            let commits: Vec<Commit> = page
+                .into_iter()
+                .filter_map(|oid| repo.find_commit(oid).ok().map(|c| Commit::from_git2(&c)))
+                .collect();
+            return Ok(commits);
+        }
+
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+
+        if let Some(ref oid_str) = start_oid {
+            let start = git2::Oid::from_str(oid_str)?;
+            revwalk.push(start)?;
+        } else {
+            let start = repo
+                .head()?
+                .target()
+                .ok_or(GitnadoError::RepositoryNotOpen)?;
+            revwalk.push(start)?;
+        }
+
+        let commits: Vec<Commit> = revwalk
+            .skip(skip_count)
+            .take(limit_count)
+            .filter_map(|oid_result| {
+                oid_result
+                    .ok()
+                    .and_then(|oid| repo.find_commit(oid).ok().map(|c| Commit::from_git2(&c)))
+            })
             .collect();
-        return Ok(commits);
-    }
 
-    let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
-
-    if let Some(ref oid_str) = start_oid {
-        let start = git2::Oid::from_str(oid_str)?;
-        revwalk.push(start)?;
-    } else {
-        let start = repo
-            .head()?
-            .target()
-            .ok_or(GitnadoError::RepositoryNotOpen)?;
-        revwalk.push(start)?;
-    }
-
-    let commits: Vec<Commit> = revwalk
-        .skip(skip_count)
-        .take(limit_count)
-        .filter_map(|oid_result| {
-            oid_result
-                .ok()
-                .and_then(|oid| repo.find_commit(oid).ok().map(|c| Commit::from_git2(&c)))
-        })
-        .collect();
-
-    Ok(commits)
+        Ok(commits)
+    })
+    .await
 }
 
 /// Get the total number of commits reachable from any ref (the size of the
@@ -304,21 +307,27 @@ pub async fn get_commit_history(
 /// `get_commit_history`, so it is O(1) when the cache is warm.
 #[command]
 pub async fn get_commit_total(path: String) -> Result<usize> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let (_page, total) = cached_walk_page(&repo, &path, 0, 0)?;
-    Ok(total)
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let (_page, total) = cached_walk_page(&repo, &path, 0, 0)?;
+        Ok(total)
+    })
+    .await
 }
 
 /// Get a single commit by OID
 #[command]
 pub async fn get_commit(path: String, oid: String) -> Result<Commit> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let oid = git2::Oid::from_str(&oid)?;
-    let commit = repo
-        .find_commit(oid)
-        .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let oid = git2::Oid::from_str(&oid)?;
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
 
-    Ok(Commit::from_git2(&commit))
+        Ok(Commit::from_git2(&commit))
+    })
+    .await
 }
 
 /// Create a new commit
@@ -379,174 +388,177 @@ pub async fn create_commit(
         .await;
     }
 
-    // Use git2 for unsigned commits (faster)
-    let mut repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        // Use git2 for unsigned commits (faster)
+        let mut repo = git2::Repository::open(Path::new(&path))?;
 
-    // A commit created while a merge is in progress must include MERGE_HEAD
-    // as a parent, otherwise the merged branch is silently dropped and the
-    // repository stays stuck in MERGING state. Collect the merge heads up
-    // front (mergehead_foreach needs a unique borrow of the repo).
-    //
-    // Cherry-pick and revert also leave sequencer state (CHERRY_PICK_HEAD /
-    // REVERT_HEAD) that must be cleared after committing, or the app stays
-    // stuck showing the operation "in progress". Unlike a merge, though, the
-    // resulting commit keeps a SINGLE parent (HEAD only) — the picked/reverted
-    // commit is NOT an extra parent.
-    let state = repo.state();
-    let merging = state == git2::RepositoryState::Merge;
-    let needs_cleanup = matches!(
-        state,
-        git2::RepositoryState::Merge
-            | git2::RepositoryState::CherryPick
-            | git2::RepositoryState::Revert
-    );
-    let mut merge_oids: Vec<git2::Oid> = Vec::new();
-    if merging {
-        repo.mergehead_foreach(|oid| {
-            merge_oids.push(*oid);
-            true
-        })?;
-    }
-    let repo = repo;
-
-    // Run client-side hooks like canonical git does — the git2 commit path
-    // otherwise bypasses them entirely. pre-commit can veto the commit;
-    // commit-msg can veto or rewrite the message.
-    crate::commands::hooks::run_hook_blocking(&repo, "pre-commit", &[], None)?;
-    let message = crate::commands::hooks::run_commit_msg_hook(&repo, &message)?;
-
-    let default_signature = repo.signature()?;
-
-    // Build author and committer signatures, optionally with custom dates
-    let author_sig = if has_custom_dates {
-        signature_with_date(
-            default_signature.name().ok().unwrap_or("Unknown"),
-            default_signature.email().ok().unwrap_or(""),
-            author_date.as_deref(),
-        )?
-    } else {
-        default_signature.clone()
-    };
-
-    let committer_sig = if has_custom_dates {
-        signature_with_date(
-            default_signature.name().ok().unwrap_or("Unknown"),
-            default_signature.email().ok().unwrap_or(""),
-            committer_date.as_deref(),
-        )?
-    } else {
-        default_signature
-    };
-
-    let mut index = repo.index()?;
-    let tree_oid = index.write_tree()?;
-    let tree = repo.find_tree(tree_oid)?;
-
-    // `git commit` refuses a commit that changes nothing unless --allow-empty,
-    // and this path never checked. The only guard was the frontend's staged
-    // COUNT, which goes stale the moment anything unstages outside the app — a
-    // terminal, another tool, watcher lag — so pressing Commit then wrote a
-    // no-op commit into history with no warning at all.
-    //
-    // Not applied mid-merge: concluding a merge whose result happens to match
-    // HEAD's tree is a legitimate commit, and git allows that one too.
-    if !amend.unwrap_or(false) && merge_oids.is_empty() {
-        let head_tree_id = repo
-            .head()
-            .ok()
-            .and_then(|h| h.peel_to_commit().ok())
-            .map(|c| c.tree_id());
-        let nothing_staged = match head_tree_id {
-            Some(head_tree_id) => head_tree_id == tree_oid,
-            // Unborn HEAD: there is no parent tree to compare against, so
-            // "nothing staged" means the index itself is empty. Comparing
-            // against a None head tree could never match, which let the very
-            // first commit in a repository be created empty — `git commit`
-            // refuses that one too.
-            None => repo
-                .find_tree(tree_oid)
-                .map(|t| t.is_empty())
-                .unwrap_or(false),
-        };
-        if nothing_staged {
-            return Err(GitnadoError::OperationFailed(
-                "No staged changes to commit".to_string(),
-            ));
-        }
-    }
-
-    let commit_oid = if amend.unwrap_or(false) {
-        let head_commit = repo.head()?.peel_to_commit()?;
-
-        // `git commit --amend` PRESERVES the original author identity and author
-        // date; only `--reset-author` changes them. An explicitly supplied
-        // author date still applies, on top of the original identity.
+        // A commit created while a merge is in progress must include MERGE_HEAD
+        // as a parent, otherwise the merged branch is silently dropped and the
+        // repository stays stuck in MERGING state. Collect the merge heads up
+        // front (mergehead_foreach needs a unique borrow of the repo).
         //
-        // The signed path (`git commit --amend` via the CLI) and amend_commit
-        // both already preserve the author, so rebuilding it from
-        // repo.signature() here also made the result depend on whether
-        // commit.gpgsign happened to be enabled.
-        let amend_author: git2::Signature<'_> = if author_date.is_some() {
-            let original = head_commit.author();
+        // Cherry-pick and revert also leave sequencer state (CHERRY_PICK_HEAD /
+        // REVERT_HEAD) that must be cleared after committing, or the app stays
+        // stuck showing the operation "in progress". Unlike a merge, though, the
+        // resulting commit keeps a SINGLE parent (HEAD only) — the picked/reverted
+        // commit is NOT an extra parent.
+        let state = repo.state();
+        let merging = state == git2::RepositoryState::Merge;
+        let needs_cleanup = matches!(
+            state,
+            git2::RepositoryState::Merge
+                | git2::RepositoryState::CherryPick
+                | git2::RepositoryState::Revert
+        );
+        let mut merge_oids: Vec<git2::Oid> = Vec::new();
+        if merging {
+            repo.mergehead_foreach(|oid| {
+                merge_oids.push(*oid);
+                true
+            })?;
+        }
+        let repo = repo;
+
+        // Run client-side hooks like canonical git does — the git2 commit path
+        // otherwise bypasses them entirely. pre-commit can veto the commit;
+        // commit-msg can veto or rewrite the message.
+        crate::commands::hooks::run_hook_blocking(&repo, "pre-commit", &[], None)?;
+        let message = crate::commands::hooks::run_commit_msg_hook(&repo, &message)?;
+
+        let default_signature = repo.signature()?;
+
+        // Build author and committer signatures, optionally with custom dates
+        let author_sig = if has_custom_dates {
             signature_with_date(
-                original.name().ok().unwrap_or("Unknown"),
-                original.email().ok().unwrap_or(""),
+                default_signature.name().ok().unwrap_or("Unknown"),
+                default_signature.email().ok().unwrap_or(""),
                 author_date.as_deref(),
             )?
         } else {
-            head_commit.author()
+            default_signature.clone()
         };
 
-        // Commit::amend, not repo.commit(Some("HEAD"), .., parents).
+        let committer_sig = if has_custom_dates {
+            signature_with_date(
+                default_signature.name().ok().unwrap_or("Unknown"),
+                default_signature.email().ok().unwrap_or(""),
+                committer_date.as_deref(),
+            )?
+        } else {
+            default_signature
+        };
+
+        let mut index = repo.index()?;
+        let tree_oid = index.write_tree()?;
+        let tree = repo.find_tree(tree_oid)?;
+
+        // `git commit` refuses a commit that changes nothing unless --allow-empty,
+        // and this path never checked. The only guard was the frontend's staged
+        // COUNT, which goes stale the moment anything unstages outside the app — a
+        // terminal, another tool, watcher lag — so pressing Commit then wrote a
+        // no-op commit into history with no warning at all.
         //
-        // libgit2 validates that the updated ref's current tip IS the new
-        // commit's first parent. An amend replaces the tip, so that check can
-        // never pass and this path failed outright with "current tip is not the
-        // first parent" — meaning amend from the commit panel was broken for
-        // every repository without commit.gpgsign enabled. Commit::amend
-        // performs the replacement libgit2 expects and carries the original
-        // parents over unchanged.
-        head_commit.amend(
-            Some("HEAD"),
-            Some(&amend_author),
-            Some(&committer_sig),
-            None,
-            Some(&message),
-            Some(&tree),
-        )?
-    } else {
-        let mut parents: Vec<git2::Commit> = repo
-            .head()
-            .ok()
-            .and_then(|h| h.peel_to_commit().ok())
-            .into_iter()
-            .collect();
-
-        // Include MERGE_HEAD parents collected above when mid-merge
-        for oid in &merge_oids {
-            parents.push(repo.find_commit(*oid)?);
+        // Not applied mid-merge: concluding a merge whose result happens to match
+        // HEAD's tree is a legitimate commit, and git allows that one too.
+        if !amend.unwrap_or(false) && merge_oids.is_empty() {
+            let head_tree_id = repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .map(|c| c.tree_id());
+            let nothing_staged = match head_tree_id {
+                Some(head_tree_id) => head_tree_id == tree_oid,
+                // Unborn HEAD: there is no parent tree to compare against, so
+                // "nothing staged" means the index itself is empty. Comparing
+                // against a None head tree could never match, which let the very
+                // first commit in a repository be created empty — `git commit`
+                // refuses that one too.
+                None => repo
+                    .find_tree(tree_oid)
+                    .map(|t| t.is_empty())
+                    .unwrap_or(false),
+            };
+            if nothing_staged {
+                return Err(GitnadoError::OperationFailed(
+                    "No staged changes to commit".to_string(),
+                ));
+            }
         }
-        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
-        let commit_oid = repo.commit(
-            Some("HEAD"),
-            &author_sig,
-            &committer_sig,
-            &message,
-            &tree,
-            &parent_refs,
-        )?;
-        if needs_cleanup {
-            repo.cleanup_state()?;
-        }
-        commit_oid
-    };
+        let commit_oid = if amend.unwrap_or(false) {
+            let head_commit = repo.head()?.peel_to_commit()?;
 
-    // post-commit runs after the commit is created and never blocks it.
-    crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
+            // `git commit --amend` PRESERVES the original author identity and author
+            // date; only `--reset-author` changes them. An explicitly supplied
+            // author date still applies, on top of the original identity.
+            //
+            // The signed path (`git commit --amend` via the CLI) and amend_commit
+            // both already preserve the author, so rebuilding it from
+            // repo.signature() here also made the result depend on whether
+            // commit.gpgsign happened to be enabled.
+            let amend_author: git2::Signature<'_> = if author_date.is_some() {
+                let original = head_commit.author();
+                signature_with_date(
+                    original.name().ok().unwrap_or("Unknown"),
+                    original.email().ok().unwrap_or(""),
+                    author_date.as_deref(),
+                )?
+            } else {
+                head_commit.author()
+            };
 
-    let commit = repo.find_commit(commit_oid)?;
-    Ok(Commit::from_git2(&commit))
+            // Commit::amend, not repo.commit(Some("HEAD"), .., parents).
+            //
+            // libgit2 validates that the updated ref's current tip IS the new
+            // commit's first parent. An amend replaces the tip, so that check can
+            // never pass and this path failed outright with "current tip is not the
+            // first parent" — meaning amend from the commit panel was broken for
+            // every repository without commit.gpgsign enabled. Commit::amend
+            // performs the replacement libgit2 expects and carries the original
+            // parents over unchanged.
+            head_commit.amend(
+                Some("HEAD"),
+                Some(&amend_author),
+                Some(&committer_sig),
+                None,
+                Some(&message),
+                Some(&tree),
+            )?
+        } else {
+            let mut parents: Vec<git2::Commit> = repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .into_iter()
+                .collect();
+
+            // Include MERGE_HEAD parents collected above when mid-merge
+            for oid in &merge_oids {
+                parents.push(repo.find_commit(*oid)?);
+            }
+            let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+
+            let commit_oid = repo.commit(
+                Some("HEAD"),
+                &author_sig,
+                &committer_sig,
+                &message,
+                &tree,
+                &parent_refs,
+            )?;
+            if needs_cleanup {
+                repo.cleanup_state()?;
+            }
+            commit_oid
+        };
+
+        // post-commit runs after the commit is created and never blocks it.
+        crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
+
+        let commit = repo.find_commit(commit_oid)?;
+        Ok(Commit::from_git2(&commit))
+    })
+    .await
 }
 
 /// Check if a commit should be signed based on explicit parameter or repo config
@@ -620,67 +632,73 @@ async fn create_commit_with_git_cli(
 /// This only updates the commit message; the tree and parents remain the same.
 #[command]
 pub async fn amend_commit_message(path: String, message: String) -> Result<Commit> {
-    // libgit2's repo.commit() cannot sign and would strip any existing signature.
-    // When commit.gpgsign is enabled, amend via the CLI so the reworded commit is
-    // re-signed instead of silently emitted unsigned.
-    if should_sign_commit(&path, None)? {
-        let output = crate::utils::create_command("git")
-            .current_dir(&path)
-            .args(["commit", "--amend", "-S", "-m", &message])
-            .output()
-            .map_err(|e| {
-                GitnadoError::OperationFailed(format!("Failed to run git commit --amend: {}", e))
-            })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(GitnadoError::OperationFailed(format!(
-                "Git commit --amend failed: {}",
-                stderr.trim()
-            )));
+    crate::utils::blocking_git(move || {
+        // libgit2's repo.commit() cannot sign and would strip any existing signature.
+        // When commit.gpgsign is enabled, amend via the CLI so the reworded commit is
+        // re-signed instead of silently emitted unsigned.
+        if should_sign_commit(&path, None)? {
+            let output = crate::utils::create_command("git")
+                .current_dir(&path)
+                .args(["commit", "--amend", "-S", "-m", &message])
+                .output()
+                .map_err(|e| {
+                    GitnadoError::OperationFailed(format!(
+                        "Failed to run git commit --amend: {}",
+                        e
+                    ))
+                })?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Git commit --amend failed: {}",
+                    stderr.trim()
+                )));
+            }
+            let repo = git2::Repository::open(Path::new(&path))?;
+            let head_commit = repo.head()?.peel_to_commit()?;
+            return Ok(Commit::from_git2(&head_commit));
         }
+
         let repo = git2::Repository::open(Path::new(&path))?;
-        let head_commit = repo.head()?.peel_to_commit()?;
-        return Ok(Commit::from_git2(&head_commit));
-    }
 
-    let repo = git2::Repository::open(Path::new(&path))?;
+        // git runs pre-commit/commit-msg/post-commit for `git commit --amend` too;
+        // the git2 amend path otherwise bypasses them.
+        crate::commands::hooks::run_hook_blocking(&repo, "pre-commit", &[], None)?;
+        let message = crate::commands::hooks::run_commit_msg_hook(&repo, &message)?;
 
-    // git runs pre-commit/commit-msg/post-commit for `git commit --amend` too;
-    // the git2 amend path otherwise bypasses them.
-    crate::commands::hooks::run_hook_blocking(&repo, "pre-commit", &[], None)?;
-    let message = crate::commands::hooks::run_commit_msg_hook(&repo, &message)?;
+        let head_commit = repo
+            .head()?
+            .peel_to_commit()
+            .map_err(|_| GitnadoError::CommitNotFound("HEAD".to_string()))?;
 
-    let head_commit = repo
-        .head()?
-        .peel_to_commit()
-        .map_err(|_| GitnadoError::CommitNotFound("HEAD".to_string()))?;
+        let tree = head_commit.tree()?;
+        let signature = repo.signature()?;
 
-    let tree = head_commit.tree()?;
-    let signature = repo.signature()?;
+        // A reword changes only the message. Passing the fresh signature as AUTHOR
+        // as well re-attributed the commit to whoever reworded it and reset the
+        // author date to now — which also reorders it in date-sorted history views.
+        // git preserves the author across a reword; only the committer changes.
+        //
+        // Commit::amend, not repo.commit(Some("HEAD"), .., parents): libgit2 checks
+        // that the updated ref's tip is the new commit's first parent, which a
+        // reword never satisfies, so that call failed with "current tip is not the
+        // first parent". Commit::amend performs the replacement and carries the
+        // original parents over unchanged.
+        let new_oid = head_commit.amend(
+            Some("HEAD"),
+            Some(&head_commit.author()),
+            Some(&signature),
+            None,
+            Some(&message),
+            Some(&tree),
+        )?;
 
-    // A reword changes only the message. Passing the fresh signature as AUTHOR
-    // as well re-attributed the commit to whoever reworded it and reset the
-    // author date to now — which also reorders it in date-sorted history views.
-    // git preserves the author across a reword; only the committer changes.
-    //
-    // Commit::amend, not repo.commit(Some("HEAD"), .., parents): libgit2 checks
-    // that the updated ref's tip is the new commit's first parent, which a
-    // reword never satisfies, so that call failed with "current tip is not the
-    // first parent". Commit::amend performs the replacement and carries the
-    // original parents over unchanged.
-    let new_oid = head_commit.amend(
-        Some("HEAD"),
-        Some(&head_commit.author()),
-        Some(&signature),
-        None,
-        Some(&message),
-        Some(&tree),
-    )?;
+        crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
 
-    crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
-
-    let new_commit = repo.find_commit(new_oid)?;
-    Ok(Commit::from_git2(&new_commit))
+        let new_commit = repo.find_commit(new_oid)?;
+        Ok(Commit::from_git2(&new_commit))
+    })
+    .await
 }
 
 /// Result of an amend operation
@@ -715,84 +733,87 @@ pub async fn amend_commit(
             .await;
     }
 
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // git runs pre-commit for `git commit --amend`; the git2 path bypasses it.
-    crate::commands::hooks::run_hook_blocking(&repo, "pre-commit", &[], None)?;
+        // git runs pre-commit for `git commit --amend`; the git2 path bypasses it.
+        crate::commands::hooks::run_hook_blocking(&repo, "pre-commit", &[], None)?;
 
-    let head_commit = repo
-        .head()?
-        .peel_to_commit()
-        .map_err(|_| GitnadoError::CommitNotFound("HEAD".to_string()))?;
+        let head_commit = repo
+            .head()?
+            .peel_to_commit()
+            .map_err(|_| GitnadoError::CommitNotFound("HEAD".to_string()))?;
 
-    let old_oid = head_commit.id().to_string();
-    let tree = head_commit.tree()?;
-    let signature = repo.signature()?;
+        let old_oid = head_commit.id().to_string();
+        let tree = head_commit.tree()?;
+        let signature = repo.signature()?;
 
-    // Use the new message or keep the original
-    let commit_message =
-        message.unwrap_or_else(|| head_commit.message().ok().unwrap_or("").to_string());
-    // commit-msg may veto or rewrite the (possibly reused) message.
-    let commit_message = crate::commands::hooks::run_commit_msg_hook(&repo, &commit_message)?;
+        // Use the new message or keep the original
+        let commit_message =
+            message.unwrap_or_else(|| head_commit.message().ok().unwrap_or("").to_string());
+        // commit-msg may veto or rewrite the (possibly reused) message.
+        let commit_message = crate::commands::hooks::run_commit_msg_hook(&repo, &commit_message)?;
 
-    // Use new author if reset_author is true, otherwise keep original
-    let author = if reset_author.unwrap_or(false) {
-        signature.clone()
-    } else {
-        head_commit.author()
-    };
+        // Use new author if reset_author is true, otherwise keep original
+        let author = if reset_author.unwrap_or(false) {
+            signature.clone()
+        } else {
+            head_commit.author()
+        };
 
-    let parent_ids: Vec<git2::Oid> = head_commit.parent_ids().collect();
-    let parents: Vec<git2::Commit> = parent_ids
-        .iter()
-        .filter_map(|id| repo.find_commit(*id).ok())
-        .collect();
-    let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        let parent_ids: Vec<git2::Oid> = head_commit.parent_ids().collect();
+        let parents: Vec<git2::Commit> = parent_ids
+            .iter()
+            .filter_map(|id| repo.find_commit(*id).ok())
+            .collect();
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
-    // Create commit without updating ref (avoids git2 parent validation error
-    // for root commits), then manually update HEAD.
-    let new_oid = repo.commit(
-        None,
-        &author,
-        &signature,
-        &commit_message,
-        &tree,
-        &parent_refs,
-    )?;
-
-    // Update HEAD to point to the new commit
-    let head_ref = repo.head()?;
-    if head_ref.is_branch() {
-        let branch_name = head_ref
-            .name()
-            .map_err(|_| GitnadoError::OperationFailed("Invalid HEAD ref".to_string()))?;
-        repo.reference(
-            branch_name,
-            new_oid,
-            true,
-            &format!("amend: {}", &old_oid[..std::cmp::min(7, old_oid.len())]),
+        // Create commit without updating ref (avoids git2 parent validation error
+        // for root commits), then manually update HEAD.
+        let new_oid = repo.commit(
+            None,
+            &author,
+            &signature,
+            &commit_message,
+            &tree,
+            &parent_refs,
         )?;
-    } else {
-        repo.set_head_detached(new_oid)?;
-    }
 
-    crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
-    // The Hooks dialog advertises post-rewrite for "rebase, amend" and lets
-    // the user enable it, but nothing ran it — so the same Amend button fired
-    // it or not depending purely on whether GPG signing was on, since the
-    // signed path shells out to git and git runs it.
-    crate::commands::hooks::run_hook_noblock_with_stdin(
-        &repo,
-        "post-rewrite",
-        &["amend"],
-        Some(&format!("{} {}\n", old_oid, new_oid)),
-    );
+        // Update HEAD to point to the new commit
+        let head_ref = repo.head()?;
+        if head_ref.is_branch() {
+            let branch_name = head_ref
+                .name()
+                .map_err(|_| GitnadoError::OperationFailed("Invalid HEAD ref".to_string()))?;
+            repo.reference(
+                branch_name,
+                new_oid,
+                true,
+                &format!("amend: {}", &old_oid[..std::cmp::min(7, old_oid.len())]),
+            )?;
+        } else {
+            repo.set_head_detached(new_oid)?;
+        }
 
-    Ok(AmendResult {
-        new_oid: new_oid.to_string(),
-        old_oid,
-        success: true,
+        crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
+        // The Hooks dialog advertises post-rewrite for "rebase, amend" and lets
+        // the user enable it, but nothing ran it — so the same Amend button fired
+        // it or not depending purely on whether GPG signing was on, since the
+        // signed path shells out to git and git runs it.
+        crate::commands::hooks::run_hook_noblock_with_stdin(
+            &repo,
+            "post-rewrite",
+            &["amend"],
+            Some(&format!("{} {}\n", old_oid, new_oid)),
+        );
+
+        Ok(AmendResult {
+            new_oid: new_oid.to_string(),
+            old_oid,
+            success: true,
+        })
     })
+    .await
 }
 
 /// Amend a commit using git CLI (supports GPG signing)
@@ -860,53 +881,59 @@ async fn amend_commit_with_git_cli(
 /// false — the check must never invent a warning for an ordinary local commit.
 #[command]
 pub async fn is_head_published(path: String) -> Result<bool> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let Ok(head) = repo.head() else {
-        return Ok(false); // Unborn HEAD: nothing to amend yet.
-    };
-    if repo.head_detached().unwrap_or(false) {
-        return Ok(false); // No upstream to diverge from.
-    }
-    let Some(head_oid) = head.target() else {
-        return Ok(false);
-    };
-    let Ok(branch_name) = head.shorthand() else {
-        return Ok(false);
-    };
+        let Ok(head) = repo.head() else {
+            return Ok(false); // Unborn HEAD: nothing to amend yet.
+        };
+        if repo.head_detached().unwrap_or(false) {
+            return Ok(false); // No upstream to diverge from.
+        }
+        let Some(head_oid) = head.target() else {
+            return Ok(false);
+        };
+        let Ok(branch_name) = head.shorthand() else {
+            return Ok(false);
+        };
 
-    let Ok(branch) = repo.find_branch(branch_name, git2::BranchType::Local) else {
-        return Ok(false);
-    };
-    // An upstream that is configured but pruned resolves to Err here, and that
-    // is the right answer: with no remote-tracking ref there is nothing local
-    // that can show the commit was published.
-    let Ok(upstream) = branch.upstream() else {
-        return Ok(false);
-    };
-    let Some(upstream_oid) = upstream.get().target() else {
-        return Ok(false);
-    };
+        let Ok(branch) = repo.find_branch(branch_name, git2::BranchType::Local) else {
+            return Ok(false);
+        };
+        // An upstream that is configured but pruned resolves to Err here, and that
+        // is the right answer: with no remote-tracking ref there is nothing local
+        // that can show the commit was published.
+        let Ok(upstream) = branch.upstream() else {
+            return Ok(false);
+        };
+        let Some(upstream_oid) = upstream.get().target() else {
+            return Ok(false);
+        };
 
-    if upstream_oid == head_oid {
-        return Ok(true);
-    }
-    // The upstream having moved PAST head still means head is published.
-    Ok(repo
-        .graph_descendant_of(upstream_oid, head_oid)
-        .unwrap_or(false))
+        if upstream_oid == head_oid {
+            return Ok(true);
+        }
+        // The upstream having moved PAST head still means head is published.
+        Ok(repo
+            .graph_descendant_of(upstream_oid, head_oid)
+            .unwrap_or(false))
+    })
+    .await
 }
 
 /// Get the full commit message for a commit
 #[command]
 pub async fn get_commit_message(path: String, oid: String) -> Result<String> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let oid = git2::Oid::from_str(&oid)?;
-    let commit = repo
-        .find_commit(oid)
-        .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let oid = git2::Oid::from_str(&oid)?;
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|_| GitnadoError::CommitNotFound(oid.to_string()))?;
 
-    Ok(commit.message().ok().unwrap_or("").to_string())
+        Ok(commit.message().ok().unwrap_or("").to_string())
+    })
+    .await
 }
 
 /// Edit the author and/or committer date of an existing commit
@@ -948,131 +975,143 @@ pub async fn edit_commit_date(
         parent_ids: Vec<git2::Oid>,
     }
 
-    let info: std::result::Result<CommitDateInfo, GitnadoError> = (|| {
-        let repo = git2::Repository::open(Path::new(&path))?;
+    let info: std::result::Result<CommitDateInfo, GitnadoError> = {
+        let path = path.clone();
+        let oid = oid.clone();
+        crate::utils::blocking_git(move || {
+            let repo = git2::Repository::open(Path::new(&path))?;
 
-        let target_oid =
-            git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
-        let target_commit = repo
-            .find_commit(target_oid)
-            .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
+            let target_oid =
+                git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
+            let target_commit = repo
+                .find_commit(target_oid)
+                .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
 
-        let head_oid = repo.head()?.peel_to_commit()?.id();
-        let is_head = head_oid == target_oid;
+            let head_oid = repo.head()?.peel_to_commit()?.id();
+            let is_head = head_oid == target_oid;
 
-        if repo.state() != git2::RepositoryState::Clean {
-            return Err(GitnadoError::OperationFailed(
-                "Another operation is in progress".to_string(),
-            ));
-        }
+            if repo.state() != git2::RepositoryState::Clean {
+                return Err(GitnadoError::OperationFailed(
+                    "Another operation is in progress".to_string(),
+                ));
+            }
 
-        // Extract all values from signatures before they are dropped
-        let author_name = target_commit
-            .author()
-            .name()
-            .ok()
-            .unwrap_or("Unknown")
-            .to_string();
-        let author_email = target_commit
-            .author()
-            .email()
-            .ok()
-            .unwrap_or("")
-            .to_string();
-        let committer_name = target_commit
-            .committer()
-            .name()
-            .ok()
-            .unwrap_or("Unknown")
-            .to_string();
-        let committer_email = target_commit
-            .committer()
-            .email()
-            .ok()
-            .unwrap_or("")
-            .to_string();
-        let message = target_commit.message().ok().unwrap_or("").to_string();
-        let parent_ids = target_commit.parent_ids().collect();
+            // Extract all values from signatures before they are dropped
+            let author_name = target_commit
+                .author()
+                .name()
+                .ok()
+                .unwrap_or("Unknown")
+                .to_string();
+            let author_email = target_commit
+                .author()
+                .email()
+                .ok()
+                .unwrap_or("")
+                .to_string();
+            let committer_name = target_commit
+                .committer()
+                .name()
+                .ok()
+                .unwrap_or("Unknown")
+                .to_string();
+            let committer_email = target_commit
+                .committer()
+                .email()
+                .ok()
+                .unwrap_or("")
+                .to_string();
+            let message = target_commit.message().ok().unwrap_or("").to_string();
+            let parent_ids = target_commit.parent_ids().collect();
 
-        Ok(CommitDateInfo {
-            is_head,
-            author_name,
-            author_email,
-            committer_name,
-            committer_email,
-            message,
-            parent_ids,
+            Ok(CommitDateInfo {
+                is_head,
+                author_name,
+                author_email,
+                committer_name,
+                committer_email,
+                message,
+                parent_ids,
+            })
         })
-    })();
+        .await
+    };
 
     let info = info?;
 
     if info.is_head {
-        // For HEAD commit, recreate it with updated dates using git2
-        let repo = git2::Repository::open(Path::new(&path))?;
-        let target_oid = git2::Oid::from_str(&oid)?;
-        let target_commit = repo.find_commit(target_oid)?;
+        let path = path.clone();
+        let oid = oid.clone();
+        let author_date = author_date.clone();
+        let committer_date = committer_date.clone();
+        crate::utils::blocking_git(move || {
+            // For HEAD commit, recreate it with updated dates using git2
+            let repo = git2::Repository::open(Path::new(&path))?;
+            let target_oid = git2::Oid::from_str(&oid)?;
+            let target_commit = repo.find_commit(target_oid)?;
 
-        let old_oid = target_oid.to_string();
+            let old_oid = target_oid.to_string();
 
-        // Build author signature with optional new date
-        let new_author = if let Some(ref ad) = author_date {
-            let time = parse_iso8601_to_git_time(ad)?;
-            git2::Signature::new(&info.author_name, &info.author_email, &time)?
-        } else {
-            target_commit.author()
-        };
+            // Build author signature with optional new date
+            let new_author = if let Some(ref ad) = author_date {
+                let time = parse_iso8601_to_git_time(ad)?;
+                git2::Signature::new(&info.author_name, &info.author_email, &time)?
+            } else {
+                target_commit.author()
+            };
 
-        // Build committer signature with optional new date
-        let new_committer = if let Some(ref cd) = committer_date {
-            let time = parse_iso8601_to_git_time(cd)?;
-            git2::Signature::new(&info.committer_name, &info.committer_email, &time)?
-        } else {
-            target_commit.committer()
-        };
+            // Build committer signature with optional new date
+            let new_committer = if let Some(ref cd) = committer_date {
+                let time = parse_iso8601_to_git_time(cd)?;
+                git2::Signature::new(&info.committer_name, &info.committer_email, &time)?
+            } else {
+                target_commit.committer()
+            };
 
-        let tree = target_commit.tree()?;
-        let parents: Vec<git2::Commit> = info
-            .parent_ids
-            .iter()
-            .filter_map(|id| repo.find_commit(*id).ok())
-            .collect();
-        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+            let tree = target_commit.tree()?;
+            let parents: Vec<git2::Commit> = info
+                .parent_ids
+                .iter()
+                .filter_map(|id| repo.find_commit(*id).ok())
+                .collect();
+            let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
-        // Create commit without updating ref (avoids git2 parent validation error),
-        // then manually update HEAD to point to the new commit.
-        let new_oid = repo.commit(
-            None,
-            &new_author,
-            &new_committer,
-            &info.message,
-            &tree,
-            &parent_refs,
-        )?;
-
-        // Update HEAD to point to the new commit
-        let head_ref = repo.head()?;
-        if head_ref.is_branch() {
-            // HEAD points to a branch - update the branch target
-            let branch_name = head_ref
-                .name()
-                .map_err(|_| GitnadoError::OperationFailed("Invalid HEAD ref".to_string()))?;
-            repo.reference(
-                branch_name,
-                new_oid,
-                true,
-                &format!("edit_commit_date: updated {}", &old_oid[..7]),
+            // Create commit without updating ref (avoids git2 parent validation error),
+            // then manually update HEAD to point to the new commit.
+            let new_oid = repo.commit(
+                None,
+                &new_author,
+                &new_committer,
+                &info.message,
+                &tree,
+                &parent_refs,
             )?;
-        } else {
-            // Detached HEAD - update HEAD directly
-            repo.set_head_detached(new_oid)?;
-        }
 
-        Ok(AmendResult {
-            new_oid: new_oid.to_string(),
-            old_oid,
-            success: true,
+            // Update HEAD to point to the new commit
+            let head_ref = repo.head()?;
+            if head_ref.is_branch() {
+                // HEAD points to a branch - update the branch target
+                let branch_name = head_ref
+                    .name()
+                    .map_err(|_| GitnadoError::OperationFailed("Invalid HEAD ref".to_string()))?;
+                repo.reference(
+                    branch_name,
+                    new_oid,
+                    true,
+                    &format!("edit_commit_date: updated {}", &old_oid[..7]),
+                )?;
+            } else {
+                // Detached HEAD - update HEAD directly
+                repo.set_head_detached(new_oid)?;
+            }
+
+            Ok(AmendResult {
+                new_oid: new_oid.to_string(),
+                old_oid,
+                success: true,
+            })
         })
+        .await
     } else {
         // For non-HEAD commits, use git CLI with rebase and environment variables
         edit_commit_date_with_rebase(
@@ -1294,62 +1333,67 @@ async fn edit_commit_date_with_rebase(
 /// mean the reword a user can actually trigger is covered.
 #[command]
 pub async fn reword_commit(path: String, oid: String, message: String) -> Result<AmendResult> {
-    // Use a closure to ensure git2 objects are dropped before any .await
-    // This is necessary because git2 types are not Send
-    let result: std::result::Result<(bool, Option<git2::Oid>), GitnadoError> = (|| {
-        let repo = git2::Repository::open(Path::new(&path))?;
+    // Run the inspection on the blocking pool, and inside one closure: git2
+    // types are not Send, so no handle may cross the await that follows.
+    let result: std::result::Result<(bool, Option<git2::Oid>), GitnadoError> = {
+        let path = path.clone();
+        let oid = oid.clone();
+        crate::utils::blocking_git(move || {
+            let repo = git2::Repository::open(Path::new(&path))?;
 
-        // Verify the commit exists
-        let target_oid =
-            git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
-        let target_commit = repo
-            .find_commit(target_oid)
-            .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
+            // Verify the commit exists
+            let target_oid =
+                git2::Oid::from_str(&oid).map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
+            let target_commit = repo
+                .find_commit(target_oid)
+                .map_err(|_| GitnadoError::CommitNotFound(oid.clone()))?;
 
-        // Check if this is the HEAD commit - if so, use amend instead
-        let head_oid = repo.head()?.peel_to_commit()?.id();
-        let is_head = head_oid == target_oid;
+            // Check if this is the HEAD commit - if so, use amend instead
+            let head_oid = repo.head()?.peel_to_commit()?.id();
+            let is_head = head_oid == target_oid;
 
-        // Check for existing operations in progress
-        if repo.state() != git2::RepositoryState::Clean {
-            return Err(GitnadoError::OperationFailed(
-                "Another operation is in progress".to_string(),
-            ));
-        }
-
-        // For non-HEAD commits, we need to use git rebase
-        // Find the parent of the target commit to use as the base
-        let parent_oid = if !is_head {
-            // A merge commit never survives that rebase. `rebase -i <merge>^1`
-            // linearizes the range instead of listing the merge, so there is no
-            // `pick <oid>` for the sequence editor to turn into `reword`: git
-            // replays the side branch onto the first parent, exits 0, and the
-            // message is never touched. The loop below would then find no
-            // commit carrying the new message, keep its HEAD seed, and report
-            // success — for a reword that did not happen on a branch whose
-            // merge commit had just been destroyed. Refuse before anything is
-            // rewritten, matching the frontend's own refusal in
-            // `isMergeCommit`. (The `is_head` path amends in place and keeps
-            // every parent, so it stays allowed.)
-            if target_commit.parent_count() > 1 {
+            // Check for existing operations in progress
+            if repo.state() != git2::RepositoryState::Clean {
                 return Err(GitnadoError::OperationFailed(
-                    "Cannot reword a merge commit".to_string(),
+                    "Another operation is in progress".to_string(),
                 ));
             }
-            Some(
-                target_commit
-                    .parent(0)
-                    .map_err(|_| {
-                        GitnadoError::OperationFailed("Cannot reword root commit".to_string())
-                    })?
-                    .id(),
-            )
-        } else {
-            None
-        };
 
-        Ok((is_head, parent_oid))
-    })();
+            // For non-HEAD commits, we need to use git rebase
+            // Find the parent of the target commit to use as the base
+            let parent_oid = if !is_head {
+                // A merge commit never survives that rebase. `rebase -i <merge>^1`
+                // linearizes the range instead of listing the merge, so there is no
+                // `pick <oid>` for the sequence editor to turn into `reword`: git
+                // replays the side branch onto the first parent, exits 0, and the
+                // message is never touched. The loop below would then find no
+                // commit carrying the new message, keep its HEAD seed, and report
+                // success — for a reword that did not happen on a branch whose
+                // merge commit had just been destroyed. Refuse before anything is
+                // rewritten, matching the frontend's own refusal in
+                // `isMergeCommit`. (The `is_head` path amends in place and keeps
+                // every parent, so it stays allowed.)
+                if target_commit.parent_count() > 1 {
+                    return Err(GitnadoError::OperationFailed(
+                        "Cannot reword a merge commit".to_string(),
+                    ));
+                }
+                Some(
+                    target_commit
+                        .parent(0)
+                        .map_err(|_| {
+                            GitnadoError::OperationFailed("Cannot reword root commit".to_string())
+                        })?
+                        .id(),
+                )
+            } else {
+                None
+            };
+
+            Ok((is_head, parent_oid))
+        })
+        .await
+    };
 
     let (is_head, parent_oid) = result?;
 
@@ -1360,77 +1404,80 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
 
     let parent_oid = parent_oid.expect("parent_oid should be set for non-HEAD commits");
 
-    // Write the new message to a temporary file
-    let git_dir = git2::Repository::open(Path::new(&path))?
-        .path()
-        .to_path_buf();
-    let msg_file = git_dir.join("REWORD_MSG");
-    std::fs::write(&msg_file, &message)?;
+    crate::utils::blocking_git(move || {
+        // Write the new message to a temporary file
+        let git_dir = git2::Repository::open(Path::new(&path))?
+            .path()
+            .to_path_buf();
+        let msg_file = git_dir.join("REWORD_MSG");
+        std::fs::write(&msg_file, &message)?;
 
-    // Git evaluates both editor variables through a shell — the POSIX one Git
-    // for Windows bundles, not cmd.exe — and appends the file it wants edited,
-    // so hand it the commands directly. The per-platform scripts these replace
-    // interpolated the message path into a DOUBLE-quoted `cp`, so a repository
-    // whose path contained `$` or a quote made the shell rewrite the path and
-    // the reword died on a message file that was never there.
-    let sequence_editor = crate::utils::todo_action_editor_command(&oid[..7], "reword");
-    let commit_editor = crate::utils::copy_file_editor_command(&msg_file);
+        // Git evaluates both editor variables through a shell — the POSIX one Git
+        // for Windows bundles, not cmd.exe — and appends the file it wants edited,
+        // so hand it the commands directly. The per-platform scripts these replace
+        // interpolated the message path into a DOUBLE-quoted `cp`, so a repository
+        // whose path contained `$` or a quote made the shell rewrite the path and
+        // the reword died on a message file that was never there.
+        let sequence_editor = crate::utils::todo_action_editor_command(&oid[..7], "reword");
+        let commit_editor = crate::utils::copy_file_editor_command(&msg_file);
 
-    // Run the rebase
-    let output = crate::utils::create_command("git")
-        .current_dir(&path)
-        .env("GIT_SEQUENCE_EDITOR", &sequence_editor)
-        .env("GIT_EDITOR", &commit_editor)
-        .args(crate::utils::TODO_FORMAT_ARGS)
-        .args(["rebase", "-i", &parent_oid.to_string()])
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
+        // Run the rebase
+        let output = crate::utils::create_command("git")
+            .current_dir(&path)
+            .env("GIT_SEQUENCE_EDITOR", &sequence_editor)
+            .env("GIT_EDITOR", &commit_editor)
+            .args(crate::utils::TODO_FORMAT_ARGS)
+            .args(["rebase", "-i", &parent_oid.to_string()])
+            .output()
+            .map_err(|e| GitnadoError::OperationFailed(e.to_string()))?;
 
-    // Clean up temporary files
-    let _ = std::fs::remove_file(&msg_file);
+        // Clean up temporary files
+        let _ = std::fs::remove_file(&msg_file);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("CONFLICT") || stderr.contains("conflict") {
-            return Err(GitnadoError::RebaseConflict);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("CONFLICT") || stderr.contains("conflict") {
+                return Err(GitnadoError::RebaseConflict);
+            }
+            return Err(GitnadoError::OperationFailed(format!(
+                "Rebase failed: {}",
+                stderr
+            )));
         }
-        return Err(GitnadoError::OperationFailed(format!(
-            "Rebase failed: {}",
-            stderr
-        )));
-    }
 
-    // Reopen the repository to get the new state after rebase
-    let repo = git2::Repository::open(Path::new(&path))?;
+        // Reopen the repository to get the new state after rebase
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Get the new HEAD to find the reworded commit's new OID
-    let new_head = repo.head()?.peel_to_commit()?;
+        // Get the new HEAD to find the reworded commit's new OID
+        let new_head = repo.head()?.peel_to_commit()?;
 
-    // Walk back to find the commit that replaced our target
-    // The new commit will be at approximately the same position in history
-    let mut revwalk = repo.revwalk()?;
-    revwalk.push(new_head.id())?;
-    revwalk.set_sorting(git2::Sort::TOPOLOGICAL)?;
+        // Walk back to find the commit that replaced our target
+        // The new commit will be at approximately the same position in history
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(new_head.id())?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL)?;
 
-    let mut new_commit_oid = new_head.id().to_string();
-    for rev_oid in revwalk.flatten() {
-        let commit = repo.find_commit(rev_oid)?;
-        // The reworded commit will have our new message. Compared with the
-        // trailing whitespace off both sides: git normalizes a commit message
-        // to end in a newline, so an exact comparison against the argument
-        // never matched and `new_commit_oid` kept its seed — leaving the caller
-        // with the DESCENDANT's oid for the commit it had just reworded.
-        if commit.message().ok().unwrap_or("").trim_end() == message.trim_end() {
-            new_commit_oid = rev_oid.to_string();
-            break;
+        let mut new_commit_oid = new_head.id().to_string();
+        for rev_oid in revwalk.flatten() {
+            let commit = repo.find_commit(rev_oid)?;
+            // The reworded commit will have our new message. Compared with the
+            // trailing whitespace off both sides: git normalizes a commit message
+            // to end in a newline, so an exact comparison against the argument
+            // never matched and `new_commit_oid` kept its seed — leaving the caller
+            // with the DESCENDANT's oid for the commit it had just reworded.
+            if commit.message().ok().unwrap_or("").trim_end() == message.trim_end() {
+                new_commit_oid = rev_oid.to_string();
+                break;
+            }
         }
-    }
 
-    Ok(AmendResult {
-        new_oid: new_commit_oid,
-        old_oid: oid,
-        success: true,
+        Ok(AmendResult {
+            new_oid: new_commit_oid,
+            old_oid: oid,
+            success: true,
+        })
     })
+    .await
 }
 
 /// Search commits with filters
@@ -1446,109 +1493,112 @@ pub async fn search_commits(
     branch: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<Commit>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
 
-    if let Some(ref branch_name) = branch {
-        // Push only the specified branch/ref
-        let reference = repo
-            .resolve_reference_from_short_name(branch_name)
-            .map_err(|_| crate::error::GitnadoError::BranchNotFound(branch_name.clone()))?;
-        if let Some(oid) = reference.target() {
-            revwalk.push(oid)?;
-        }
-    } else {
-        // Push all branch heads for complete search
-        for reference in repo.references()?.flatten() {
+        if let Some(ref branch_name) = branch {
+            // Push only the specified branch/ref
+            let reference = repo
+                .resolve_reference_from_short_name(branch_name)
+                .map_err(|_| crate::error::GitnadoError::BranchNotFound(branch_name.clone()))?;
             if let Some(oid) = reference.target() {
-                let _ = revwalk.push(oid);
+                revwalk.push(oid)?;
             }
-        }
-    }
-
-    let limit_count = limit.unwrap_or(500);
-    let query_lower = query.as_ref().map(|q| q.to_lowercase());
-    let author_lower = author.as_ref().map(|a| a.to_lowercase());
-
-    let mut results = Vec::new();
-
-    for oid_result in revwalk {
-        if results.len() >= limit_count {
-            break;
-        }
-
-        let oid = match oid_result {
-            Ok(oid) => oid,
-            Err(_) => continue,
-        };
-
-        let commit = match repo.find_commit(oid) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        // Check query filter (message, SHA)
-        if let Some(ref q) = query_lower {
-            let message = commit.message().ok().unwrap_or("").to_lowercase();
-            let sha = commit.id().to_string().to_lowercase();
-            if !message.contains(q) && !sha.starts_with(q) {
-                continue;
+        } else {
+            // Push all branch heads for complete search
+            for reference in repo.references()?.flatten() {
+                if let Some(oid) = reference.target() {
+                    let _ = revwalk.push(oid);
+                }
             }
         }
 
-        // Check author filter
-        if let Some(ref a) = author_lower {
-            let author_name = commit.author().name().ok().unwrap_or("").to_lowercase();
-            let author_email = commit.author().email().ok().unwrap_or("").to_lowercase();
-            if !author_name.contains(a) && !author_email.contains(a) {
-                continue;
+        let limit_count = limit.unwrap_or(500);
+        let query_lower = query.as_ref().map(|q| q.to_lowercase());
+        let author_lower = author.as_ref().map(|a| a.to_lowercase());
+
+        let mut results = Vec::new();
+
+        for oid_result in revwalk {
+            if results.len() >= limit_count {
+                break;
             }
-        }
 
-        // Check date range
-        let commit_time = commit.time().seconds();
-        if let Some(from) = date_from {
-            if commit_time < from {
-                continue;
-            }
-        }
-        if let Some(to) = date_to {
-            if commit_time > to {
-                continue;
-            }
-        }
-
-        // Check file path filter
-        if let Some(ref fp) = file_path {
-            let tree = match commit.tree() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
-
-            let mut diff_opts = git2::DiffOptions::new();
-            diff_opts.pathspec(fp);
-
-            let diff = match repo.diff_tree_to_tree(
-                parent_tree.as_ref(),
-                Some(&tree),
-                Some(&mut diff_opts),
-            ) {
-                Ok(d) => d,
+            let oid = match oid_result {
+                Ok(oid) => oid,
                 Err(_) => continue,
             };
 
-            if diff.deltas().count() == 0 {
-                continue;
+            let commit = match repo.find_commit(oid) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Check query filter (message, SHA)
+            if let Some(ref q) = query_lower {
+                let message = commit.message().ok().unwrap_or("").to_lowercase();
+                let sha = commit.id().to_string().to_lowercase();
+                if !message.contains(q) && !sha.starts_with(q) {
+                    continue;
+                }
             }
+
+            // Check author filter
+            if let Some(ref a) = author_lower {
+                let author_name = commit.author().name().ok().unwrap_or("").to_lowercase();
+                let author_email = commit.author().email().ok().unwrap_or("").to_lowercase();
+                if !author_name.contains(a) && !author_email.contains(a) {
+                    continue;
+                }
+            }
+
+            // Check date range
+            let commit_time = commit.time().seconds();
+            if let Some(from) = date_from {
+                if commit_time < from {
+                    continue;
+                }
+            }
+            if let Some(to) = date_to {
+                if commit_time > to {
+                    continue;
+                }
+            }
+
+            // Check file path filter
+            if let Some(ref fp) = file_path {
+                let tree = match commit.tree() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+
+                let mut diff_opts = git2::DiffOptions::new();
+                diff_opts.pathspec(fp);
+
+                let diff = match repo.diff_tree_to_tree(
+                    parent_tree.as_ref(),
+                    Some(&tree),
+                    Some(&mut diff_opts),
+                ) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                if diff.deltas().count() == 0 {
+                    continue;
+                }
+            }
+
+            results.push(Commit::from_git2(&commit));
         }
 
-        results.push(Commit::from_git2(&commit));
-    }
-
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 /// Get all commits that modified a specific file, each paired with the path
@@ -1565,151 +1615,157 @@ pub async fn get_file_history(
     limit: Option<usize>,
     follow_renames: Option<bool>,
 ) -> Result<Vec<FileHistoryEntry>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let mut revwalk = repo.revwalk()?;
-    // TOPOLOGICAL as well as TIME. Following a rename rewrites current_path
-    // when the walk REACHES the renaming commit, so every commit before the
-    // rename must be visited after it. Sorting by time alone does not
-    // guarantee that — commits made within the same second (a scripted commit,
-    // a rebase, an import) tie, and a tie can put the renaming commit last, by
-    // which point the pre-rename history has already been tested against the
-    // new name and discarded. Topological order makes children precede parents
-    // no matter what the timestamps say.
-    revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+        let mut revwalk = repo.revwalk()?;
+        // TOPOLOGICAL as well as TIME. Following a rename rewrites current_path
+        // when the walk REACHES the renaming commit, so every commit before the
+        // rename must be visited after it. Sorting by time alone does not
+        // guarantee that — commits made within the same second (a scripted commit,
+        // a rebase, an import) tie, and a tie can put the renaming commit last, by
+        // which point the pre-rename history has already been tested against the
+        // new name and discarded. Topological order makes children precede parents
+        // no matter what the timestamps say.
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
 
-    // Start from HEAD
-    let head = repo
-        .head()?
-        .target()
-        .ok_or(GitnadoError::RepositoryNotOpen)?;
-    revwalk.push(head)?;
+        // Start from HEAD
+        let head = repo
+            .head()?
+            .target()
+            .ok_or(GitnadoError::RepositoryNotOpen)?;
+        revwalk.push(head)?;
 
-    let limit_count = limit.unwrap_or(500);
-    let should_follow = follow_renames.unwrap_or(true);
-    let mut entries: Vec<FileHistoryEntry> = Vec::new();
-    let mut current_path = file_path.clone();
+        let limit_count = limit.unwrap_or(500);
+        let should_follow = follow_renames.unwrap_or(true);
+        let mut entries: Vec<FileHistoryEntry> = Vec::new();
+        let mut current_path = file_path.clone();
 
-    for oid_result in revwalk {
-        if entries.len() >= limit_count {
-            break;
-        }
+        for oid_result in revwalk {
+            if entries.len() >= limit_count {
+                break;
+            }
 
-        let oid = match oid_result {
-            Ok(oid) => oid,
-            Err(_) => continue,
-        };
+            let oid = match oid_result {
+                Ok(oid) => oid,
+                Err(_) => continue,
+            };
 
-        let commit = match repo.find_commit(oid) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+            let commit = match repo.find_commit(oid) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-        let tree = match commit.tree() {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
+            let tree = match commit.tree() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
 
-        // Check if file exists in this commit
-        let file_in_commit = tree.get_path(std::path::Path::new(&current_path)).is_ok();
+            // Check if file exists in this commit
+            let file_in_commit = tree.get_path(std::path::Path::new(&current_path)).is_ok();
 
-        if !file_in_commit && !should_follow {
-            continue;
-        }
+            if !file_in_commit && !should_follow {
+                continue;
+            }
 
-        // Get parent tree for diff
-        let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+            // Get parent tree for diff
+            let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
 
-        // Create diff options
-        let mut diff_opts = git2::DiffOptions::new();
-        diff_opts.pathspec(&current_path);
+            // Create diff options
+            let mut diff_opts = git2::DiffOptions::new();
+            diff_opts.pathspec(&current_path);
 
-        let diff =
-            match repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_opts)) {
+            let diff = match repo.diff_tree_to_tree(
+                parent_tree.as_ref(),
+                Some(&tree),
+                Some(&mut diff_opts),
+            ) {
                 Ok(d) => d,
                 Err(_) => continue,
             };
 
-        // Check if file was modified in this commit
-        let mut file_modified;
-        let mut renamed_from: Option<String> = None;
+            // Check if file was modified in this commit
+            let mut file_modified;
+            let mut renamed_from: Option<String> = None;
 
-        if should_follow {
-            // The pathspec above filters deltas at diff-GENERATION time, so at
-            // the commit that renamed old -> current this diff holds only the
-            // Added(current) half. find_similar had no Deleted(old) to pair it
-            // with, delta.status() was therefore never Renamed, renamed_from
-            // was never set, and the walk stopped dead at the rename — the one
-            // thing follow_renames exists to get past.
-            //
-            // Detect the modification from the cheap filtered diff, then pay
-            // for an UNFILTERED diff only where a rename could actually be
-            // hiding: the commit that introduces the path. That is once per
-            // rename, not once per commit.
-            let introduced_here = diff
-                .deltas()
-                .any(|d| d.status() == git2::Delta::Added || d.status() == git2::Delta::Renamed);
-            file_modified = diff.deltas().count() > 0;
+            if should_follow {
+                // The pathspec above filters deltas at diff-GENERATION time, so at
+                // the commit that renamed old -> current this diff holds only the
+                // Added(current) half. find_similar had no Deleted(old) to pair it
+                // with, delta.status() was therefore never Renamed, renamed_from
+                // was never set, and the walk stopped dead at the rename — the one
+                // thing follow_renames exists to get past.
+                //
+                // Detect the modification from the cheap filtered diff, then pay
+                // for an UNFILTERED diff only where a rename could actually be
+                // hiding: the commit that introduces the path. That is once per
+                // rename, not once per commit.
+                let introduced_here = diff.deltas().any(|d| {
+                    d.status() == git2::Delta::Added || d.status() == git2::Delta::Renamed
+                });
+                file_modified = diff.deltas().count() > 0;
 
-            // `if let Ok`, not an early `continue`: the filtered diff has
-            // already established the file was touched by this commit. Skipping
-            // the iteration on a failed diff dropped the commit from the
-            // history entirely — losing a real entry to report a rename we
-            // could not look for. Without the unfiltered diff we simply do not
-            // detect a rename here, and the walk stops following the path,
-            // which is the old behaviour rather than a missing commit.
-            if introduced_here {
-                if let Ok(mut unfiltered) =
-                    repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
-                {
-                    let mut find_opts = git2::DiffFindOptions::new();
-                    find_opts.renames(true);
-                    find_opts.copies(false);
-                    let _ = unfiltered.find_similar(Some(&mut find_opts));
+                // `if let Ok`, not an early `continue`: the filtered diff has
+                // already established the file was touched by this commit. Skipping
+                // the iteration on a failed diff dropped the commit from the
+                // history entirely — losing a real entry to report a rename we
+                // could not look for. Without the unfiltered diff we simply do not
+                // detect a rename here, and the walk stops following the path,
+                // which is the old behaviour rather than a missing commit.
+                if introduced_here {
+                    if let Ok(mut unfiltered) =
+                        repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+                    {
+                        let mut find_opts = git2::DiffFindOptions::new();
+                        find_opts.renames(true);
+                        find_opts.copies(false);
+                        let _ = unfiltered.find_similar(Some(&mut find_opts));
 
-                    for delta in unfiltered.deltas() {
-                        if delta.status() != git2::Delta::Renamed {
-                            continue;
-                        }
-                        let is_ours = delta
-                            .new_file()
-                            .path()
-                            .is_some_and(|p| p.to_string_lossy() == current_path);
-                        if is_ours {
-                            file_modified = true;
-                            if let Some(old_file) = delta.old_file().path() {
-                                renamed_from = Some(old_file.to_string_lossy().to_string());
+                        for delta in unfiltered.deltas() {
+                            if delta.status() != git2::Delta::Renamed {
+                                continue;
                             }
-                            break;
+                            let is_ours = delta
+                                .new_file()
+                                .path()
+                                .is_some_and(|p| p.to_string_lossy() == current_path);
+                            if is_ours {
+                                file_modified = true;
+                                if let Some(old_file) = delta.old_file().path() {
+                                    renamed_from = Some(old_file.to_string_lossy().to_string());
+                                }
+                                break;
+                            }
                         }
                     }
                 }
+            } else {
+                file_modified = diff.deltas().count() > 0;
             }
-        } else {
-            file_modified = diff.deltas().count() > 0;
+
+            if file_modified {
+                // Recorded BEFORE the rename is followed: at the renaming commit
+                // the file already exists in that commit's tree under the NEW
+                // name, so the new name is the right path there. Only commits
+                // older than the rename get the old name. This is also the
+                // historical path a caller restoring the file to this commit must
+                // use — the file's CURRENT name is not in that commit's tree at
+                // all before the rename.
+                entries.push(FileHistoryEntry {
+                    commit: Commit::from_git2(&commit),
+                    path_at_commit: current_path.clone(),
+                });
+
+                // Follow the rename backwards
+                if let Some(old_path) = renamed_from {
+                    current_path = old_path;
+                }
+            }
         }
 
-        if file_modified {
-            // Recorded BEFORE the rename is followed: at the renaming commit
-            // the file already exists in that commit's tree under the NEW
-            // name, so the new name is the right path there. Only commits
-            // older than the rename get the old name. This is also the
-            // historical path a caller restoring the file to this commit must
-            // use — the file's CURRENT name is not in that commit's tree at
-            // all before the rename.
-            entries.push(FileHistoryEntry {
-                commit: Commit::from_git2(&commit),
-                path_at_commit: current_path.clone(),
-            });
-
-            // Follow the rename backwards
-            if let Some(old_path) = renamed_from {
-                current_path = old_path;
-            }
-        }
-    }
-
-    Ok(entries)
+        Ok(entries)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1991,6 +2047,8 @@ mod tests {
             entry.commit.oid.clone(),
             entry.path_at_commit.clone(),
             None,
+            None,
+            None,
         )
         .await
         .expect("the path the entry reports must be diffable at that commit");
@@ -2000,6 +2058,8 @@ mod tests {
             repo.path_str(),
             entry.commit.oid.clone(),
             "new-name.txt".to_string(),
+            None,
+            None,
             None,
         )
         .await

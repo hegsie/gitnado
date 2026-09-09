@@ -358,6 +358,11 @@ export class LvCredentialsDialog extends LitElement {
         background: var(--color-error-bg);
       }
 
+      .test-result.info {
+        border-color: var(--color-info);
+        background: var(--color-info-bg);
+      }
+
       .test-result-header {
         display: flex;
         align-items: center;
@@ -372,6 +377,10 @@ export class LvCredentialsDialog extends LitElement {
 
       .test-result-header.error {
         color: var(--color-error);
+      }
+
+      .test-result-header.info {
+        color: var(--color-info);
       }
 
       .test-result-details {
@@ -572,7 +581,9 @@ export class LvCredentialsDialog extends LitElement {
 
       if (result.success && result.data) {
         this.testResult = result.data;
-      } else {
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        // A gate refusal has already been toasted with its own reason;
+        // repeating it inline would say the same thing twice.
         this.error = result.error?.message || 'Failed to test credentials';
       }
     } catch (e) {
@@ -582,6 +593,103 @@ export class LvCredentialsDialog extends LitElement {
     }
   }
 
+  /**
+   * Whether git stores a credential for this transport at all.
+   *
+   * Only `https` and `http` are answered out of a credential helper. SSH
+   * authenticates with a key, and `git://` and `file://` do not authenticate,
+   * so for all three `git credential reject` matches nothing — a button
+   * offered there warns "you will need to re-authenticate" and then does
+   * precisely nothing.
+   */
+  private usesStoredCredentials(protocol: string): boolean {
+    return protocol === 'https' || protocol === 'http';
+  }
+
+  /**
+   * How a result should READ, which is not the same question as `success`.
+   *
+   * A transport that stores no credential — `git://`, `file://` — comes back
+   * `success: false` because nothing was found, and nothing ever will be:
+   * there is no credential to find. Drawing that in the failure colours, with
+   * a ✗ and the backend's "No credentials found for <host>" underneath, sent
+   * the user off to fix a remote that works. SSH and https/http keep the
+   * failure styling, because for those a missing or rejected credential is a
+   * real fault.
+   */
+  private testResultTone(result: CredentialTestResult): 'success' | 'error' | 'info' {
+    if (result.success) return 'success';
+    if (result.protocol === 'ssh' || this.usesStoredCredentials(result.protocol)) return 'error';
+    return 'info';
+  }
+
+  /**
+   * The one-line verdict at the top of the result panel.
+   *
+   * The backend tells three https outcomes apart — found, a username with no
+   * password, nothing at all — and this collapsed the last two into "No
+   * Credentials Found". The panel then printed "Username found but no password
+   * for <host>" underneath, with the username listed right above it, and
+   * pointed the user at the wrong repair: the login is stored, the secret is
+   * what is missing. Anyone with `credential.<url>.username` set, or a helper
+   * holding a username whose token was revoked, is in exactly that state.
+   */
+  private testResultHeadline(result: CredentialTestResult, tone: string): string {
+    if (tone === 'success') return 'Credentials Working';
+    if (tone === 'info') return 'No Credentials Needed';
+    if (result.protocol === 'ssh') return 'SSH Authentication Failed';
+    return result.username ? 'Password Not Stored' : 'No Credentials Found';
+  }
+
+  /**
+   * Whether the reported target is a path rather than a host to connect to.
+   *
+   * Such a target has no host to report — a host-less `file://` URL carries
+   * none, a bare local path (`/srv/git/repo.git`, `C:\repos\x.git`,
+   * `../sibling.git`) is not a host either, and neither is a UNC share, which
+   * git opens through the OS redirector without ever asking a credential
+   * helper — so the backend reports the remote AS TYPED. Printed under a
+   * "Host:" label that put a whole URL, or a path, where a hostname belongs,
+   * and left the sentence below it ending in one.
+   *
+   * The BACKEND's answer, not `protocol === 'file'`: that read
+   * `file://server/share/repo.git` — which keeps its `file` scheme while
+   * resolving a real host, and which the network gate refuses as a target that
+   * leaves the machine — as a local path. `isPathTarget` carries the
+   * `resolved` half of the rule that never used to cross the IPC boundary.
+   */
+  private isPathTarget(result: CredentialTestResult): boolean {
+    return result.isPathTarget;
+  }
+
+  /**
+   * What to print under the verdict.
+   *
+   * The backend's message is written for the transports that DO store a
+   * credential, so for the neutral branch it contradicts the header it sits
+   * under. Say what is actually going on there instead — about the protocol
+   * actually reported, not a fixed `git://` and `file://` pair, which named
+   * two schemes at every transport that lands here and named a scheme at all
+   * for a remote that is a plain path.
+   */
+  private testResultMessage(result: CredentialTestResult, tone: string): string {
+    if (tone !== 'info') return result.message;
+    if (this.isPathTarget(result)) {
+      // Not "a local repository": a UNC share lands here too, and it is not on
+      // this machine — git simply opens it as a path and asks no helper about
+      // it, which is the whole of what this sentence has to say.
+      return 'Git opens this remote as a filesystem path, so there is no credential to store for it.';
+    }
+    return `${result.protocol}:// remotes do not authenticate, so nothing is stored for ${result.host}.`;
+  }
+
+  /**
+   * Erase the stored credential the test just found.
+   *
+   * Offered for the transports `usesStoredCredentials` names, and only after a
+   * test found one — that is the entry `erase_credentials` then rejects, under
+   * the very protocol it was found under.
+   */
   private async handleEraseCredentials(): Promise<void> {
     if (!this.testResult) return;
 
@@ -760,49 +868,56 @@ export class LvCredentialsDialog extends LitElement {
         </button>
       </div>
 
-      ${this.testResult
-        ? html`
-            <div class="test-result ${this.testResult.success ? 'success' : 'error'}">
-              <div class="test-result-header ${this.testResult.success ? 'success' : 'error'}">
-                ${this.testResult.success
-                  ? html`
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                      </svg>
-                      Credentials Working
-                    `
-                  : html`
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="15" y1="9" x2="9" y2="15"></line>
-                        <line x1="9" y1="9" x2="15" y2="15"></line>
-                      </svg>
-                      No Credentials Found
-                    `}
+      ${this.testResult ? this.renderTestResult(this.testResult) : ''}
+    `;
+  }
+
+  private renderTestResult(result: CredentialTestResult) {
+    const tone = this.testResultTone(result);
+    const message = this.testResultMessage(result, tone);
+    return html`
+      <div class="test-result ${tone}">
+        <div class="test-result-header ${tone}">
+          ${tone === 'success'
+            ? html`
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+              `
+            : tone === 'info'
+              ? html`
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                `
+              : html`
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="15" y1="9" x2="9" y2="15"></line>
+                    <line x1="9" y1="9" x2="15" y2="15"></line>
+                  </svg>
+                `}
+          ${this.testResultHeadline(result, tone)}
+        </div>
+        <div class="test-result-details">
+          <div>${this.isPathTarget(result) ? 'Path' : 'Host'}: ${result.host}</div>
+          <div>Protocol: ${result.protocol}</div>
+          ${result.username ? html`<div>Username: ${result.username}</div>` : ''}
+        </div>
+        ${message ? html`<div class="test-result-message">${message}</div>` : ''}
+        ${result.success && this.usesStoredCredentials(result.protocol)
+          ? html`
+              <div class="form-actions" style="margin-top: var(--spacing-sm)">
+                <button class="btn btn-secondary" @click=${this.handleEraseCredentials}>
+                  Erase Credentials
+                </button>
               </div>
-              <div class="test-result-details">
-                <div>Host: ${this.testResult.host}</div>
-                <div>Protocol: ${this.testResult.protocol}</div>
-                ${this.testResult.username
-                  ? html`<div>Username: ${this.testResult.username}</div>`
-                  : ''}
-              </div>
-              ${this.testResult.message
-                ? html`<div class="test-result-message">${this.testResult.message}</div>`
-                : ''}
-              ${this.testResult.success
-                ? html`
-                    <div class="form-actions" style="margin-top: var(--spacing-sm)">
-                      <button class="btn btn-secondary" @click=${this.handleEraseCredentials}>
-                        Erase Credentials
-                      </button>
-                    </div>
-                  `
-                : ''}
-            </div>
-          `
-        : ''}
+            `
+          : ''}
+      </div>
     `;
   }
 

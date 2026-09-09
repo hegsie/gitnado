@@ -25,7 +25,10 @@ const invoked: { command: string; args?: unknown }[] = [];
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
 import { expect, fixture, html, oneEvent } from '@open-wc/testing';
 import type { Branch } from '../../../types/git.types.ts';
-import type { LvCompareBranchesDialog } from '../lv-compare-branches-dialog.ts';
+import type {
+  CompareOpenOptions,
+  LvCompareBranchesDialog,
+} from '../lv-compare-branches-dialog.ts';
 import '../lv-compare-branches-dialog.ts';
 
 function branch(name: string, isHead = false): Branch {
@@ -119,9 +122,9 @@ async function makeDialog(): Promise<LvCompareBranchesDialog> {
 /** open() defers its branch load behind updateComplete + rAF; settle both. */
 async function openAndSettle(
   el: LvCompareBranchesDialog,
-  compareRef?: string,
+  target?: string | CompareOpenOptions,
 ): Promise<void> {
-  el.open(compareRef);
+  el.open(target);
   await el.updateComplete;
   await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -508,5 +511,83 @@ describe('lv-compare-branches-dialog', () => {
       'and it does not wipe the result the reopened dialog produced',
     ).to.exist;
   });
+
+  // The graph's "Compare these commits" hands over two commit oids, which are
+  // not in the branch list at all — `compare_branches` resolves them with
+  // revparse_single like any other ref.
+  describe('comparing two commits from the graph', () => {
+    const OLDER = 'aaa1111';
+    const NEWER = 'ccc3333';
+    const twoCommits: CompareOpenOptions = {
+      baseRef: OLDER,
+      compareRef: NEWER,
+      extraRefs: [
+        { ref: OLDER, label: 'aaa1111 First commit' },
+        { ref: NEWER, label: 'ccc3333 Third commit' },
+      ],
+    };
+
+    it('offers the two commits in both pickers, ancestor as the base', async () => {
+      const el = await makeDialog();
+      await openAndSettle(el, twoCommits);
+
+      const options = Array.from(
+        el.renderRoot.querySelectorAll('#compare-ref-select option'),
+      ).map((o) => (o as HTMLOptionElement).value);
+      expect(options.slice(0, 2), 'the commits lead the list').to.deep.equal([OLDER, NEWER]);
+      expect(options, 'the branches stay available too').to.include('main');
+
+      const baseSelect = el.renderRoot.querySelector('#base-ref-select') as HTMLSelectElement;
+      const compareSelect = el.renderRoot.querySelector('#compare-ref-select') as HTMLSelectElement;
+      expect(baseSelect.value).to.equal(OLDER);
+      expect(compareSelect.value).to.equal(NEWER);
+      expect(text(el), 'the oids are labelled with their subjects').to.contain('First commit');
+    });
+
+    it('compares the two oids', async () => {
+      const el = await makeDialog();
+      await openAndSettle(el, twoCommits);
+
+      const compareBtn = el.renderRoot.querySelector('.btn-primary') as HTMLButtonElement;
+      expect(compareBtn.disabled, 'two distinct refs are selected').to.be.false;
+      compareBtn.click();
+      await settle(el);
+
+      const call = invoked.find((c) => c.command === 'compare_branches');
+      expect(call?.args).to.deep.include({ base: OLDER, compare: NEWER });
+    });
+
+    it('still compares when the repository has no branches to offer', async () => {
+      // A brand-new repository, or a branch load that failed: the two commits
+      // are all this comparison ever needed.
+      installMock({ get_branches: [] });
+      const el = await makeDialog();
+      await openAndSettle(el, twoCommits);
+
+      const baseSelect = el.renderRoot.querySelector('#base-ref-select') as HTMLSelectElement;
+      expect(baseSelect.disabled, 'two refs is enough to compare').to.be.false;
+      expect(el.renderRoot.querySelector('[data-testid="no-branches"]')).to.not.exist;
+      expect(el.renderRoot.querySelector('[data-testid="single-branch"]')).to.not.exist;
+      const compareBtn = el.renderRoot.querySelector('.btn-primary') as HTMLButtonElement;
+      expect(compareBtn.disabled).to.be.false;
+    });
+
+    it('keeps the string form working for the branch context menu', async () => {
+      const el = await makeDialog();
+      await openAndSettle(el, 'feature');
+
+      const compareSelect = el.renderRoot.querySelector('#compare-ref-select') as HTMLSelectElement;
+      expect(compareSelect.value).to.equal('feature');
+      const options = Array.from(
+        el.renderRoot.querySelectorAll('#compare-ref-select option'),
+      ).map((o) => (o as HTMLOptionElement).value);
+      expect(options, 'no phantom refs are added').to.deep.equal([
+        'main',
+        'feature',
+        'origin/feature',
+      ]);
+    });
+  });
+
 });
 

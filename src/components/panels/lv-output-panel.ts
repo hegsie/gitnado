@@ -26,6 +26,26 @@ function formatTimestamp(ts: number): string {
   return `${hh}:${mm}:${ss}`;
 }
 
+/** Compact duration: `84ms`, `1.2s`, `1m 05s`. */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+}
+
+/**
+ * Marker on a line Gitnado DERIVED rather than executed.
+ *
+ * Most operations run through libgit2, so no `git` process exists to quote.
+ * The panel shows the equivalent command line so the user can see what git was
+ * asked to do — but it must never read as though the CLI ran, hence the `≈`
+ * and the legend at the foot of the panel.
+ */
+const SYNTHESIZED_MARK = '≈';
+
 @customElement('lv-output-panel')
 export class LvOutputPanel extends LitElement {
   static styles = [
@@ -155,6 +175,33 @@ export class LvOutputPanel extends LitElement {
         color: var(--color-error);
       }
 
+      .entry-duration {
+        flex-shrink: 0;
+        color: var(--color-text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* The ≈ marker on a line derived from a libgit2 operation rather than one
+         that really ran. Subdued so an executed command reads as the stronger
+         statement it is. */
+      .synth-mark {
+        flex-shrink: 0;
+        color: var(--color-text-muted);
+        cursor: help;
+      }
+
+      .entry-command.synthesized {
+        color: var(--color-text-secondary);
+      }
+
+      /* The IPC command behind a synthesised line, so the entry is still
+         traceable to the operation the app actually invoked. */
+      .entry-ipc {
+        flex-shrink: 0;
+        color: var(--color-text-muted);
+        opacity: 0.8;
+      }
+
       .entry-output {
         padding: var(--spacing-xs) var(--spacing-md) var(--spacing-sm);
         padding-left: calc(var(--spacing-md) + 12px + var(--spacing-sm) + 8px + var(--spacing-sm));
@@ -165,6 +212,29 @@ export class LvOutputPanel extends LitElement {
         border-top: 1px solid var(--color-border);
         max-height: 200px;
         overflow-y: auto;
+      }
+
+      /* A failing command's output is the reason the user opened the panel —
+         give it the error colour and a rule so it is findable at a glance. */
+      .entry-output.failure {
+        color: var(--color-error);
+        border-left: 2px solid var(--color-error);
+      }
+
+      /* Shown when an entry carries nothing but its exit status, so an
+         expanded row is never an empty box the user cannot explain. */
+      .entry-output.empty-output {
+        color: var(--color-text-muted);
+        font-style: italic;
+      }
+
+      .legend {
+        flex-shrink: 0;
+        padding: var(--spacing-xs) var(--spacing-md);
+        border-top: 1px solid var(--color-border);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-muted);
+        font-size: var(--font-size-xs);
       }
 
       .empty {
@@ -251,23 +321,53 @@ export class LvOutputPanel extends LitElement {
     // Keyed by stable entry id — array positions shift when entries prepend
     const expanded = this.expandedEntries.has(entry.id);
     const statusClass = entry.success ? 'success' : 'failure';
+    // The git line when there is one, otherwise the IPC name — a command with
+    // no synthesis is still worth showing, it just says less.
+    const line = entry.gitCommand ?? entry.command;
+    const synthesized = entry.synthesized === true;
+    const duration =
+      entry.durationMs === undefined ? '' : formatDuration(entry.durationMs);
+    const tooltip = synthesized
+      ? `${line}\n\nEquivalent command — Gitnado performed this with libgit2 (IPC: ${entry.command})`
+      : line;
 
     return html`
       <div class="entry">
         <div
           class="entry-header"
           @click=${() => this.toggleEntry(entry.id)}
-          title="${entry.command}"
+          title="${tooltip}"
         >
           <svg class="expand-icon ${expanded ? 'expanded' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
           <span class="status-dot ${statusClass}"></span>
           <span class="entry-timestamp">${formatTimestamp(entry.timestamp)}</span>
-          <span class="entry-command ${statusClass}">${entry.command}</span>
+          ${synthesized
+            ? html`<span
+                class="synth-mark"
+                aria-label="Equivalent command — performed with libgit2"
+                >${SYNTHESIZED_MARK}</span
+              >`
+            : nothing}
+          <span class="entry-command ${statusClass} ${synthesized ? 'synthesized' : ''}"
+            >${line}</span
+          >
+          ${synthesized && entry.gitCommand
+            ? html`<span class="entry-ipc">${entry.command}</span>`
+            : nothing}
+          ${duration ? html`<span class="entry-duration">${duration}</span>` : nothing}
         </div>
-        ${expanded && entry.output
-          ? html`<div class="entry-output">${entry.output}</div>`
+        ${expanded
+          ? entry.output
+            ? html`<div class="entry-output ${statusClass}">${entry.output}</div>`
+            : // An entry with no captured output still owes the user an
+              // explanation of why the row is empty.
+              html`<div class="entry-output empty-output">
+                ${entry.success
+                  ? 'Completed with no output.'
+                  : 'Failed with no output.'}
+              </div>`
           : nothing}
       </div>
     `;
@@ -275,6 +375,7 @@ export class LvOutputPanel extends LitElement {
 
   render() {
     const visible = this.visibleEntries;
+    const hasSynthesized = visible.some((e) => e.synthesized === true);
     return html`
       <div class="header">
         <span class="header-title">
@@ -313,6 +414,13 @@ export class LvOutputPanel extends LitElement {
           ? html`<div class="empty">No output yet</div>`
           : visible.map((entry) => this.renderEntry(entry))}
       </div>
+      ${hasSynthesized
+        ? html`<div class="legend">
+            ${SYNTHESIZED_MARK} Gitnado runs these operations with libgit2 —
+            the line shown is the equivalent <code>git</code> command, not one
+            that was executed.
+          </div>`
+        : nothing}
     `;
   }
 }

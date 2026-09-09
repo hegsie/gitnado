@@ -5,7 +5,9 @@ import { repositoryStore } from '../../stores/index.ts';
 import './lv-branch-list.ts';
 import './lv-stash-list.ts';
 import './lv-tag-list.ts';
+import './lv-pull-request-list.ts';
 import './lv-gitflow-panel.ts';
+import type { LvPullRequestList } from './lv-pull-request-list.ts';
 
 /**
  * Left panel container component
@@ -139,6 +141,7 @@ export class LvLeftPanel extends LitElement {
   @state() private repositoryPath: string | null = null;
   @state() private stashCount: number = 0;
   @state() private tagCount: number = 0;
+  @state() private pullRequestCount: number = 0;
   @state() private expandedSections = new Set<string>(['branches']);
 
   private unsubscribe?: () => void;
@@ -169,6 +172,7 @@ export class LvLeftPanel extends LitElement {
     const branchesExpanded = this.expandedSections.has('branches');
     const stashesExpanded = this.expandedSections.has('stashes');
     const tagsExpanded = this.expandedSections.has('tags');
+    const pullRequestsExpanded = this.expandedSections.has('pull-requests');
     const gitflowExpanded = this.expandedSections.has('gitflow');
 
     return html`
@@ -249,6 +253,40 @@ export class LvLeftPanel extends LitElement {
         </div>
       </section>
 
+      <!-- Pull Requests Section - collapsed by default ON PURPOSE. Its content
+           is the only sidebar section backed by a REMOTE API (GitHub / GitLab /
+           Bitbucket / Azure DevOps), so it loads only once the user expands it:
+           the child's .expanded property is its lazy-load trigger, and nothing
+           is fetched at app start. It keeps its own per-repository cache, so
+           collapsing and re-expanding costs no further API calls. -->
+      <section class="section refs-section ${pullRequestsExpanded ? '' : 'collapsed'}">
+        <header class="section-header" @click=${() => this.toggleSection('pull-requests')}>
+          ${this.renderChevron(pullRequestsExpanded)}
+          <span class="title">Pull Requests</span>
+          ${this.pullRequestCount > 0 ? html`<span class="count">${this.pullRequestCount}</span>` : ''}
+          ${pullRequestsExpanded ? html`
+            <button
+              class="section-action"
+              title="Refresh pull requests"
+              aria-label="Refresh pull requests"
+              @click=${this.handleRefreshPullRequests}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+            </button>
+          ` : ''}
+        </header>
+        <div class="section-content">
+          <lv-pull-request-list
+            .repositoryPath=${this.repositoryPath}
+            .expanded=${pullRequestsExpanded}
+            @pull-request-count-changed=${this.handlePullRequestCountChanged}
+          ></lv-pull-request-list>
+        </div>
+      </section>
+
       <!-- Git Flow Section -->
       <section class="section refs-section ${gitflowExpanded ? '' : 'collapsed'}">
         <header class="section-header" @click=${() => this.toggleSection('gitflow')}>
@@ -318,6 +356,23 @@ export class LvLeftPanel extends LitElement {
 
   private handleTagCountChanged(e: CustomEvent<{ count: number }>): void {
     this.tagCount = e.detail.count;
+  }
+
+  private handlePullRequestCountChanged(e: CustomEvent<{ count: number }>): void {
+    this.pullRequestCount = e.detail.count;
+  }
+
+  /**
+   * Explicit refresh of the pull request list. Called directly on the child
+   * rather than dispatched as an event, because this element would be the only
+   * possible listener - an event would just be a longer way to reach the same
+   * instance.
+   */
+  private handleRefreshPullRequests(e: Event): void {
+    // The button sits inside the header that toggles the section.
+    e.stopPropagation();
+    const list = this.renderRoot.querySelector('lv-pull-request-list') as LvPullRequestList | null;
+    void list?.refresh();
   }
 
   private handleCreateTag(e: Event): void {

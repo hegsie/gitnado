@@ -173,6 +173,7 @@ type RendererInternals = {
   avatarCache: Map<string, HTMLImageElement>;
   failedAvatars: Map<string, number>;
   avatarLoadingSet: Set<string>;
+  pendingAvatarImages: Set<HTMLImageElement>;
   loadAvatar(email: string): void;
   getCachedAvatar(email: string): HTMLImageElement | undefined;
 };
@@ -461,11 +462,69 @@ describe('CanvasRenderer avatar cache', () => {
 
     internals.loadAvatar('someone@example.com');
     expect(internals.avatarLoadingSet.size).to.equal(0);
+    expect(internals.pendingAvatarImages.size, 'no Image() request created').to.equal(0);
+    renderer.destroy();
+  });
+
+  it('defaults to NOT fetching when no policy is supplied', () => {
+    // Default-deny: a renderer built without an explicit decision must not
+    // reach out to gravatar.com.
+    const renderer = makeRenderer();
+    const internals = renderer as unknown as RendererInternals;
+
+    internals.loadAvatar('someone@example.com');
+    expect(internals.pendingAvatarImages.size).to.equal(0);
+    expect(internals.avatarLoadingSet.size).to.equal(0);
+    renderer.destroy();
+  });
+
+  it('creates exactly one Image request per author when fetching is allowed', () => {
+    const renderer = makeRenderer({ fetchAvatars: true });
+    const internals = renderer as unknown as RendererInternals;
+
+    internals.loadAvatar('someone@example.com');
+    internals.loadAvatar('someone@example.com');
+
+    expect(internals.pendingAvatarImages.size).to.equal(1);
+    expect(internals.avatarLoadingSet.has('someone@example.com')).to.be.true;
+    renderer.destroy();
+  });
+
+  it('stops loads and aborts in-flight requests when fetching is turned off', () => {
+    // Switching Offline Mode on mid-session must stop the requests already on
+    // the wire, not just the next ones.
+    const renderer = makeRenderer({ fetchAvatars: true });
+    const internals = renderer as unknown as RendererInternals;
+
+    internals.loadAvatar('someone@example.com');
+    const inFlight = [...internals.pendingAvatarImages][0];
+    expect(inFlight, 'a request was started').to.not.be.undefined;
+
+    renderer.setConfig({ fetchAvatars: false });
+
+    expect(internals.pendingAvatarImages.size, 'in-flight requests aborted').to.equal(0);
+    expect(internals.avatarLoadingSet.size).to.equal(0);
+    expect(inFlight.onload, 'callbacks released').to.equal(null);
+
+    // And no new request starts afterwards
+    internals.loadAvatar('another@example.com');
+    expect(internals.pendingAvatarImages.size).to.equal(0);
+    renderer.destroy();
+  });
+
+  it('keeps in-flight requests when an unrelated config change lands', () => {
+    const renderer = makeRenderer({ fetchAvatars: true });
+    const internals = renderer as unknown as RendererInternals;
+
+    internals.loadAvatar('someone@example.com');
+    renderer.setConfig({ scaleNodesByCommitSize: false });
+
+    expect(internals.pendingAvatarImages.size).to.equal(1);
     renderer.destroy();
   });
 
   it('does not retry a recently failed avatar load', () => {
-    const renderer = makeRenderer();
+    const renderer = makeRenderer({ fetchAvatars: true });
     const internals = renderer as unknown as RendererInternals;
 
     internals.failedAvatars.set('someone@example.com', Date.now());
@@ -475,7 +534,7 @@ describe('CanvasRenderer avatar cache', () => {
   });
 
   it('retries a failed avatar load after the retry window has passed', () => {
-    const renderer = makeRenderer();
+    const renderer = makeRenderer({ fetchAvatars: true });
     const internals = renderer as unknown as RendererInternals;
 
     // Failure recorded 10 minutes ago — outside the 5-minute retry window
@@ -500,7 +559,7 @@ describe('CanvasRenderer avatar cache', () => {
   });
 
   it('bounds the failed-avatar map when loads keep failing', () => {
-    const renderer = makeRenderer();
+    const renderer = makeRenderer({ fetchAvatars: true });
     const internals = renderer as unknown as RendererInternals & {
       pendingAvatarImages: Set<HTMLImageElement>;
     };

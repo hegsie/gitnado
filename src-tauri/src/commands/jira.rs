@@ -56,6 +56,15 @@ fn get_jira_auth_header(email: &str, api_token: &str) -> String {
 }
 
 /// Build a JIRA REST API URL
+/// The HTTP client every outbound Jira call in this module goes through.
+///
+/// A Jira site is per-repository (`JiraConfig::base_url`), so that is the host
+/// the allowlist is checked against.
+fn api_client(base_url: &str) -> Result<reqwest::Client> {
+    crate::services::security::guard_url(base_url)?;
+    Ok(reqwest::Client::new())
+}
+
 fn build_jira_api_url(base_url: &str, path: &str) -> String {
     let base = base_url.trim_end_matches('/');
     format!("{}/rest/api/3/{}", base, path)
@@ -239,7 +248,7 @@ pub async fn get_jira_issues(
         ],
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client(&config.base_url)?;
     let response = client
         .post(&url)
         .header(
@@ -341,7 +350,7 @@ pub async fn get_jira_issue(path: String, issue_key: String) -> Result<JiraIssue
         ),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client(&config.base_url)?;
     let response = client
         .get(&url)
         .header(
@@ -431,7 +440,7 @@ pub async fn get_jira_transitions(path: String, issue_key: String) -> Result<Vec
         &format!("issue/{}/transitions", issue_key),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client(&config.base_url)?;
     let response = client
         .get(&url)
         .header(
@@ -515,7 +524,7 @@ pub async fn transition_jira_issue(
         },
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client(&config.base_url)?;
     let response = client
         .post(&url)
         .header(
@@ -565,7 +574,7 @@ pub async fn create_branch_from_jira(
         &format!("issue/{}?fields=summary", issue_key),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client(&config.base_url)?;
     let response = client
         .get(&url)
         .header(

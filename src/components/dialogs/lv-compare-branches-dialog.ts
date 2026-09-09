@@ -21,6 +21,26 @@ import { containsDeepActiveElement } from '../../utils/focus.ts';
 import type { LvModal } from './lv-modal.ts';
 import './lv-modal.ts';
 
+/** A ref the branch list does not contain, with the label to show for it. */
+export interface CompareExtraRef {
+  ref: string;
+  label: string;
+}
+
+export interface CompareOpenOptions {
+  /** Preselect the base (left) side. */
+  baseRef?: string;
+  /** Preselect the compare (right) side. */
+  compareRef?: string;
+  /**
+   * Refs that are not branches — commit oids from the graph's multi-selection
+   * — added to both pickers so this dialog can compare things the branch list
+   * does not contain. `compare_branches` resolves whatever it is given with
+   * `revparse_single`, so an oid is as valid a side as a branch name.
+   */
+  extraRefs?: CompareExtraRef[];
+}
+
 @customElement('lv-compare-branches-dialog')
 export class LvCompareBranchesDialog extends LitElement {
   static styles = [
@@ -241,6 +261,8 @@ export class LvCompareBranchesDialog extends LitElement {
   private isOpen = false;
 
   @state() private branches: Branch[] = [];
+  /** Non-branch refs the caller asked to compare (commit oids from the graph). */
+  @state() private extraRefs: CompareExtraRef[] = [];
   @state() private baseRef = '';
   @state() private compareRef = '';
   @state() private loadingBranches = false;
@@ -273,16 +295,23 @@ export class LvCompareBranchesDialog extends LitElement {
   }
 
   /**
-   * @param compareRef Ref to preselect on the compare side (e.g. the branch
-   * whose context menu was used). Base defaults to the current branch.
+   * @param target Either the ref to preselect on the compare side (e.g. the
+   * branch whose context menu was used — base defaults to the current
+   * branch), or an options object naming both sides and any non-branch refs
+   * they need (the graph's "Compare these commits" hands over two oids).
    */
-  public open(compareRef?: string): void {
+  public open(target?: string | CompareOpenOptions): void {
+    const opts: CompareOpenOptions =
+      typeof target === 'string' ? { compareRef: target } : (target ?? {});
+
     // Re-entry while already open must not wipe a selection the user made:
     // the command palette fires even while the dialog has focus. Re-aim only
     // if a new target was named.
     if (this.isOpen) {
-      if (compareRef) {
-        this.compareRef = compareRef;
+      if (opts.compareRef || opts.baseRef) {
+        this.addExtraRefs(opts.extraRefs);
+        if (opts.baseRef) this.baseRef = opts.baseRef;
+        if (opts.compareRef) this.compareRef = opts.compareRef;
         this.resolveBaseCollision();
         this.comparison = null;
         this.error = '';
@@ -295,8 +324,12 @@ export class LvCompareBranchesDialog extends LitElement {
     this.openGeneration++;
     this.pinnedRepoPath = this.repositoryPath;
     this.isOpen = true;
-    if (compareRef) {
-      this.compareRef = compareRef;
+    this.addExtraRefs(opts.extraRefs);
+    if (opts.baseRef) {
+      this.baseRef = opts.baseRef;
+    }
+    if (opts.compareRef) {
+      this.compareRef = opts.compareRef;
     }
 
     void this.updateComplete.then(() => {
@@ -335,6 +368,7 @@ export class LvCompareBranchesDialog extends LitElement {
 
   private reset(): void {
     this.branches = [];
+    this.extraRefs = [];
     this.baseRef = '';
     this.compareRef = '';
     this.loadingBranches = false;
@@ -353,7 +387,36 @@ export class LvCompareBranchesDialog extends LitElement {
    */
   private resolveBaseCollision(): void {
     if (this.baseRef !== this.compareRef) return;
-    this.baseRef = this.branches.find((b) => b.name !== this.compareRef)?.name ?? this.baseRef;
+    this.baseRef =
+      this.selectableRefs.find((r) => r.value !== this.compareRef)?.value ?? this.baseRef;
+  }
+
+  /** Merge caller-supplied non-branch refs in, keeping them unique. */
+  private addExtraRefs(extra?: CompareExtraRef[]): void {
+    if (!extra || extra.length === 0) return;
+    const merged = [...this.extraRefs];
+    for (const candidate of extra) {
+      if (!merged.some((r) => r.ref === candidate.ref)) merged.push(candidate);
+    }
+    this.extraRefs = merged;
+  }
+
+  /**
+   * Everything the two pickers offer: the caller's extra refs first (they are
+   * what the dialog was opened FOR), then the branches. Every "is there
+   * anything to compare" test reads this rather than `branches`, or a
+   * commit-to-commit comparison in a single-branch repository would render
+   * with both pickers disabled and a "nothing to compare" message over two
+   * refs it can compare perfectly well.
+   */
+  private get selectableRefs(): Array<{ value: string; label: string }> {
+    return [
+      ...this.extraRefs.map((r) => ({ value: r.ref, label: r.label })),
+      ...this.branches.map((b) => ({
+        value: b.name,
+        label: `${b.name}${b.isHead ? ' (current)' : ''}`,
+      })),
+    ];
   }
 
   /**
@@ -600,9 +663,11 @@ export class LvCompareBranchesDialog extends LitElement {
   }
 
   render() {
-    const options = this.branches.map(
-      (b) => html`<option value=${b.name}>${b.name}${b.isHead ? ' (current)' : ''}</option>`,
+    const selectable = this.selectableRefs;
+    const options = selectable.map(
+      (r) => html`<option value=${r.value}>${r.label}</option>`,
     );
+    const tooFewRefs = selectable.length < 2;
 
     return html`
       <lv-modal modalTitle="Compare Branches" @close=${this.handleModalClose}>
@@ -613,7 +678,7 @@ export class LvCompareBranchesDialog extends LitElement {
               <select
                 id="base-ref-select"
                 @change=${this.handleBaseChange}
-                ?disabled=${this.loadingBranches || this.comparing || this.branches.length < 2}
+                ?disabled=${this.loadingBranches || this.comparing || tooFewRefs}
               >
                 ${options}
               </select>
@@ -624,7 +689,7 @@ export class LvCompareBranchesDialog extends LitElement {
               type="button"
               title="Swap base and compare"
               aria-label="Swap base and compare"
-              ?disabled=${this.loadingBranches || this.comparing || this.branches.length < 2}
+              ?disabled=${this.loadingBranches || this.comparing || tooFewRefs}
               @click=${this.handleSwap}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -640,7 +705,7 @@ export class LvCompareBranchesDialog extends LitElement {
               <select
                 id="compare-ref-select"
                 @change=${this.handleCompareChange}
-                ?disabled=${this.loadingBranches || this.comparing || this.branches.length < 2}
+                ?disabled=${this.loadingBranches || this.comparing || tooFewRefs}
               >
                 ${options}
               </select>
@@ -653,16 +718,19 @@ export class LvCompareBranchesDialog extends LitElement {
             ? html`<div class="status"><span class="spinner"></span>Loading branches…</div>`
             : nothing}
 
-          ${!this.loadingBranches && this.branches.length === 0 && !this.error
+          ${!this.loadingBranches && selectable.length === 0 && !this.error
             ? html`<div class="status" data-testid="no-branches">
                 This repository has no branches to compare yet.
               </div>`
             : nothing}
 
-          ${!this.loadingBranches && this.branches.length === 1 && !this.error
+          ${!this.loadingBranches && selectable.length === 1 && !this.error
             ? html`<div class="status" data-testid="single-branch">
-                ${this.branches[0].name} is the only branch here — there is nothing to compare it
-                with yet.
+                ${this.branches.length === 1
+                  ? html`${this.branches[0].name} is the only branch here — there is nothing to
+                      compare it with yet.`
+                  : html`${selectable[0].label} is the only ref here — there is nothing to compare
+                      it with yet.`}
               </div>`
             : nothing}
 

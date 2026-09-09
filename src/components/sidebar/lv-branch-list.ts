@@ -3,11 +3,17 @@ import { customElement, property, state, query } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm, showPrompt } from '../../services/dialog.service.ts';
+import { mergePreviewSummary } from '../../utils/merge-preview.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { sweepRepoScopedDialogs } from '../../utils/repo-scoped-dialogs.ts';
 import { showErrorWithSuggestion } from '../../services/error-suggestion.service.ts';
 import { dragDropService, type DragItem } from '../../services/drag-drop.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
+import {
+  detectPullRequestProvider,
+  invalidateProviderDetection,
+  type PullRequestProviderTarget,
+} from '../../services/pull-request.service.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
 import { fuzzyScore } from '../../utils/fuzzy-search.ts';
 import '../dialogs/lv-branch-cleanup-dialog.ts';
@@ -651,6 +657,22 @@ export class LvBranchList extends LitElement {
    */
   @state() private cleanupCheckFailed = false;
 
+  /**
+   * The hosting provider backing this repository, once resolved, and null when
+   * resolution finished and found none. `providerResolved` is what tells those
+   * two apart -- "not detected" and "not looked yet" must not both disable the
+   * create-request entry with the same explanation.
+   *
+   * Resolved eagerly (per repository, through the cache in
+   * pull-request.service that the sidebar's Pull Requests section shares) and
+   * NOT on menu open: the `detect_*_repo` commands only read this repository's
+   * own remote configuration, so they cost no network call, and an entry that
+   * flips from disabled to enabled under the user's cursor is worse than one
+   * that is simply right when the menu appears.
+   */
+  @state() private prProvider: PullRequestProviderTarget | null = null;
+  @state() private prProviderResolved = false;
+
   @query('lv-branch-cleanup-dialog') private branchCleanupDialog!: LvBranchCleanupDialog;
 
   private static readonly HIDDEN_BRANCHES_STORAGE_PREFIX = 'lv-hidden-branches:';
@@ -707,6 +729,7 @@ export class LvBranchList extends LitElement {
       });
     });
     await this.loadBranches();
+    void this.detectProvider();
   }
 
   disconnectedCallback(): void {
@@ -723,6 +746,9 @@ export class LvBranchList extends LitElement {
 
   private handleRepositoryRefresh = (): void => {
     this.loadBranches();
+    // Adding or re-pointing a remote changes the answer, and a stale "no
+    // provider" would silently keep the create-request entry disabled.
+    void this.detectProvider(true);
   };
 
   private handleExternalCleanupOpen = (): void => {
@@ -779,8 +805,118 @@ export class LvBranchList extends LitElement {
       // survive the rebind and delete repo A's branch inside repo B.
       this.contextMenu = { ...this.contextMenu, visible: false };
       this.loadHiddenBranches();
+      // Clear before the await: the previous repository's provider must never
+      // label -- or enable -- a menu opened over this one's branches.
+      this.prProvider = null;
+      this.prProviderResolved = false;
       await this.loadBranches();
+      await this.detectProvider();
     }
+  }
+
+  /**
+   * Resolve the hosting provider for the bound repository.
+   *
+   * `force` re-detects instead of reading the shared cache, for the case where
+   * the repository's remotes may have just changed.
+   */
+  private async detectProvider(force = false): Promise<void> {
+    const loadedPath = this.repositoryPath;
+    if (!loadedPath) {
+      this.prProvider = null;
+      this.prProviderResolved = false;
+      return;
+    }
+    if (force) invalidateProviderDetection(loadedPath);
+    let target: PullRequestProviderTarget | null = null;
+    try {
+      target = await detectPullRequestProvider(loadedPath, { force });
+    } catch {
+      // Detection is best-effort: a failure leaves the entry disabled with the
+      // "no provider" explanation rather than breaking the menu. Nothing the
+      // user asked for has failed here, so there is nothing to report.
+      target = null;
+    }
+    // A tab switch while detection was in flight: the result belongs to the
+    // repository it was requested for, not whichever one is bound now.
+    if (this.repositoryPath !== loadedPath) return;
+    this.prProvider = target;
+    this.prProviderResolved = true;
+  }
+
+  /**
+   * Label for the create-request entry. GitLab calls them merge requests, and
+   * saying "pull request" there would name a thing GitLab does not have.
+   */
+  private get createRequestLabel(): string {
+    return this.prProvider?.provider === 'gitlab'
+      ? 'Create merge request...'
+      : 'Create pull request...';
+  }
+
+  /**
+   * Why the create-request entry is disabled, or null when it is enabled.
+   *
+   * An upstream is required because every provider opens the request from a
+   * branch that already exists on the remote -- without one there is nothing
+   * on the server to open it from.
+   */
+  private createRequestBlockedReason(branch: Branch): string | null {
+    if (!this.prProviderResolved) return 'Checking for a hosting provider...';
+    if (!this.prProvider) {
+      return 'No GitHub, GitLab, Bitbucket or Azure DevOps remote was detected for this repository';
+    }
+    if (!branch.upstream) {
+      return `Push ${branch.shorthand} and set its upstream first`;
+    }
+    return null;
+  }
+
+  /**
+   * A base branch to prefill the provider's create form with: the first
+   * conventional trunk that exists locally, and nothing when none does.
+   *
+   * A SUGGESTION only -- the dialog applies it just to an empty field, and the
+   * user can change it there. Derived from the branches already loaded, so it
+   * costs no extra call; the repository's real default branch is only known to
+   * the remote.
+   */
+  private suggestBaseBranch(sourceBranch: string): string | undefined {
+    const localNames = new Set(
+      this.localBranchGroups.flatMap((group) => group.branches.map((b) => b.shorthand)),
+    );
+    return ['main', 'master', 'develop', 'trunk'].find(
+      (name) => name !== sourceBranch && localNames.has(name),
+    );
+  }
+
+  /**
+   * Hand the branch off to the provider dialog's existing create form.
+   *
+   * Dispatched rather than handled here on purpose: the four provider dialogs
+   * already own the create flow (form, account selection, API call, feedback),
+   * and app-shell hosts them. Listener: `@create-pull-request` on app-shell's
+   * left-panel aside.
+   */
+  private handleCreatePullRequest(): void {
+    const branch = this.contextMenu.branch;
+    const provider = this.prProvider;
+    // Re-checked at click time, not just in the disabled binding: the provider
+    // is resolved asynchronously and the menu can outlive a repository switch.
+    if (!branch || branch.isRemote || !branch.upstream || !provider) return;
+
+    this.contextMenu = { ...this.contextMenu, visible: false };
+    this.dispatchEvent(
+      new CustomEvent('create-pull-request', {
+        bubbles: true,
+        composed: true,
+        detail: {
+          provider: provider.provider,
+          sourceBranch: branch.shorthand,
+          baseBranch: this.suggestBaseBranch(branch.shorthand),
+        },
+      }),
+    );
   }
 
   private get hiddenBranchesStorageKey(): string {
@@ -836,7 +972,7 @@ export class LvBranchList extends LitElement {
     this.error = null;
 
     try {
-      const [branchesResult, , cleanupResult] = await Promise.all([
+      const [branchesResult, remotesResult, cleanupResult] = await Promise.all([
         gitService.getBranches(loadedPath),
         gitService.getRemotes(loadedPath),
         // The staleDays argument is what makes the badge and the cleanup
@@ -875,6 +1011,11 @@ export class LvBranchList extends LitElement {
       repositoryStore.getState().updateRepoData(loadedPath, {
         branches,
         currentBranch: branches.find((b) => b.isHead) ?? null,
+        // The remotes this load already asked for, mirrored instead of
+        // discarded: the same store field decides whether Fetch/Pull/Push are
+        // available, and a failed read is left out rather than written as an
+        // empty list, so "could not read" never becomes "has no remote".
+        ...(remotesResult.success && remotesResult.data ? { remotes: remotesResult.data } : {}),
       });
 
       if (!isCurrent) return;
@@ -1390,9 +1531,14 @@ export class LvBranchList extends LitElement {
     // Captured BEFORE the confirm await: the merge must run on the repo it was
     // invoked on, even if the user switches tabs while the confirm is up.
     const repoPath = this.repositoryPath;
+    // Predicted BEFORE the confirm, inside the claim taken above: the user has
+    // to be able to see "N files would conflict" while deciding, not discover
+    // it from a working tree that is already conflicted. Read-only and
+    // in-memory in the backend, so it cannot race the merge it precedes.
+    const prediction = await mergePreviewSummary(repoPath, branch.name);
     const confirmed = await showConfirm(
       'Merge Branch',
-      `Merge "${branch.name}" into the current branch?`,
+      `Merge "${branch.name}" into the current branch?${prediction}`,
       'info'
     );
 
@@ -1875,10 +2021,13 @@ export class LvBranchList extends LitElement {
     // If target is HEAD, merge source into current
     if (targetBranch.isHead) {
       if (action === 'merge') {
-        // Merge source branch into current (HEAD)
+        // Merge source branch into current (HEAD). Same conflict prediction the
+        // context menu shows — a drag is the least deliberate of the merge
+        // gestures, so it is the one that most needs the warning.
+        const prediction = await mergePreviewSummary(repoPath, sourceBranch.name);
         const confirmed = await showConfirm(
           'Merge Branch',
-          `Merge "${sourceBranch.name}" into the current branch?`,
+          `Merge "${sourceBranch.name}" into the current branch?${prediction}`,
           'info'
         );
         if (!confirmed) return;
@@ -1943,10 +2092,18 @@ export class LvBranchList extends LitElement {
     } else {
       // Dropping on a non-HEAD branch: need to checkout first, then merge/rebase
       const actionText = action === 'merge' ? 'merge' : 'rebase onto';
+      // Previewed against the TARGET branch, not HEAD: this arm checks the
+      // target out first and merges into that, so a prediction against the
+      // branch the user is leaving would describe a different merge.
+      const prediction =
+        action === 'merge'
+          ? await mergePreviewSummary(repoPath, sourceBranch.name, targetBranch.name)
+          : '';
       const confirmed = await showConfirm(
         action === 'merge' ? 'Merge Branch' : 'Rebase Branch',
         `This will checkout "${targetBranch.name}" and ${actionText} "${sourceBranch.name}". Continue?` +
-          (action === 'rebase' ? `\n\nThis will rewrite commit history.` : ''),
+          (action === 'rebase' ? `\n\nThis will rewrite commit history.` : '') +
+          prediction,
         action === 'merge' ? 'info' : 'warning'
       );
       if (!confirmed) return;
@@ -2195,6 +2352,7 @@ export class LvBranchList extends LitElement {
     const branch = this.contextMenu.branch;
     const isLocal = !branch.isRemote;
     const isHead = branch.isHead;
+    const createRequestBlocked = isLocal ? this.createRequestBlockedReason(branch) : null;
 
     return html`
       <div
@@ -2243,6 +2401,24 @@ export class LvBranchList extends LitElement {
               <line x1="23" y1="11" x2="17" y2="11"></line>
             </svg>
             Track this branch
+          </button>
+        ` : ''}
+
+        ${isLocal ? html`
+          <button
+            class="context-menu-item"
+            role="menuitem"
+            ?disabled=${createRequestBlocked !== null}
+            title=${createRequestBlocked ?? `Open a ${this.prProvider?.itemNoun ?? 'pull request'} for ${branch.shorthand} on ${this.prProvider?.providerName ?? 'the remote'}`}
+            @click=${this.handleCreatePullRequest}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="18" cy="18" r="3"></circle>
+              <circle cx="6" cy="6" r="3"></circle>
+              <path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+              <line x1="6" y1="9" x2="6" y2="21"></line>
+            </svg>
+            ${this.createRequestLabel}
           </button>
         ` : ''}
 

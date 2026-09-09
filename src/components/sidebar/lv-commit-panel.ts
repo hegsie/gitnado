@@ -5,11 +5,23 @@ import * as gitService from '../../services/git.service.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showPrompt } from '../../services/dialog.service.ts';
-import { repositoryStore } from '../../stores/index.ts';
+import { repositoryStore, settingsStore } from '../../stores/index.ts';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { safeUnlisten } from '../../services/tauri-api.ts';
 import type { CommitTemplate, ConventionalType } from '../../services/git.service.ts';
 import type { Commit } from '../../types/git.types.ts';
 import { RefLockController, tryAcquireRefOpOrWarn, releaseRefOp } from '../../utils/ref-lock.ts';
+import {
+  adoptTrailers,
+  applyTrailers,
+  coAuthoredByTrailer,
+  formatTrailer,
+  parseCoAuthorInput,
+  sameCoAuthor,
+  signedOffByTrailer,
+  type CoAuthor,
+  type Trailer,
+} from '../../utils/commit-trailers.ts';
 
 /**
  * Commit panel component
@@ -639,6 +651,204 @@ export class LvCommitPanel extends LitElement {
         font-size: var(--font-size-xs);
         text-align: center;
       }
+
+      /* Trailers (Signed-off-by / Co-authored-by) */
+      .signoff-toggle {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        font-size: var(--font-size-xs);
+        color: var(--color-text-secondary);
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .signoff-toggle input {
+        margin: 0;
+      }
+
+      .signoff-toggle.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .coauthor-wrapper {
+        position: relative;
+      }
+
+      .coauthor-btn {
+        padding: 2px var(--spacing-xs);
+        background: transparent;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+      }
+
+      .coauthor-btn:hover {
+        background: var(--color-bg-hover);
+        color: var(--color-text-primary);
+      }
+
+      .coauthor-dropdown {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 100;
+        width: 280px;
+        max-height: 260px;
+        overflow-y: auto;
+        background: var(--color-bg-primary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
+
+      .coauthor-dropdown-header {
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border-bottom: 1px solid var(--color-border);
+        font-size: var(--font-size-xs);
+        color: var(--color-text-secondary);
+      }
+
+      .coauthor-entry {
+        display: flex;
+        gap: var(--spacing-xs);
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border-bottom: 1px solid var(--color-border);
+      }
+
+      .coauthor-input {
+        flex: 1;
+        min-width: 0;
+        padding: var(--spacing-xs);
+        background: var(--color-bg-primary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-xs);
+      }
+
+      .coauthor-input:focus {
+        outline: none;
+        border-color: var(--color-primary);
+      }
+
+      .coauthor-add-btn {
+        padding: 2px var(--spacing-xs);
+        background: transparent;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+      }
+
+      .coauthor-add-btn:hover {
+        background: var(--color-bg-hover);
+        color: var(--color-text-primary);
+      }
+
+      .coauthor-suggestion {
+        display: block;
+        width: 100%;
+        padding: var(--spacing-xs) var(--spacing-sm);
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--color-border);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-xs);
+        text-align: left;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .coauthor-suggestion:hover {
+        background: var(--color-bg-hover);
+      }
+
+      .coauthor-suggestion .suggestion-email {
+        color: var(--color-text-muted);
+      }
+
+      .coauthor-empty {
+        padding: var(--spacing-sm);
+        color: var(--color-text-muted);
+        font-size: var(--font-size-xs);
+        text-align: center;
+      }
+
+      .coauthor-error {
+        padding: var(--spacing-xs) var(--spacing-sm);
+        color: var(--color-error);
+        font-size: var(--font-size-xs);
+      }
+
+      .trailers-preview {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: var(--spacing-xs);
+        border: 1px dashed var(--color-border);
+        border-radius: var(--radius-sm);
+        font-size: var(--font-size-xs);
+      }
+
+      .trailers-title {
+        color: var(--color-text-muted);
+      }
+
+      .trailer-line {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        font-family: var(--font-mono);
+        color: var(--color-text-secondary);
+        word-break: break-all;
+      }
+
+      .trailer-remove {
+        margin-left: auto;
+        padding: 0 4px;
+        background: transparent;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        color: var(--color-text-muted);
+        font-size: 10px;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      .trailer-remove:hover {
+        color: var(--color-error);
+        border-color: var(--color-error);
+      }
+
+      .trailer-hint {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        flex-wrap: wrap;
+        padding: var(--spacing-xs);
+        background: var(--color-warning-bg);
+        border-radius: var(--radius-sm);
+        color: var(--color-warning);
+        font-size: var(--font-size-xs);
+      }
+
+      .trailer-hint button {
+        padding: 1px 6px;
+        background: transparent;
+        border: 1px solid currentColor;
+        border-radius: var(--radius-sm);
+        color: inherit;
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+      }
     `,
   ];
 
@@ -680,9 +890,35 @@ export class LvCommitPanel extends LitElement {
   @state() private currentBranch: string = '';
   private cachedAuthor: string = '';
 
+  // Trailer state (Signed-off-by / Co-authored-by)
+  @state() private signOff: boolean = false;
+  @state() private coAuthors: CoAuthor[] = [];
+  @state() private showCoAuthors: boolean = false;
+  @state() private coAuthorInput: string = '';
+  @state() private coAuthorError: string | null = null;
+  @state() private authorSuggestions: CoAuthor[] = [];
+  @state() private loadingSuggestions: boolean = false;
+  @state() private suggestionsError: string | null = null;
+  /**
+   * The identity the commit will actually be authored with.
+   *
+   * `get_user_identity` resolves user.name/user.email *with repository
+   * context*, the same way libgit2 does when it signs the commit — so it
+   * honours system/global/local precedence and the conditional includes a bare
+   * `--global --get` would miss, and it picks up whatever a unified profile
+   * wrote into this repository's config. Signing off with anything else would
+   * put a name in the footer that the commit is not authored by.
+   */
+  @state() private identityName: string = '';
+  @state() private identityEmail: string = '';
+  /** False until the first identity lookup finishes, so the hint isn't flashed. */
+  @state() private identityLoaded: boolean = false;
+
   // Store original input before amend pre-population
   private originalSummary: string = '';
   private originalDescription: string = '';
+  private originalSignOff: boolean = false;
+  private originalCoAuthors: CoAuthor[] = [];
 
   // AI state
   @state() private aiAvailable: boolean = false;
@@ -713,7 +949,7 @@ export class LvCommitPanel extends LitElement {
   private readonly HISTORY_MAX_ENTRIES = 20;
 
   // Per-repo draft cache: preserves commit form state when switching repos
-  private draftCache = new Map<string, { summary: string; description: string; conventionalMode: boolean; selectedType: string; scope: string }>();
+  private draftCache = new Map<string, { summary: string; description: string; conventionalMode: boolean; selectedType: string; scope: string; signOff: boolean; coAuthors: CoAuthor[] }>();
 
   private boundHandleTriggerAmend = this.handleTriggerAmend.bind(this);
   private boundHandleAiSettingsChanged = () => this.checkAiAvailability();
@@ -721,6 +957,11 @@ export class LvCommitPanel extends LitElement {
   // profile that rewrote user.name/user.email in the repo's git config), so the
   // {{author}} template placeholder reflects the new identity.
   private boundHandleRepositoryRefresh = () => this.loadAuthorName();
+  // The Git Configuration dialog — which this panel's "Configure identity" hint
+  // opens — announces a saved identity. Reload it straight away so the sign-off
+  // control the user came to fix stops saying there is no identity, instead of
+  // waiting for the next unrelated refresh, commit or tab switch.
+  private boundHandleIdentityChanged = () => this.loadAuthorName();
   private unsubscribeStore?: () => void;
   private aiRetryTimer?: ReturnType<typeof setTimeout>;
   private modelCompleteUnlisten?: UnlistenFn;
@@ -733,6 +974,11 @@ export class LvCommitPanel extends LitElement {
     await this.loadGitTemplate();
     await this.checkAiAvailability();
     await this.loadAuthorName();
+    // "Always sign off" seeds a fresh draft; it never overrides a choice the
+    // user made on the draft in front of them, and it cannot arm a sign-off
+    // this repository has no identity to write (the identity load above has
+    // already settled by now).
+    this.signOff = settingsStore.getState().alwaysSignOff && this.hasIdentity;
     this._onDocumentClick = this._onDocumentClick.bind(this);
     document.addEventListener('click', this._onDocumentClick);
 
@@ -752,12 +998,20 @@ export class LvCommitPanel extends LitElement {
     // Reload author identity after a repository refresh (e.g. profile applied).
     window.addEventListener('repository-refresh', this.boundHandleRepositoryRefresh);
 
+    // Reload it immediately when the config dialog saves a new identity.
+    window.addEventListener('git-identity-changed', this.boundHandleIdentityChanged);
+
     // Also listen for Tauri backend event when a model download completes and auto-loads
     listen<{ modelId: string; loaded?: boolean }>('model-download-complete', (event) => {
       if (event.payload.loaded) {
         this.checkAiAvailability();
       }
-    }).then(unlisten => { this.modelCompleteUnlisten = unlisten; });
+    })
+      .then(unlisten => { this.modelCompleteUnlisten = unlisten; })
+      .catch(() => {
+        // No Tauri event bridge (unit tests, plain browser): the periodic
+        // availability poll below still notices a model that loads later.
+      });
 
     // If AI isn't available yet, poll periodically to catch backend auto-loading
     // a model on startup (which can take 10-30 seconds)
@@ -772,7 +1026,9 @@ export class LvCommitPanel extends LitElement {
     window.removeEventListener('trigger-amend', this.boundHandleTriggerAmend);
     window.removeEventListener('ai-settings-changed', this.boundHandleAiSettingsChanged);
     window.removeEventListener('repository-refresh', this.boundHandleRepositoryRefresh);
-    this.modelCompleteUnlisten?.();
+    window.removeEventListener('git-identity-changed', this.boundHandleIdentityChanged);
+    safeUnlisten(this.modelCompleteUnlisten);
+    this.modelCompleteUnlisten = undefined;
     if (this.aiRetryTimer) clearTimeout(this.aiRetryTimer);
     this.unsubscribeStore?.();
   }
@@ -789,6 +1045,8 @@ export class LvCommitPanel extends LitElement {
           conventionalMode: this.conventionalMode,
           selectedType: this.selectedType,
           scope: this.scope,
+          signOff: this.signOff,
+          coAuthors: this.coAuthors,
         });
       }
 
@@ -800,12 +1058,16 @@ export class LvCommitPanel extends LitElement {
         this.conventionalMode = draft.conventionalMode;
         this.selectedType = draft.selectedType;
         this.scope = draft.scope;
+        this.signOff = draft.signOff;
+        this.coAuthors = draft.coAuthors;
       } else {
         this.summary = '';
         this.description = '';
         this.conventionalMode = false;
         this.selectedType = 'feat';
         this.scope = '';
+        this.signOff = settingsStore.getState().alwaysSignOff;
+        this.coAuthors = [];
       }
 
       // Clear transient state
@@ -814,6 +1076,28 @@ export class LvCommitPanel extends LitElement {
       this.generationError = null;
       this.amend = false;
       this.lastCommit = null;
+      this.showCoAuthors = false;
+      this.coAuthorInput = '';
+      this.coAuthorError = null;
+      this.suggestionsError = null;
+      // Suggestions and the sign-off identity both belong to the repository, so
+      // neither may survive a tab switch: signing off as the previous repo's
+      // identity would write a footer the commit is not authored by.
+      this.authorSuggestions = [];
+      this.identityName = '';
+      this.identityEmail = '';
+      this.identityLoaded = false;
+      void this.loadAuthorName();
+    }
+
+    // Once we KNOW there is no identity, sign-off cannot be armed: the
+    // Signed-off-by trailer needs a `Name <email>`, so `pendingTrailers` adds
+    // nothing and the checkbox — checked and disabled — would be claiming
+    // something the commit will not do. Enforced here rather than at each of
+    // the places that arm it ("always sign off", a restored draft, adopting an
+    // amended commit's footer), so no path can leave the box lying.
+    if (this.identityLoaded && !this.hasIdentity && this.signOff) {
+      this.signOff = false;
     }
   }
 
@@ -849,20 +1133,29 @@ export class LvCommitPanel extends LitElement {
         this.showHistory = false;
       }
     }
+    if (this.showCoAuthors) {
+      const path = e.composedPath();
+      const isInside = path.some(
+        (el) => el instanceof HTMLElement && (el.classList?.contains('coauthor-wrapper'))
+      );
+      if (!isInside) {
+        this.showCoAuthors = false;
+      }
+    }
   }
 
   private handleTriggerAmend(e: Event): void {
     const event = e as CustomEvent<{ commit: Commit }>;
     if (event.detail?.commit) {
       // Store original input before pre-populating
-      this.originalSummary = this.summary;
-      this.originalDescription = this.description;
+      this.snapshotDraftForAmend();
 
       // Enable amend mode and populate with commit message
       this.amend = true;
       this.lastCommit = event.detail.commit;
       this.summary = event.detail.commit.summary;
       this.description = event.detail.commit.body ?? '';
+      this.adoptTrailersFromDescription();
 
       // Focus the summary input
       this.updateComplete.then(() => {
@@ -966,10 +1259,39 @@ export class LvCommitPanel extends LitElement {
 
   private async loadAuthorName(): Promise<void> {
     if (!this.repositoryPath) return;
+    const requestedFor = this.repositoryPath;
     const result = await gitService.getUserIdentity(this.repositoryPath);
+    // A slow lookup for a repo the user has since tabbed away from must not
+    // overwrite the identity of the repo now on screen.
+    if (this.repositoryPath !== requestedFor) return;
     if (result.success && result.data?.name) {
       this.cachedAuthor = result.data.name;
     }
+    if (result.success) {
+      this.identityName = result.data?.name ?? '';
+      this.identityEmail = result.data?.email ?? '';
+    } else {
+      this.identityName = '';
+      this.identityEmail = '';
+    }
+    this.identityLoaded = true;
+  }
+
+  /** True once we know the commit will carry a real `Name <email>`. */
+  private get hasIdentity(): boolean {
+    return this.identityName.trim().length > 0 && this.identityEmail.trim().length > 0;
+  }
+
+  /** The trailers the current controls will append to the message. */
+  private get pendingTrailers(): Trailer[] {
+    const trailers: Trailer[] = [];
+    if (this.signOff && this.hasIdentity) {
+      trailers.push(signedOffByTrailer(this.identityName, this.identityEmail));
+    }
+    for (const coAuthor of this.coAuthors) {
+      trailers.push(coAuthoredByTrailer(coAuthor));
+    }
+    return trailers;
   }
 
   expandTemplateVariables(content: string): string {
@@ -1052,7 +1374,154 @@ export class LvCommitPanel extends LitElement {
       summary = `${this.selectedType}${scopePart}: ${summary}`;
     }
 
-    return this.description ? `${summary}\n\n${this.description}` : summary;
+    const message = this.description ? `${summary}\n\n${this.description}` : summary;
+
+    // Trailers belong in the footer: a blank line after the body, one per line,
+    // never repeated. With no trailers armed the message is returned untouched,
+    // so a hand-formatted message is never reflowed by a feature that is off.
+    return applyTrailers(message, this.pendingTrailers);
+  }
+
+  private handleSignOffToggle(e: Event): void {
+    const target = e.target as HTMLInputElement;
+    // Without an identity the trailer would read `Signed-off-by:  <>`. Refuse,
+    // and say why — the checkbox is disabled, but a keyboard or programmatic
+    // toggle must not slip past it either.
+    if (target.checked && !this.hasIdentity) {
+      target.checked = false;
+      this.signOff = false;
+      showToast(
+        'No git identity configured — set user.name and user.email to sign off',
+        'error'
+      );
+      return;
+    }
+    this.signOff = target.checked;
+  }
+
+  private handleCoAuthorsToggle(e: Event): void {
+    e.stopPropagation();
+    this.showCoAuthors = !this.showCoAuthors;
+    this.coAuthorError = null;
+    if (this.showCoAuthors) {
+      void this.loadCoAuthorSuggestions();
+    }
+  }
+
+  /**
+   * Recent distinct commit authors in this repository, newest first — the
+   * people you are most likely to be pairing with. Read from the commit history
+   * that is already available rather than a bespoke backend command.
+   */
+  private async loadCoAuthorSuggestions(): Promise<void> {
+    if (!this.repositoryPath || this.loadingSuggestions) return;
+
+    this.loadingSuggestions = true;
+    this.suggestionsError = null;
+    try {
+      const result = await gitService.getCommitHistory({
+        path: this.repositoryPath,
+        limit: 100,
+        allBranches: true,
+      });
+
+      if (!result.success) {
+        this.suggestionsError = result.error?.message ?? 'Could not read recent commit authors';
+        this.authorSuggestions = [];
+        return;
+      }
+
+      const seen = new Set<string>();
+      const suggestions: CoAuthor[] = [];
+      for (const commit of result.data ?? []) {
+        const name = commit.author?.name?.trim();
+        const email = commit.author?.email?.trim();
+        if (!name || !email) continue;
+        const key = email.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        suggestions.push({ name, email });
+        if (suggestions.length >= 20) break;
+      }
+      this.authorSuggestions = suggestions;
+    } catch (err) {
+      this.suggestionsError = err instanceof Error ? err.message : 'Could not read recent commit authors';
+      this.authorSuggestions = [];
+    } finally {
+      this.loadingSuggestions = false;
+    }
+  }
+
+  /** Suggestions minus yourself and anyone already added. */
+  private get visibleSuggestions(): CoAuthor[] {
+    const own = this.identityEmail.trim().toLowerCase();
+    return this.authorSuggestions.filter(
+      (s) =>
+        s.email.trim().toLowerCase() !== own &&
+        !this.coAuthors.some((c) => sameCoAuthor(c, s))
+    );
+  }
+
+  private addCoAuthor(coAuthor: CoAuthor): boolean {
+    if (this.coAuthors.some((c) => sameCoAuthor(c, coAuthor))) {
+      // Adding the same co-author twice is a no-op — say so rather than
+      // leaving the click looking broken.
+      this.coAuthorError = `${coAuthor.email} is already a co-author`;
+      return false;
+    }
+    this.coAuthors = [...this.coAuthors, coAuthor];
+    this.coAuthorError = null;
+    return true;
+  }
+
+  private handleCoAuthorInput(e: Event): void {
+    this.coAuthorInput = (e.target as HTMLInputElement).value;
+    this.coAuthorError = null;
+  }
+
+  private handleAddCoAuthor(): void {
+    const { coAuthor, error } = parseCoAuthorInput(this.coAuthorInput);
+    if (!coAuthor) {
+      this.coAuthorError = error ?? 'Invalid co-author';
+      return;
+    }
+    if (this.addCoAuthor(coAuthor)) {
+      this.coAuthorInput = '';
+    }
+  }
+
+  private handleCoAuthorKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleAddCoAuthor();
+    }
+  }
+
+  private handleRemoveCoAuthor(coAuthor: CoAuthor): void {
+    this.coAuthors = this.coAuthors.filter((c) => !sameCoAuthor(c, coAuthor));
+    this.coAuthorError = null;
+  }
+
+  /**
+   * Take over the trailers of a message being amended, so the controls show
+   * what is already in the footer instead of the panel appending a second copy
+   * of it. Only what the UI can represent is lifted out of the text.
+   */
+  private adoptTrailersFromDescription(): void {
+    const identity = this.hasIdentity
+      ? { name: this.identityName, email: this.identityEmail }
+      : null;
+    // The description has already had the subject split off, so its only
+    // paragraph may legitimately be the trailer block.
+    const adopted = adoptTrailers(this.description, identity, { allowSingleParagraph: true });
+    this.description = adopted.message;
+    if (adopted.signedOff) this.signOff = true;
+    for (const coAuthor of adopted.coAuthors) {
+      if (!this.coAuthors.some((c) => sameCoAuthor(c, coAuthor))) {
+        this.coAuthors = [...this.coAuthors, coAuthor];
+      }
+    }
   }
 
   private get canCommit(): boolean {
@@ -1082,17 +1551,33 @@ export class LvCommitPanel extends LitElement {
 
     if (this.amend) {
       // Store current input before pre-populating
-      this.originalSummary = this.summary;
-      this.originalDescription = this.description;
+      this.snapshotDraftForAmend();
 
       // Fetch last commit and pre-populate message
       await this.fetchLastCommitMessage();
     } else {
       // Restore original input when toggling off
-      this.summary = this.originalSummary;
-      this.description = this.originalDescription;
+      this.restoreDraftAfterAmend();
       this.lastCommit = null;
     }
+  }
+
+  /**
+   * Remember the draft the amend pre-population is about to overwrite —
+   * trailers included, since amend adopts the amended commit's own footer.
+   */
+  private snapshotDraftForAmend(): void {
+    this.originalSummary = this.summary;
+    this.originalDescription = this.description;
+    this.originalSignOff = this.signOff;
+    this.originalCoAuthors = this.coAuthors;
+  }
+
+  private restoreDraftAfterAmend(): void {
+    this.summary = this.originalSummary;
+    this.description = this.originalDescription;
+    this.signOff = this.originalSignOff;
+    this.coAuthors = this.originalCoAuthors;
   }
 
   private async fetchLastCommitMessage(): Promise<void> {
@@ -1108,6 +1593,7 @@ export class LvCommitPanel extends LitElement {
         this.lastCommit = result.data[0];
         this.summary = this.lastCommit.summary;
         this.description = this.lastCommit.body ?? '';
+        this.adoptTrailersFromDescription();
         return;
       }
 
@@ -1315,6 +1801,15 @@ export class LvCommitPanel extends LitElement {
           this.lastCommit = null;
           this.originalSummary = '';
           this.originalDescription = '';
+          // Co-authors belong to the commit that was just made, not to the next
+          // one; sign-off falls back to the user's standing preference.
+          this.coAuthors = [];
+          this.signOff = settingsStore.getState().alwaysSignOff && this.hasIdentity;
+          this.originalSignOff = this.signOff;
+          this.originalCoAuthors = [];
+          this.showCoAuthors = false;
+          this.coAuthorInput = '';
+          this.coAuthorError = null;
 
           // Clear success message after a delay
           setTimeout(() => {
@@ -1366,8 +1861,91 @@ export class LvCommitPanel extends LitElement {
     }
   }
 
+  /**
+   * The footer the commit will carry, with a control to take each line back
+   * out. Without it the only way to know what `create_commit` is about to
+   * receive would be to make the commit and read it back.
+   */
+  private renderTrailersPreview() {
+    const trailers = this.pendingTrailers;
+    if (trailers.length === 0) return nothing;
+
+    return html`
+      <div class="trailers-preview" role="status" aria-label="Trailers added to this commit">
+        <span class="trailers-title">Trailers</span>
+        ${trailers.map((trailer) => {
+          const coAuthor = this.coAuthors.find(
+            (c) => formatTrailer(coAuthoredByTrailer(c)) === formatTrailer(trailer)
+          );
+          return html`
+            <div class="trailer-line">
+              <span>${formatTrailer(trailer)}</span>
+              <button
+                class="trailer-remove"
+                title=${coAuthor ? `Remove ${coAuthor.email}` : 'Turn off sign-off'}
+                aria-label=${coAuthor
+                  ? `Remove co-author ${coAuthor.name} <${coAuthor.email}>`
+                  : 'Turn off sign-off'}
+                @click=${() => (coAuthor ? this.handleRemoveCoAuthor(coAuthor) : (this.signOff = false))}
+              >
+                ✕
+              </button>
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  private renderCoAuthorDropdown() {
+    return html`
+      <div class="coauthor-dropdown" id="coauthor-dropdown">
+        <div class="coauthor-dropdown-header">Add co-author</div>
+        <div class="coauthor-entry">
+          <input
+            type="text"
+            class="coauthor-input"
+            aria-label="Co-author name and email"
+            placeholder="Name &lt;email@example.com&gt;"
+            .value=${this.coAuthorInput}
+            @input=${this.handleCoAuthorInput}
+            @keydown=${this.handleCoAuthorKeyDown}
+          />
+          <button class="coauthor-add-btn" @click=${this.handleAddCoAuthor}>Add</button>
+        </div>
+        ${this.coAuthorError
+          ? html`<div class="coauthor-error" role="alert">${this.coAuthorError}</div>`
+          : nothing}
+        ${this.loadingSuggestions
+          ? html`<div class="coauthor-empty">Loading recent authors...</div>`
+          : this.suggestionsError
+            ? html`<div class="coauthor-error" role="alert">${this.suggestionsError}</div>`
+            : this.visibleSuggestions.length > 0
+              ? this.visibleSuggestions.map(
+                  (suggestion) => html`
+                    <button
+                      class="coauthor-suggestion"
+                      title="${suggestion.name} <${suggestion.email}>"
+                      @click=${() => this.addCoAuthor(suggestion)}
+                    >
+                      ${suggestion.name}
+                      <span class="suggestion-email">&lt;${suggestion.email}&gt;</span>
+                    </button>
+                  `
+                )
+              : html`<div class="coauthor-empty">No other recent authors in this repository</div>`}
+      </div>
+    `;
+  }
+
+  /** Open the Git Configuration dialog, where user.name/user.email live. */
+  private handleOpenGitConfig(): void {
+    window.dispatchEvent(new CustomEvent('open-git-config'));
+  }
+
   render() {
     const summaryOverLimit = this.summary.length > this.SUMMARY_LIMIT;
+    const identityMissing = this.identityLoaded && !this.hasIdentity;
 
     return html`
       <div class="header">
@@ -1604,7 +2182,46 @@ export class LvCommitPanel extends LitElement {
           />
           Conventional
         </label>
+
+        <label
+          class="signoff-toggle ${identityMissing ? 'disabled' : ''}"
+          title=${identityMissing
+            ? 'No git identity configured — set user.name and user.email to sign off'
+            : this.hasIdentity
+              ? `Add Signed-off-by: ${this.identityName} <${this.identityEmail}>`
+              : 'Add a Signed-off-by trailer using your git identity'}
+        >
+          <input
+            type="checkbox"
+            .checked=${this.signOff}
+            ?disabled=${identityMissing}
+            @change=${this.handleSignOffToggle}
+          />
+          Sign off
+        </label>
+
+        <div class="coauthor-wrapper">
+          <button
+            class="coauthor-btn"
+            @click=${this.handleCoAuthorsToggle}
+            title="Add Co-authored-by trailers"
+            aria-expanded=${this.showCoAuthors ? 'true' : 'false'}
+            aria-controls="coauthor-dropdown"
+          >
+            Co-authors${this.coAuthors.length > 0 ? ` (${this.coAuthors.length})` : ''}
+          </button>
+          ${this.showCoAuthors ? this.renderCoAuthorDropdown() : nothing}
+        </div>
       </div>
+
+      ${identityMissing ? html`
+        <div class="trailer-hint" role="status">
+          <span>No git identity configured, so commits cannot be signed off.</span>
+          <button @click=${this.handleOpenGitConfig}>Configure identity</button>
+        </div>
+      ` : nothing}
+
+      ${this.renderTrailersPreview()}
 
       ${this.error ? html`<div class="error">${this.error}</div>` : nothing}
       ${this.success ? html`<div class="success">${this.success}</div>` : nothing}

@@ -286,7 +286,7 @@ fn prune_command(
     remote_url: Option<&str>,
     token: Option<&str>,
     dry_run: bool,
-) -> std::process::Command {
+) -> crate::utils::GitCommand {
     let mut cmd = create_command("git");
     cmd.current_dir(path);
     if dry_run {
@@ -314,6 +314,12 @@ pub async fn prune_remote_tracking_branches(
     // Verify the repository exists
     if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
         return Err(GitnadoError::RepositoryNotFound(path));
+    }
+
+    // Every remote in the gesture is checked before any of them is contacted,
+    // so a disallowed one refuses the whole prune rather than pruning half.
+    for remote_name in &remotes {
+        crate::services::security::guard_remote(&path, Some(remote_name))?;
     }
 
     let mut all_pruned_branches = Vec::new();
@@ -782,6 +788,7 @@ pub async fn get_pack_info(path: String) -> Result<PackInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
 
     // ── Tests from HEAD (feature branch) ─────────────────────────────────
@@ -1062,6 +1069,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prune_remote_tracking_branches_invalid_path() {
+        let _policy = no_policy();
         let result =
             prune_remote_tracking_branches("/nonexistent/path".to_string(), vec![], None).await;
 

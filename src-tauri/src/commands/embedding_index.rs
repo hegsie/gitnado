@@ -84,6 +84,12 @@ pub async fn download_embedding_model(
     state: tauri::State<'_, SharedEmbeddingIndex>,
     app_handle: tauri::AppHandle,
 ) -> Result<()> {
+    // Offline mode / the remote allowlist, checked before the first byte is
+    // requested so the refusal reaches the caller as `BLOCKED` instead of a
+    // download that quietly starts. `download_hf_file` guards each of the
+    // three files again at the socket (see services/security.rs).
+    crate::services::embedding::embedding_model::guard_embedding_model_download()?;
+
     let (models_dir, cancel_flag) = {
         let guard = state.read().await;
         (guard.models_dir().clone(), Arc::new(AtomicBool::new(false)))

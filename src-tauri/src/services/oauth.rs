@@ -362,6 +362,12 @@ pub fn validate_issuer_url(issuer_url: &str) -> Result<(), String> {
 
 /// Discover OIDC provider configuration from the well-known endpoint
 pub async fn discover_oidc_config(issuer_url: &str) -> Result<OidcDiscovery, String> {
+    // Offline mode / remote allowlist. Guarded here rather than at the two
+    // commands that reach discovery, because `oauth_exchange_code` and
+    // `oauth_refresh_token` both come through here BEFORE they know the token
+    // endpoint they would otherwise be gated on.
+    crate::services::security::guard_url(issuer_url).map_err(|e| e.to_string())?;
+
     // SSRF guard: validate the user-supplied issuer URL before any network call.
     // validate_issuer_url() does a blocking DNS lookup (ToSocketAddrs), so run it
     // on a blocking thread to avoid stalling an async worker during discovery.

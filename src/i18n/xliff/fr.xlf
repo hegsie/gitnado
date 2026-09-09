@@ -1,0 +1,705 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+<file target-language="fr" source-language="en" original="lit-localize-inputs" datatype="plaintext">
+<body>
+<trans-unit id="s85f056bf44fd17e9">
+  <source>Failed to open repository</source>
+  <target>Échec de l'ouverture du dépôt</target></trans-unit>
+<trans-unit id="s8fda07a17721f793">
+  <source>Opened workspace: <x id="0" equiv-text="${workspace.name}"/></source>
+  <target>Espace de travail ouvert : <x id="0" equiv-text="${workspace.name}"/></target></trans-unit>
+<trans-unit id="s2ad99b51cdd1e4e3">
+  <source>Opened workspace: <x id="0" equiv-text="${workspace.name}"/> (<x id="1" equiv-text="${failedCount}"/> of <x id="2" equiv-text="${workspace.repositories.length}"/> repositories failed to open)</source>
+  <target>Espace de travail ouvert : <x id="0" equiv-text="${workspace.name}"/> (<x id="1" equiv-text="${failedCount}"/> dépôts sur <x id="2" equiv-text="${workspace.repositories.length}"/> n'ont pas pu être ouverts)</target></trans-unit>
+<trans-unit id="s112e91e220154a7a">
+  <source>Could not open workspace: <x id="0" equiv-text="${workspace.name}"/> — no repository could be opened</source>
+  <target>Impossible d'ouvrir l'espace de travail : <x id="0" equiv-text="${workspace.name}"/> — aucun dépôt n'a pu être ouvert</target></trans-unit>
+<trans-unit id="s4f035d0ef56d6721">
+  <source>Gitnado - a tornado of git branches</source>
+  <target>Gitnado - une tornade de branches git</target></trans-unit>
+<trans-unit id="sc4e51f82f9e539e5">
+  <source>A powerful, open-source Git client</source>
+  <target>Un client Git puissant et open source</target></trans-unit>
+<trans-unit id="s1f7698c061c208c9">
+  <source>Open</source>
+  <target>Ouvrir</target></trans-unit>
+<trans-unit id="s5e2654fb8587f442">
+  <source>Clone</source>
+  <target>Cloner</target></trans-unit>
+<trans-unit id="s2060b0d17c25e5f3">
+  <source>Init</source>
+  <target>Initialiser</target></trans-unit>
+<trans-unit id="s7852cf4cdecf73c7">
+  <source>Profiles &amp; Accounts</source>
+  <target>Profils et comptes</target></trans-unit>
+<trans-unit id="see70eee54a7b0a1f">
+  <source>Workspaces</source>
+  <target>Espaces de travail</target></trans-unit>
+<trans-unit id="s2ca7699f7c5a4996">
+  <source>Manage</source>
+  <target>Gérer</target></trans-unit>
+<trans-unit id="s641d208cfbfbeab8">
+  <source>1 repository</source>
+  <target>1 dépôt</target></trans-unit>
+<trans-unit id="s2e49a35772f85f6f">
+  <source><x id="0" equiv-text="${ws.repositories.length}"/> repositories</source>
+  <target><x id="0" equiv-text="${ws.repositories.length}"/> dépôts</target></trans-unit>
+<trans-unit id="s21ea0624b6865748">
+  <source>Scan</source>
+  <target>Analyser</target>
+</trans-unit>
+<trans-unit id="safc804bad242ab2d">
+  <source>Scan Folder for Repositories</source>
+  <target>Analyser le dossier à la recherche de dépôts</target>
+</trans-unit>
+<trans-unit id="sf5b62faa7e55362a">
+  <source>Recent Repositories</source>
+  <target>Dépôts récents</target></trans-unit>
+<trans-unit id="sb4f1dffbb6be6302">
+  <source>Clear</source>
+  <target>Effacer</target></trans-unit>
+<trans-unit id="scf39b102c7cc194f">
+  <source>Open <x id="0" equiv-text="${repo.name}"/></source>
+  <target>Ouvrir <x id="0" equiv-text="${repo.name}"/></target></trans-unit>
+<trans-unit id="s0ddd7bc8d7dcea26">
+  <source>Remove from recent repositories</source>
+  <target>Retirer des dépôts récents</target></trans-unit>
+<trans-unit id="sed096fff6d160c38">
+  <source>Remove <x id="0" equiv-text="${repo.name}"/> from recent repositories</source>
+  <target>Retirer <x id="0" equiv-text="${repo.name}"/> des dépôts récents</target></trans-unit>
+<trans-unit id="s084b3761e4ecf273">
+  <source>No recent repositories</source>
+  <target>Aucun dépôt récent</target></trans-unit>
+<trans-unit id="s44de939c404f50a7">
+  <source>Could not load that language. Keeping the current one.</source>
+  <target>Impossible de charger cette langue. La langue actuelle est conservée.</target></trans-unit>
+<trans-unit id="sf0e261e04eda82ff">
+  <source>Appearance</source>
+  <target>Apparence</target></trans-unit>
+<trans-unit id="sefcf950b3cc4fc3b">
+  <source>Language</source>
+  <target>Langue</target></trans-unit>
+<trans-unit id="s373baac6ee6e85c0">
+  <source>Language used across the app. Applies immediately — no restart needed.</source>
+  <target>Langue utilisée dans toute l'application. Appliquée immédiatement — aucun redémarrage nécessaire.</target></trans-unit>
+<trans-unit id="saab875d8cfcfe712">
+  <source>Theme</source>
+  <target>Thème</target></trans-unit>
+<trans-unit id="s008557dcd3bc3ce8">
+  <source>Choose your preferred color scheme</source>
+  <target>Choisissez votre palette de couleurs préférée</target></trans-unit>
+<trans-unit id="sac895c732f350ac5">
+  <source>Dark</source>
+  <target>Sombre</target></trans-unit>
+<trans-unit id="s3b0ab4b52326316f">
+  <source>Light</source>
+  <target>Clair</target></trans-unit>
+<trans-unit id="sa81e2cdaf6921adc">
+  <source>System</source>
+  <target>Système</target></trans-unit>
+<trans-unit id="s24221a89168e9d21">
+  <source>Font Size</source>
+  <target>Taille de police</target></trans-unit>
+<trans-unit id="se64653d1c0c1cda8">
+  <source>Adjust the base font size</source>
+  <target>Ajuster la taille de police de base</target></trans-unit>
+<trans-unit id="s3d2cc8d952adebec">
+  <source>Small</source>
+  <target>Petite</target></trans-unit>
+<trans-unit id="sac6bdc71f750ac96">
+  <source>Medium</source>
+  <target>Moyenne</target></trans-unit>
+<trans-unit id="sc8736ef79380e634">
+  <source>Large</source>
+  <target>Grande</target></trans-unit>
+<trans-unit id="s2066e84a62ff77ff">
+  <source>UI Density</source>
+  <target>Densité de l'interface</target></trans-unit>
+<trans-unit id="sd29ddef701037abe">
+  <source>Adjust spacing and row heights</source>
+  <target>Ajuster les espacements et la hauteur des lignes</target></trans-unit>
+<trans-unit id="s7c87dc5c593f3de6">
+  <source>Compact</source>
+  <target>Compacte</target></trans-unit>
+<trans-unit id="s0d324f226e021a0f">
+  <source>Comfortable</source>
+  <target>Confortable</target></trans-unit>
+<trans-unit id="s0231804042f30d6a">
+  <source>Spacious</source>
+  <target>Spacieuse</target></trans-unit>
+<trans-unit id="sef467f8fe7307be7">
+  <source>Graph</source>
+  <target>Graphe</target></trans-unit>
+<trans-unit id="see7ef123dedbe3ea">
+  <source>Show Avatars</source>
+  <target>Afficher les avatars</target></trans-unit>
+<trans-unit id="s221b45fc7533fbf2">
+  <source>Show Commit Size</source>
+  <target>Afficher la taille des commits</target></trans-unit>
+<trans-unit id="s25d670cb403313f5">
+  <source>Scale node size based on changes</source>
+  <target>Dimensionner les nœuds selon l'ampleur des modifications</target></trans-unit>
+<trans-unit id="se3390de638661fef">
+  <source>Graph Color Scheme</source>
+  <target>Palette de couleurs du graphe</target></trans-unit>
+<trans-unit id="s4b120030d9dcb60b">
+  <source>Following your system high contrast setting — the graph is drawn on a canvas, so it cannot be recolored by the OS. Choose a scheme to override.</source>
+  <target>Suit le réglage de contraste élevé de votre système — le graphe est dessiné dans un canvas, le système ne peut donc pas le recolorer. Choisissez une palette pour passer outre.</target></trans-unit>
+<trans-unit id="sec0516d2a2c9ae33">
+  <source>Color palette for branch lanes</source>
+  <target>Palette de couleurs des branches</target></trans-unit>
+<trans-unit id="s9d76c914b7104de3">
+  <source>Auto (high contrast)</source>
+  <target>Auto (contraste élevé)</target></trans-unit>
+<trans-unit id="sa3a118d46af3a62f">
+  <source>Graph color scheme</source>
+  <target>Palette de couleurs du graphe</target></trans-unit>
+<trans-unit id="sa351c53a602c1ef3">
+  <source>Manage profiles and accounts</source>
+  <target>Gérer les profils et les comptes</target></trans-unit>
+<trans-unit id="s4e1f55d649b82942">
+  <source>Profiles set your git identity per repository. Accounts are shared logins (GitHub, GitLab, Bitbucket, Azure DevOps, OIDC) you assign to profiles.</source>
+  <target>Les profils définissent votre identité git dépôt par dépôt. Les comptes sont des identifiants partagés (GitHub, GitLab, Bitbucket, Azure DevOps, OIDC) que vous associez aux profils.</target></trans-unit>
+<trans-unit id="s7e53c6f826fc5d29">
+  <source>Open Profiles &amp; Accounts</source>
+  <target>Ouvrir les profils et comptes</target></trans-unit>
+<trans-unit id="s070dadf05e350bc3">
+  <source>Git Defaults</source>
+  <target>Valeurs git par défaut</target></trans-unit>
+<trans-unit id="se2f45cb096d63365">
+  <source>Default Branch Name</source>
+  <target>Nom de branche par défaut</target></trans-unit>
+<trans-unit id="sf3b0e2edfbb0954d">
+  <source>Used when initializing new repositories</source>
+  <target>Utilisé lors de l'initialisation de nouveaux dépôts</target></trans-unit>
+<trans-unit id="sa89eb05d841e59a5">
+  <source>Default Clone Folder</source>
+  <target>Dossier de clonage par défaut</target></trans-unit>
+<trans-unit id="s6898abaa8b37279a">
+  <source>Prefilled as the destination when cloning a repository</source>
+  <target>Prérempli comme destination lors du clonage d'un dépôt</target></trans-unit>
+<trans-unit id="s9f9fe0e373853fbf">
+  <source>No default set</source>
+  <target>Aucune valeur par défaut</target></trans-unit>
+<trans-unit id="s61e993a94b0b3983">
+  <source>Browse...</source>
+  <target>Parcourir...</target></trans-unit>
+<trans-unit id="sf48ac77358c2843a">
+  <source>Diff</source>
+  <target>Différences</target></trans-unit>
+<trans-unit id="s14053ac11f20f80f">
+  <source>Word Wrap</source>
+  <target>Retour à la ligne automatique</target></trans-unit>
+<trans-unit id="sb2823ce809fc5bad">
+  <source>Wrap long lines in diff view</source>
+  <target>Renvoyer à la ligne les lignes longues dans la vue des différences</target></trans-unit>
+<trans-unit id="s98ff3c7e401ddb31">
+  <source>External Tools</source>
+  <target>Outils externes</target></trans-unit>
+<trans-unit id="s7a1478bdab69db47">
+  <source>Merge Tool</source>
+  <target>Outil de fusion</target></trans-unit>
+<trans-unit id="s4c4f86583941fa63">
+  <source>External tool for resolving merge conflicts</source>
+  <target>Outil externe pour résoudre les conflits de fusion</target></trans-unit>
+<trans-unit id="s669b18c6d2d9c95b">
+  <source>None</source>
+  <target>Aucun</target></trans-unit>
+<trans-unit id="s376755b96082d7b3">
+  <source> (available)</source>
+  <target> (disponible)</target></trans-unit>
+<trans-unit id="s82c1c3759cc41ecc">
+  <source>Custom...</source>
+  <target>Personnalisé...</target></trans-unit>
+<trans-unit id="s07550b043d6b8912">
+  <source>Merge Tool Command</source>
+  <target>Commande de l'outil de fusion</target></trans-unit>
+<trans-unit id="sb4cc7e6d2b63916b">
+  <source>Custom command to launch merge tool</source>
+  <target>Commande personnalisée pour lancer l'outil de fusion</target></trans-unit>
+<trans-unit id="s2197a707299ddeec">
+  <source>e.g., /usr/bin/meld $LOCAL $REMOTE $MERGED</source>
+  <target>ex. : /usr/bin/meld $LOCAL $REMOTE $MERGED</target></trans-unit>
+<trans-unit id="sedee6aa0104d7a08">
+  <source>Diff Tool</source>
+  <target>Outil de comparaison</target></trans-unit>
+<trans-unit id="s18230340b970f47c">
+  <source>External tool for viewing diffs</source>
+  <target>Outil externe pour afficher les différences</target></trans-unit>
+<trans-unit id="s089c5a11550c3d51">
+  <source>Diff Tool Command</source>
+  <target>Commande de l'outil de comparaison</target></trans-unit>
+<trans-unit id="s043d60e2f538e4cc">
+  <source>Custom command to launch diff tool</source>
+  <target>Commande personnalisée pour lancer l'outil de comparaison</target></trans-unit>
+<trans-unit id="sb7f9d1cd846aff50">
+  <source>e.g., /usr/bin/meld $LOCAL $REMOTE</source>
+  <target>ex. : /usr/bin/meld $LOCAL $REMOTE</target></trans-unit>
+<trans-unit id="s59c675c04da12f61">
+  <source>Open a repository to configure external tools</source>
+  <target>Ouvrez un dépôt pour configurer les outils externes</target></trans-unit>
+<trans-unit id="sb3fff06c253a0d9e">
+  <source>Network &amp; Sync</source>
+  <target>Réseau et synchronisation</target></trans-unit>
+<trans-unit id="s81de60321b87a430">
+  <source>Auto-Fetch Interval</source>
+  <target>Intervalle de récupération automatique</target></trans-unit>
+<trans-unit id="s7f2965695f1a54bf">
+  <source>Minutes between automatic fetches (0 to disable)</source>
+  <target>Minutes entre deux récupérations automatiques (0 pour désactiver)</target></trans-unit>
+<trans-unit id="s2f933f9dc32c25e8">
+  <source>Fetch on Window Focus</source>
+  <target>Récupérer au retour du focus</target></trans-unit>
+<trans-unit id="s27da61d501ee4385">
+  <source>Automatically fetch when the app window regains focus</source>
+  <target>Récupérer automatiquement lorsque la fenêtre de l'application reprend le focus</target></trans-unit>
+<trans-unit id="s01a8d45397ec133b">
+  <source>Security</source>
+  <target>Sécurité</target></trans-unit>
+<trans-unit id="s31f20aaa82bf4f8b">
+  <source>Offline Mode</source>
+  <target>Mode hors ligne</target></trans-unit>
+<trans-unit id="s33757788925c0442">
+  <source>Block every operation that leaves this machine — fetch, pull, push, clone, tag push, remote prune, LFS, submodules, auto-fetch, provider APIs (pull requests, issues, releases, CI), and cloud AI providers (OpenAI, Anthropic, Google Gemini, GitHub Models). Local AI — Ollama, LM Studio and the embedded model — keeps working.</source>
+  <target>Bloquer toute opération qui sort de cette machine — fetch, pull, push, clonage, envoi d'étiquettes, nettoyage des distants, LFS, sous-modules, récupération automatique, API des fournisseurs (pull requests, tickets, versions, CI) et fournisseurs d'IA en ligne (OpenAI, Anthropic, Google Gemini, GitHub Models). L'IA locale — Ollama, LM Studio et le modèle embarqué — continue de fonctionner.</target></trans-unit>
+<trans-unit id="s5d9e1403ffb4d805">
+  <source>Confirm Network Operations</source>
+  <target>Confirmer les opérations réseau</target></trans-unit>
+<trans-unit id="s1c1701c5b19691f0">
+  <source>Ask before each git operation that contacts a remote. Background provider lookups are blocked or allowed silently — they are never prompted.</source>
+  <target>Demander avant chaque opération git qui contacte un dépôt distant. Les requêtes des fournisseurs en arrière-plan sont bloquées ou autorisées silencieusement — elles ne donnent jamais lieu à une demande.</target></trans-unit>
+<trans-unit id="s0a944a7bcfa5b4ba">
+  <source>Remote Allowlist</source>
+  <target>Liste des distants autorisés</target></trans-unit>
+<trans-unit id="sb2ae03102cc5f39f">
+  <source>Comma-separated domains. When set, remotes, provider APIs and cloud AI providers outside the list are blocked. Leave empty to allow all.</source>
+  <target>Domaines séparés par des virgules. Si la liste est renseignée, les distants, les API des fournisseurs et les fournisseurs d'IA en ligne qui n'y figurent pas sont bloqués. Laissez vide pour tout autoriser.</target></trans-unit>
+<trans-unit id="sf4c59c00ddcda487">
+  <source>Behavior</source>
+  <target>Comportement</target></trans-unit>
+<trans-unit id="s0a3128b5ad6841b8">
+  <source>Reopen Last Repositories</source>
+  <target>Rouvrir les derniers dépôts</target></trans-unit>
+<trans-unit id="se67b6027e793dd14">
+  <source>Reopen the repository tabs from your last session when Gitnado starts. Turn this off to start on the welcome screen — the tabs are remembered, so turning it back on restores them.</source>
+  <target>Rouvrir les onglets de dépôt de votre dernière session au démarrage de Gitnado. Désactivez cette option pour démarrer sur l'écran d'accueil — les onglets sont mémorisés, donc les réactiver les restaure.</target></trans-unit>
+<trans-unit id="sb62f052f83da2ed4">
+  <source>Confirm Before Discard</source>
+  <target>Confirmer avant d'abandonner</target></trans-unit>
+<trans-unit id="sfcd8cc883a24a8f0">
+  <source>Ask for confirmation when discarding changes. Deleting untracked files always asks.</source>
+  <target>Demander confirmation avant d'abandonner des modifications. La suppression de fichiers non suivis demande toujours confirmation.</target></trans-unit>
+<trans-unit id="s1c46fed5fd15322d">
+  <source>Auto-Stash on Checkout</source>
+  <target>Remisage automatique au changement de branche</target></trans-unit>
+<trans-unit id="s2c78585997918fcb">
+  <source>Automatically stash and re-apply changes when switching branches</source>
+  <target>Remiser puis réappliquer automatiquement les modifications lors d'un changement de branche</target></trans-unit>
+<trans-unit id="s1c0466906ff8d861">
+  <source>Stale Branch Threshold</source>
+  <target>Seuil de branche inactive</target></trans-unit>
+<trans-unit id="s3204b15ecd0768a7">
+  <source>Days without commits before a branch is marked stale (0 to disable)</source>
+  <target>Jours sans commit avant qu'une branche soit marquée comme inactive (0 pour désactiver)</target></trans-unit>
+<trans-unit id="s204260f7d5a42d6f">
+  <source>Network Operation Timeout</source>
+  <target>Délai d'expiration des opérations réseau</target></trans-unit>
+<trans-unit id="s1f40682bada92dbf">
+  <source>Seconds before fetch/pull/push operations time out (0 to disable)</source>
+  <target>Secondes avant l'expiration des opérations fetch/pull/push (0 pour désactiver)</target></trans-unit>
+<trans-unit id="s060b6317b008a59a">
+  <source>Minimize to Tray</source>
+  <target>Réduire dans la zone de notification</target></trans-unit>
+<trans-unit id="s5f2862b3481d7ff7">
+  <source>Minimize to system tray instead of closing</source>
+  <target>Réduire dans la zone de notification au lieu de fermer</target></trans-unit>
+<trans-unit id="s27f7fc4496290992">
+  <source>Native Notifications</source>
+  <target>Notifications natives</target></trans-unit>
+<trans-unit id="s92b39792f8637ba3">
+  <source>Show system notifications for background events</source>
+  <target>Afficher des notifications système pour les événements en arrière-plan</target></trans-unit>
+<trans-unit id="scbf53736e0ebdd32">
+  <source>AI Features</source>
+  <target>Fonctions d'IA</target></trans-unit>
+<trans-unit id="sa9e433a14b2bb7a4">
+  <source>AI Provider</source>
+  <target>Fournisseur d'IA</target></trans-unit>
+<trans-unit id="sb0b5419161b24218">
+  <source>Select an AI provider for commit message generation</source>
+  <target>Choisissez un fournisseur d'IA pour la génération des messages de commit</target></trans-unit>
+<trans-unit id="s3961e1b722d24184">
+  <source>Select provider...</source>
+  <target>Choisir un fournisseur...</target></trans-unit>
+<trans-unit id="s7defd554673d207d">
+  <source>(Available)</source>
+  <target>(Disponible)</target></trans-unit>
+<trans-unit id="s39fdffd6b100cfe8">
+  <source>(Not checked - offline)</source>
+  <target>(Non vérifié - hors ligne)</target>
+</trans-unit>
+<trans-unit id="s60fbea7b0e9e042e">
+  <source>(API key required)</source>
+  <target>(Clé d'API requise)</target></trans-unit>
+<trans-unit id="s6b1b03cb5805a77e">
+  <source>(Unavailable)</source>
+  <target>(Indisponible)</target></trans-unit>
+<trans-unit id="sf91953bcd738924a">
+  <source><x id="0" equiv-text="${provider.name}"/> API Key</source>
+  <target>Clé d'API <x id="0" equiv-text="${provider.name}"/></target></trans-unit>
+<trans-unit id="sea01c937be5a6a7d">
+  <source>Configured</source>
+  <target>Configuré</target></trans-unit>
+<trans-unit id="sd23d45996ee5598e">
+  <source>Not configured</source>
+  <target>Non configuré</target></trans-unit>
+<trans-unit id="s9e958ad4f96442ed">
+  <source>✓ Working</source>
+  <target>✓ Fonctionne</target></trans-unit>
+<trans-unit id="sd91517c3cdcbe253">
+  <source>✗ Failed</source>
+  <target>✗ Échec</target></trans-unit>
+<trans-unit id="se0863d4c871d274c">
+  <source>Enter API key...</source>
+  <target>Saisir la clé d'API...</target></trans-unit>
+<trans-unit id="s33f85f24c0f5f008">
+  <source>Save</source>
+  <target>Enregistrer</target></trans-unit>
+<trans-unit id="s1bc81712252b8fa7">
+  <source>Testing...</source>
+  <target>Test en cours...</target></trans-unit>
+<trans-unit id="s2474e7fb1aec9f05">
+  <source>Test</source>
+  <target>Tester</target></trans-unit>
+<trans-unit id="s59a1372802c02a92">
+  <source>Local Providers</source>
+  <target>Fournisseurs locaux</target></trans-unit>
+<trans-unit id="s026eb5f89598847a">
+  <source>Ollama and LM Studio are auto-detected when running locally</source>
+  <target>Ollama et LM Studio sont détectés automatiquement lorsqu'ils tournent en local</target></trans-unit>
+<trans-unit id="s7b7163270e57e8b4">
+  <source>Refresh</source>
+  <target>Actualiser</target></trans-unit>
+<trans-unit id="s88798712209c4218">
+  <source>Local AI Engine</source>
+  <target>Moteur d'IA local</target></trans-unit>
+<trans-unit id="s66f52a78df4e030d">
+  <source>RAM: <x id="0" equiv-text="${localAiService.formatBytes(this.systemCapabilities.totalRamBytes)}"/></source>
+  <target>RAM : <x id="0" equiv-text="${localAiService.formatBytes(this.systemCapabilities.totalRamBytes)}"/></target></trans-unit>
+<trans-unit id="s60ebfd604165bcd5">
+  <source> | GPU: <x id="0" equiv-text="${this.systemCapabilities.gpuInfo.name}"/></source>
+  <target> | GPU : <x id="0" equiv-text="${this.systemCapabilities.gpuInfo.name}"/></target></trans-unit>
+<trans-unit id="s5351f93e2220fe0f">
+  <source> | No dedicated GPU detected</source>
+  <target> | Aucun GPU dédié détecté</target></trans-unit>
+<trans-unit id="s6d94a1fbaba2217e">
+  <source>GPU Accelerated</source>
+  <target>Accéléré par GPU</target></trans-unit>
+<trans-unit id="s8a28477e944a13c5">
+  <source>CPU Only</source>
+  <target>CPU uniquement</target></trans-unit>
+<trans-unit id="s6c9966f2702b4307">
+  <source>Detecting system capabilities...</source>
+  <target>Détection des capacités du système...</target></trans-unit>
+<trans-unit id="saf92c2a62d066d63">
+  <source>Engine Status</source>
+  <target>État du moteur</target></trans-unit>
+<trans-unit id="s024a0021a7a612cf">
+  <source>Model Loaded</source>
+  <target>Modèle chargé</target></trans-unit>
+<trans-unit id="sa812ba9ded26aa98">
+  <source>Loading model...</source>
+  <target>Chargement du modèle...</target></trans-unit>
+<trans-unit id="safce72b6f68493e8">
+  <source>Recommended: <x id="0" equiv-text="${this.recommendedModel.displayName}"/></source>
+  <target>Recommandé : <x id="0" equiv-text="${this.recommendedModel.displayName}"/></target></trans-unit>
+<trans-unit id="s6dafa6ffd121f507">
+  <source><x id="0" equiv-text="${localAiService.formatBytes(this.recommendedModel.sizeBytes)}"/> download</source>
+  <target><x id="0" equiv-text="${localAiService.formatBytes(this.recommendedModel.sizeBytes)}"/> à télécharger</target></trans-unit>
+<trans-unit id="s25250c555b37c663">
+  <source>Downloading...</source>
+  <target>Téléchargement...</target></trans-unit>
+<trans-unit id="sd3386a2ef42e80b9">
+  <source>Download</source>
+  <target>Télécharger</target></trans-unit>
+<trans-unit id="s9388a164976d0160">
+  <source>Loaded</source>
+  <target>Chargé</target></trans-unit>
+<trans-unit id="s5d3714bc882df1b2">
+  <source>Unload</source>
+  <target>Décharger</target></trans-unit>
+<trans-unit id="s49730f3d5751a433">
+  <source>Loading...</source>
+  <target>Chargement...</target></trans-unit>
+<trans-unit id="sb87a1067596d7a10">
+  <source>Downloaded</source>
+  <target>Téléchargé</target></trans-unit>
+<trans-unit id="s4f20edb48a6287c9">
+  <source>Load</source>
+  <target>Charger</target></trans-unit>
+<trans-unit id="sdc673e73b5c13aea">
+  <source>Delete</source>
+  <target>Supprimer</target></trans-unit>
+<trans-unit id="s2ceb11be2290bb1b">
+  <source>Cancel</source>
+  <target>Annuler</target></trans-unit>
+<trans-unit id="s5b1ccdf16a13c3fe">
+  <source>MCP Server</source>
+  <target>Serveur MCP</target></trans-unit>
+<trans-unit id="se70af7b2a7a80804">
+  <source>Context Proxy</source>
+  <target>Proxy de contexte</target></trans-unit>
+<trans-unit id="sb65e1b0bdf369e06">
+  <source>Allow external tools (Cursor, VS Code) to query Git context via MCP. Restarts automatically on launch while enabled.</source>
+  <target>Permet à des outils externes (Cursor, VS Code) d'interroger le contexte Git via MCP. Redémarre automatiquement au lancement tant que l'option est activée.</target></trans-unit>
+<trans-unit id="s85994a70cd39166c">
+  <source>Running</source>
+  <target>En cours d'exécution</target></trans-unit>
+<trans-unit id="sc5fcb9351a03ab2e">
+  <source>Stopped</source>
+  <target>Arrêté</target></trans-unit>
+<trans-unit id="s66722bc2ea775e05">
+  <source>Disabled</source>
+  <target>Désactivé</target></trans-unit>
+<trans-unit id="s10c8e4cae4e11503">
+  <source>Disable</source>
+  <target>Désactiver</target></trans-unit>
+<trans-unit id="sd9ad53251f2330a5">
+  <source>Stop</source>
+  <target>Arrêter</target></trans-unit>
+<trans-unit id="s2c8189544e3ea679">
+  <source>Retry</source>
+  <target>Réessayer</target></trans-unit>
+<trans-unit id="sae1c7f13b7c0c47f">
+  <source>Start</source>
+  <target>Démarrer</target></trans-unit>
+<trans-unit id="sb354dc19a7208a86">
+  <source>Port</source>
+  <target>Port</target></trans-unit>
+<trans-unit id="saa07629cf30610a8">
+  <source>Localhost port for the MCP server</source>
+  <target>Port local du serveur MCP</target></trans-unit>
+<trans-unit id="s9bfd080addc297ac">
+  <source>Connection URL</source>
+  <target>URL de connexion</target></trans-unit>
+<trans-unit id="sd2e443fc08b24046">
+  <source>Access Token</source>
+  <target>Jeton d'accès</target></trans-unit>
+<trans-unit id="sc244f82eb4a926ae">
+  <source>Every MCP request must send this token. Keep it secret: anyone who has it can read the history and contents of your open repositories.</source>
+  <target>Chaque requête MCP doit envoyer ce jeton. Gardez-le secret : quiconque le possède peut lire l'historique et le contenu de vos dépôts ouverts.</target></trans-unit>
+<trans-unit id="s0b1eeb1999c1735d">
+  <source>Not generated yet</source>
+  <target>Pas encore généré</target></trans-unit>
+<trans-unit id="s9df212d89cab196d">
+  <source>Hide</source>
+  <target>Masquer</target></trans-unit>
+<trans-unit id="sd8c644529b574f90">
+  <source>Reveal</source>
+  <target>Afficher</target></trans-unit>
+<trans-unit id="s3687049d1af562c4">
+  <source>Copy</source>
+  <target>Copier</target></trans-unit>
+<trans-unit id="s80908076f581f5cf">
+  <source>Regenerate</source>
+  <target>Régénérer</target></trans-unit>
+<trans-unit id="s3a28f5d7ecab6d1c">
+  <source>MCP Client Configuration</source>
+  <target>Configuration du client MCP</target></trans-unit>
+<trans-unit id="s99491da831b9dae4">
+  <source>Paste this into your MCP client. A client set up before Gitnado required a token must add the Authorization header, or its requests are refused with 401.</source>
+  <target>Collez ceci dans votre client MCP. Un client configuré avant que Gitnado n'exige un jeton doit ajouter l'en-tête Authorization, sans quoi ses requêtes sont refusées avec une erreur 401.</target></trans-unit>
+<trans-unit id="s0487f33d9ddaabde">
+  <source>About</source>
+  <target>À propos</target></trans-unit>
+<trans-unit id="se19df7d58cd5fff7">
+  <source>Version:</source>
+  <target>Version :</target></trans-unit>
+<trans-unit id="sa66ef0fd77fae30e">
+  <source>Checking for updates...</source>
+  <target>Recherche de mises à jour...</target></trans-unit>
+<trans-unit id="sba66ff384e50502d">
+  <source>Update available: v<x id="0" equiv-text="${this.latestVersion}"/></source>
+  <target>Mise à jour disponible : v<x id="0" equiv-text="${this.latestVersion}"/></target></trans-unit>
+<trans-unit id="s94cb78ee8bed961d">
+  <source>You're up to date!</source>
+  <target>Vous êtes à jour !</target></trans-unit>
+<trans-unit id="sb78a66c8b3d23215">
+  <source>Checking...</source>
+  <target>Vérification...</target></trans-unit>
+<trans-unit id="s0c2d622bae70cc06">
+  <source>Check for Updates</source>
+  <target>Rechercher des mises à jour</target></trans-unit>
+<trans-unit id="s76c11f3845111b1d">
+  <source>Reset to Defaults</source>
+  <target>Réinitialiser les réglages</target></trans-unit>
+<trans-unit id="s0379fc73608ab971">
+  <source>Done</source>
+  <target>Terminé</target></trans-unit>
+<trans-unit id="s11326fd2590f4e5e">
+  <source>Default</source>
+  <target>Par défaut</target></trans-unit>
+<trans-unit id="s30f853f2943ac1ec">
+  <source>Pastel</source>
+  <target>Pastel</target></trans-unit>
+<trans-unit id="sfc9ea230eb3d1d8d">
+  <source>Vibrant</source>
+  <target>Vif</target></trans-unit>
+<trans-unit id="s6e04f937a9b38cd0">
+  <source>Monochrome</source>
+  <target>Monochrome</target></trans-unit>
+<trans-unit id="s480fd2e6a8201911">
+  <source>High Contrast</source>
+  <target>Contraste élevé</target></trans-unit>
+<trans-unit id="s9d8b8aa2b404c2c8">
+  <source>Settings</source>
+  <target>Paramètres</target></trans-unit>
+<trans-unit id="sa66f9093a496eba1">
+  <source>Failed to choose a folder to scan</source>
+  <target>Échec du choix d'un dossier à analyser</target></trans-unit>
+<trans-unit id="sf17476b6f5be1617">
+  <source>Drop a folder to open it</source>
+  <target>Déposez un dossier pour l'ouvrir</target></trans-unit>
+<trans-unit id="s3e70f60da06fa540">
+  <source>Git repositories open straight away; any other folder can be scanned or initialized.</source>
+  <target>Les dépôts Git s'ouvrent directement ; tout autre dossier peut être analysé ou initialisé.</target></trans-unit>
+<trans-unit id="se4930190902665df">
+  <source>Blocked by security settings</source>
+  <target>Bloqué par les paramètres de sécurité</target></trans-unit>
+<trans-unit id="s0c4a4d4b0cf3c4de">
+  <source><x id="0" equiv-text="${label}"/> copied to clipboard</source>
+  <target><x id="0" equiv-text="${label}"/> copié dans le presse-papiers</target></trans-unit>
+<trans-unit id="s0d8e74960f4641ff">
+  <source>Failed to copy <x id="0" equiv-text="${label}"/> to clipboard</source>
+  <target>Échec de la copie de <x id="0" equiv-text="${label}"/> dans le presse-papiers</target></trans-unit>
+<trans-unit id="s88b70c498139cab2">
+  <source>MCP access token</source>
+  <target>Jeton d'accès MCP</target></trans-unit>
+<trans-unit id="sd968a34e54a77f1c">
+  <source>MCP client configuration</source>
+  <target>Configuration du client MCP</target></trans-unit>
+<trans-unit id="s54c06c750232820c">
+  <source>MCP access token regenerated — update your MCP clients</source>
+  <target>Jeton d'accès MCP régénéré — mettez à jour vos clients MCP</target></trans-unit>
+<trans-unit id="s0f305840ead30d29">
+  <source>Failed to regenerate the MCP access token</source>
+  <target>Échec de la régénération du jeton d'accès MCP</target></trans-unit>
+<trans-unit id="sdbd27b6f6f6bfce6">
+  <source>Display author avatars in commit nodes. Avatars are fetched from Gravatar (<x id="0" equiv-text="${GRAVATAR_HOST}"/>), a third-party service: each request sends an MD5 hash of the commit author's email address and your IP address. Off by default; Offline Mode disables it.</source>
+  <target>Afficher les avatars des auteurs dans les nœuds de commit. Les avatars sont récupérés auprès de Gravatar (<x id="0" equiv-text="${GRAVATAR_HOST}"/>), un service tiers : chaque requête envoie une empreinte MD5 de l'adresse e-mail de l'auteur du commit ainsi que votre adresse IP. Désactivé par défaut ; le mode hors ligne le désactive.</target></trans-unit>
+<trans-unit id="sf6d9820dc43c4800">
+  <source>Whitespace</source>
+  <target>Espaces</target></trans-unit>
+<trans-unit id="s6df3f8ff14c9cf0b">
+  <source>How whitespace-only changes are treated when rendering a diff</source>
+  <target>Traitement des modifications ne portant que sur les espaces lors de l'affichage d'une différence</target></trans-unit>
+<trans-unit id="s73178931dcc8148f">
+  <source>Context Lines</source>
+  <target>Lignes de contexte</target></trans-unit>
+<trans-unit id="s3e17fde1aa4b60b2">
+  <source>Unchanged lines shown around each change (<x id="0" equiv-text="${MIN_DIFF_CONTEXT_LINES}"/>-<x id="1" equiv-text="${MAX_DIFF_CONTEXT_LINES}"/>, git's default is 3)</source>
+  <target>Lignes inchangées affichées autour de chaque modification (<x id="0" equiv-text="${MIN_DIFF_CONTEXT_LINES}"/>-<x id="1" equiv-text="${MAX_DIFF_CONTEXT_LINES}"/>, la valeur par défaut de git est 3)</target></trans-unit>
+<trans-unit id="s4e1daa44a0a614fe">
+  <source>Always Sign Off Commits</source>
+  <target>Toujours ajouter un Signed-off-by aux commits</target></trans-unit>
+<trans-unit id="s4e62e1ed7dc40a1a">
+  <source>Start each new commit message with Sign off enabled, adding a Signed-off-by trailer</source>
+  <target>Activer « Sign off » dans chaque nouveau message de commit, ce qui ajoute une ligne Signed-off-by</target></trans-unit>
+<trans-unit id="s14faf432e526b738">
+  <source>Show all whitespace</source>
+  <target>Afficher tous les espaces</target></trans-unit>
+<trans-unit id="s9b47d0bf224a3f2a">
+  <source>Ignore trailing whitespace</source>
+  <target>Ignorer les espaces en fin de ligne</target></trans-unit>
+<trans-unit id="s50034919585163fd">
+  <source>Ignore whitespace changes</source>
+  <target>Ignorer les modifications d'espaces</target></trans-unit>
+<trans-unit id="s58f54d18ddadd61d">
+  <source>Ignore all whitespace</source>
+  <target>Ignorer tous les espaces</target></trans-unit>
+<trans-unit id="s83a9532b5e0d6bf5">
+  <source>Unavailable while Offline Mode is on — avatars are fetched from gravatar.com.</source>
+  <target>Indisponible tant que le mode hors ligne est actif — les avatars sont récupérés depuis gravatar.com.</target></trans-unit>
+<trans-unit id="s3605f04ef070fcd3">
+  <source>Unavailable: your remote allowlist does not include <x id="0" equiv-text="${GRAVATAR_HOST}"/>.</source>
+  <target>Indisponible : votre liste des distants autorisés ne contient pas <x id="0" equiv-text="${GRAVATAR_HOST}"/>.</target></trans-unit>
+<trans-unit id="sdfd045b4e3898993">
+  <source>Could not check for updates. Try again later.</source>
+  <target>Impossible de vérifier les mises à jour. Réessayez plus tard.</target></trans-unit>
+<trans-unit id="s8c04b169bee5549b">
+  <source><x id="0" equiv-text="${aiService.getProviderDisplayName(providerType)}"/> is not available. Check your API key and try again.</source>
+  <target><x id="0" equiv-text="${aiService.getProviderDisplayName(providerType)}"/> n'est pas disponible. Vérifiez votre clé d'API et réessayez.</target></trans-unit>
+<trans-unit id="sd91e344cb5c0232b">
+  <source>Loading failed for <x id="0" equiv-text="${event.payload.modelId}"/>: <x id="1" equiv-text="${reason}"/></source>
+  <target>Échec du chargement de <x id="0" equiv-text="${event.payload.modelId}"/> : <x id="1" equiv-text="${reason}"/></target></trans-unit>
+<trans-unit id="s09f7206ed00062e1">
+  <source>Download failed for <x id="0" equiv-text="${event.payload.modelId}"/>: <x id="1" equiv-text="${event.payload.error}"/></source>
+  <target>Échec du téléchargement de <x id="0" equiv-text="${event.payload.modelId}"/> : <x id="1" equiv-text="${event.payload.error}"/></target></trans-unit>
+<trans-unit id="sa6d63ff474ed0ca3">
+  <source>unknown error</source>
+  <target>erreur inconnue</target></trans-unit>
+<trans-unit id="s32793431a738a1be">
+  <source>Failed to set provider</source>
+  <target>Échec de la définition du fournisseur</target></trans-unit>
+<trans-unit id="s50b18aabd90ee355">
+  <source>Failed to save API key</source>
+  <target>Échec de l'enregistrement de la clé API</target></trans-unit>
+<trans-unit id="se553c9bfbd649d2c">
+  <source>Failed to set model</source>
+  <target>Échec de la définition du modèle</target></trans-unit>
+<trans-unit id="se93301bfc26498ce">
+  <source>Failed to clear merge tool</source>
+  <target>Échec de la suppression de l'outil de fusion</target></trans-unit>
+<trans-unit id="s98e950e15fb380a7">
+  <source>Failed to clear diff tool</source>
+  <target>Échec de la suppression de l'outil de diff</target></trans-unit>
+<trans-unit id="sc24f98763051cf0b">
+  <source>Failed to start download</source>
+  <target>Échec du démarrage du téléchargement</target></trans-unit>
+<trans-unit id="s62cb03f8de2cfcff">
+  <source>Failed to cancel download</source>
+  <target>Échec de l'annulation du téléchargement</target></trans-unit>
+<trans-unit id="sf5d2d1e9dbcf5331">
+  <source>Failed to delete model</source>
+  <target>Échec de la suppression du modèle</target></trans-unit>
+<trans-unit id="s6a8e97f496d4c0ba">
+  <source>Failed to load model</source>
+  <target>Échec du chargement du modèle</target></trans-unit>
+<trans-unit id="s8a4061c3e0759881">
+  <source>Failed to unload model</source>
+  <target>Échec du déchargement du modèle</target></trans-unit>
+<trans-unit id="s39e07d32192cd4ee">
+  <source>Failed to stop MCP server</source>
+  <target>Échec de l'arrêt du serveur MCP</target></trans-unit>
+<trans-unit id="s4f2af727ff3e16bb">
+  <source>Failed to save MCP settings</source>
+  <target>Échec de l'enregistrement des paramètres MCP</target></trans-unit>
+<trans-unit id="sf43fcb91e6c031cc">
+  <source>Failed to start MCP server</source>
+  <target>Échec du démarrage du serveur MCP</target></trans-unit>
+<trans-unit id="s8f8df09149ceea0d">
+  <source>Failed to disable the MCP server</source>
+  <target>Échec de la désactivation du serveur MCP</target></trans-unit>
+<trans-unit id="s3420935f88f459e9">
+  <source>Failed to save MCP port</source>
+  <target>Échec de l'enregistrement du port MCP</target></trans-unit>
+<trans-unit id="s59af9cc8acfda651">
+  <source>Ultra-Light (8GB+ RAM)</source>
+  <target>Ultra-léger (8 Go+ de RAM)</target></trans-unit>
+<trans-unit id="s33c1c6766b419d56">
+  <source>Standard (16GB+ RAM)</source>
+  <target>Standard (16 Go+ de RAM)</target></trans-unit>
+<trans-unit id="sde169a28c0b76e74">
+  <source>Not Supported</source>
+  <target>Non pris en charge</target></trans-unit>
+<trans-unit id="s4795644f9fe85a17">
+  <source>(Not checked - not in your remote allowlist)</source>
+  <target>(Non vérifié - absent de votre liste des distants autorisés)</target>
+</trans-unit>
+<trans-unit id="se1b6fbb473670488">
+  <source>(Not checked)</source>
+  <target>(Non vérifié)</target>
+</trans-unit>
+</body>
+</file>
+</xliff>

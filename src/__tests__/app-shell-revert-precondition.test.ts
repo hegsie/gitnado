@@ -27,6 +27,7 @@ let cbId = 0;
 import { expect } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
+import { dialogs } from '../stores/dialog.store.ts';
 import { uiStore, repositoryStore } from '../stores/index.ts';
 import type { Repository } from '../types/git.types.ts';
 import { resetRefOpLocks } from '../utils/ref-lock.ts';
@@ -51,6 +52,14 @@ function mockRepo(): Repository {
     cloneFilter: null,
   } as Repository;
 }
+
+// Which dialogs are open is module state, and several tests here drive a shell
+// that is never connected to the document (so its connectedCallback reset never
+// runs). Clear it per test to keep the isolation each instance used to get for
+// free from its own `@state()` flags.
+beforeEach(() => {
+  dialogs.reset();
+});
 
 describe('app-shell revert precondition failures', () => {
   beforeEach(() => {
@@ -98,7 +107,7 @@ describe('app-shell revert precondition failures', () => {
         )}`,
       ).to.equal(true);
       expect(
-        (el as any).showConflictDialog,
+        dialogs.isOpen('conflict'),
         'nothing is in progress, so there is no conflict to resolve',
       ).to.not.equal(true);
     });
@@ -119,7 +128,7 @@ describe('app-shell revert precondition failures', () => {
 
     await (el as any).revertCommit();
 
-    expect((el as any).showConflictDialog).to.equal(true);
+    expect(dialogs.isOpen('conflict')).to.equal(true);
     expect((el as any).conflictOperationType).to.equal('revert');
   });
 });

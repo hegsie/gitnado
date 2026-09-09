@@ -642,4 +642,436 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     // Verify the commit message textarea remains unchanged (pre-existing text preserved)
     await expect(rightPanel.commitMessage).toHaveValue('existing draft message');
   });
+
+  test('offline mode refuses AI generation for a cloud provider', async ({ page }) => {
+    // Offline mode promises nothing leaves the machine. Generating a commit
+    // message posts the staged diff to the configured provider, so with a
+    // cloud provider selected that promise was broken silently.
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(
+      page,
+      withStagedFiles([{ path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false }])
+    );
+
+    await injectCommandMock(page, {
+      is_ai_available: true,
+      get_active_ai_provider: 'open_ai',
+    });
+
+    // The panel checks availability while still online — the state a user is
+    // in when they turn offline mode on with the panel already open.
+    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+      if (typeof el.checkAiAvailability === 'function') {
+        await el.checkAiAvailability();
+        await el.updateComplete;
+      }
+    });
+    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+
+    await page.evaluate(() => {
+      (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
+    });
+
+    await startCommandCaptureWithMocks(page, {
+      generate_commit_message: { summary: 'feat: leaked message', body: null },
+      is_ai_available: true,
+      get_active_ai_provider: 'open_ai',
+    });
+
+    await rightPanel.aiGenerateButton.click();
+
+    // The refusal names the setting and the provider, so the user can act on it.
+    const inlineError = page.locator('lv-commit-panel .error');
+    await expect(inlineError).toBeVisible();
+    await expect(inlineError).toContainText(/Offline mode/i);
+    await expect(inlineError).toContainText(/OpenAI/i);
+
+    // The staged diff never left.
+    expect(await findCommand(page, 'generate_commit_message')).toHaveLength(0);
+
+    // The button is usable again rather than stuck spinning.
+    await expect(rightPanel.aiGenerateButton).toBeEnabled();
+  });
+
+  test('offline mode leaves a local AI provider working', async ({ page }) => {
+    // Ollama listens on localhost, so nothing leaves the machine and offline
+    // mode has no business refusing it.
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(
+      page,
+      withStagedFiles([{ path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false }])
+    );
+
+    await injectCommandMock(page, {
+      is_ai_available: true,
+      get_active_ai_provider: 'ollama',
+    });
+
+    await page.evaluate(() => {
+      (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
+    });
+
+    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+      if (typeof el.checkAiAvailability === 'function') {
+        await el.checkAiAvailability();
+        await el.updateComplete;
+      }
+    });
+    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+
+    await startCommandCaptureWithMocks(page, {
+      generate_commit_message: { summary: 'feat: local model message', body: null },
+      is_ai_available: true,
+      get_active_ai_provider: 'ollama',
+    });
+
+    await rightPanel.aiGenerateButton.click();
+
+    await waitForCommand(page, 'generate_commit_message');
+    await expect(rightPanel.commitMessage).toHaveValue(/local model message/);
+    await expect(page.locator('lv-commit-panel .error')).toHaveCount(0);
+  });
+
+  test('offline mode leaves the local fallback working with no provider selected', async ({ page }) => {
+    // A fresh install with Ollama running: nothing selects a provider, because
+    // Ollama and LM Studio need no API key and only a stored key auto-selects
+    // one. The backend resolves the fallback itself and skips every provider
+    // the security settings forbid, so the request is served on loopback —
+    // refusing it here hid every AI affordance and named a cloud risk that
+    // cannot arise.
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(
+      page,
+      withStagedFiles([{ path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false }])
+    );
+
+    await injectCommandMock(page, {
+      is_ai_available: true,
+      get_active_ai_provider: null,
+    });
+
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          __GITNADO_STORES__: {
+            settingsStore: { getState(): { setOfflineMode(on: boolean): void } };
+          };
+        }
+      ).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
+    });
+
+    await page.locator('lv-commit-panel').evaluate(
+      async (el: Element & {
+        checkAiAvailability?: () => Promise<void>;
+        updateComplete?: Promise<unknown>;
+      }) => {
+        if (typeof el.checkAiAvailability === 'function') {
+          await el.checkAiAvailability();
+          await el.updateComplete;
+        }
+      }
+    );
+    // The affordance stays available rather than being hidden as "no AI".
+    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+
+    await startCommandCaptureWithMocks(page, {
+      generate_commit_message: { summary: 'feat: fallback model message', body: null },
+      is_ai_available: true,
+      get_active_ai_provider: null,
+    });
+
+    await rightPanel.aiGenerateButton.click();
+
+    await waitForCommand(page, 'generate_commit_message');
+    await expect(rightPanel.commitMessage).toHaveValue(/fallback model message/);
+    await expect(page.locator('lv-commit-panel .error')).toHaveCount(0);
+  });
+});
+
+test.describe('Commit Panel - Trailers', () => {
+  let rightPanel: RightPanelPage;
+
+  const stagedFile = [
+    { path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false },
+  ];
+
+  const commitBy = (
+    oid: string,
+    summary: string,
+    author: { name: string; email: string },
+    body: string | null = null
+  ) => ({
+    oid,
+    shortId: oid.slice(0, 7),
+    message: body ? `${summary}\n\n${body}` : summary,
+    summary,
+    body,
+    author: { ...author, timestamp: Date.now() / 1000 },
+    committer: { ...author, timestamp: Date.now() / 1000 },
+    parentIds: [],
+    timestamp: Date.now() / 1000,
+  });
+
+  test('sign off adds a Signed-off-by trailer to the committed message', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, withStagedFiles(stagedFile));
+
+    await startCommandCaptureWithMocks(page, {
+      create_commit: { oid: 'signed-1', shortId: 'signed1', summary: 'feat: signed' },
+    });
+
+    await rightPanel.commitMessage.fill('feat: signed work');
+    await page.locator('lv-commit-panel .signoff-toggle input').check();
+
+    // The panel says exactly what will be added before the commit is made.
+    const preview = page.locator('lv-commit-panel .trailers-preview');
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText('Signed-off-by: Test User <test@example.com>');
+
+    await rightPanel.commitButton.click();
+    await waitForCommand(page, 'create_commit');
+
+    const commits = await findCommand(page, 'create_commit');
+    expect(commits.length).toBe(1);
+    expect((commits[0].args as { message: string }).message).toBe(
+      'feat: signed work\n\nSigned-off-by: Test User <test@example.com>'
+    );
+  });
+
+  test('turning sign off back off removes only its own trailer', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, withStagedFiles(stagedFile));
+
+    await startCommandCaptureWithMocks(page, {
+      create_commit: { oid: 'unsigned-1', shortId: 'unsign1', summary: 'feat: unsigned' },
+    });
+
+    const body = page.locator('lv-commit-panel .description-input');
+    await rightPanel.commitMessage.fill('feat: hand written');
+    await body.fill('A body the user wrote.\n\nRefs: #42');
+
+    const signOff = page.locator('lv-commit-panel .signoff-toggle input');
+    await signOff.check();
+    await expect(page.locator('lv-commit-panel .trailers-preview')).toBeVisible();
+    await signOff.uncheck();
+    await expect(page.locator('lv-commit-panel .trailers-preview')).toHaveCount(0);
+
+    await rightPanel.commitButton.click();
+    await waitForCommand(page, 'create_commit');
+
+    const commits = await findCommand(page, 'create_commit');
+    expect((commits[0].args as { message: string }).message).toBe(
+      'feat: hand written\n\nA body the user wrote.\n\nRefs: #42'
+    );
+  });
+
+  test('a recent author can be added as a co-author and reaches the commit', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, {
+      ...withStagedFiles(stagedFile),
+      commits: [
+        commitBy('aaa1111', 'earlier work', { name: 'Grace Hopper', email: 'grace@example.com' }),
+        commitBy('bbb2222', 'older work', { name: 'Test User', email: 'test@example.com' }),
+      ],
+    });
+
+    await startCommandCaptureWithMocks(page, {
+      create_commit: { oid: 'coauth-1', shortId: 'coauth1', summary: 'feat: paired' },
+    });
+
+    await rightPanel.commitMessage.fill('feat: paired work');
+    await page.locator('lv-commit-panel .coauthor-btn').click();
+
+    const suggestion = page.locator('lv-commit-panel .coauthor-suggestion', {
+      hasText: 'grace@example.com',
+    });
+    await expect(suggestion).toBeVisible();
+    // The committer themselves is never offered as their own co-author.
+    await expect(
+      page.locator('lv-commit-panel .coauthor-suggestion', { hasText: 'test@example.com' })
+    ).toHaveCount(0);
+
+    await suggestion.click();
+
+    const preview = page.locator('lv-commit-panel .trailers-preview');
+    await expect(preview).toContainText('Co-authored-by: Grace Hopper <grace@example.com>');
+
+    await rightPanel.commitButton.click();
+    await waitForCommand(page, 'create_commit');
+
+    const commits = await findCommand(page, 'create_commit');
+    expect((commits[0].args as { message: string }).message).toBe(
+      'feat: paired work\n\nCo-authored-by: Grace Hopper <grace@example.com>'
+    );
+  });
+
+  test('a co-author can be typed in, removed, and refused when duplicated', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, withStagedFiles(stagedFile));
+
+    await rightPanel.commitMessage.fill('feat: manual co-author');
+    await page.locator('lv-commit-panel .coauthor-btn').click();
+
+    const input = page.locator('lv-commit-panel .coauthor-input');
+    const add = page.locator('lv-commit-panel .coauthor-add-btn');
+
+    // A malformed entry is refused with an explanation, not silently dropped.
+    await input.fill('grace@example.com');
+    await add.click();
+    await expect(page.locator('lv-commit-panel .coauthor-error')).toContainText(
+      'not a valid co-author'
+    );
+
+    await input.fill('Grace Hopper <grace@example.com>');
+    await add.click();
+    await expect(page.locator('lv-commit-panel .trailer-line')).toHaveCount(1);
+
+    // Adding the same person again is a no-op that says so.
+    await input.fill('G. Hopper <GRACE@example.com>');
+    await add.click();
+    await expect(page.locator('lv-commit-panel .coauthor-error')).toContainText(
+      'already a co-author'
+    );
+    await expect(page.locator('lv-commit-panel .trailer-line')).toHaveCount(1);
+
+    // Close the dropdown, which floats over the preview beneath it.
+    await page.locator('lv-commit-panel .coauthor-btn').click();
+    await expect(page.locator('lv-commit-panel .coauthor-dropdown')).toHaveCount(0);
+
+    await page.locator('lv-commit-panel .trailer-remove').click();
+    await expect(page.locator('lv-commit-panel .trailers-preview')).toHaveCount(0);
+  });
+
+  test('amending a commit that already has trailers does not duplicate them', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, {
+      commits: [
+        commitBy(
+          'ccc3333',
+          'fix: already signed',
+          { name: 'Test User', email: 'test@example.com' },
+          'Body.\n\nSigned-off-by: Test User <test@example.com>\nCo-authored-by: Grace Hopper <grace@example.com>'
+        ),
+      ],
+    });
+
+    await startCommandCaptureWithMocks(page, {
+      create_commit: { oid: 'amend-1', shortId: 'amend1', summary: 'fix: already signed' },
+    });
+
+    await page.locator('lv-commit-panel label', { hasText: /amend/i }).first().click();
+
+    // The existing footer is shown as panel state instead of being re-appended.
+    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeChecked();
+    const preview = page.locator('lv-commit-panel .trailers-preview');
+    await expect(preview).toContainText('Signed-off-by: Test User <test@example.com>');
+    await expect(preview).toContainText('Co-authored-by: Grace Hopper <grace@example.com>');
+    await expect(page.locator('lv-commit-panel .description-input')).toHaveValue('Body.');
+
+    await rightPanel.commitButton.click();
+    await waitForCommand(page, 'create_commit');
+
+    const commits = await findCommand(page, 'create_commit');
+    const message = (commits[0].args as { message: string }).message;
+    expect(message).toBe(
+      'fix: already signed\n\nBody.\n\nSigned-off-by: Test User <test@example.com>\n' +
+        'Co-authored-by: Grace Hopper <grace@example.com>'
+    );
+    expect(message.match(/Signed-off-by/g)).toHaveLength(1);
+    expect(message.match(/Co-authored-by/g)).toHaveLength(1);
+  });
+
+  test('without a git identity the sign-off control explains itself', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, withStagedFiles(stagedFile));
+
+    await injectCommandMock(page, {
+      get_user_identity: { name: null, email: null, nameIsGlobal: false, emailIsGlobal: false },
+    });
+
+    // Reload the identity the way applying a profile would.
+    await page.locator('lv-commit-panel').evaluate(async (el) => {
+      const panel = el as HTMLElement & {
+        loadAuthorName: () => Promise<void>;
+        updateComplete: Promise<unknown>;
+      };
+      await panel.loadAuthorName();
+      await panel.updateComplete;
+    });
+
+    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeDisabled();
+    const hint = page.locator('lv-commit-panel .trailer-hint');
+    await expect(hint).toBeVisible();
+    await expect(hint).toContainText('No git identity configured');
+
+    // The warning leads somewhere: it opens the Git Configuration dialog.
+    await hint.locator('button').click();
+    await expect(page.locator('lv-config-dialog lv-modal[open]')).toBeVisible();
+  });
+
+  test('configuring an identity from the hint re-enables Sign off', async ({ page }) => {
+    rightPanel = new RightPanelPage(page);
+    await setupOpenRepository(page, withStagedFiles(stagedFile));
+
+    // The backend starts with no identity and remembers what the dialog saves,
+    // so the round trip is the real one: hint → dialog → save → recovery.
+    await page.evaluate(() => {
+      const internals = (
+        window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+        }
+      ).__TAURI_INTERNALS__;
+      const original = internals.invoke;
+      let identity: { name: string | null; email: string | null } = { name: null, email: null };
+      internals.invoke = async (command: string, args?: unknown) => {
+        if (command === 'get_user_identity') {
+          return { ...identity, nameIsGlobal: false, emailIsGlobal: false };
+        }
+        if (command === 'set_user_identity') {
+          const a = args as { name?: string; email?: string };
+          identity = { name: a.name ?? null, email: a.email ?? null };
+          return null;
+        }
+        return original(command, args);
+      };
+    });
+
+    // Reload the identity the way applying a profile would.
+    await page.locator('lv-commit-panel').evaluate(async (el) => {
+      const panel = el as HTMLElement & {
+        loadAuthorName: () => Promise<void>;
+        updateComplete: Promise<unknown>;
+      };
+      await panel.loadAuthorName();
+      await panel.updateComplete;
+    });
+
+    const hint = page.locator('lv-commit-panel .trailer-hint');
+    await expect(hint).toBeVisible();
+    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeDisabled();
+
+    await hint.locator('button').click();
+    await expect(page.locator('lv-config-dialog lv-modal[open]')).toBeVisible();
+
+    const fields = page.locator('lv-config-dialog .form-group input');
+    await fields.nth(0).fill('Ada Lovelace');
+    await fields.nth(1).fill('ada@example.com');
+    await page.locator('lv-config-dialog .btn-primary').click();
+
+    // The panel the user came from recovers straight away — no commit, fetch
+    // or tab switch needed to clear the dead end.
+    await expect(page.locator('lv-commit-panel .trailer-hint')).toHaveCount(0);
+    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeEnabled();
+
+    // ...and it is still gone once the dialog is closed.
+    await page.locator('lv-config-dialog lv-modal').getByRole('button', { name: 'Close' }).click();
+    await expect(page.locator('lv-config-dialog lv-modal[open]')).toHaveCount(0);
+    await expect(page.locator('lv-commit-panel .trailer-hint')).toHaveCount(0);
+
+    // Sign off now works: it writes the identity that was just configured.
+    await page.locator('lv-commit-panel .signoff-toggle input').check();
+    await expect(page.locator('lv-commit-panel .trailers-preview')).toContainText(
+      'Signed-off-by: Ada Lovelace <ada@example.com>',
+    );
+  });
 });

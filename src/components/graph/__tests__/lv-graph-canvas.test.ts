@@ -2820,6 +2820,117 @@ describe('lv-graph-canvas commit-size setting', () => {
   });
 });
 
+describe('lv-graph-canvas avatar fetch policy', () => {
+  type RendererInternals = { renderer: { config: { fetchAvatars: boolean } } };
+
+  beforeEach(() => {
+    clearHistory();
+    setupDefaultMocks();
+    settingsStore.getState().resetToDefaults();
+  });
+
+  afterEach(() => {
+    settingsStore.getState().resetToDefaults();
+  });
+
+  it('does not fetch avatars with the shipped defaults', async () => {
+    const el = await renderCanvas(10);
+
+    expect((el as unknown as RendererInternals).renderer.config.fetchAvatars).to.be.false;
+  });
+
+  it('fetches avatars once the user opts in', async () => {
+    settingsStore.getState().setShowAvatars(true);
+
+    const el = await renderCanvas(10);
+
+    expect((el as unknown as RendererInternals).renderer.config.fetchAvatars).to.be.true;
+  });
+
+  it('does not fetch avatars in offline mode even when the setting is on', async () => {
+    // Avatar loads are plain Image() requests, so offline mode has to be
+    // applied here — git.service's gate never sees them.
+    settingsStore.getState().setShowAvatars(true);
+    settingsStore.getState().setOfflineMode(true);
+
+    const el = await renderCanvas(10);
+
+    expect((el as unknown as RendererInternals).renderer.config.fetchAvatars).to.be.false;
+  });
+
+  it('does not fetch avatars when an allowlist excludes gravatar.com', async () => {
+    settingsStore.getState().setShowAvatars(true);
+    settingsStore.getState().setRemoteAllowlist(['github.com']);
+
+    const el = await renderCanvas(10);
+
+    expect((el as unknown as RendererInternals).renderer.config.fetchAvatars).to.be.false;
+  });
+
+  it('fetches avatars when the allowlist includes gravatar.com', async () => {
+    settingsStore.getState().setShowAvatars(true);
+    settingsStore.getState().setRemoteAllowlist(['gravatar.com']);
+
+    const el = await renderCanvas(10);
+
+    expect((el as unknown as RendererInternals).renderer.config.fetchAvatars).to.be.true;
+  });
+
+  it('stops fetching immediately when offline mode is switched on at runtime', async () => {
+    settingsStore.getState().setShowAvatars(true);
+
+    const el = await renderCanvas(10);
+    const { renderer } = el as unknown as RendererInternals;
+    expect(renderer.config.fetchAvatars).to.be.true;
+
+    settingsStore.getState().setOfflineMode(true);
+    await el.updateComplete;
+
+    expect(renderer.config.fetchAvatars).to.be.false;
+  });
+
+  it('resumes fetching when offline mode is switched back off', async () => {
+    settingsStore.getState().setShowAvatars(true);
+    settingsStore.getState().setOfflineMode(true);
+
+    const el = await renderCanvas(10);
+    const { renderer } = el as unknown as RendererInternals;
+    expect(renderer.config.fetchAvatars).to.be.false;
+
+    settingsStore.getState().setOfflineMode(false);
+    await el.updateComplete;
+
+    expect(renderer.config.fetchAvatars).to.be.true;
+  });
+
+  it('stops fetching when an allowlist that excludes gravatar.com is set at runtime', async () => {
+    settingsStore.getState().setShowAvatars(true);
+
+    const el = await renderCanvas(10);
+    const { renderer } = el as unknown as RendererInternals;
+    expect(renderer.config.fetchAvatars).to.be.true;
+
+    settingsStore.getState().setRemoteAllowlist(['github.com']);
+    await el.updateComplete;
+
+    expect(renderer.config.fetchAvatars).to.be.false;
+  });
+
+  it('follows the Show Avatars toggle at runtime', async () => {
+    const el = await renderCanvas(10);
+    const { renderer } = el as unknown as RendererInternals;
+    expect(renderer.config.fetchAvatars).to.be.false;
+
+    settingsStore.getState().setShowAvatars(true);
+    await el.updateComplete;
+    expect(renderer.config.fetchAvatars).to.be.true;
+
+    settingsStore.getState().setShowAvatars(false);
+    await el.updateComplete;
+    expect(renderer.config.fetchAvatars).to.be.false;
+  });
+});
+
 describe('lv-graph-canvas SVG export node sizing', () => {
   type CanvasInternals = {
     exportAsSvg(): void;

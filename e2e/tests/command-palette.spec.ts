@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
 import {
   injectCommandError,
+  injectCommandMock,
   startCommandCaptureWithMocks,
   findCommand,
   waitForCommand,
@@ -167,5 +168,140 @@ test.describe('Command palette: open the active repository elsewhere', () => {
     await expect(page.locator('lv-toast-container .toast.error')).toContainText(
       'No terminal emulator found'
     );
+  });
+});
+
+/**
+ * app-shell no longer pulls the graph's loaded commits and tag tips from
+ * inside render() — it mirrors them into state and refreshes that mirror when
+ * the graph announces a change, and it memoises the static command list. These
+ * specs are the regression check that the mirror never goes stale: everything
+ * the palette lists (actions, branches, files, commits, tags) must still be
+ * there, including data the graph only loaded after the first render.
+ */
+test.describe('Command palette data freshness', () => {
+  const REFS_WITH_TAG = {
+    abc123def456: [
+      { name: 'refs/heads/main', shorthand: 'main', refType: 'localBranch', isHead: true },
+      { name: 'refs/tags/v1.0.0', shorthand: 'v1.0.0', refType: 'tag', isHead: false },
+    ],
+  };
+
+  const EXTRA_COMMIT = {
+    oid: 'fed321cba987',
+    shortId: 'fed321c',
+    message: 'Palette regression commit',
+    summary: 'Palette regression commit',
+    body: null,
+    author: { name: 'Test User', email: 'test@example.com', timestamp: 1700000000 },
+    committer: { name: 'Test User', email: 'test@example.com', timestamp: 1700000000 },
+    parentIds: ['abc123def456'],
+    timestamp: 1700000000,
+  };
+
+  // The graph canvas exposes its loaded set as public methods, so the specs
+  // drive it through a locator (which pierces the shadow DOM for us) rather
+  // than reaching into shadowRoot by hand.
+  const graph = (page: Page) => page.locator('lv-graph-canvas');
+
+  /** Wait until the graph canvas holds exactly `count` loaded commits. */
+  async function waitForGraphLoaded(page: Page, count: number): Promise<void> {
+    await expect
+      .poll(() =>
+        graph(page).evaluate((el) => (el as unknown as {
+          getLoadedCommits: () => unknown[];
+        }).getLoadedCommits().length)
+      )
+      .toBe(count);
+  }
+
+  /** Wait until the graph canvas holds exactly `count` tag tips. */
+  async function waitForGraphTags(page: Page, count: number): Promise<void> {
+    await expect
+      .poll(() =>
+        graph(page).evaluate((el) => (el as unknown as {
+          getTagTips: () => unknown[];
+        }).getTagTips().length)
+      )
+      .toBe(count);
+  }
+
+  /** Reload the graph the way a fetch, pull or new commit does. */
+  async function reloadGraph(page: Page): Promise<void> {
+    await graph(page).evaluate((el) => (el as unknown as { refresh: () => void }).refresh());
+  }
+
+  function item(page: Page, text: string) {
+    return page.locator(`${palette} .command`, { hasText: text });
+  }
+
+  async function search(page: Page, query: string): Promise<void> {
+    await page.locator(`${palette} .search-input`).fill(query);
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await setupOpenRepository(page);
+    await waitForGraphLoaded(page, 2);
+  });
+
+  test('lists actions, branches, files, commits and tags from the loaded graph', async ({
+    page,
+  }) => {
+    await injectCommandMock(page, {
+      list_tracked_files: ['src/main.ts', 'README.md'],
+      get_refs_by_commit: REFS_WITH_TAG,
+    });
+    // Pick up the refs the mock now returns (the first load ran without them).
+    await reloadGraph(page);
+    await waitForGraphTags(page, 1);
+
+    await page.keyboard.press('Meta+p');
+    await expect(page.locator(palette)).toBeVisible();
+
+    // Actions and branches show with no query at all.
+    await expect(item(page, 'Fetch from remote')).toHaveCount(1);
+    await expect(item(page, 'Switch to feature/test')).toHaveCount(1);
+
+    // Files, commits and tag reveals are searchable (they are excluded from
+    // the empty-query view so they don't drown the actions).
+    await search(page, 'main.ts');
+    await expect(item(page, 'src/main.ts')).toHaveCount(1);
+
+    await search(page, 'Initial commit');
+    await expect(item(page, 'abc123d Initial commit')).toHaveCount(1);
+
+    await search(page, 'Reveal tag');
+    await expect(item(page, 'Reveal tag v1.0.0 in graph')).toHaveCount(1);
+  });
+
+  test('an open palette picks up commits the graph loads afterwards', async ({ page }) => {
+    await page.keyboard.press('Meta+p');
+    await expect(page.locator(palette)).toBeVisible();
+
+    // The palette is already open, so nothing re-reads the graph on its
+    // behalf — only the graph's own change announcement can refresh it.
+    await search(page, 'Palette regression');
+    await expect(page.locator(`${palette} .empty`)).toBeVisible();
+
+    await injectCommandMock(page, {
+      get_commit_history: [
+        EXTRA_COMMIT,
+        {
+          oid: 'abc123def456',
+          shortId: 'abc123d',
+          message: 'Initial commit',
+          summary: 'Initial commit',
+          body: null,
+          author: { name: 'Test User', email: 'test@example.com', timestamp: 1699999000 },
+          committer: { name: 'Test User', email: 'test@example.com', timestamp: 1699999000 },
+          parentIds: [],
+          timestamp: 1699999000,
+        },
+      ],
+    });
+    await reloadGraph(page);
+    await waitForGraphLoaded(page, 2);
+
+    await expect(item(page, 'fed321c Palette regression commit')).toHaveCount(1);
   });
 });

@@ -109,6 +109,18 @@ pub struct CredentialTestResult {
     pub username: Option<String>,
     /// Message describing the result
     pub message: String,
+    /// Whether `host` is the remote AS TYPED — a path standing in for a host
+    /// there is none of — rather than a hostname to connect to.
+    ///
+    /// The dialog labels the field "Path" instead of "Host" and says nothing
+    /// is stored for it, and it used to work this out from `protocol == "file"`
+    /// alone. That is not the rule: `file://server/share/repo.git` keeps its
+    /// `file` scheme while resolving a real host, which is exactly the target
+    /// the network gate refuses as one that leaves the machine — and the
+    /// dialog drew it as a local path anyway. Only the backend can tell the
+    /// two apart (`resolved`), so it says so here instead of leaving the
+    /// frontend to guess.
+    pub is_path_target: bool,
 }
 
 /// Available credential helper
@@ -520,30 +532,48 @@ fn check_helper_available(helper: &str) -> bool {
 /// Test credentials for a remote URL
 #[command]
 pub async fn test_credentials(path: String, remote_url: String) -> Result<CredentialTestResult> {
+    // The SSH branch below opens a real connection to the remote, exactly as
+    // `test_ssh_connection` does — and that one guards here as well as in the
+    // frontend. This command was gated on the frontend only, leaving the one
+    // network-reaching path in the app whose enforcement had no backstop.
+    //
+    // The HTTPS branch is guarded too, deliberately. `git credential fill` is
+    // not reliably local: a configured `credential.helper` such as Git
+    // Credential Manager performs an OAuth round trip to the host on a cache
+    // miss, so "HTTPS stays on this machine" is a property of the user's
+    // helper configuration rather than of this command. Under an explicitly
+    // configured policy, refusing is the right side to err on.
+    crate::services::security::guard_remote_url(&remote_url)?;
+
     let repo_path = Path::new(&path);
 
-    // Determine protocol and host from URL
-    let (protocol, host) = if remote_url.starts_with("git@") || remote_url.starts_with("ssh://") {
-        ("ssh".to_string(), extract_host(&remote_url))
-    } else {
-        ("https".to_string(), extract_host(&remote_url))
-    };
+    let target = credential_target(&remote_url);
+    // Worked out from the whole target, before it is taken apart, so the
+    // question put to the credential helper is the one the result reports.
+    let lookup = credential_lookup_query(&target);
+    // What the dialog needs and cannot work out for itself: whether the `host`
+    // it is about to print is a hostname or the remote as typed.
+    let is_path_target = target.is_path();
+    let CredentialTarget {
+        protocol,
+        display_host: host,
+        ssh_destination,
+        port,
+        resolved,
+    } = target;
 
-    if protocol == "ssh" {
+    // `resolved` guards the probe: an unresolved target's "destination" is the
+    // remote string itself, which is not a host to connect to.
+    if protocol == "ssh" && resolved {
         // For SSH, test the connection
-        let output = create_command("ssh")
-            .args([
-                "-T",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "BatchMode=yes",
-                &format!("git@{}", host),
-            ])
-            .output()
-            .map_err(|e| {
-                GitnadoError::OperationFailed(format!("Failed to test SSH connection: {}", e))
-            })?;
+        let mut command = create_command("ssh");
+        command.args(ssh_probe_args());
+        if let Some(port) = port {
+            command.args(["-p".to_string(), port.to_string()]);
+        }
+        let output = command.arg(&ssh_destination).output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to test SSH connection: {}", e))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -565,6 +595,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
             protocol,
             username,
             message: message.trim().to_string(),
+            is_path_target,
         })
     } else {
         // For HTTPS, use git credential fill
@@ -582,8 +613,7 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
         // Send credential request
         use std::io::Write;
         if let Some(mut stdin) = child.stdin.take() {
-            let input = format!("protocol=https\nhost={}\n\n", host);
-            let _ = stdin.write_all(input.as_bytes());
+            let _ = stdin.write_all(lookup.as_bytes());
         }
 
         let output = child.wait_with_output().map_err(|e| {
@@ -619,37 +649,237 @@ pub async fn test_credentials(path: String, remote_url: String) -> Result<Creden
             protocol,
             username,
             message,
+            is_path_target,
         })
     }
 }
 
-/// Extract host from URL
-fn extract_host(url: &str) -> String {
-    // Handle various URL formats:
-    // - https://github.com/user/repo.git
-    // - git@github.com:user/repo.git
-    // - ssh://git@github.com/user/repo.git
+/// Where a credential test is going.
+///
+/// Worked out with the SAME parse the network gate above uses, so the host the
+/// allowlist judged is the host that is then contacted. Deciding the protocol on
+/// `starts_with("git@")` instead reported every scp-form remote with another
+/// login — `deploy@git.example.test:team/app.git`, an ordinary corporate remote
+/// — as HTTPS: `git credential fill` was asked about a host that has no HTTPS
+/// credentials, the dialog reported "No credentials found" for a remote that
+/// works, and the erase button then offered to drop `https` credentials that
+/// were never in play. Reading the host after the LAST `@` was worse still —
+/// the gate reads the FIRST, as git does — so a URL whose two differ passed the
+/// allowlist as one host and opened a connection to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CredentialTarget {
+    /// `ssh`, or the URL's own scheme. The dialog shows it and hands it back to
+    /// `erase_credentials`, so it has to name the protocol the credential was
+    /// actually looked up under.
+    protocol: String,
+    /// What the dialog shows, and what `git credential` is asked about. git's
+    /// `host` field carries the port, so this does too.
+    display_host: String,
+    /// `[user@]host` for `ssh`, keeping the login the URL named.
+    ssh_destination: String,
+    /// The port for `ssh -p`, when the URL named one.
+    port: Option<u16>,
+    /// Whether `parse_target` recognised the remote at all.
+    ///
+    /// When it did not, `ssh_destination` is the whole remote string standing
+    /// in for a host it has none of, so an `ssh`-schemed one must never reach
+    /// the ssh probe: `ssh -T ssh://` has nothing to connect to.
+    resolved: bool,
+}
 
-    if let Some(rest) = url.strip_prefix("https://") {
-        rest.split('/').next().unwrap_or("").to_string()
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        rest.split('/').next().unwrap_or("").to_string()
-    } else if let Some(rest) = url.strip_prefix("ssh://") {
-        rest.split('@')
-            .next_back()
-            .and_then(|s| s.split('/').next())
-            .unwrap_or("")
-            .to_string()
-    } else if url.contains('@') && url.contains(':') {
-        // git@host:path format
-        url.split('@')
-            .next_back()
-            .and_then(|s| s.split(':').next())
-            .unwrap_or("")
-            .to_string()
-    } else {
-        url.to_string()
+impl CredentialTarget {
+    /// Whether `display_host` is the remote AS TYPED — a path standing in for a
+    /// host there is none of — rather than a hostname to connect to.
+    ///
+    /// Not `protocol == "file"` on its own: `file://server/share/repo.git`
+    /// keeps its `file` scheme while resolving a real host, and that is
+    /// precisely the target the network gate refuses as one that leaves the
+    /// machine. `resolved` is the half that tells them apart, and it never
+    /// crossed the IPC boundary — so the dialog drew that URL as a local path.
+    fn is_path(&self) -> bool {
+        !self.resolved && self.protocol == "file"
     }
+}
+
+/// The request written to `git credential fill`'s stdin for a target.
+///
+/// The protocol is the target's own, not a fixed `https`. Asking about `https`
+/// while REPORTING the URL's scheme made the two halves disagree: an
+/// `http://` remote with a working stored credential came back "No Credentials
+/// Found", and an unrelated `https` credential for the same host came back
+/// "Credentials Working / Protocol: http" — with an erase button pointed at
+/// `protocol=http`, which matches nothing.
+fn credential_lookup_query(target: &CredentialTarget) -> String {
+    credential_query(&target.protocol, &target.display_host)
+}
+
+/// A `git credential` request for one protocol/host pair. `erase_credentials`
+/// writes the same shape, so a credential found by the test is the credential
+/// the erase button then rejects.
+fn credential_query(protocol: &str, host: &str) -> String {
+    format!("protocol={}\nhost={}\n\n", protocol, host)
+}
+
+fn credential_target(remote_url: &str) -> CredentialTarget {
+    let trimmed_url = remote_url.trim();
+    // A scheme-less path is a repository on this machine, and `git clone
+    // /srv/git/bare.git` leaves `origin` in exactly that form. `parse_target`
+    // resolves one all the same — its fallback reads the string as
+    // `https://{}` and the WHATWG special-scheme parse skips the extra slashes
+    // — so this reported a host invented from a path: `srv` for
+    // `/srv/git/repo.git`, `c` for `C:\repos\x.git`, `..` for a relative
+    // submodule remote. The user was sent to fix HTTPS credentials for a host
+    // that appears nowhere in their config, while the SAME repository spelled
+    // `file:///srv/git/repo.git` was correctly told nothing is stored for it.
+    //
+    // WHICH strings are paths is `security::is_local_target`'s answer, not a
+    // second parse of this question: the gate uses it to decide that a target
+    // never leaves the machine, and a private copy here disagreed with it in
+    // both directions. `\\server\share\repo.git` and `//server/share/repo.git`
+    // are SMB and `~deploy@host:team/app.git` is an scp-form ssh remote — the
+    // gate refuses all three under offline mode as things that DO leave the
+    // machine, while this dialog called them local repositories that "do not
+    // authenticate", and silently skipped the ssh probe for a working ssh
+    // remote. One string, one answer.
+    //
+    // The GATE is untouched: `parse_target` is still the one parse the
+    // allowlist and the destination share, and it still resolves these to the
+    // host it always did. This is what the DIALOG reports, and it must not
+    // name a value the user cannot find anywhere.
+    if crate::services::security::is_local_remote_target(trimmed_url) {
+        return CredentialTarget {
+            protocol: "file".to_string(),
+            ssh_destination: trimmed_url.to_string(),
+            display_host: trimmed_url.to_string(),
+            port: None,
+            resolved: false,
+        };
+    }
+
+    // A UNC path is the one string the gate calls non-local that git still
+    // opens as a PATH. `is_local_target` excludes it on purpose — SMB puts
+    // bytes on the wire, so offline mode has to go on refusing it — but git
+    // never consults a credential helper for `\\server\share\repo.git`: the OS
+    // redirector opens it, under git's own `file` protocol (the one
+    // `protocol.file.allow` names). Falling through to `parse_target` invented
+    // an https host out of it: the scheme-less fallback parses
+    // `https://\\server\share\repo.git`, WHATWG "special authority ignore
+    // slashes" eats the backslashes, and the dialog reported "host: server,
+    // protocol: https". A working share was drawn in the failure colours, and
+    // where the user really did have an `https://server/…` credential — an
+    // internal Gitea on the same box name — the panel said "Credentials
+    // Working" and offered an Erase button that rejected THAT credential.
+    //
+    // The GATE is untouched: `is_local_target` still refuses UNC under offline
+    // mode, and `parse_target` still resolves it to the host the allowlist has
+    // always judged. This is what the DIALOG reports.
+    if is_unc_path(trimmed_url) {
+        return CredentialTarget {
+            protocol: "file".to_string(),
+            ssh_destination: trimmed_url.to_string(),
+            display_host: trimmed_url.to_string(),
+            port: None,
+            resolved: false,
+        };
+    }
+
+    let Some(target) = crate::services::security::parse_remote_target(remote_url) else {
+        // Nothing a URL parser recognises as `[user@]host`, and not a place on
+        // this machine either — a remote too malformed for either half to make
+        // sense of. Report it as typed rather than invent a host for it, and
+        // keep the scheme the user wrote: substituting `https` reported a
+        // scheme-carrying remote as "No credentials found ... Protocol: https"
+        // under a protocol it does not use, and the dialog reads the protocol
+        // reported here to decide whether a missing credential is a fault at
+        // all — so a transport that stores nothing could never reach the
+        // branch that says so.
+        //
+        // The GATE is untouched by this: `parse_target` above is still the one
+        // parse the allowlist and the destination share, and a host-less remote
+        // still resolves to no host and is still refused wherever an allowlist
+        // is configured.
+        let as_typed = remote_url.trim().to_string();
+        return CredentialTarget {
+            protocol: url_scheme(&as_typed).unwrap_or_else(|| "https".to_string()),
+            ssh_destination: as_typed.clone(),
+            display_host: as_typed,
+            port: None,
+            resolved: false,
+        };
+    };
+
+    let display_host = match target.port {
+        Some(port) => format!("{}:{}", target.host, port),
+        None => target.host.clone(),
+    };
+    let protocol = if target.is_ssh {
+        "ssh".to_string()
+    } else {
+        target.scheme.unwrap_or_else(|| "https".to_string())
+    };
+    // A remote that names no login is handed to `ssh` as the BARE host, which
+    // is what git does with it: `ssh` then applies the `User` its own config
+    // has for that host. Substituting `git` probed a different account than the
+    // remote authenticates as — and the remote whose login lives in
+    // `~/.ssh/config` rather than in the URL (`gitserver:team/app.git`, the
+    // scp-like form with the login left off) is exactly the one that has none
+    // to read here.
+    let ssh_destination = match target.user.as_deref() {
+        Some(login) => format!("{}@{}", login, target.host),
+        None => target.host.clone(),
+    };
+
+    CredentialTarget {
+        protocol,
+        ssh_destination,
+        display_host,
+        port: target.port,
+        resolved: true,
+    }
+}
+
+/// A UNC path — `\\server\share\repo.git`, and its `//server/share/repo.git`
+/// spelling. The same two prefixes [`crate::services::security::is_local_target`]
+/// excludes, asked here for the opposite reason: not "does it leave the
+/// machine" (it does) but "does git ask a credential helper for it" (it does
+/// not — it is a path).
+fn is_unc_path(target: &str) -> bool {
+    target.starts_with("//") || target.starts_with(r"\\")
+}
+
+/// The scheme a remote string carries, if it carries one at all.
+///
+/// Only the scheme grammar is accepted — a letter followed by letters, digits
+/// and `+-.` — so a remote that merely contains `://` somewhere is not read as
+/// naming a protocol.
+fn url_scheme(remote_url: &str) -> Option<String> {
+    let (scheme, _) = remote_url.split_once("://")?;
+    let mut chars = scheme.chars();
+    if !chars.next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+        return None;
+    }
+    Some(scheme.to_lowercase())
+}
+
+/// The `ssh -T` probe options.
+///
+/// `ConnectTimeout` counts as much as the rest: without it a user whose network
+/// drops outbound :22 waits out the kernel's TCP timeout — around two minutes —
+/// with the dialog stuck on "Testing". `test_ssh_connection` runs the same
+/// probe and has always set one.
+fn ssh_probe_args() -> [&'static str; 7] {
+    [
+        "-T",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+    ]
 }
 
 /// Extract username from SSH response
@@ -721,8 +951,7 @@ pub async fn erase_credentials(path: String, host: String, protocol: String) -> 
     // Send credential info to reject
     use std::io::Write;
     if let Some(mut stdin) = child.stdin.take() {
-        let input = format!("protocol={}\nhost={}\n\n", protocol, host);
-        let _ = stdin.write_all(input.as_bytes());
+        let _ = stdin.write_all(credential_query(&protocol, &host).as_bytes());
     }
 
     let _ = child.wait();
@@ -867,8 +1096,9 @@ fn remove_keyring_token(service: &str, key: &str) -> Result<()> {
 }
 
 /// Read `key` under `service`, falling back to `legacy_service`. A legacy hit is
-/// re-stored under `service` and the old entry removed, so the fallback is taken
-/// once per key. The backend is passed in so the logic is unit-tested.
+/// re-stored under `service` and, once that write succeeded, removed from
+/// `legacy_service` — so the fallback is taken once per key. The backend is
+/// passed in so the logic is unit-tested.
 fn read_with_legacy_fallback(
     service: &str,
     legacy_service: &str,
@@ -883,7 +1113,22 @@ fn read_with_legacy_fallback(
     let Some(value) = read(legacy_service, key)? else {
         return Ok(None);
     };
-    write(service, key, &value)?;
+    // A failed re-store is not a reason to throw away the token that WAS read.
+    // `?` here meant an upgrading user whose keyring accepts reads but refuses
+    // writes — a keychain that re-locks after a read, an entry-count limit, a
+    // re-locked SecretService collection — got an error instead of the
+    // credential sitting right there, and a working connected account read as
+    // broken. The legacy entry stays put, so the next launch adopts it
+    // properly. `credentials_service::get_with_legacy_fallback` does the same.
+    if let Err(e) = write(service, key, &value) {
+        tracing::warn!(
+            "Found a legacy keyring token for {} but could not re-store it under {}: {}",
+            key,
+            service,
+            e
+        );
+        return Ok(Some(value));
+    }
     if let Err(e) = remove(legacy_service, key) {
         tracing::warn!(
             "Adopted legacy keyring token for {} but could not remove the old entry: {}",
@@ -967,45 +1212,608 @@ mod tests {
         );
     }
 
+    /// An scp-form remote whose login is not `git` is an ordinary corporate
+    /// remote, and git reaches it over SSH. Classifying it as HTTPS ran
+    /// `git credential fill` against a host that has no HTTPS credentials, told
+    /// the user "No credentials found" about a remote that works, and then
+    /// offered to erase `https` credentials that were never in play.
     #[test]
-    fn test_extract_host_https() {
-        assert_eq!(
-            extract_host("https://github.com/user/repo.git"),
-            "github.com"
+    fn an_scp_remote_with_another_login_is_tested_over_ssh_as_that_user() {
+        let target = credential_target("deploy@git.example.test:team/app.git");
+        assert_eq!(target.protocol, "ssh");
+        assert_eq!(target.display_host, "git.example.test");
+        assert_eq!(target.ssh_destination, "deploy@git.example.test");
+    }
+
+    /// An `ssh://` URL names its login too — CodeCommit's is an access-key id,
+    /// and `git@` is not a substitute for it.
+    #[test]
+    fn an_ssh_url_is_tested_as_the_login_it_names() {
+        let target = credential_target(
+            "ssh://APKAEXAMPLEKEYID@git-codecommit.eu-west-1.amazonaws.com/v1/repos/app",
         );
-        assert_eq!(extract_host("https://gitlab.com/user/repo"), "gitlab.com");
+        assert_eq!(target.protocol, "ssh");
         assert_eq!(
-            extract_host("https://bitbucket.org/user/repo.git"),
-            "bitbucket.org"
+            target.ssh_destination,
+            "APKAEXAMPLEKEYID@git-codecommit.eu-west-1.amazonaws.com"
         );
     }
 
+    /// The host handed to `ssh` must be the host the allowlist judged.
+    ///
+    /// The gate reads the host after the FIRST `@`, which is the one git reads:
+    /// `git@github.com:x@evil.test:y` is the path `x@evil.test:y` on
+    /// `github.com`. Reading the LAST one here meant such a URL passed a
+    /// `github.com` allowlist and then opened a connection to `evil.test`.
     #[test]
-    fn test_extract_host_http() {
+    fn the_host_contacted_is_the_host_the_gate_judged() {
+        let url = "git@github.com:x@evil.test:y";
+        let target = credential_target(url);
         assert_eq!(
-            extract_host("http://github.com/user/repo.git"),
-            "github.com"
+            Some(target.display_host.as_str()),
+            crate::services::security::url_host(url).as_deref(),
+            "the gate and the destination must read one host"
         );
+        assert_eq!(target.ssh_destination, "git@github.com");
+    }
+
+    /// A non-default port belongs in git's `host` field and on the ssh command
+    /// line; dropping it asks the wrong server.
+    #[test]
+    fn a_port_survives_into_the_credential_lookup() {
+        let https = credential_target("https://gitlab.example.test:8443/team/app.git");
+        assert_eq!(https.protocol, "https");
+        assert_eq!(https.display_host, "gitlab.example.test:8443");
+
+        let ssh = credential_target("ssh://git@git.example.test:2222/team/app.git");
+        assert_eq!(ssh.protocol, "ssh");
+        assert_eq!(ssh.ssh_destination, "git@git.example.test");
+        assert_eq!(ssh.port, Some(2222));
+    }
+
+    /// An `http://` remote is looked up under `http`. Reporting it as `https`
+    /// asked the credential helper about a protocol the remote does not use,
+    /// and pointed the erase button at that same wrong entry.
+    #[test]
+    fn an_http_remote_is_not_reported_as_https() {
+        let target = credential_target("http://git.internal.test/team/app.git");
+        assert_eq!(target.protocol, "http");
+        assert_eq!(target.display_host, "git.internal.test");
+        // The REPORTED protocol above is only half of it: the lookup handed to
+        // `git credential fill` has to name the same one, or the dialog
+        // describes an entry the helper was never asked about.
         assert_eq!(
-            extract_host("http://internal-git.company.com/repo"),
-            "internal-git.company.com"
+            credential_query(&target.protocol, &target.display_host),
+            "protocol=http\nhost=git.internal.test\n\n"
         );
     }
 
+    /// A `file://` remote is not https.
+    ///
+    /// `parse_target` refuses a host-less URL — deliberately: the allowlist has
+    /// to keep refusing one — and this fallback then substituted `https`, so a
+    /// local remote was reported as "No credentials found ... Protocol: https"
+    /// under a protocol it does not use. The dialog picks the wording AND the
+    /// styling off the protocol reported here, so `file://` could never reach
+    /// the branch written for it.
     #[test]
-    fn test_extract_host_ssh() {
-        assert_eq!(extract_host("git@github.com:user/repo.git"), "github.com");
+    fn a_file_url_keeps_its_own_scheme() {
+        let target = credential_target("file:///srv/git/repo.git");
+        assert_eq!(target.protocol, "file");
+        // Reported as typed: there is no host to invent one from.
+        assert_eq!(target.display_host, "file:///srv/git/repo.git");
+    }
+
+    /// A scheme-less local path is a path, not a host.
+    ///
+    /// `parse_target` resolves one all the same: its fallback reads the string
+    /// as `https://{}`, and the WHATWG special-scheme parse skips the extra
+    /// slashes, so `/srv/git/repo.git` comes back as the host `srv`,
+    /// `C:\repos\x.git` as `c` and a relative submodule remote
+    /// `../sibling.git` as `..`. `git clone /srv/git/bare.git` leaves `origin`
+    /// in exactly that form, so the dialog sent the user off to fix HTTPS
+    /// credentials for a host that appears nowhere in their config — while the
+    /// SAME repository spelled `file:///srv/git/repo.git` was correctly told
+    /// nothing is stored for it. One remote, two contradictory verdicts.
+    #[test]
+    fn a_bare_local_path_is_reported_as_the_local_path_it_is() {
+        for url in [
+            "/srv/git/repo.git",
+            "~/repos/x.git",
+            "../sibling.git",
+            "./x.git",
+            ".",
+            "C:\\repos\\x.git",
+            "c:/repos/x.git",
+        ] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "file", "{url} is a local path");
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+            assert!(!target.resolved, "{url} names no host to contact");
+        }
+    }
+
+    /// ...and a remote that only LOOKS like a path is reported as the host it
+    /// reaches, because that is what the gate says about it.
+    ///
+    /// This dialog used to answer "is this a path?" with a parse of its own,
+    /// and it disagreed with `security::is_local_target` — the gate's answer —
+    /// in the direction that hides a real transport. An scp-form remote is
+    /// ssh; it leaves the machine, and offline mode refuses it. The dialog
+    /// called it a local repository that "does not authenticate, so nothing is
+    /// stored", so the same remote was a network host with offline mode on and
+    /// a local path with it off — and the ssh probe, the whole point of
+    /// testing an ssh remote, was silently skipped.
+    #[test]
+    fn a_remote_that_only_looks_like_a_path_is_reported_as_the_host_it_reaches() {
+        // scp-form ssh, `~` login and all: the probe must run for it.
+        let target = credential_target("~deploy@git.example.test:team/app.git");
+        assert_eq!(target.protocol, "ssh");
+        assert!(target.resolved, "the ssh probe is gated on `resolved`");
+        assert_eq!(target.display_host, "git.example.test");
+        assert_eq!(target.ssh_destination, "~deploy@git.example.test");
+    }
+
+    /// A remote whose login lives in `~/.ssh/config` is ssh, and is probed as
+    /// the bare host.
+    ///
+    /// `gitserver:team/app.git` is git's scp form with the login left off —
+    /// what a `Host` alias leaves behind. `parse_target` did not recognise it,
+    /// so this fell to the malformed branch: no `://` meant `url_scheme` found
+    /// nothing and `https` was substituted, `resolved` stayed false, and the
+    /// `protocol == "ssh" && resolved` gate skipped the ssh probe entirely.
+    /// `git credential fill` was asked `protocol=https host=gitserver:team/app.git`
+    /// and the panel drew a red ✗ "No Credentials Found" over "Protocol: https"
+    /// for a remote that works.
+    #[test]
+    fn an_scp_remote_with_no_login_is_probed_over_ssh_as_the_bare_host() {
+        let target = credential_target("gitserver:team/app.git");
+        assert_eq!(target.protocol, "ssh");
+        assert!(target.resolved, "the ssh probe is gated on `resolved`");
+        assert!(!target.is_path(), "an ssh remote is not a local path");
+        assert_eq!(target.display_host, "gitserver");
+        // The BARE host: with no login named, `ssh gitserver` applies the
+        // `User` that `~/.ssh/config` has for the alias — the account git
+        // itself will use. `git@gitserver` probes a different one.
+        assert_eq!(target.ssh_destination, "gitserver");
+        assert_eq!(target.port, None);
+        // ...and the destination is the host the gate judged, as ever.
         assert_eq!(
-            extract_host("git@gitlab.com:group/project.git"),
-            "gitlab.com"
+            Some(target.display_host.as_str()),
+            crate::services::security::url_host("gitserver:team/app.git").as_deref()
         );
     }
 
+    /// A repository whose NAME parses as a port is still an ssh remote.
+    ///
+    /// `gitserver:2024` is git's scp form: the repository `2024` on the
+    /// `~/.ssh/config` alias `gitserver`, exactly as `git@host:2222` already
+    /// was. `parse_target` read the login-less `host:<u16>` as a PORT — which
+    /// is right for the SSH settings dialog's host field, the only input that
+    /// has that form, and wrong for a remote. `is_ssh` came back false and the
+    /// scheme `None`, so `protocol` became `https` with `resolved` true, and
+    /// the `protocol == "ssh" && resolved` gate skipped the ssh probe: a red
+    /// "No Credentials Found / Protocol: https / Host: gitserver:2024" for a
+    /// working ssh remote — and where an unrelated `https://gitserver:2024`
+    /// credential existed, "Credentials Working" with an Erase button aimed at
+    /// it.
     #[test]
-    fn test_extract_host_ssh_url() {
+    fn a_repository_named_like_a_port_is_probed_over_ssh() {
+        for url in ["gitserver:2024", "git.example.test:8080", "host:22"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "ssh", "{url} is an scp-form ssh remote");
+            assert!(
+                target.resolved,
+                "{url}: the ssh probe is gated on `resolved`"
+            );
+            assert_eq!(target.port, None, "{url}: the colon separates a PATH");
+        }
+        let target = credential_target("gitserver:2024");
+        assert_eq!(target.display_host, "gitserver");
+        assert_eq!(target.ssh_destination, "gitserver");
+        // The GATE is unaffected either way — both readings resolve the same
+        // host, which is all it judges.
         assert_eq!(
-            extract_host("ssh://git@github.com/user/repo.git"),
-            "github.com"
+            crate::services::security::parse_target("gitserver:2024").map(|t| t.host),
+            crate::services::security::parse_remote_target("gitserver:2024").map(|t| t.host),
+        );
+        // ...and the SSH settings dialog's host field keeps its `host:port`
+        // reading, which is the only place that form exists.
+        assert_eq!(
+            crate::services::security::parse_target("gitserver:2024").and_then(|t| t.port),
+            Some(2024)
+        );
+    }
+
+    /// A BARE relative remote is a repository on this disk, not an https host.
+    ///
+    /// `git remote add b2 sub/mybackup.git` is purely local, but
+    /// `is_local_target` — the strict rule, which also judges bare hosts — said
+    /// otherwise, so this fell through to the host branch and the panel drew
+    /// "Host: sub / Protocol: https / No Credentials Found" for a repository on
+    /// the same disk, with no credential anywhere named `sub`.
+    #[test]
+    fn a_bare_relative_remote_is_reported_as_the_path_it_is() {
+        for url in ["sub/mybackup.git", "backups/app.git"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "file", "{url} asks no credential helper");
+            assert!(target.is_path(), "{url} is a path, and the dialog says so");
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+            assert!(!target.resolved, "{url} names no host to contact");
+        }
+        // `mybackup.git` has no separator, so nothing tells it from a bare
+        // host; it keeps the answer it has always had, deliberately.
+        assert!(!credential_target("mybackup.git").is_path());
+    }
+
+    /// A login the remote DOES name is still the login ssh is given.
+    #[test]
+    fn a_named_login_still_reaches_the_ssh_probe() {
+        assert_eq!(
+            credential_target("deploy@gitserver:team/app.git").ssh_destination,
+            "deploy@gitserver"
+        );
+    }
+
+    /// A UNC share is reported as the path it is — not as an invented https
+    /// host, and above all not as one whose credential the Erase button then
+    /// deletes.
+    ///
+    /// `is_local_target` excludes UNC on purpose (SMB does leave the machine,
+    /// and offline mode has to go on refusing it), so this fell through to
+    /// `parse_target`, whose scheme-less fallback parses
+    /// `https://\\server\share\repo.git` — WHATWG "special authority ignore
+    /// slashes" eats the backslashes and yields the host `server` under the
+    /// protocol `https`. Both fabricated: git opens a UNC path through the OS
+    /// redirector and asks no credential helper about it at all. A working
+    /// share was drawn as "No Credentials Found", and a user who really did
+    /// have an `https://server/…` credential for an internal host of that name
+    /// was shown "Credentials Working" over an Erase button pointed at it.
+    #[test]
+    fn a_unc_share_is_reported_as_a_path_not_an_invented_https_host() {
+        for url in ["\\\\server\\share\\repo.git", "//fileserver/share/repo.git"] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, "file", "{url} asks no credential helper");
+            assert_ne!(target.protocol, "https", "{url} is not an https remote");
+            assert!(
+                !target.resolved,
+                "{url} names no host to look a credential up under"
+            );
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+            // The question actually put to `git credential fill`, which is the
+            // one the Erase button then rejects: it must not name a real host.
+            assert_eq!(
+                credential_lookup_query(&target),
+                format!("protocol=file\nhost={url}\n\n")
+            );
+        }
+    }
+
+    /// The dialog and the gate answer their two questions off the ONE parse.
+    ///
+    /// They are not the same question. The gate asks "does this leave the
+    /// machine?"; the dialog asks "would git ask a credential helper about
+    /// it?". Everything the gate calls local answers no to both, and the
+    /// dialog reports it as a path with no host to contact — that direction
+    /// holds without exception, and it is the one that used to fail (a bare
+    /// path was reported as the host `srv`).
+    ///
+    /// UNC is the single case where the two answers part, in the only
+    /// direction they can: SMB puts bytes on the wire, so the gate refuses it
+    /// under offline mode, while git opens it as a path and consults no
+    /// helper — so the dialog must not invent a host for it either.
+    ///
+    /// (Not a biconditional on `protocol` alone in the other direction either:
+    /// `file://server/share` keeps its `file` scheme while resolving a host,
+    /// which is exactly the case the gate refuses.)
+    #[test]
+    fn the_dialog_and_the_gate_agree_about_what_is_local() {
+        for url in [
+            "/srv/git/repo.git",
+            "~/repos/x.git",
+            "../sibling.git",
+            ".",
+            "C:\\repos\\x.git",
+            "file:///srv/git/repo.git",
+            "file://localhost/srv/git/repo.git",
+            "file://server/share/repo.git",
+            "~deploy@git.example.test:team/app.git",
+            // ...and the same form with the login left to `~/.ssh/config`.
+            "gitserver:team/app.git",
+            "https://github.com/o/r.git",
+            "git@github.com:o/r.git",
+        ] {
+            let target = credential_target(url);
+            let local = crate::services::security::is_local_target(url);
+            assert_eq!(
+                !target.resolved && target.protocol == "file",
+                local,
+                "{url}: the dialog and the gate must not disagree about this"
+            );
+            if local {
+                assert_eq!(target.display_host, url, "{url} is reported as typed");
+            }
+        }
+
+        // The one documented exception, pinned in both directions so neither
+        // half can drift into the other's answer.
+        for url in ["\\\\server\\share\\repo.git", "//fileserver/share/repo.git"] {
+            let target = credential_target(url);
+            assert!(
+                !crate::services::security::is_local_target(url),
+                "{url} is SMB: the gate must go on refusing it under offline mode"
+            );
+            assert!(
+                !target.resolved && target.protocol == "file",
+                "{url} is a path to git: the dialog must not invent a host for it"
+            );
+            assert_eq!(target.display_host, url, "{url} is reported as typed");
+        }
+    }
+
+    /// ...and a single-letter host with a port is still a host: the drive
+    /// check needs the separator, or `x:22` reads as a drive.
+    #[test]
+    fn a_single_letter_host_with_a_port_is_not_a_drive() {
+        let target = credential_target("x:22");
+        assert_eq!(target.protocol, "https");
+        assert_eq!(target.display_host, "x:22");
+    }
+
+    /// The DISPLAY above moved; the GATE did not.
+    ///
+    /// `parse_target` stays the one parse the allowlist and the destination
+    /// share, and it still resolves a bare path to the host it always did — the
+    /// dialog simply stops repeating a hostname that was invented from a path.
+    #[test]
+    fn reporting_a_local_path_does_not_move_the_gate() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let settings = crate::services::security::SecuritySettings {
+            offline_mode: false,
+            remote_allowlist: vec!["github.com".to_string()],
+        };
+        assert_eq!(
+            crate::services::security::parse_target("/srv/git/repo.git").map(|t| t.host),
+            Some("srv".to_string()),
+            "the gate's parse is untouched"
+        );
+        // ...and the gate PERMITS it, because a filesystem remote never leaves
+        // the machine — the carve-out `is_local_target` added alongside this.
+        // The two changes were made independently and meet here: this one
+        // decides what the dialog REPORTS, that one decides what the gate
+        // PERMITS, and both agree a local path is local.
+        assert!(
+            crate::services::security::check(&settings, Some("/srv/git/repo.git")).is_ok(),
+            "a filesystem remote opens no socket, so an allowlist has no business refusing it"
+        );
+    }
+
+    /// Keeping the scheme must not move the GATE.
+    ///
+    /// `parse_target` stays the single source of truth for both the allowlist
+    /// and the destination — this change is about what the DIALOG reports.
+    /// A host-less URL still resolves to no host; whether that is then refused
+    /// is the gate's own business, and it refuses everything except the local
+    /// targets it deliberately carves out.
+    #[test]
+    fn a_host_less_remote_still_resolves_to_no_target() {
+        // The verdict below is computed from the settings passed in, but the
+        // gate is reached all the same, and the policy lock is what keeps that
+        // from racing a test that switches a policy on.
+        let _policy = crate::services::security::test_support::no_policy();
+        let settings = crate::services::security::SecuritySettings {
+            offline_mode: false,
+            remote_allowlist: vec!["github.com".to_string()],
+        };
+        for url in ["file:///srv/git/repo.git", "ssh://"] {
+            assert!(
+                crate::services::security::parse_target(url).is_none(),
+                "{url} must still resolve to no target"
+            );
+        }
+        // `ssh://` names no host and could reach anywhere, so it is refused.
+        assert!(
+            crate::services::security::check(&settings, Some("ssh://")).is_err(),
+            "a host-less ssh url must still be refused"
+        );
+        // `file://` is local, so the carve-out permits it — the same rule the
+        // loopback exemption has always applied to endpoints.
+        assert!(
+            crate::services::security::check(&settings, Some("file:///srv/git/repo.git")).is_ok(),
+            "a file:// remote never leaves the machine"
+        );
+    }
+
+    /// A scheme-carrying URL with no host must not be handed to the ssh probe:
+    /// what stands in for the destination there is the whole unparsed string,
+    /// not a host, so there is nothing to connect to.
+    #[test]
+    fn a_host_less_ssh_url_is_not_probed_over_ssh() {
+        let target = credential_target("ssh://");
+        assert_eq!(target.protocol, "ssh");
+        assert!(
+            !target.resolved,
+            "an unresolved target must not reach the ssh probe"
+        );
+    }
+
+    /// Point a repo at a `store` credential helper holding `entries`, each one
+    /// a store-file line (`http://user:pass@host`).
+    fn repo_with_stored_credentials(entries: &[&str]) -> TestRepo {
+        let repo = TestRepo::with_initial_commit();
+        let store = repo.path.join("credential-store");
+        std::fs::write(&store, format!("{}\n", entries.join("\n"))).expect("write store");
+        repo.repo()
+            .config()
+            .expect("config")
+            // Forward slashes: git evaluates a credential helper through its
+            // bundled shell, which eats the backslashes of a Windows path, so
+            // `--file=C:\Users\…` reaches `store` as a path that does not
+            // exist and every lookup answers "No credentials found".
+            .set_str(
+                "credential.helper",
+                &format!("store --file={}", crate::test_utils::git_path(&store)),
+            )
+            .expect("set credential.helper");
+        repo
+    }
+
+    /// The credential a remote actually uses has to be the one looked up.
+    ///
+    /// The lookup was pinned to `protocol=https` while the reported protocol
+    /// was the URL's own scheme, so an `http://` remote with a working stored
+    /// credential came back "No credentials found" — about a remote that works.
+    #[tokio::test]
+    async fn an_http_remote_finds_its_stored_http_credential() {
+        let repo = repo_with_stored_credentials(&["http://http-user:http-pass@git.internal.test"]);
+
+        let result = test_credentials(
+            repo.path_str(),
+            "http://git.internal.test/team/app.git".to_string(),
+        )
+        .await
+        .expect("test_credentials");
+
+        assert!(result.success, "got: {:?}", result);
+        assert_eq!(result.protocol, "http");
+        assert_eq!(result.username.as_deref(), Some("http-user"));
+    }
+
+    /// ...and a credential stored under a DIFFERENT protocol for the same host
+    /// is not it. Reporting one is worse than reporting nothing: the dialog
+    /// said "Credentials Working / Protocol: http" about an `https` entry, and
+    /// the erase button then rejected `protocol=http`, which matches nothing —
+    /// so the user confirmed a re-authentication warning for a no-op.
+    #[tokio::test]
+    async fn an_http_remote_does_not_report_the_hosts_https_credential() {
+        let repo =
+            repo_with_stored_credentials(&["https://https-user:https-pass@git.internal.test"]);
+
+        let result = test_credentials(
+            repo.path_str(),
+            "http://git.internal.test/team/app.git".to_string(),
+        )
+        .await
+        .expect("test_credentials");
+
+        assert!(
+            !result.success,
+            "an https credential is not an http one: {:?}",
+            result
+        );
+        assert_eq!(result.username, None);
+    }
+
+    /// The everyday `https://` remote keeps finding its own credential.
+    #[tokio::test]
+    async fn an_https_remote_finds_its_stored_https_credential() {
+        let repo =
+            repo_with_stored_credentials(&["https://https-user:https-pass@git.internal.test"]);
+
+        let result = test_credentials(
+            repo.path_str(),
+            "https://git.internal.test/team/app.git".to_string(),
+        )
+        .await
+        .expect("test_credentials");
+
+        assert!(result.success, "got: {:?}", result);
+        assert_eq!(result.protocol, "https");
+        assert_eq!(result.username.as_deref(), Some("https-user"));
+    }
+
+    /// A UNC share must not find — and must not then OFFER TO ERASE — the
+    /// credential of an unrelated host that happens to share its box name.
+    ///
+    /// `\\\\server\\share\\repo.git` used to be looked up as `protocol=https
+    /// host=server`, so a user with an internal Gitea on `https://server/…`
+    /// was shown "Credentials Working / host: server / protocol: https" for a
+    /// file share — over an Erase button that would have run
+    /// `git credential reject protocol=https host=server` and dropped that
+    /// unrelated entry.
+    #[tokio::test]
+    async fn a_unc_share_does_not_find_the_https_credential_of_a_host_of_that_name() {
+        let repo = repo_with_stored_credentials(&["https://alice:secret@server"]);
+
+        let result = test_credentials(repo.path_str(), "\\\\server\\share\\repo.git".to_string())
+            .await
+            .expect("test_credentials");
+
+        assert!(
+            !result.success,
+            "git asks no credential helper for a UNC path: {:?}",
+            result
+        );
+        assert_eq!(result.username, None, "no credential of another host's");
+        assert_ne!(result.protocol, "https", "the protocol was fabricated");
+        assert_eq!(result.protocol, "file");
+        assert_eq!(result.host, "\\\\server\\share\\repo.git");
+        assert!(result.is_path_target, "the dialog labels this a path");
+    }
+
+    /// `is_path_target` is the backend's answer to a question the frontend
+    /// used to guess at from `protocol` alone.
+    ///
+    /// `file://server/share/repo.git` keeps its `file` scheme while resolving a
+    /// host — the very target the gate refuses under offline mode — and the
+    /// dialog printed "A local repository does not authenticate" for it. A bare
+    /// path and a host-less `file://` URL are the ones that really are paths.
+    #[tokio::test]
+    async fn the_result_says_whether_the_host_it_reports_is_really_a_path() {
+        let repo = repo_with_stored_credentials(&[]);
+
+        for (url, expected) in [
+            ("/srv/git/repo.git", true),
+            ("file:///srv/git/repo.git", true),
+            ("\\\\server\\share\\repo.git", true),
+            ("file://server/share/repo.git", false),
+            ("https://github.com/o/r.git", false),
+        ] {
+            let result = test_credentials(repo.path_str(), url.to_string())
+                .await
+                .expect("test_credentials");
+            assert_eq!(
+                result.is_path_target, expected,
+                "{url}: is_path_target must not be guessed from protocol alone (got {:?})",
+                result
+            );
+            if expected {
+                assert_eq!(result.host, url, "{url} is reported as typed");
+            }
+        }
+    }
+
+    /// The everyday remote forms still resolve the way they always did.
+    #[test]
+    fn the_ordinary_remote_forms_keep_their_protocol_and_host() {
+        for (url, protocol, host) in [
+            ("https://github.com/user/repo.git", "https", "github.com"),
+            ("https://gitlab.com/user/repo", "https", "gitlab.com"),
+            (
+                "https://bitbucket.org/user/repo.git",
+                "https",
+                "bitbucket.org",
+            ),
+            ("git@github.com:user/repo.git", "ssh", "github.com"),
+            ("git@gitlab.com:group/project.git", "ssh", "gitlab.com"),
+            ("ssh://git@github.com/user/repo.git", "ssh", "github.com"),
+        ] {
+            let target = credential_target(url);
+            assert_eq!(target.protocol, protocol, "protocol for {url}");
+            assert_eq!(target.display_host, host, "host for {url}");
+        }
+    }
+
+    /// Without a connect timeout a user whose network drops outbound :22 waits
+    /// out the kernel's TCP timeout — around two minutes — with the dialog
+    /// stuck on "Testing". `test_ssh_connection` runs the same probe and has
+    /// always set one.
+    #[test]
+    fn the_ssh_probe_gives_up_rather_than_hanging() {
+        assert!(
+            ssh_probe_args().contains(&"ConnectTimeout=10"),
+            "got: {:?}",
+            ssh_probe_args()
         );
     }
 
@@ -1374,6 +2182,7 @@ mod tests {
             protocol: "https".to_string(),
             username: Some("testuser".to_string()),
             message: "Credentials found".to_string(),
+            is_path_target: false,
         };
 
         assert!(result.success);
@@ -1708,17 +2517,36 @@ mod tests {
         );
     }
 
+    /// A failed re-store must not throw away the token that WAS read.
+    ///
+    /// `?` on the write propagated the failure, so an upgrading user whose
+    /// keyring accepts reads but refuses writes — a keychain that re-locks
+    /// after a read, an entry-count limit, a re-locked SecretService
+    /// collection — got an error from `get_keyring_token` instead of the token
+    /// sitting right there under the old service name, and a perfectly good
+    /// connected account read as broken. The sibling adopter
+    /// `credentials_service::get_with_legacy_fallback` warns and returns the
+    /// value; these two are written for the same situation and must agree.
+    ///
+    /// The legacy entry stays put, so the next launch adopts it properly.
     #[test]
-    fn token_fallback_propagates_write_failure_and_keeps_legacy() {
+    fn token_fallback_returns_the_adopted_token_when_the_re_store_fails() {
         let store: FakeKeyring = Default::default();
         store.borrow_mut().insert(
             ("leviathan-integrations".into(), "jira".into()),
             "tok".into(),
         );
-        assert!(read_fallback(&store, "jira", true).is_err());
-        assert!(store
-            .borrow()
-            .contains_key(&("leviathan-integrations".into(), "jira".into())));
+        assert_eq!(
+            read_fallback(&store, "jira", true).unwrap().as_deref(),
+            Some("tok"),
+            "the token was read; a failed re-store is no reason to lose it"
+        );
+        assert!(
+            store
+                .borrow()
+                .contains_key(&("leviathan-integrations".into(), "jira".into())),
+            "the only copy must not be removed after a failed write"
+        );
     }
 
     #[test]

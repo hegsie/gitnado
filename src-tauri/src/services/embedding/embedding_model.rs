@@ -47,6 +47,22 @@ pub fn default_embedding_model() -> EmbeddingModelEntry {
     }
 }
 
+/// The URL one of the model's files is fetched from.
+pub fn hf_file_url(repo: &str, filename: &str) -> String {
+    format!("https://huggingface.co/{}/resolve/main/{}", repo, filename)
+}
+
+/// Offline mode / the remote allowlist, for the embedding model download.
+///
+/// One function so the command that STARTS the download and the requests that
+/// actually open the sockets check the same destination. All three files come
+/// from the one HuggingFace repository, so the weights URL stands for the set.
+/// See `services/security.rs`.
+pub fn guard_embedding_model_download() -> crate::error::Result<()> {
+    let model = default_embedding_model();
+    crate::services::security::guard_url(&hf_file_url(model.hf_repo, model.weights_filename))
+}
+
 /// Get the directory where the embedding model is stored
 pub fn get_model_dir(models_dir: &Path) -> PathBuf {
     models_dir.join("embedding-minilm-l6-v2")
@@ -136,7 +152,12 @@ async fn download_hf_file(
     app_handle: &AppHandle,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
+    let url = hf_file_url(repo, filename);
+
+    // The backstop half of the network gate (see services/security.rs): each
+    // file is a separate request, so the check belongs here rather than only
+    // at the command that kicks the three of them off.
+    crate::services::security::guard_url(&url).map_err(|e| e.to_string())?;
 
     let client = reqwest::Client::new();
     let response = client

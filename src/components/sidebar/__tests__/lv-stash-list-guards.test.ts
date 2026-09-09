@@ -22,7 +22,7 @@ const invokeCalls: Array<{ command: string; args?: unknown }> = [];
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvStashList } from '../lv-stash-list.ts';
 
 // Import the actual component
@@ -401,12 +401,16 @@ describe('lv-stash-list operationInProgress guards', () => {
 
     invokeCalls.length = 0;
     (btn as HTMLButtonElement).click();
-    await el.updateComplete;
-    await new Promise((r) => setTimeout(r, 0));
+    // The click claims the shared lock and then invokes; under load that takes
+    // more than one macrotask, so wait for the invoke itself, not a timer.
+    await waitUntil(
+      () => invokeCalls.some((c) => c.command === 'create_stash'),
+      'the button must reach the backend'
+    );
 
     expect(
       invokeCalls.filter((c) => c.command === 'create_stash'),
-      'the button must reach the backend'
+      'the button must reach the backend exactly once'
     ).to.have.length(1);
   });
 

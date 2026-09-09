@@ -2116,6 +2116,24 @@ export class LvBitbucketDialog extends LitElement {
     `;
   }
 
+  /**
+   * Open the create-pull-request form with `sourceBranch` prefilled as the
+   * source branch.
+   *
+   * The entry point for the sidebar's branch context menu, which deliberately
+   * does NOT build its own create flow: this dialog already owns the form, the
+   * account selection and the create call, so the menu reuses them. `baseBranch`
+   * is only a suggestion and is applied ONLY when the field is still empty, so
+   * a draft the user already typed here is never overwritten.
+   */
+  public startCreatePullRequest(sourceBranch: string, baseBranch?: string): void {
+    this.createPrSource = sourceBranch;
+    if (baseBranch && !this.createPrDestination) {
+      this.createPrDestination = baseBranch;
+    }
+    this.activeTab = 'create-pr';
+  }
+
   render() {
     return html`
       <lv-modal

@@ -122,6 +122,15 @@ pub struct AiProviderInfo {
     pub provider_type: AiProviderType,
     pub name: String,
     pub available: bool,
+    /// Whether `available` is an answer or a guess.
+    ///
+    /// Listing the providers must not itself be a network request: for an
+    /// OpenAI-compatible cloud provider the reachability probe is an outbound
+    /// models-list call, and Settings has to be able to enumerate providers in
+    /// order to turn the cloud one OFF. So with offline mode on (or the host
+    /// outside the allowlist) the probe is skipped and this is `false`,
+    /// meaning "not probed" rather than "unavailable".
+    pub probed: bool,
     pub requires_api_key: bool,
     pub has_api_key: bool,
     pub endpoint: String,
@@ -615,6 +624,29 @@ impl AiService {
         &self.config
     }
 
+    /// The endpoint a provider would be contacted on.
+    pub fn endpoint_for(&self, provider_type: AiProviderType) -> String {
+        self.config
+            .providers
+            .get(&provider_type)
+            .and_then(|s| s.endpoint.clone())
+            .unwrap_or_else(|| provider_type.default_endpoint().to_string())
+    }
+
+    /// Whether a request to `provider_type` is permitted by the security
+    /// settings. A provider on loopback (Ollama, LM Studio) or with no endpoint
+    /// at all (the embedded model) never leaves the machine and stays usable
+    /// with offline mode on — that is the whole point of running one.
+    pub fn provider_network_allowed(&self, provider_type: AiProviderType) -> bool {
+        crate::services::security::endpoint_allowed(&self.endpoint_for(provider_type))
+    }
+
+    /// The endpoint of the provider chosen in Settings, or `None` when nothing
+    /// is chosen and a request would fall back to whatever is reachable.
+    pub fn active_provider_endpoint(&self) -> Option<String> {
+        self.config.active_provider.map(|pt| self.endpoint_for(pt))
+    }
+
     /// Get information about all providers
     pub async fn get_providers_info(&self) -> Vec<AiProviderInfo> {
         let mut infos = Vec::new();
@@ -622,13 +654,26 @@ impl AiService {
         for provider_type in AiProviderType::all() {
             if let Some(provider) = self.providers.get(&provider_type) {
                 let settings = self.config.providers.get(&provider_type);
-                let available = provider.is_available().await;
-                let models = provider.list_models().await.unwrap_or_default();
+                // Probing is itself a network request for a cloud provider, and
+                // this list is what Settings renders — including the switch the
+                // user needs in order to turn that provider off. So when the
+                // security settings forbid reaching it, report it unprobed
+                // instead of reaching out or hiding it.
+                let probed = self.provider_network_allowed(provider_type);
+                let (available, models) = if probed {
+                    (
+                        provider.is_available().await,
+                        provider.list_models().await.unwrap_or_default(),
+                    )
+                } else {
+                    (false, Vec::new())
+                };
 
                 infos.push(AiProviderInfo {
                     provider_type,
                     name: provider.name().to_string(),
                     available,
+                    probed,
                     requires_api_key: provider_type.requires_api_key(),
                     has_api_key: settings.and_then(|s| s.api_key.as_ref()).is_some(),
                     endpoint: settings
@@ -827,10 +872,22 @@ impl AiService {
                 }
             }
 
-            if let Some(provider) = self.providers.get(&pt) {
-                if provider.is_available().await {
-                    return Ok((provider.as_ref(), pt));
+            // A provider the security settings forbid reaching is not probed
+            // and not used, whatever its state.
+            if self.provider_network_allowed(pt) {
+                if let Some(provider) = self.providers.get(&pt) {
+                    if provider.is_available().await {
+                        return Ok((provider.as_ref(), pt));
+                    }
                 }
+            } else {
+                return Err(format!(
+                    "{} is at {}, which your security settings do not allow reaching. \
+                     Turn off offline mode or allowlist its host in Settings > Security, \
+                     or select a local provider.",
+                    pt.display_name(),
+                    self.endpoint_for(pt)
+                ));
             }
 
             let hint = match pt {
@@ -863,6 +920,12 @@ impl AiService {
         for pt in AiProviderType::all() {
             if pt == AiProviderType::LocalInference {
                 continue; // Already checked above
+            }
+            // Skipped rather than probed: the scan runs on every availability
+            // check, so probing a forbidden host here would leak a request per
+            // check even with offline mode on.
+            if !self.provider_network_allowed(pt) {
+                continue;
             }
             if let Some(provider) = self.providers.get(&pt) {
                 if provider.is_available().await {
@@ -1004,6 +1067,11 @@ impl AiService {
         let mut available = Vec::new();
 
         for provider_type in [AiProviderType::Ollama, AiProviderType::LmStudio] {
+            // Normally loopback and therefore always probeable, but either can
+            // be pointed at a remote host in Settings.
+            if !self.provider_network_allowed(provider_type) {
+                continue;
+            }
             if let Some(provider) = self.providers.get(&provider_type) {
                 if provider.is_available().await {
                     available.push(provider_type);
@@ -1081,6 +1149,7 @@ mod tests {
         assert_eq!(truncate_at_char_boundary("abc", 3), "abc");
     }
     use super::*;
+    use crate::services::security::test_support::no_policy;
 
     #[test]
     fn test_provider_type_display_name() {
@@ -1211,6 +1280,7 @@ mod tests {
     /// silently undid the Settings "Unload" button on the next AI action.
     #[tokio::test]
     async fn test_generate_commit_message_does_not_load_local_when_another_provider_serves() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         service
             .set_active_provider(AiProviderType::Anthropic)
@@ -1235,6 +1305,7 @@ mod tests {
     /// explain, and had the same unconditional load.
     #[tokio::test]
     async fn test_generate_text_does_not_load_local_when_another_provider_serves() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         service
             .set_active_provider(AiProviderType::Anthropic)
@@ -1257,6 +1328,7 @@ mod tests {
     /// local model is still the candidate and must still be lazily loaded.
     #[tokio::test]
     async fn test_generate_commit_message_still_lazy_loads_local_when_nothing_else_available() {
+        let _policy = no_policy();
         let (service, _config_dir, _models_dir) = service_fixture().await;
 
         let err = service
@@ -1281,6 +1353,7 @@ mod tests {
     /// Settings is honoured exactly, in both directions.
     #[tokio::test]
     async fn test_local_active_provider_is_loaded_and_errors_when_it_cannot_load() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         service
             .set_active_provider(AiProviderType::LocalInference)
@@ -1310,6 +1383,7 @@ mod tests {
     /// selected.
     #[tokio::test]
     async fn test_unavailable_active_provider_does_not_fall_back_to_local_model() {
+        let _policy = no_policy();
         let (mut service, _config_dir, _models_dir) = service_fixture().await;
         // Ollama is the chosen provider but its endpoint is a closed port.
         service.set_active_provider(AiProviderType::Ollama).unwrap();
@@ -1366,6 +1440,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_refuses_to_substitute_an_unchosen_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1384,6 +1459,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_commit_message_never_hands_the_diff_to_a_substitute_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1400,6 +1476,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_text_never_hands_the_prompt_to_a_substitute_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1420,6 +1497,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_error_points_at_the_local_model_step() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
@@ -1436,6 +1514,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_uses_the_provider_the_user_selected() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::Anthropic, "test-key");
@@ -1451,6 +1530,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_provider_still_scans_when_nothing_is_selected() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         assert!(service.config.active_provider.is_none());
@@ -1504,6 +1584,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloaded_but_unloaded_local_model_counts_as_available() {
+        let _policy = no_policy();
         let models = tempfile::tempdir().unwrap();
         write_model(models.path(), "ready-model", true);
         let (service, _cfg) = service_with_models(models.path().to_path_buf());
@@ -1550,6 +1631,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloaded_local_model_does_not_cover_a_different_chosen_provider() {
+        let _policy = no_policy();
         // A local model is downloaded, but the user picked a cloud provider that
         // is not reachable. A request would fail rather than quietly run on the
         // local model, so availability must report false — otherwise the AI
@@ -1567,6 +1649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloaded_local_model_covers_local_inference_when_chosen() {
+        let _policy = no_policy();
         let models = tempfile::tempdir().unwrap();
         write_model(models.path(), "ready-model", true);
         let (mut service, _cfg) = service_with_models(models.path().to_path_buf());
@@ -1578,6 +1661,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unavailable_reason_is_generic_when_nothing_is_configured() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let service = test_service(&dir);
         assert!(service.config.active_provider.is_none());
@@ -1588,6 +1672,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unavailable_reason_is_none_for_the_chosen_provider() {
+        let _policy = no_policy();
         let dir = tempfile::tempdir().unwrap();
         let mut service = test_service(&dir);
         set_key(&mut service, AiProviderType::Anthropic, "test-key");

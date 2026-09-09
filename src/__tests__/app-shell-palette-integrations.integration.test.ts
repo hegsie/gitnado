@@ -23,6 +23,7 @@ import { expect } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import { uiStore } from '../stores/ui.store.ts';
 import '../app-shell.ts';
+import { dialogs, type DialogId } from '../stores/dialog.store.ts';
 
 interface PaletteCommand {
   id: string;
@@ -45,18 +46,26 @@ function getCommand(el: AppShell, id: string): PaletteCommand {
   return cmd;
 }
 
+// Which dialogs are open is module state, and several tests here drive a shell
+// that is never connected to the document (so its connectedCallback reset never
+// runs). Clear it per test to keep the isolation each instance used to get for
+// free from its own `@state()` flags.
+beforeEach(() => {
+  dialogs.reset();
+});
+
 describe('app-shell palette integration entries (no repo required)', () => {
   beforeEach(() => {
     uiStore.setState({ toasts: [] });
   });
 
-  const cases: Array<{ id: string; flag: string }> = [
-    { id: 'github', flag: 'showGitHub' },
-    { id: 'gitlab', flag: 'showGitLab' },
-    { id: 'bitbucket', flag: 'showBitbucket' },
-    { id: 'azure-devops', flag: 'showAzureDevOps' },
-    { id: 'oidc', flag: 'showOidc' },
-    { id: 'profiles', flag: 'showProfileManager' },
+  const cases: Array<{ id: string; flag: DialogId }> = [
+    { id: 'github', flag: 'gitHub' },
+    { id: 'gitlab', flag: 'gitLab' },
+    { id: 'bitbucket', flag: 'bitbucket' },
+    { id: 'azure-devops', flag: 'azureDevOps' },
+    { id: 'oidc', flag: 'oidc' },
+    { id: 'profiles', flag: 'profileManager' },
   ];
 
   for (const { id, flag } of cases) {
@@ -64,13 +73,11 @@ describe('app-shell palette integration entries (no repo required)', () => {
       const el = createAppShellNoRepo();
       const cmd = getCommand(el, id);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any)[flag], `${flag} starts false`).to.not.equal(true);
+      expect(dialogs.isOpen(flag), `${flag} starts closed`).to.equal(false);
 
       cmd.action();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect((el as any)[flag], `${flag} set true`).to.equal(true);
+      expect(dialogs.isOpen(flag), `${flag} opened`).to.equal(true);
       const warnings = uiStore.getState().toasts.filter(
         (t) => t.message === 'Please open a repository first',
       );
@@ -107,7 +114,7 @@ describe('app-shell explicit integration navigation', () => {
   it('standalone open sets no return context → no Back arrow, no attach name', () => {
     const el = createAppShellNoRepo();
     getCommand(el, 'github').action();
-    expect((el as any).showGitHub).to.equal(true);
+    expect(dialogs.isOpen('gitHub')).to.equal(true);
     expect((el as any).integrationContext, 'no context standalone').to.equal(null);
     expect((el as any).integrationBackButton, 'no back arrow').to.equal(false);
     expect((el as any).integrationAttachName, 'no breadcrumb').to.equal('');
@@ -123,7 +130,7 @@ describe('app-shell explicit integration navigation', () => {
       attach: true,
     };
     (el as any).handleOpenIntegrationFromManager('github', { detail: context });
-    expect((el as any).showGitHub).to.equal(true);
+    expect(dialogs.isOpen('gitHub')).to.equal(true);
     expect((el as any).integrationContext).to.deep.equal(context);
     expect((el as any).integrationBackButton, 'back arrow shown').to.equal(true);
     expect((el as any).integrationAttachName, 'breadcrumb name shown').to.equal('Work');
@@ -164,7 +171,7 @@ describe('app-shell explicit integration navigation', () => {
     });
 
     (el as any).handleIntegrationDialogClose('github');
-    expect((el as any).showGitHub, 'provider dialog closed').to.equal(false);
+    expect(dialogs.isOpen('gitHub'), 'provider dialog closed').to.equal(false);
     expect((el as any).integrationContext, 'context cleared').to.equal(null);
     expect(revealed, 'manager revealed with the explicit context').to.deep.equal(context);
   });
@@ -178,35 +185,175 @@ describe('app-shell explicit integration navigation', () => {
       get currentView() { return 'list'; },
     });
     (el as any).handleIntegrationDialogClose('gitlab');
-    expect((el as any).showGitLab).to.equal(false);
+    expect(dialogs.isOpen('gitLab')).to.equal(false);
     expect(revealedCalled, 'no reveal for standalone close').to.equal(false);
   });
 
   it('Manage Accounts is reversible: closing the Accounts view reopens the provider', () => {
     const el = createAppShellNoRepo();
     // Simulate a provider dialog open, then "Manage Accounts" from it.
-    (el as any).showGitHub = true;
+    dialogs.open('gitHub');
     (el as any).handleManageAccounts({ detail: { integrationType: 'github' } });
-    expect((el as any).showGitHub, 'provider dialog closed').to.equal(false);
-    expect((el as any).showProfileManager, 'manager opened').to.equal(true);
-    expect((el as any).profileManagerView, 'lands on Accounts view').to.equal('accounts');
+    expect(dialogs.isOpen('gitHub'), 'provider dialog closed').to.equal(false);
+    expect(dialogs.isOpen('profileManager'), 'manager opened').to.equal(true);
+    expect(
+      dialogs.context('profileManager')?.initialView,
+      'lands on Accounts view',
+    ).to.equal('accounts');
     // Not demoted — the manager is shown ON TOP (no stacked-overlay context).
     expect((el as any).profileManagerDemoted).to.equal(false);
 
     // Closing OUT OF the Accounts view returns to the provider dialog.
     (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
-    expect((el as any).showProfileManager).to.equal(false);
-    expect((el as any).showGitHub, 'returned to the provider dialog').to.equal(true);
+    expect(dialogs.isOpen('profileManager')).to.equal(false);
+    expect(dialogs.isOpen('gitHub'), 'returned to the provider dialog').to.equal(true);
   });
 
   it('Manage Accounts close does NOT reopen the provider if user navigated off Accounts', () => {
     const el = createAppShellNoRepo();
-    (el as any).showGitHub = true;
+    dialogs.open('gitHub');
     (el as any).handleManageAccounts({ detail: { integrationType: 'github' } });
     // User navigated into the profile list; closing should NOT bounce back.
     (el as any).handleProfileManagerClose({ detail: { fromView: 'list' } });
-    expect((el as any).showProfileManager).to.equal(false);
-    expect((el as any).showGitHub, 'no surprise reopen off Accounts').to.equal(false);
+    expect(dialogs.isOpen('profileManager')).to.equal(false);
+    expect(dialogs.isOpen('gitHub'), 'no surprise reopen off Accounts').to.equal(false);
+  });
+  it('a provider-less Manage Accounts request lands the user nowhere new', () => {
+    const el = createAppShellNoRepo();
+    // What the clone dialog's account picker sends: it wants the manager, but
+    // it has no provider dialog to be returned to — the user came from Clone.
+    (el as any).handleManageAccounts({ detail: {} });
+    expect(dialogs.isOpen('profileManager'), 'manager opened').to.equal(true);
+
+    (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+
+    expect(dialogs.isOpen('profileManager')).to.equal(false);
+    for (const id of ['gitHub', 'gitLab', 'bitbucket', 'azureDevOps', 'oidc'] as const) {
+      expect(dialogs.isOpen(id), `${id} must not open unasked`).to.equal(false);
+    }
+  });
+
+  it('announces the manager close so a mid-task surface can come back', () => {
+    const el = createAppShellNoRepo();
+    let announced = 0;
+    const listener = (): void => {
+      announced++;
+    };
+    window.addEventListener('profile-manager-closed', listener);
+    try {
+      (el as any).handleManageAccounts({ detail: {} });
+      (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+    } finally {
+      window.removeEventListener('profile-manager-closed', listener);
+    }
+    expect(announced, 'exactly one announcement').to.equal(1);
+  });
+
+  // The two return mechanisms must not both fire on one close. Reopening the
+  // provider dialog AND announcing the close would bring a waiting surface
+  // (the clone dialog) back stacked under the provider dialog.
+  it('a close that returns to a provider dialog defers the announcement until that dialog closes', () => {
+    const el = createAppShellNoRepo();
+    let announced = 0;
+    const listener = (): void => {
+      announced++;
+    };
+    window.addEventListener('profile-manager-closed', listener);
+    try {
+      dialogs.open('gitHub');
+      (el as any).handleManageAccounts({ detail: { integrationType: 'github' } });
+      (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+
+      expect(dialogs.isOpen('gitHub'), 'returned to the provider dialog').to.equal(true);
+      expect(announced, 'not announced while the provider dialog is up').to.equal(0);
+
+      (el as any).handleIntegrationDialogClose('github');
+      expect(dialogs.isOpen('gitHub')).to.equal(false);
+      expect(announced, 'announced once the detour is actually over').to.equal(1);
+
+      // Settled: a later, unrelated provider close does not announce again.
+      dialogs.open('gitHub');
+      (el as any).handleIntegrationDialogClose('github');
+      expect(announced, 'no stale announcement').to.equal(1);
+    } finally {
+      window.removeEventListener('profile-manager-closed', listener);
+    }
+  });
+
+  it('the nested trip — clone → manager → provider → Manage Accounts → manager — ends up back at clone, one dialog at a time', () => {
+    const el = createAppShellNoRepo();
+    let announced = 0;
+    const listener = (): void => {
+      announced++;
+    };
+    window.addEventListener('profile-manager-closed', listener);
+    try {
+      // Clone's picker asks for the manager, without a provider.
+      (el as any).handleManageAccounts({ detail: {} });
+      expect(dialogs.isOpen('profileManager')).to.equal(true);
+
+      // "Connect a new account" → GitHub, stacked on the manager.
+      (el as any).handleOpenIntegrationFromManager('github', {
+        detail: {
+          returnTo: 'profile-manager',
+          integrationType: 'github',
+          profileId: '',
+          profileName: '',
+          attach: false,
+        },
+      });
+      expect(dialogs.isOpen('gitHub')).to.equal(true);
+      expect((el as any).profileManagerDemoted, 'manager demoted under GitHub').to.equal(true);
+
+      // "Manage Accounts…" from the GitHub dialog's account selector.
+      (el as any).handleManageAccounts({ detail: { integrationType: 'github' } });
+      expect(dialogs.isOpen('gitHub')).to.equal(false);
+      expect(dialogs.isOpen('profileManager'), 'manager still open').to.equal(true);
+
+      // × on the manager's Accounts view: back to the GitHub dialog ONLY.
+      (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+      expect(dialogs.isOpen('profileManager')).to.equal(false);
+      expect(dialogs.isOpen('gitHub'), 'the provider dialog the user came from').to.equal(true);
+      expect(announced, 'clone is NOT reopened under it').to.equal(0);
+
+      // Closing the GitHub dialog ends the trip: now clone gets its return.
+      (el as any).handleIntegrationDialogClose('github');
+      expect(dialogs.isOpen('gitHub')).to.equal(false);
+      expect(dialogs.isOpen('profileManager'), 'the manager does not resurface').to.equal(false);
+      expect(announced, 'exactly one announcement, at the end').to.equal(1);
+    } finally {
+      window.removeEventListener('profile-manager-closed', listener);
+    }
+  });
+
+  it('a provider return that the user then navigates away from still announces exactly once', () => {
+    const el = createAppShellNoRepo();
+    let announced = 0;
+    const listener = (): void => {
+      announced++;
+    };
+    window.addEventListener('profile-manager-closed', listener);
+    try {
+      dialogs.open('gitHub');
+      (el as any).handleManageAccounts({ detail: { integrationType: 'github' } });
+      (el as any).handleProfileManagerClose({ detail: { fromView: 'accounts' } });
+      expect(announced).to.equal(0);
+
+      // From the returned-to GitHub dialog, into the manager again, then off
+      // the Accounts view before closing: no provider return this time, so
+      // the close itself is the end of the trip.
+      (el as any).handleManageAccounts({ detail: { integrationType: 'github' } });
+      (el as any).handleProfileManagerClose({ detail: { fromView: 'list' } });
+      expect(dialogs.isOpen('gitHub'), 'no reopen off Accounts').to.equal(false);
+      expect(announced, 'announced by the close that ended the trip').to.equal(1);
+
+      // And nothing is left armed for a later provider close.
+      dialogs.open('gitHub');
+      (el as any).handleIntegrationDialogClose('github');
+      expect(announced).to.equal(1);
+    } finally {
+      window.removeEventListener('profile-manager-closed', listener);
+    }
   });
   /* eslint-enable @typescript-eslint/no-explicit-any */
 });

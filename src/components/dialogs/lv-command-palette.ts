@@ -209,6 +209,17 @@ export class LvCommandPalette extends LitElement {
   /** Tag tips for graph navigation ("Reveal tag X in graph") */
   @property({ type: Array }) tags: Array<{ name: string; oid: string }> = [];
 
+  /**
+   * Text the search box starts with when the palette opens.
+   *
+   * The palette is the branch switcher — the native menu's "Switch Branch…"
+   * resolves here rather than to a second switcher built for the menu — so
+   * that entry point opens it pre-filtered ("Switch to ") instead of dropping
+   * the user on the full command list to type it out themselves. Every other
+   * entry point leaves it empty and gets the unfiltered palette it always had.
+   */
+  @property({ type: String }) initialQuery = '';
+
   @state() private searchQuery = '';
   @state() private selectedIndex = 0;
   @state() private filteredCommands: PaletteCommand[] = [];
@@ -283,7 +294,9 @@ export class LvCommandPalette extends LitElement {
       // app-wide until the user happened to click something.
       this.previouslyFocused = document.activeElement as HTMLElement | null;
       this.pointerMovedSinceOpen = false;
-      this.searchQuery = '';
+      // Re-read on every open, so a palette opened pre-filtered by one entry
+      // point does not stay filtered for the next Ctrl+P.
+      this.searchQuery = this.initialQuery;
       this.selectedIndex = 0;
       this.updateFilteredCommands();
       requestAnimationFrame(() => {

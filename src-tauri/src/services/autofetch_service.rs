@@ -205,6 +205,13 @@ async fn perform_fetch(
     let remote_name = remote_name.to_string();
     let expected_remote_url = expected_remote_url.to_string();
 
+    // Re-checked every cycle, not just when the loop was started: this is a
+    // long-lived task, and turning offline mode on mid-session used to leave it
+    // fetching every N minutes regardless.
+    if let Err(e) = crate::services::security::guard_remote_url(&expected_remote_url) {
+        return Err(e.to_string());
+    }
+
     tokio::task::spawn_blocking(move || {
         let repo =
             git2::Repository::open(&path).map_err(|e| format!("Failed to open repo: {}", e))?;

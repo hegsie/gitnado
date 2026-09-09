@@ -6,13 +6,14 @@ import {
   findCommand,
   injectCommandError,
   waitForCommand,
+  openAppDialog,
 } from '../fixtures/test-helpers';
 
 /**
  * E2E tests for the File History Panel (lv-file-history).
  *
- * The panel is rendered by the app shell in the main area when
- * showFileHistory is true and fileHistoryPath is set. It loads commits
+ * The panel is rendered by the app shell in the main area when the
+ * `fileHistory` dialog is open with a file path. It loads commits
  * via get_file_history and shows them in a scrollable list with:
  * - Header showing "File History" title, file path, commit count, and close button
  * - Commit items with short OID, summary, author, date, and "View" button
@@ -21,7 +22,7 @@ import {
  * - Empty state when no history exists
  *
  * Tests trigger the component through the app shell's real rendering flow
- * (setting showFileHistory/fileHistoryPath state) so that event wiring and
+ * (opening the `fileHistory` dialog in the store) so that event wiring and
  * store connections work correctly. Playwright locators pierce shadow DOM
  * to access internal elements.
  */
@@ -75,7 +76,7 @@ const MOCK_ENTRIES = [
 ];
 
 /**
- * Trigger file history display by setting app-shell state directly.
+ * Trigger file history display through the dialog store.
  * This mirrors the pattern used by the blame-view tests and reliably
  * triggers Lit's reactive update cycle.
  */
@@ -83,17 +84,7 @@ async function showFileHistory(
   page: import('@playwright/test').Page,
   filePath = 'src/main.ts'
 ): Promise<void> {
-  // Set app-shell properties directly to show the file history panel
-  await page.evaluate((fp) => {
-    const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
-      showFileHistory: boolean;
-      fileHistoryPath: string | null;
-    };
-    if (appShell) {
-      appShell.fileHistoryPath = fp;
-      appShell.showFileHistory = true;
-    }
-  }, filePath);
+  await openAppDialog(page, 'fileHistory', { filePath });
 
   await page.locator('lv-file-history').waitFor({ state: 'attached', timeout: 5000 });
   await waitForCommand(page, 'get_file_history');
@@ -224,7 +215,7 @@ test.describe('File History - Close', () => {
 
   test('clicking close button should remove file history panel', async ({ page }) => {
     // In the real app tree, the close event is handled by the app shell
-    // which sets showFileHistory=false, removing the component from the DOM
+    // which closes the fileHistory dialog, removing the component from the DOM
     await page.locator('lv-file-history .close-btn').click();
     await expect(page.locator('lv-file-history')).not.toBeAttached();
   });
@@ -625,16 +616,7 @@ test.describe('File History - Error Scenarios', () => {
     await injectCommandError(page, 'get_file_history', 'Failed to get history');
 
     // Trigger the file history panel (which will call get_file_history and get the error)
-    await page.evaluate(() => {
-      const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
-        showFileHistory: boolean;
-        fileHistoryPath: string | null;
-      };
-      if (appShell) {
-        appShell.fileHistoryPath = 'src/main.ts';
-        appShell.showFileHistory = true;
-      }
-    });
+    await openAppDialog(page, 'fileHistory', { filePath: 'src/main.ts' });
 
     // Wait for the file history panel to appear in the DOM
     await page.locator('lv-file-history').waitFor({ state: 'attached', timeout: 5000 });

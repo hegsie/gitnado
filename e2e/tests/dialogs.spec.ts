@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { setupOpenRepository, setupTauriMocks } from '../fixtures/tauri-mock';
 import { AppPage } from '../pages/app.page';
 import { DialogsPage } from '../pages/dialogs.page';
@@ -523,17 +523,13 @@ test.describe('Dialogs - Error Scenarios', () => {
     await page.keyboard.press('Meta+,');
     await expect(dialogs.settings.dialog).toBeVisible();
 
-    // Find and change the font size select (second select in the dialog)
-    const selects = page.locator('lv-settings-dialog select');
-    const count = await selects.count();
-    expect(count).toBeGreaterThan(0);
-
-    // Change the first available select to its second option
-    const firstSelect = selects.first();
-    const options = await firstSelect.locator('option').allTextContents();
-    if (options.length > 1) {
-      await firstSelect.selectOption({ index: 1 });
-    }
+    // Addressed by id, not by position: the Appearance section has gained
+    // selects over time (a language picker now renders above these), and a
+    // positional locator quietly starts driving a different setting.
+    const fontSizeSelect = page.locator('lv-settings-dialog #font-size-select');
+    await expect(fontSizeSelect).toBeVisible();
+    await fontSizeSelect.selectOption('large');
+    await expect(fontSizeSelect).toHaveValue('large');
 
     // Dialog should still be visible (no crash)
     await expect(dialogs.settings.dialog).toBeVisible();
@@ -645,5 +641,131 @@ test.describe('Command Palette - open file in editor', () => {
 
     await expect(dialogs.commandPalette.palette).not.toBeVisible();
     await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+  });
+});
+
+// =========================================================================
+// Settings Dialog — the "Show Avatars" privacy gate
+//
+// Avatars are images the graph renderer pulls from gravatar.com with a plain
+// `new Image()`, so they never reach the Tauri-command network gate that
+// Offline Mode and the remote allowlist guard. The setting is opt-in, the row
+// says where the data goes, and Offline Mode / the allowlist take the control
+// away with the reason spelled out — rather than leaving a toggle that
+// silently does nothing.
+// =========================================================================
+
+/** The slice of the exposed settings store this suite drives. */
+type SettingsStoreWindow = {
+  __GITNADO_STORES__?: {
+    settingsStore?: {
+      getState: () => {
+        showAvatars: boolean;
+        setOfflineMode: (enabled: boolean) => void;
+        setRemoteAllowlist: (domains: string[]) => void;
+      };
+    };
+  };
+};
+
+test.describe('Settings Dialog - Show Avatars privacy gate', () => {
+  const avatarRow = 'lv-settings-dialog .setting-row:has(.setting-name:text-is("Show Avatars"))';
+  const offlineRow = 'lv-settings-dialog .setting-row:has(.setting-name:text-is("Offline Mode"))';
+  // The switch is an <lv-toggle>; its shadow `button[role="switch"]` is what
+  // carries the checked/disabled state (Playwright pierces the shadow root).
+  const avatarToggle = `${avatarRow} lv-toggle button[role="switch"]`;
+  const offlineToggle = `${offlineRow} lv-toggle button[role="switch"]`;
+  const avatarReason = `${avatarRow} .setting-unavailable-reason`;
+
+  test.beforeEach(async ({ page }) => {
+    await setupOpenRepository(page);
+  });
+
+  /** Set the security settings through the store, the way the app itself does. */
+  async function setSecurity(
+    page: Page,
+    security: { offlineMode?: boolean; remoteAllowlist?: string[] }
+  ): Promise<void> {
+    await page.waitForFunction(
+      () =>
+        typeof (window as unknown as SettingsStoreWindow).__GITNADO_STORES__?.settingsStore !==
+        'undefined'
+    );
+    await page.evaluate((s) => {
+      const store = (
+        window as unknown as SettingsStoreWindow
+      ).__GITNADO_STORES__!.settingsStore!.getState();
+      if (s.offlineMode !== undefined) store.setOfflineMode(s.offlineMode);
+      if (s.remoteAllowlist !== undefined) store.setRemoteAllowlist(s.remoteAllowlist);
+    }, security);
+  }
+
+  test('the row names the third party and starts off', async ({ page }) => {
+    await page.keyboard.press('Meta+,');
+    await expect(page.locator(avatarRow)).toBeVisible();
+
+    const description = page.locator(`${avatarRow} .setting-description`);
+    await expect(description).toContainText('Gravatar');
+    await expect(description).toContainText('third-party');
+    await expect(description).toContainText('Offline Mode');
+
+    await expect(page.locator(avatarToggle)).not.toBeChecked();
+    await expect(page.locator(avatarToggle)).toBeEnabled();
+    await expect(page.locator(avatarReason)).toHaveCount(0);
+  });
+
+  test('the row is disabled with a reason when Offline Mode is already on', async ({ page }) => {
+    await setSecurity(page, { offlineMode: true });
+
+    await page.keyboard.press('Meta+,');
+    await expect(page.locator(avatarRow)).toBeVisible();
+
+    await expect(page.locator(avatarToggle)).toBeDisabled();
+    await expect(page.locator(avatarReason)).toBeVisible();
+    await expect(page.locator(avatarReason)).toContainText('Offline Mode');
+    await expect(page.locator(avatarReason)).toContainText('gravatar.com');
+  });
+
+  test('switching Offline Mode on disables the row without reopening the dialog', async ({
+    page,
+  }) => {
+    await page.keyboard.press('Meta+,');
+    await expect(page.locator(avatarToggle)).toBeEnabled();
+
+    await page.locator(offlineToggle).click();
+
+    await expect(page.locator(avatarToggle)).toBeDisabled();
+    await expect(page.locator(avatarReason)).toContainText('Offline Mode');
+  });
+
+  test('an allowlist without gravatar.com disables the row', async ({ page }) => {
+    await setSecurity(page, { remoteAllowlist: ['github.com'] });
+
+    await page.keyboard.press('Meta+,');
+
+    await expect(page.locator(avatarToggle)).toBeDisabled();
+    await expect(page.locator(avatarReason)).toContainText('allowlist');
+  });
+
+  test('an allowlist that includes gravatar.com leaves the row usable', async ({ page }) => {
+    await setSecurity(page, { remoteAllowlist: ['gravatar.com'] });
+
+    await page.keyboard.press('Meta+,');
+
+    await expect(page.locator(avatarToggle)).toBeEnabled();
+    await expect(page.locator(avatarReason)).toHaveCount(0);
+  });
+
+  test('opting in turns avatar fetching on in the settings store', async ({ page }) => {
+    await page.keyboard.press('Meta+,');
+
+    await page.locator(avatarToggle).click();
+
+    await expect(page.locator(avatarToggle)).toBeChecked();
+    await page.waitForFunction(
+      () =>
+        (window as unknown as SettingsStoreWindow).__GITNADO_STORES__?.settingsStore?.getState()
+          ?.showAvatars === true
+    );
   });
 });

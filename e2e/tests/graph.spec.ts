@@ -1199,3 +1199,214 @@ test.describe('Graph Load Error Retry', () => {
     await expect(page.locator('lv-graph-canvas .graph-overlay.empty-state')).toBeVisible();
   });
 });
+
+/**
+ * Ctrl+clicking several commits and acting on the whole set.
+ *
+ * The canvas has always built a multi-selection; nothing consumed it, so the
+ * commit context menu could only ever act on one commit. These drive real
+ * Ctrl+clicks on the canvas (the row-based hit test makes the coordinates
+ * computable) and assert the batch actions the menu grows.
+ */
+test.describe('Graph multi-selection actions', () => {
+  const HISTORY = [makeCommit(0, ['commit1']), makeCommit(1, ['commit2']), makeCommit(2, [])];
+
+  /** Screen coordinates of a graph row, derived the way hitTest reads them. */
+  async function rowPoint(
+    page: import('@playwright/test').Page,
+    row: number
+  ): Promise<{ x: number; y: number }> {
+    const box = await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox();
+    if (!box) throw new Error('the graph canvas has no box');
+    const handle = await getGraphCanvasHandle(page);
+    const metrics = await page.evaluate((el) => {
+      const canvas = el as HTMLElement & {
+        HEADER_HEIGHT: number;
+        PADDING: number;
+        ROW_HEIGHT: number;
+        getViewport: () => { scrollTop: number };
+      };
+      return {
+        header: canvas.HEADER_HEIGHT,
+        padding: canvas.PADDING,
+        rowHeight: canvas.ROW_HEIGHT,
+        scrollTop: canvas.getViewport().scrollTop,
+      };
+    }, handle);
+    return {
+      x: box.x + 12,
+      y:
+        box.y +
+        metrics.header +
+        metrics.padding +
+        row * metrics.rowHeight -
+        metrics.scrollTop,
+    };
+  }
+
+  async function clickRow(
+    page: import('@playwright/test').Page,
+    row: number,
+    options: { ctrl?: boolean; button?: 'right' } = {}
+  ): Promise<void> {
+    const point = await rowPoint(page, row);
+    // page.mouse.click takes no modifiers — hold Control around the click the
+    // way a user does.
+    if (options.ctrl) await page.keyboard.down('Control');
+    try {
+      await page.mouse.click(point.x, point.y, options.button ? { button: options.button } : {});
+    } finally {
+      if (options.ctrl) await page.keyboard.up('Control');
+    }
+  }
+
+  /** Load a three-commit history (commit0 newest, commit2 the root). */
+  async function loadHistory(
+    page: import('@playwright/test').Page,
+    extraMocks: Record<string, unknown> = {}
+  ): Promise<void> {
+    await startCommandCaptureWithMocks(page, {
+      get_commit_history: HISTORY,
+      get_commit_total: 3,
+      get_refs_by_commit: {},
+      cherry_pick: HISTORY[0],
+      'plugin:dialog|message': 'Ok',
+      ...extraMocks,
+    });
+    const handle = await getGraphCanvasHandle(page);
+    await page.evaluate((el) => {
+      (el as HTMLElement & { refresh(): void }).refresh();
+    }, handle);
+    await waitForNodeCount(page, 3);
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await setupOpenRepository(page);
+    await expect(page.locator('lv-graph-canvas')).toBeVisible();
+  });
+
+  test('ctrl-clicking builds a selection the context menu can act on', async ({ page }) => {
+    await loadHistory(page);
+
+    await clickRow(page, 2);
+    await waitForSelectedNode(page, 'commit2');
+    await clickRow(page, 1, { ctrl: true });
+    await clickRow(page, 0, { ctrl: true });
+
+    expect((await getSelectedNodeOids(page)).sort()).toEqual(['commit0', 'commit1', 'commit2']);
+    // The set is announced, not just painted
+    await expect(page.locator('lv-graph-canvas [role="status"]')).toContainText(
+      '3 commits selected'
+    );
+
+    // Right-clicking inside the selection keeps it and opens the batch menu
+    await clickRow(page, 1, { button: 'right' });
+    await expect(page.locator('.context-menu')).toBeVisible();
+    await expect(page.locator('[data-testid="multi-commit-count"]')).toHaveText(
+      '3 commits selected'
+    );
+    await expect(page.locator('[data-testid="multi-cherry-pick"]')).toHaveText(
+      /Cherry-pick 3 commits/
+    );
+    await expect(page.locator('[data-testid="multi-create-patch"]')).toHaveText(
+      /Create patch from 3 commits/
+    );
+    // Compare takes two refs, so three commits do not offer it
+    await expect(page.locator('[data-testid="multi-compare"]')).toHaveCount(0);
+  });
+
+  test('cherry-picking the selection applies every commit oldest first', async ({ page }) => {
+    await loadHistory(page);
+
+    await clickRow(page, 0);
+    await waitForSelectedNode(page, 'commit0');
+    await clickRow(page, 1, { ctrl: true });
+    await clickRow(page, 2, { ctrl: true });
+    await clickRow(page, 0, { button: 'right' });
+
+    await page.locator('[data-testid="multi-cherry-pick"]').click();
+
+    await waitForCommand(page, 'cherry_pick');
+    await expect
+      .poll(async () => (await findCommand(page, 'cherry_pick')).length)
+      .toBe(3);
+    const picks = await findCommand(page, 'cherry_pick');
+    // Clicked newest first; applied ancestor first regardless
+    expect(picks.map((c) => (c.args as { commitOid: string }).commitOid)).toEqual([
+      'commit2',
+      'commit1',
+      'commit0',
+    ]);
+    await expect(page.locator('.toast.success').first()).toContainText(
+      'Cherry-picked 3 commits'
+    );
+    await expect(page.locator('.context-menu')).toHaveCount(0);
+  });
+
+  test('a failed pick stops the sequence and reports what is left', async ({ page }) => {
+    await loadHistory(page, {
+      cherry_pick: { __error__: 'could not apply patch' },
+    });
+
+    await clickRow(page, 2);
+    await waitForSelectedNode(page, 'commit2');
+    await clickRow(page, 1, { ctrl: true });
+    await clickRow(page, 0, { ctrl: true });
+    await clickRow(page, 1, { button: 'right' });
+
+    await page.locator('[data-testid="multi-cherry-pick"]').click();
+
+    await waitForCommand(page, 'cherry_pick');
+    const toast = page.locator('.toast.error').first();
+    await expect(toast).toContainText('stopped on the first of 3 commits');
+    await expect(toast).toContainText('could not apply patch');
+    await expect(toast).toContainText('Still to apply after it: commit1, commit0');
+    // It stopped: the remaining commits were never sent
+    expect(await findCommand(page, 'cherry_pick')).toHaveLength(1);
+  });
+
+  test('two selected commits can be compared against each other', async ({ page }) => {
+    await loadHistory(page);
+
+    await clickRow(page, 0);
+    await waitForSelectedNode(page, 'commit0');
+    await clickRow(page, 2, { ctrl: true });
+    await clickRow(page, 0, { button: 'right' });
+
+    await expect(page.locator('[data-testid="multi-compare"]')).toBeVisible();
+    await page.locator('[data-testid="multi-compare"]').click();
+
+    await expect(page.locator('lv-compare-branches-dialog lv-modal[open]')).toBeVisible();
+    // The older commit is the base, the newer one the compare side
+    await expect(page.locator('lv-compare-branches-dialog #base-ref-select')).toHaveValue(
+      'commit2'
+    );
+    await expect(page.locator('lv-compare-branches-dialog #compare-ref-select')).toHaveValue(
+      'commit0'
+    );
+  });
+
+  test('the export dialog opens with the whole selection pre-ticked for patches', async ({
+    page,
+  }) => {
+    await loadHistory(page);
+
+    await clickRow(page, 2);
+    await waitForSelectedNode(page, 'commit2');
+    await clickRow(page, 1, { ctrl: true });
+    await clickRow(page, 0, { ctrl: true });
+    await clickRow(page, 1, { button: 'right' });
+
+    await page.locator('[data-testid="multi-create-patch"]').click();
+
+    await expect(page.locator('lv-export-import-dialog lv-modal[open]')).toBeVisible();
+    for (const oid of ['commit0', 'commit1', 'commit2']) {
+      await expect(
+        page.locator(`lv-export-import-dialog input[data-oid="${oid}"]`)
+      ).toBeChecked();
+    }
+    await expect(
+      page.locator('lv-export-import-dialog [data-testid="patch-selected-count"]')
+    ).toContainText('3 selected');
+  });
+});

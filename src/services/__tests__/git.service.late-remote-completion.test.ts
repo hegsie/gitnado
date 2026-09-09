@@ -60,6 +60,8 @@ type UiStoreModule = typeof import('../../stores/ui.store.ts');
 let uiStore: UiStoreModule['uiStore'];
 type GitServiceModule = typeof import('../git.service.ts');
 let gitService: GitServiceModule;
+type DialogStoreModule = typeof import('../../stores/dialog.store.ts');
+let dialogs: DialogStoreModule['dialogs'];
 
 /**
  * The tag AppShell is registered under (`@customElement` in app-shell.ts).
@@ -76,7 +78,6 @@ const REPO_PATH = '/repos/alpha';
 
 /** The private conflict-dialog state the real AppShell drives. */
 interface ShellConflictState {
-  showConflictDialog: boolean;
   conflictDialogConfig?: { repoPath?: string; operationType?: string };
 }
 
@@ -135,6 +136,7 @@ describe('git.service late remote-operation completions', () => {
   before(async () => {
     gitService = await import('../git.service.ts');
     ({ uiStore } = await import('../../stores/ui.store.ts'));
+    ({ dialogs } = await import('../../stores/dialog.store.ts'));
     // The REAL component, not a stand-in: the conflict route hangs off a
     // querySelector for its tag, so mounting anything else would let a wrong
     // selector — or a shell that never listens — pass unnoticed.
@@ -221,7 +223,7 @@ describe('git.service late remote-operation completions', () => {
         { repositoryPath: REPO_PATH, operationType: 'merge' },
       ]);
       // ...and the real handler must have acted on it, not just received it.
-      expect(shellState(shell).showConflictDialog, 'the dialog is open').to.equal(true);
+      expect(dialogs.isOpen('conflict'), 'the dialog is open').to.equal(true);
       expect(shellState(shell).conflictDialogConfig?.repoPath).to.equal(REPO_PATH);
       expect(shellState(shell).conflictDialogConfig?.operationType).to.equal('merge');
       // Not an error: the pull landed and now needs resolving.
@@ -256,7 +258,7 @@ describe('git.service late remote-operation completions', () => {
   });
 
   it('still refreshes a late failure that is not a conflict', async () => {
-    const { shell, conflicts, cleanup } = await mountShell();
+    const { conflicts, cleanup } = await mountShell();
 
     try {
       emit('remote-operation-completed', {
@@ -270,7 +272,7 @@ describe('git.service late remote-operation completions', () => {
       });
 
       expect(conflicts, 'only a conflict opens the conflict dialog').to.deep.equal([]);
-      expect(shellState(shell).showConflictDialog).to.equal(false);
+      expect(dialogs.isOpen('conflict')).to.equal(false);
       expect(refreshes).to.deep.equal([REPO_PATH]);
       expect(newestToast()?.type).to.equal('error');
     } finally {

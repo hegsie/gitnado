@@ -5,6 +5,7 @@
 //! All API functions accept an optional token parameter from the frontend.
 
 use crate::error::{GitnadoError, Result};
+use crate::models::{ProviderRepository, ProviderRepositoryPage};
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
@@ -21,10 +22,20 @@ fn resolve_token(token: Option<String>) -> Result<String> {
     }
 }
 
+/// The HTTP client every outbound GitLab API call in this module goes through.
+///
+/// GitLab is self-hostable, so the host to check is the instance URL the call
+/// is aimed at rather than a fixed constant — the same value the frontend gate
+/// passes (`providerApiHost` in src/services/git.service.ts).
+fn api_client(instance_url: &str) -> Result<reqwest::Client> {
+    crate::services::security::guard_url(instance_url)?;
+    Ok(reqwest::Client::new())
+}
+
 /// Helper to make authenticated GitLab API GET requests
 /// Tries Bearer auth first (for OAuth tokens), falls back to PRIVATE-TOKEN (for PATs)
 async fn gitlab_get(url: &str, token: &str) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
+    let client = api_client(url)?;
 
     // Try Bearer auth first (for OAuth tokens)
     let response = client
@@ -54,7 +65,7 @@ async fn gitlab_post<T: Serialize + ?Sized>(
     token: &str,
     body: &T,
 ) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
+    let client = api_client(url)?;
 
     // Try Bearer auth first (for OAuth tokens)
     let response = client
@@ -250,8 +261,8 @@ pub async fn check_gitlab_connection(
         }
     };
 
-    let client = reqwest::Client::new();
     let api_url = build_api_url(&instance_url, "user");
+    let client = api_client(&api_url)?;
 
     // Try Bearer auth first (for OAuth tokens)
     let response = client
@@ -964,9 +975,135 @@ pub async fn get_gitlab_labels(
     Ok(labels.into_iter().map(|l| l.name).collect())
 }
 
+// ============================================================================
+// Repository Listing Commands
+// ============================================================================
+
+/// Default page size for the account project listing.
+///
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// discloses it to the user.
+const PROJECTS_DEFAULT_PER_PAGE: u32 = 30;
+
+/// The error a failed project listing reports.
+///
+/// A 401 means the account's stored token is dead — reported as
+/// `AUTH_REQUIRED` so the picker can offer "reconnect this account" instead of
+/// a raw API string. Anything else keeps the module's usual message shape.
+fn map_project_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return GitnadoError::AuthenticationRequired;
+    }
+    GitnadoError::OperationFailed(format!("GitLab API error {}: {}", status, body))
+}
+
+/// One project as `/projects` returns it.
+#[derive(Deserialize)]
+struct ApiProjectListEntry {
+    id: u64,
+    name: String,
+    path_with_namespace: String,
+    description: Option<String>,
+    visibility: Option<String>,
+    http_url_to_repo: String,
+    web_url: Option<String>,
+    default_branch: Option<String>,
+    last_activity_at: Option<String>,
+}
+
+/// Turn one page of `/projects` into the shared listing shape.
+///
+/// Split out from the request so the mapping, the empty case and the next-page
+/// arithmetic are testable without a network.
+fn parse_gitlab_project_page(
+    body: &str,
+    per_page: u32,
+    page: u32,
+) -> Result<ProviderRepositoryPage> {
+    let entries: Vec<ApiProjectListEntry> = serde_json::from_str(body)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse projects: {}", e)))?;
+
+    // A short page is the last one. GitLab reports totals in headers that
+    // self-hosted instances may omit above 10k projects, so page length is the
+    // reliable signal.
+    let next_page = if per_page > 0 && entries.len() >= per_page as usize {
+        Some(page + 1)
+    } else {
+        None
+    };
+
+    Ok(ProviderRepositoryPage {
+        repositories: entries
+            .into_iter()
+            .map(|project| {
+                let owner = project
+                    .path_with_namespace
+                    .rsplit_once('/')
+                    .map(|(namespace, _)| namespace.to_string())
+                    .unwrap_or_default();
+                ProviderRepository {
+                    id: project.id.to_string(),
+                    name: project.name,
+                    owner,
+                    full_name: project.path_with_namespace,
+                    description: project.description,
+                    // "internal" is visible to instance members only, so it is
+                    // not public — treat everything but "public" as private.
+                    is_private: project.visibility.as_deref() != Some("public"),
+                    clone_url: project.http_url_to_repo,
+                    web_url: project.web_url,
+                    default_branch: project.default_branch,
+                    last_pushed_at: project.last_activity_at,
+                }
+            })
+            .collect(),
+        next_page,
+    })
+}
+
+/// List the projects the authenticated account is a member of.
+///
+/// One page per call — an account can belong to hundreds of projects, and the
+/// picker asks for the next page only when the user wants it. Ordered by last
+/// activity so the project someone is most likely to want comes first.
+#[command]
+pub async fn list_gitlab_projects(
+    instance_url: String,
+    per_page: Option<u32>,
+    page: Option<u32>,
+    token: Option<String>,
+) -> Result<ProviderRepositoryPage> {
+    let token = resolve_token(token)?;
+    let per_page = per_page.unwrap_or(PROJECTS_DEFAULT_PER_PAGE);
+    let page = page.unwrap_or(1).max(1);
+
+    let url = format!(
+        "{}?{}&page={}&membership=true&order_by=last_activity_at&sort=desc",
+        build_api_url(&instance_url, "projects"),
+        per_page_query_param(Some(per_page), PROJECTS_DEFAULT_PER_PAGE),
+        page
+    );
+
+    let response = gitlab_get(&url, &token).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(map_project_list_error(status, &body));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read projects: {}", e)))?;
+
+    parse_gitlab_project_page(&body, per_page, page)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
 
     #[test]
@@ -1151,6 +1288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_gitlab_connection_no_token() {
+        let _policy = no_policy();
         let result = check_gitlab_connection("https://gitlab.com".to_string(), None).await;
         assert!(result.is_ok());
         let status = result.unwrap();
@@ -1160,6 +1298,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_gitlab_connection_empty_token() {
+        let _policy = no_policy();
         let result =
             check_gitlab_connection("https://gitlab.com".to_string(), Some("".to_string())).await;
         assert!(result.is_ok());
@@ -1167,8 +1306,126 @@ mod tests {
         assert!(!status.connected);
     }
 
+    // ========================================================================
+    // Project Listing Tests
+    // ========================================================================
+
+    const PROJECT_PAGE_JSON: &str = r#"[
+        {
+            "id": 11,
+            "name": "Gitnado",
+            "path_with_namespace": "group/sub/gitnado",
+            "description": "A git client",
+            "visibility": "private",
+            "http_url_to_repo": "https://gitlab.com/group/sub/gitnado.git",
+            "web_url": "https://gitlab.com/group/sub/gitnado",
+            "default_branch": "main",
+            "last_activity_at": "2024-05-01T10:00:00Z"
+        },
+        {
+            "id": 12,
+            "name": "Docs",
+            "path_with_namespace": "group/docs",
+            "description": null,
+            "visibility": "public",
+            "http_url_to_repo": "https://gitlab.com/group/docs.git",
+            "web_url": "https://gitlab.com/group/docs",
+            "default_branch": null,
+            "last_activity_at": null
+        }
+    ]"#;
+
+    #[test]
+    fn test_parse_gitlab_project_page_maps_fields() {
+        let page = parse_gitlab_project_page(PROJECT_PAGE_JSON, 30, 1).expect("page should parse");
+
+        assert_eq!(page.repositories.len(), 2);
+        let first = &page.repositories[0];
+        assert_eq!(first.id, "11");
+        assert_eq!(first.name, "Gitnado");
+        // The namespace is everything before the last path segment, so a
+        // subgroup is preserved rather than truncated to the top-level group.
+        assert_eq!(first.owner, "group/sub");
+        assert_eq!(first.full_name, "group/sub/gitnado");
+        assert!(first.is_private);
+        assert_eq!(first.clone_url, "https://gitlab.com/group/sub/gitnado.git");
+        assert_eq!(first.default_branch.as_deref(), Some("main"));
+        assert_eq!(
+            first.last_pushed_at.as_deref(),
+            Some("2024-05-01T10:00:00Z")
+        );
+        assert!(!page.repositories[1].is_private);
+    }
+
+    #[test]
+    fn test_parse_gitlab_project_page_internal_is_not_public() {
+        // "internal" is visible to instance members only — showing it as public
+        // would misreport who can see the project.
+        let json = r#"[{
+            "id": 1,
+            "name": "x",
+            "path_with_namespace": "g/x",
+            "description": null,
+            "visibility": "internal",
+            "http_url_to_repo": "https://gitlab.com/g/x.git",
+            "web_url": null,
+            "default_branch": null,
+            "last_activity_at": null
+        }]"#;
+        let page = parse_gitlab_project_page(json, 30, 1).expect("page should parse");
+        assert!(page.repositories[0].is_private);
+    }
+
+    #[test]
+    fn test_parse_gitlab_project_page_pagination() {
+        // A full page means there may be another one; a short page ends it.
+        assert_eq!(
+            parse_gitlab_project_page(PROJECT_PAGE_JSON, 2, 1)
+                .expect("page should parse")
+                .next_page,
+            Some(2)
+        );
+        assert_eq!(
+            parse_gitlab_project_page(PROJECT_PAGE_JSON, 30, 1)
+                .expect("page should parse")
+                .next_page,
+            None
+        );
+        assert_eq!(
+            parse_gitlab_project_page(PROJECT_PAGE_JSON, 2, 3)
+                .expect("page should parse")
+                .next_page,
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn test_parse_gitlab_project_page_empty() {
+        let page = parse_gitlab_project_page("[]", 30, 1).expect("page should parse");
+        assert!(page.repositories.is_empty());
+        assert_eq!(page.next_page, None);
+    }
+
+    #[test]
+    fn test_map_project_list_error_auth() {
+        let err = map_project_list_error(reqwest::StatusCode::UNAUTHORIZED, "401 Unauthorized");
+        assert!(matches!(err, GitnadoError::AuthenticationRequired));
+
+        let other = map_project_list_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "boom");
+        assert!(matches!(other, GitnadoError::OperationFailed(_)));
+        assert!(other.to_string().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn test_list_gitlab_projects_no_token() {
+        let _policy = no_policy();
+        let result = list_gitlab_projects("https://gitlab.com".to_string(), None, None, None).await;
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
     async fn test_list_gitlab_merge_requests_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_merge_requests(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1182,6 +1439,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_gitlab_merge_request_no_token() {
+        let _policy = no_policy();
         let result = get_gitlab_merge_request(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1194,6 +1452,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_gitlab_issues_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_issues(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1208,6 +1467,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_gitlab_pipelines_no_token() {
+        let _policy = no_policy();
         let result = list_gitlab_pipelines(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),
@@ -1221,6 +1481,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_gitlab_labels_no_token() {
+        let _policy = no_policy();
         let result = get_gitlab_labels(
             "https://gitlab.com".to_string(),
             "user/repo".to_string(),

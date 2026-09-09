@@ -2164,6 +2164,24 @@ export class LvGitLabDialog extends LitElement {
     `;
   }
 
+  /**
+   * Open the create-merge-request form with `sourceBranch` prefilled as the
+   * source branch.
+   *
+   * The entry point for the sidebar's branch context menu, which deliberately
+   * does NOT build its own create flow: this dialog already owns the form, the
+   * account selection and the create call, so the menu reuses them. `baseBranch`
+   * is only a suggestion and is applied ONLY when the field is still empty, so
+   * a draft the user already typed here is never overwritten.
+   */
+  public startCreateMergeRequest(sourceBranch: string, baseBranch?: string): void {
+    this.createMrSource = sourceBranch;
+    if (baseBranch && !this.createMrTarget) {
+      this.createMrTarget = baseBranch;
+    }
+    this.activeTab = 'create-mr';
+  }
+
   render() {
     return html`
       <lv-modal

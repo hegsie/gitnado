@@ -33,10 +33,11 @@ const invoked: { command: string; args?: unknown }[] = [];
   unregisterListener: (_event: string, _eventId: number) => {},
 };
 
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import '../lv-clone-dialog.ts';
 import type { LvCloneDialog } from '../lv-clone-dialog.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
+import { uiStore } from '../../../stores/ui.store.ts';
 
 /** Resolver for the pending clone, so the test controls when it finishes. */
 let finishClone: ((value: unknown) => void) | null = null;
@@ -53,19 +54,37 @@ function cloneButton(el: LvCloneDialog): HTMLButtonElement {
   return footerButtons(el)[1];
 }
 
-async function startClone(el: LvCloneDialog): Promise<void> {
+function urlInput(el: LvCloneDialog): HTMLInputElement {
+  return el.shadowRoot!.querySelector('input') as HTMLInputElement;
+}
+
+function toastMessages(): string[] {
+  return uiStore.getState().toasts.map((t) => t.message);
+}
+
+async function startClone(
+  el: LvCloneDialog,
+  options: { url?: string; submodules?: boolean } = {},
+): Promise<void> {
   el.open();
   await el.updateComplete;
 
-  const urlInput = el.shadowRoot!.querySelector('input') as HTMLInputElement;
-  urlInput.value = 'https://example.com/hung/repo.git';
-  urlInput.dispatchEvent(new Event('input'));
+  const url = urlInput(el);
+  url.value = options.url ?? 'https://example.com/hung/repo.git';
+  url.dispatchEvent(new Event('input'));
   await el.updateComplete;
 
   const destInput = el.shadowRoot!.querySelectorAll('input')[1] as HTMLInputElement;
   destInput.value = '/tmp/clone-target';
   destInput.dispatchEvent(new Event('input'));
   await el.updateComplete;
+
+  if (options.submodules) {
+    const checkbox = el.shadowRoot!.querySelector('#clone-submodules') as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+  }
 
   cloneButton(el).click();
   // handleClone awaits the progress listener before invoking the clone, so a
@@ -86,6 +105,7 @@ describe('lv-clone-dialog cancellation', () => {
   beforeEach(async () => {
     invoked.length = 0;
     finishClone = null;
+    uiStore.setState({ toasts: [] });
     settingsStore.getState().setDefaultClonePath('');
 
     mockInvoke = (command) => {
@@ -209,12 +229,149 @@ describe('lv-clone-dialog cancellation', () => {
     await flush();
     await el.updateComplete;
 
-    // Backend reports the cancellation as a failed clone.
-    finishClone?.(Promise.reject(new Error('Clone cancelled')));
+    // The backend reports the cancellation with the code every other
+    // cancellable operation uses (`OperationCancelled`).
+    finishClone?.(Promise.reject({ code: 'OPERATION_CANCELLED', message: 'Operation cancelled' }));
     await flush();
     await el.updateComplete;
 
     // The dialog must now be closable: Cancel goes back to plain dismissal.
+    expect(cancelButton(el).disabled).to.be.false;
+    // And the user's own Cancel is not painted back at them as a red failure,
+    // the way a declined network confirm already is not.
+    // Compared as text rather than as nodes: a DOM node in an assertion
+    // failure does not serialise out of the browser.
+    expect(
+      el.shadowRoot!.querySelector('.error-message')?.textContent ?? '',
+      'a cancelled clone must not be shown as an error',
+    ).to.equal('');
+    expect(el.shadowRoot!.querySelector('.progress-text') === null).to.equal(true);
+    // The progress section is gone, so without this the user's Cancel left no
+    // trace at all — fetch, pull and push each toast the same acknowledgement.
+    expect(toastMessages(), 'the cancellation is acknowledged').to.include('Clone cancelled');
+    expect(uiStore.getState().toasts.find((t) => t.message === 'Clone cancelled')?.type).to.equal(
+      'info',
+    );
+  });
+
+  it('does not toast a cancellation for a real clone failure', async () => {
+    await startClone(el);
+
+    finishClone?.(Promise.reject({ code: 'CUSTOM_ERROR', message: 'git clone failed: boom' }));
+    await flush();
+    await el.updateComplete;
+
+    expect(toastMessages()).to.not.include('Clone cancelled');
+  });
+
+  // `handleClone` shows "Cancel Clone" from the moment it starts, but the
+  // service still awaits the network gate and the keyring token lookup before
+  // it sends `clone_repository` — and the backend resets its cancellation
+  // flag when the clone starts. A Cancel pressed in that window used to be
+  // acknowledged by `cancel_clone`, then ignored: the clone ran anyway with the
+  // footer stuck on a disabled "Cancelling…" and every dismissal routed back
+  // into the same refused cancel.
+  it('stops a clone cancelled while the token lookup is still pending', async () => {
+    let releaseKeyring: ((value: unknown) => void) | null = null;
+    mockInvoke = (command) => {
+      if (command === 'get_keyring_token') {
+        return new Promise((resolve) => {
+          releaseKeyring = resolve;
+        });
+      }
+      if (command === 'clone_repository') {
+        return new Promise((resolve) => {
+          finishClone = resolve;
+        });
+      }
+      return Promise.resolve(null);
+    };
+
+    // A github.com URL is what sends the clone through the stored-token lookup.
+    await startClone(el, { url: 'https://github.com/hung/repo.git' });
+    await waitUntil(() => releaseKeyring !== null, 'the clone is waiting on the keyring');
+    expect(cancelButton(el).textContent!.trim()).to.equal('Cancel Clone');
+    expect(
+      invoked.some((c) => c.command === 'clone_repository'),
+      'control: the clone command has not been sent yet',
+    ).to.be.false;
+
+    cancelButton(el).click();
+    await flush();
+    await el.updateComplete;
+    expect(invoked.some((c) => c.command === 'cancel_clone')).to.be.true;
+
+    releaseKeyring!(null);
+    await waitUntil(
+      async () => {
+        await el.updateComplete;
+        return cancelButton(el).textContent!.trim() === 'Cancel';
+      },
+      'the dialog was released',
+    );
+
+    expect(
+      invoked.some((c) => c.command === 'clone_repository'),
+      'a clone cancelled before it was sent must never be sent',
+    ).to.be.false;
+    expect(cancelButton(el).disabled, 'Cancel is pressable again').to.be.false;
+    expect(urlInput(el).disabled, 'the form is editable again').to.be.false;
+    expect(cloneButton(el).disabled, 'a fresh clone can be started').to.be.false;
+    expect(el.shadowRoot!.querySelector('.error-message')?.textContent ?? '').to.equal('');
+    expect(toastMessages()).to.include('Clone cancelled');
+  });
+
+  // The CLI clone path reaps the child on cancel; a child that had already
+  // finished makes that cancel return success. `isCancelling` then stayed set,
+  // so with "Clone submodules" ticked the footer button was disabled for the
+  // whole submodule phase and the dialog could not be closed.
+  it('leaves the dialog closable when a cancel lands after the clone already succeeded', async () => {
+    let listSubmodules: ((value: unknown) => void) | null = null;
+    mockInvoke = (command) => {
+      if (command === 'clone_repository') {
+        return new Promise((resolve) => {
+          finishClone = resolve;
+        });
+      }
+      if (command === 'get_submodules') {
+        // Parked so the submodule phase stays on screen.
+        return new Promise((resolve) => {
+          listSubmodules = resolve;
+        });
+      }
+      return Promise.resolve(null);
+    };
+
+    await startClone(el, { submodules: true });
+    cancelButton(el).click();
+    await flush();
+    await el.updateComplete;
+    expect(cancelButton(el).disabled, 'control: Cancel is held while cancelling').to.be.true;
+
+    finishClone?.(
+      Promise.resolve({ path: '/tmp/clone-target', name: 'repo', currentBranch: null }),
+    );
+    await waitUntil(() => listSubmodules !== null, 'the submodule phase started');
+    await el.updateComplete;
+
+    expect(cancelButton(el).textContent!.trim()).to.equal('Close');
+    expect(cancelButton(el).disabled, 'the submodule phase must be dismissable').to.be.false;
+
+    listSubmodules!([]);
+    await flush();
+  });
+
+  it('still shows a real clone failure as an error', async () => {
+    await startClone(el);
+
+    finishClone?.(
+      Promise.reject({ code: 'CUSTOM_ERROR', message: 'git clone failed: repository not found' }),
+    );
+    await flush();
+    await el.updateComplete;
+
+    const error = el.shadowRoot!.querySelector('.error-message')?.textContent ?? '';
+    expect(error, 'a failed clone must be reported').to.contain('repository not found');
     expect(cancelButton(el).disabled).to.be.false;
   });
 });

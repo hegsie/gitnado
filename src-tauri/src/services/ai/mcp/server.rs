@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
+use std::time::Duration;
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,44 @@ const MCP_CONFIG_FILE: &str = "mcp_config.json";
 
 /// Number of characters in a generated bearer token
 const AUTH_TOKEN_LEN: usize = 43;
+
+/// How long one connection may take to deliver its complete request (head and
+/// body) before it is closed.
+///
+/// Without it a client that opens a socket and then says nothing — or that
+/// announces a `Content-Length` and stalls — keeps its task and file descriptor
+/// alive for as long as the server runs. Thirty seconds is far longer than a
+/// loopback client legitimately needs while still bounding a stalled one.
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many connections are served at once.
+///
+/// The listener binds `127.0.0.1` only, so only local processes can reach it,
+/// but a local process must still not be able to exhaust the descriptor budget
+/// of the whole application by opening sockets in a loop. Connections beyond
+/// the cap are closed immediately rather than queued, so a misbehaving client
+/// cannot make work pile up unboundedly; MCP clients issue one short request at
+/// a time, so a real one never comes close to this many.
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+
+/// Per-connection limits applied by the accept loop. Held separately from
+/// [`McpConfig`] because they are not user-configurable; tests tighten them.
+#[derive(Debug, Clone, Copy)]
+struct ConnectionLimits {
+    /// Deadline for reading a complete request off one connection
+    read_timeout: Duration,
+    /// Maximum number of connections handled at the same time
+    max_concurrent: usize,
+}
+
+impl Default for ConnectionLimits {
+    fn default() -> Self {
+        Self {
+            read_timeout: REQUEST_READ_TIMEOUT,
+            max_concurrent: MAX_CONCURRENT_CONNECTIONS,
+        }
+    }
+}
 
 /// The message every rejected-authentication response carries.
 ///
@@ -413,6 +452,11 @@ impl McpServer {
 
     /// Start the MCP server
     pub async fn start(&mut self) -> Result<(), String> {
+        self.start_with_limits(ConnectionLimits::default()).await
+    }
+
+    /// Start the MCP server with explicit per-connection limits
+    async fn start_with_limits(&mut self, limits: ConnectionLimits) -> Result<(), String> {
         if self.running.load(Ordering::SeqCst) {
             return Err("MCP server is already running".to_string());
         }
@@ -437,7 +481,7 @@ impl McpServer {
         let auth = self.auth.clone();
 
         tokio::spawn(async move {
-            Self::run_server(listener, running, shutdown_rx, open_repos, auth).await;
+            Self::run_server(listener, running, shutdown_rx, open_repos, auth, limits).await;
         });
 
         // Remember that the server should come back up on the next launch
@@ -524,7 +568,12 @@ impl McpServer {
         mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
+        limits: ConnectionLimits,
     ) {
+        // One permit per in-flight connection; the permit is released when the
+        // connection task ends
+        let permits = Arc::new(tokio::sync::Semaphore::new(limits.max_concurrent));
+
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
@@ -534,10 +583,25 @@ impl McpServer {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, _addr)) => {
+                            // Refuse rather than queue past the cap: dropping the
+                            // stream closes it at once, so a local process opening
+                            // sockets in a loop cannot pile up tasks and
+                            // descriptors waiting for a turn.
+                            let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+                                tracing::warn!(
+                                    "MCP connection refused: {} connections already in flight",
+                                    limits.max_concurrent
+                                );
+                                drop(stream);
+                                continue;
+                            };
                             let repos = open_repos.clone();
                             let auth = auth.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = Self::handle_connection(stream, repos, auth).await {
+                                let _permit = permit;
+                                if let Err(e) =
+                                    Self::handle_connection(stream, repos, auth, limits).await
+                                {
                                     tracing::warn!("MCP connection error: {}", e);
                                 }
                             });
@@ -556,6 +620,7 @@ impl McpServer {
         mut stream: tokio::net::TcpStream,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
+        limits: ConnectionLimits,
     ) -> Result<(), String> {
         // Snapshot the auth rules once per connection so the lock is never held
         // across an await
@@ -568,11 +633,19 @@ impl McpServer {
         let mut buf = Vec::with_capacity(65536);
         let mut tmp = vec![0u8; 8192];
 
+        // One deadline for the whole request, not per read: a client that
+        // dribbles a byte at a time must not be able to hold the connection
+        // open indefinitely by staying just inside a per-read timeout.
+        let deadline = tokio::time::Instant::now() + limits.read_timeout;
+
         // Read headers first
         loop {
-            let n = stream
-                .read(&mut tmp)
+            let n = tokio::time::timeout_at(deadline, stream.read(&mut tmp))
                 .await
+                .map_err(|_| {
+                    // Dropping the stream on the way out closes the connection
+                    "Timed out waiting for the request".to_string()
+                })?
                 .map_err(|e| format!("Read error: {}", e))?;
 
             if n == 0 {
@@ -1133,11 +1206,10 @@ mod tests {
     #[tokio::test]
     async fn test_start_stop_server() {
         let (_dir, mut server) = test_server();
-        // Use a high port to avoid conflicts
         server
             .set_config(McpConfig {
                 enabled: true,
-                port: 19876,
+                port: free_port(),
                 allowed_origins: Vec::new(),
                 auth_token: String::new(),
             })
@@ -1257,20 +1329,19 @@ mod tests {
         assert!(!server.get_config().enabled);
     }
 
-    /// Ask the OS for a currently unused localhost port
-    async fn free_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to reserve a port");
-        listener
-            .local_addr()
-            .expect("Failed to read reserved address")
-            .port()
+    /// A localhost port this test can configure the server to bind.
+    ///
+    /// Not "bind port 0 and read it back": the server binds the configured
+    /// port itself, later, and a port that was free when probed is back in
+    /// the ephemeral range the moment the probe closes — another test's
+    /// `connect()` can take it first. See `test_utils::reserve_test_port`.
+    fn free_port() -> u16 {
+        crate::test_utils::reserve_test_port()
     }
 
     #[tokio::test]
     async fn test_start_enables_and_stop_disables_persisted_config() {
-        let port = free_port().await;
+        let port = free_port();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let mut server = McpServer::new(dir.path().to_path_buf());
         server
@@ -1765,7 +1836,17 @@ mod tests {
         dir: &TempDir,
         allowed_origins: Vec<String>,
     ) -> (McpServer, u16, String) {
-        let port = free_port().await;
+        started_server_with_limits(dir, allowed_origins, ConnectionLimits::default()).await
+    }
+
+    /// The same, with per-connection limits tightened so the deadline and the
+    /// concurrency cap can be observed in test time
+    async fn started_server_with_limits(
+        dir: &TempDir,
+        allowed_origins: Vec<String>,
+        limits: ConnectionLimits,
+    ) -> (McpServer, u16, String) {
+        let port = free_port();
         let mut server = McpServer::new(dir.path().to_path_buf());
         server
             .set_config(McpConfig {
@@ -1776,8 +1857,40 @@ mod tests {
             })
             .expect("Failed to set config");
         let token = server.get_config().auth_token.clone();
-        server.start().await.expect("Failed to start server");
+        server
+            .start_with_limits(limits)
+            .await
+            .expect("Failed to start server");
         (server, port, token)
+    }
+
+    async fn connect(port: u16) -> tokio::net::TcpStream {
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("Failed to connect to the MCP server")
+    }
+
+    /// Read whatever the server sends before it closes the connection, giving
+    /// up after `budget`. `None` means the connection was still open.
+    ///
+    /// A reset counts as closed: when the server drops a connection past
+    /// the concurrency cap while the client's request bytes are still
+    /// unread, the kernel answers with RST rather than FIN, and the client
+    /// sees `ECONNRESET` instead of a clean EOF — the same refusal, only
+    /// raced differently against the client's write.
+    async fn read_until_closed(
+        stream: &mut tokio::net::TcpStream,
+        budget: Duration,
+    ) -> Option<String> {
+        let mut response = Vec::new();
+        match tokio::time::timeout(budget, stream.read_to_end(&mut response)).await {
+            Ok(Ok(_)) => Some(String::from_utf8_lossy(&response).to_string()),
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                Some(String::from_utf8_lossy(&response).to_string())
+            }
+            Ok(Err(e)) => panic!("Failed to read response: {}", e),
+            Err(_) => None,
+        }
     }
 
     #[tokio::test]
@@ -1881,6 +1994,177 @@ mod tests {
         );
         let response = send_raw(port, &authenticated).await;
         assert!(response.starts_with("HTTP/1.1 405"), "got: {}", response);
+
+        server.stop().await.expect("Failed to stop server");
+    }
+    // =====================================================
+    // Connection limits (read deadline and concurrency cap)
+    // =====================================================
+
+    #[tokio::test]
+    async fn test_a_client_that_sends_nothing_is_dropped_after_the_deadline() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _token) = started_server_with_limits(
+            &dir,
+            Vec::new(),
+            ConnectionLimits {
+                read_timeout: Duration::from_millis(200),
+                ..ConnectionLimits::default()
+            },
+        )
+        .await;
+
+        let mut silent = connect(port).await;
+        let closed = read_until_closed(&mut silent, Duration::from_secs(5)).await;
+        assert_eq!(
+            closed,
+            Some(String::new()),
+            "a client that opens a socket and says nothing must be dropped once the read deadline passes"
+        );
+
+        server.stop().await.expect("Failed to stop server");
+    }
+
+    #[tokio::test]
+    async fn test_a_client_that_stalls_mid_request_is_dropped_after_the_deadline() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, token) = started_server_with_limits(
+            &dir,
+            Vec::new(),
+            ConnectionLimits {
+                read_timeout: Duration::from_millis(200),
+                ..ConnectionLimits::default()
+            },
+        )
+        .await;
+
+        // Announce a body and never send it
+        let mut stalled = connect(port).await;
+        stalled
+            .write_all(
+                format!(
+                    "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: 4096\r\n\r\n",
+                    token
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("Failed to write head");
+        stalled.flush().await.expect("Failed to flush head");
+
+        let closed = read_until_closed(&mut stalled, Duration::from_secs(5)).await;
+        assert_eq!(
+            closed,
+            Some(String::new()),
+            "a client that announces a body and stalls must be dropped once the read deadline passes"
+        );
+
+        server.stop().await.expect("Failed to stop server");
+    }
+
+    #[tokio::test]
+    async fn test_a_slow_but_legitimate_client_is_still_served() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, token) = started_server_with_limits(
+            &dir,
+            Vec::new(),
+            ConnectionLimits {
+                read_timeout: Duration::from_secs(10),
+                ..ConnectionLimits::default()
+            },
+        )
+        .await;
+
+        let request = tools_list_request(&[format!("Authorization: Bearer {}", token)]);
+        let split = request.find("\r\n\r\n").expect("request has a head") + 4;
+        let (head, body) = request.split_at(split);
+
+        let mut slow = connect(port).await;
+        slow.write_all(head.as_bytes())
+            .await
+            .expect("Failed to write head");
+        slow.flush().await.expect("Failed to flush head");
+        // Well inside the deadline: the fix must not punish a slow client
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        slow.write_all(body.as_bytes())
+            .await
+            .expect("Failed to write body");
+        slow.flush().await.expect("Failed to flush body");
+
+        let response = read_until_closed(&mut slow, Duration::from_secs(5))
+            .await
+            .expect("the server must answer a slow but complete request");
+        assert!(response.starts_with("HTTP/1.1 200"), "got: {}", response);
+        assert!(response.contains("get_commit_history"));
+
+        server.stop().await.expect("Failed to stop server");
+    }
+
+    #[tokio::test]
+    async fn test_connections_past_the_cap_are_closed_and_the_slots_come_back() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        // A deadline long enough that the two silent holders keep their slots
+        // for the whole test
+        let (mut server, port, token) = started_server_with_limits(
+            &dir,
+            Vec::new(),
+            ConnectionLimits {
+                read_timeout: Duration::from_secs(30),
+                max_concurrent: 2,
+            },
+        )
+        .await;
+
+        // Two clients that connect and say nothing occupy both slots
+        let holders = vec![connect(port).await, connect(port).await];
+
+        // Probing until a deadline keeps the assertion independent of when
+        // the accept loop gets to each socket; a refused connection is closed
+        // at once rather than queued, so it reads EOF immediately.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut refused = false;
+        while tokio::time::Instant::now() < deadline {
+            let mut probe = connect(port).await;
+            if read_until_closed(&mut probe, Duration::from_millis(250)).await
+                == Some(String::new())
+            {
+                refused = true;
+                break;
+            }
+        }
+        assert!(
+            refused,
+            "a connection past the concurrency cap must be closed instead of queued"
+        );
+
+        // Closing the holders frees their slots again — once the server's
+        // tasks for them have run and seen EOF, which is why this too retries
+        // until a deadline rather than a fixed number of times: on a loaded
+        // machine a burst of refusals can come and go before those tasks are
+        // scheduled at all.
+        drop(holders);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut served = None;
+        while tokio::time::Instant::now() < deadline {
+            let mut client = connect(port).await;
+            let request = tools_list_request(&[format!("Authorization: Bearer {}", token)]);
+            client
+                .write_all(request.as_bytes())
+                .await
+                .expect("Failed to write request");
+            client.flush().await.expect("Failed to flush request");
+            if let Some(response) = read_until_closed(&mut client, Duration::from_secs(2)).await {
+                if response.starts_with("HTTP/1.1 200") {
+                    served = Some(response);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            served.is_some_and(|response| response.contains("get_commit_history")),
+            "a slot must become available again once a connection ends"
+        );
 
         server.stop().await.expect("Failed to stop server");
     }

@@ -632,9 +632,9 @@ function createMockHandler(mocks: typeof defaultMockData) {
       // AI provider commands
       case 'get_ai_providers':
         return [
-          { providerType: 'local_inference', name: 'Local AI (Embedded)', available: false, requiresApiKey: false, hasApiKey: false, endpoint: '', models: [], selectedModel: null },
-          { providerType: 'ollama', name: 'Ollama', available: false, requiresApiKey: false, hasApiKey: false, endpoint: 'http://localhost:11434', models: [], selectedModel: null },
-          { providerType: 'anthropic', name: 'Anthropic Claude', available: false, requiresApiKey: true, hasApiKey: false, endpoint: 'https://api.anthropic.com', models: [], selectedModel: null },
+          { providerType: 'local_inference', name: 'Local AI (Embedded)', available: false, probed: true, requiresApiKey: false, hasApiKey: false, endpoint: '', models: [], selectedModel: null },
+          { providerType: 'ollama', name: 'Ollama', available: false, probed: true, requiresApiKey: false, hasApiKey: false, endpoint: 'http://localhost:11434', models: [], selectedModel: null },
+          { providerType: 'anthropic', name: 'Anthropic Claude', available: false, probed: true, requiresApiKey: true, hasApiKey: false, endpoint: 'https://api.anthropic.com', models: [], selectedModel: null },
         ];
       case 'get_active_ai_provider':
         return null;
@@ -1204,7 +1204,7 @@ export async function setupTauriMocks(
             return { summary: 'Auto-generated commit', body: null };
           case 'get_ai_providers':
             return [
-              { providerType: 'local_inference', name: 'Local AI (Embedded)', available: false, requiresApiKey: false, hasApiKey: false, endpoint: '', models: [], selectedModel: null },
+              { providerType: 'local_inference', name: 'Local AI (Embedded)', available: false, probed: true, requiresApiKey: false, hasApiKey: false, endpoint: '', models: [], selectedModel: null },
             ];
           case 'get_active_ai_provider':
             return null;
@@ -1314,6 +1314,13 @@ export async function setupTauriMocks(
             );
             return null;
           }
+          // === Application menu bar ===
+          // The frontend pushes enabled state and accelerators on startup and
+          // whenever a repository opens or closes; there is no native menu in
+          // the browser, so the call just succeeds.
+          case 'sync_app_menu':
+            return null;
+
           // === Git Flow ===
           case 'get_gitflow_config':
             return state.gitflowConfig;

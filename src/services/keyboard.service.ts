@@ -774,7 +774,10 @@ export function registerDefaultShortcuts(actions: {
     });
   }
 
-  // Staging
+  // Staging.
+  // These act on the files the Changes list is SHOWING, which is the whole
+  // list unless a path filter is typed; lv-file-status toasts the narrowed
+  // scope in that case, so the unqualified description here cannot mislead.
   keyboardService.register('stage-all', {
     key: 's',
     action: actions.stageAll,

@@ -6,7 +6,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { CommandResult } from '../types/api.types.ts';
-import { logGitCommand, shouldLogToOutput } from './output-log.service.ts';
+import {
+  beginGitOperation,
+  settleGitOperation,
+  shouldLogToOutput,
+} from './output-log.service.ts';
+import { redactSecrets, synthesizeGitCommand } from './git-command-format.ts';
 
 /**
  * Invoke a Tauri command with type safety
@@ -27,11 +32,32 @@ export async function invokeCommand<T, A = unknown>(
         ? (argsRecord.repoPath as string)
         : undefined;
 
+  // The equivalent `git` command line for the operations that run through
+  // libgit2, so the Output panel shows a git invocation rather than an IPC
+  // name. Args are STILL never logged wholesale — they can carry credentials.
+  // `synthesizeGitCommand` reads an explicit per-command allowlist of fields
+  // (never `token`) and redacts what it renders; anything it does not cover
+  // falls back to the command name, exactly as before.
+  const logged = shouldLogToOutput(command);
+  const gitCommand = logged ? synthesizeGitCommand(command, args) : undefined;
+  // Register the operation for the duration of the call so a REAL `git` run
+  // reported by the backend can claim it. Operations that shell out (a signed
+  // commit, `push --force-with-lease`, a CLI clone, `rebase --continue`) would
+  // otherwise produce two rows for one action — see output-log.service.ts.
+  const operationId = logged
+    ? beginGitOperation(command, repoPath, gitCommand)
+    : undefined;
+  const startedAt = Date.now();
+
   try {
     const data = await invoke<T>(command, args as Record<string, unknown>);
-    // Args are intentionally never logged — they can carry credentials
-    if (shouldLogToOutput(command)) {
-      logGitCommand(command, '', true, repoPath);
+    if (operationId !== undefined) {
+      settleGitOperation(operationId, command, '', true, {
+        repoPath,
+        gitCommand,
+        synthesized: gitCommand !== undefined,
+        durationMs: Date.now() - startedAt,
+      });
     }
     return { success: true, data };
   } catch (error) {
@@ -50,8 +76,17 @@ export async function invokeCommand<T, A = unknown>(
       message = String(error);
     }
 
-    if (shouldLogToOutput(command)) {
-      logGitCommand(command, message, false, repoPath);
+    if (operationId !== undefined) {
+      // Backend error messages routinely quote a remote URL, which can carry
+      // `user:token@host` — scrub before it reaches the panel. When a real
+      // invocation already claimed this operation, the error is carried onto
+      // ITS row rather than opening a second one.
+      settleGitOperation(operationId, command, redactSecrets(message), false, {
+        repoPath,
+        gitCommand,
+        synthesized: gitCommand !== undefined,
+        durationMs: Date.now() - startedAt,
+      });
     }
 
     return {
@@ -65,15 +100,59 @@ export async function invokeCommand<T, A = unknown>(
 }
 
 /**
- * Listen to a Tauri event
+ * Call a listener's unlisten function so that teardown can never throw or
+ * reject, whatever state the event bridge is in.
+ *
+ * The closure `listen()` returns reads `window.__TAURI_EVENT_PLUGIN_INTERNALS__`
+ * and then makes an IPC round trip. Outside a real webview (unit tests that
+ * mock `invoke` and nothing else, a plain-browser preview) that global is
+ * absent, so the call rejects — and a disconnectedCallback has nowhere to send
+ * that rejection. It surfaces as an unhandled rejection that the test runner
+ * charges to whichever test happens to be running, i.e. as an intermittent
+ * failure of an unrelated test under load. The listener dies with the webview
+ * anyway, so the failure is swallowed here, once, rather than at every
+ * teardown site — that is the hand-enumerated list that goes stale.
+ */
+export function safeUnlisten(unlisten: UnlistenFn | null | undefined): void {
+  if (!unlisten) return;
+  try {
+    // Typed as `() => void`, but the closure Tauri returns is async: a failure
+    // arrives as a rejected promise, not a throw.
+    const result = unlisten() as unknown;
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch((error: unknown) => {
+        // No event bridge — nothing to unregister. Logged rather than dropped:
+        // a REAL IPC unregister failure looks identical from here, and a
+        // listener that silently stays attached is a bug nobody can see.
+        console.debug('[tauri-api] unlisten failed', error);
+      });
+    }
+  } catch (error) {
+    console.debug('[tauri-api] unlisten failed', error);
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/**
+ * Listen to a Tauri event.
+ *
+ * The unlisten this resolves to is teardown-safe — see `safeUnlisten`.
  */
 export async function listenToEvent<T>(
   event: string,
   handler: (payload: T) => void
 ): Promise<UnlistenFn> {
-  return listen<T>(event, (event) => {
+  const unlisten = await listen<T>(event, (event) => {
     handler(event.payload);
   });
+  return () => safeUnlisten(unlisten);
 }
 
 /**

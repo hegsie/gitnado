@@ -334,21 +334,33 @@ test.describe('Output Panel - Error Entry Display', () => {
     await expect(page.locator('lv-output-panel .entry-command.failure')).toHaveCount(2);
   });
 
-  test('failed entry with empty output should expand but show nothing', async ({ page }) => {
+  test('failed entry with empty output should explain the empty row', async ({ page }) => {
     await addFailedEntry(page, 'git checkout nonexistent', '');
     await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
 
-    // Expand the entry - with empty output, no .entry-output div should render
     await page.locator('lv-output-panel .entry-header').click();
 
-    // The component renders entry-output only when entry.output is truthy
-    // An empty string is falsy, so no output div appears
-    await expect(page.locator('lv-output-panel .entry-output')).toHaveCount(0);
+    // An expanded row is never an unexplained empty box: with nothing captured
+    // the panel says so rather than rendering blank.
+    await expect(page.locator('lv-output-panel .entry-output.empty-output')).toContainText(
+      'Failed with no output'
+    );
 
-    // But the expand icon should still toggle
+    // And the expand icon still toggles
     await expect(
       page.locator('lv-output-panel .entry').first().locator('.expand-icon.expanded')
     ).toBeVisible();
+  });
+
+  test('failed output is styled distinctly from a successful one', async ({ page }) => {
+    await addFailedEntry(page, 'git push origin main', 'error: failed to push some refs');
+    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+
+    await page.locator('lv-output-panel .entry-header').click();
+
+    await expect(page.locator('lv-output-panel .entry-output.failure')).toContainText(
+      'error: failed to push some refs'
+    );
   });
 });
 
@@ -380,12 +392,431 @@ test.describe('Output Panel - In-app integration', () => {
     await expect(promptInput).toBeVisible();
     await promptInput.fill('panel probe');
     await page.locator('lv-prompt-dialog .btn-primary').click();
+
+    // The panel shows a READABLE GIT COMMAND, not the IPC name.
     await expect(
-      appPanel.locator('.entry-command', { hasText: 'create_stash' }).first()
-    ).toBeVisible();
+      appPanel.locator('.entry-command', { hasText: 'git stash push' }).first()
+    ).toContainText('git stash push --include-untracked -m "panel probe"');
+    // The IPC name is still there, as secondary detail.
+    await expect(appPanel.locator('.entry-ipc').first()).toHaveText('create_stash');
 
     // Close button hides the panel again
     await appPanel.locator('.close-btn').click();
     await expect(appPanel).toHaveCount(0);
+  });
+
+  test('a libgit2-backed operation is marked as an equivalent, with a legend', async ({
+    page,
+  }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+
+    await app.executeCommand('Create stash');
+    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    await expect(promptInput).toBeVisible();
+    await promptInput.fill('equivalence probe');
+    await page.locator('lv-prompt-dialog .btn-primary').click();
+
+    // git2 did the work — the panel must not imply the CLI ran.
+    await expect(appPanel.locator('.synth-mark').first()).toBeVisible();
+    await expect(appPanel.locator('.entry-command.synthesized').first()).toBeVisible();
+    await expect(appPanel.locator('.legend')).toContainText('libgit2');
+
+    // Timing is shown so a slow operation is visible as one.
+    await expect(appPanel.locator('.entry-duration').first()).toHaveText(/\d/);
+  });
+
+
+  test('an operation that shells out shows ONE row — the real invocation', async ({
+    page,
+  }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    // Model a CLI-backed operation: the backend reports the REAL `git` run on
+    // `git-command-executed` while the IPC command is still in flight. The
+    // real line carries a flag the synthesised one cannot know about, exactly
+    // as a commit signed because of `commit.gpgsign` carries `-S`.
+    await page.evaluate((repoPath) => {
+      const internals = (
+        window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> };
+        }
+      ).__TAURI_INTERNALS__;
+      const originalInvoke = internals.invoke;
+      internals.invoke = async (command: string, args?: unknown) => {
+        if (command === 'create_stash') {
+          (
+            window as unknown as {
+              __EMIT_TAURI_EVENT__: (event: string, payload: unknown) => void;
+            }
+          ).__EMIT_TAURI_EVENT__('git-command-executed', {
+            command:
+              'git stash push --include-untracked --keep-index -m "cli probe"',
+            output: 'Saved working directory and index state',
+            success: true,
+            durationMs: 120,
+            repoPath,
+          });
+        }
+        return originalInvoke(command, args);
+      };
+    }, '/tmp/test-repo');
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await app.executeCommand('Create stash');
+    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    await expect(promptInput).toBeVisible();
+    await promptInput.fill('cli probe');
+    await page.locator('lv-prompt-dialog .btn-primary').click();
+
+    // ONE row for one operation — not the real line plus a weaker synthesised
+    // twin that omits `--keep-index`.
+    const stashRows = appPanel.locator('.entry-command', { hasText: 'git stash push' });
+    await expect(stashRows).toHaveCount(1);
+    await expect(stashRows.first()).toHaveText(
+      'git stash push --include-untracked --keep-index -m "cli probe"'
+    );
+
+    // The surviving row is the executed one, so nothing marks it an equivalent.
+    await expect(appPanel.locator('.synth-mark')).toHaveCount(0);
+    await expect(appPanel.locator('.legend')).toHaveCount(0);
+  });
+
+  /**
+   * Model the backend of a repository with `commit.gpgsign = true`: the merge
+   * itself runs through libgit2, and the merge commit is then made with
+   * `git commit -S -m <msg>` (commit_merge_signed in merge.rs) — a DIFFERENT
+   * git subcommand from the `git merge` the frontend synthesises — reported on
+   * `git-command-executed` while the `merge` IPC call is still in flight.
+   */
+  async function mergeCommitsThroughSignedCli(
+    page: import('@playwright/test').Page,
+    outcome: { success: true } | { success: false; error: string }
+  ): Promise<void> {
+    await page.evaluate(
+      ({ repoPath, outcome }) => {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__: { invoke: (c: string, a?: unknown) => Promise<unknown> };
+          }
+        ).__TAURI_INTERNALS__;
+        const originalInvoke = internals.invoke;
+        internals.invoke = async (command: string, args?: unknown) => {
+          if (command !== 'merge') return originalInvoke(command, args);
+          const sourceRef = (args as { sourceRef?: string } | undefined)?.sourceRef ?? '';
+          (
+            window as unknown as {
+              __EMIT_TAURI_EVENT__: (event: string, payload: unknown) => void;
+            }
+          ).__EMIT_TAURI_EVENT__('git-command-executed', {
+            command: `git commit -S -m "Merge branch '${sourceRef}'"`,
+            output: outcome.success
+              ? `[main 1a2b3c4] Merge branch '${sourceRef}'`
+              : outcome.error,
+            success: outcome.success,
+            durationMs: 240,
+            repoPath,
+          });
+          if (!outcome.success) {
+            throw { code: 'OPERATION_FAILED', message: `Failed to run git commit: ${outcome.error}` };
+          }
+          return originalInvoke(command, args);
+        };
+      },
+      { repoPath: '/tmp/test-repo', outcome }
+    );
+  }
+
+  /** Branch list → right-click `name` → "Merge into current branch". */
+  async function mergeFromBranchList(
+    page: import('@playwright/test').Page,
+    name: string
+  ): Promise<void> {
+    const { LeftPanelPage } = await import('../pages/panels.page');
+    const leftPanel = new LeftPanelPage(page);
+    await leftPanel.openBranchContextMenu(name);
+    const mergeMenuItem = page.locator('.context-menu-item', { hasText: 'Merge into current branch' });
+    await expect(mergeMenuItem).toBeVisible();
+    await mergeMenuItem.click();
+  }
+
+  test('a merge signed because of commit.gpgsign shows ONE row — the real git commit -S', async ({
+    page,
+  }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const { autoConfirmDialogs } = await import('../fixtures/test-helpers');
+    const app = new AppPage(page);
+
+    await autoConfirmDialogs(page);
+    await mergeCommitsThroughSignedCli(page, { success: true });
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await mergeFromBranchList(page, 'feature/test');
+    await expect(page.locator('.toast', { hasText: 'Merged feature/test' })).toBeVisible();
+
+    // ONE row for one click: the real `git commit -S`, whose subcommand differs
+    // from the synthesised `git merge` — not both.
+    const realRow = appPanel.locator('.entry-command', { hasText: 'git commit -S' });
+    await expect(realRow).toHaveCount(1);
+    await expect(realRow.first()).toHaveText(`git commit -S -m "Merge branch 'feature/test'"`);
+    await expect(appPanel.locator('.entry-command', { hasText: 'git merge' })).toHaveCount(0);
+
+    // The surviving row is the executed one, so nothing marks it an equivalent.
+    await expect(appPanel.locator('.synth-mark')).toHaveCount(0);
+    await expect(appPanel.locator('.legend')).toHaveCount(0);
+    await expect(appPanel.locator('.status-dot.success')).toHaveCount(1);
+  });
+
+  test('a signed merge with no GPG key shows ONE red row, not two', async ({ page }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const { autoConfirmDialogs } = await import('../fixtures/test-helpers');
+    const app = new AppPage(page);
+
+    await autoConfirmDialogs(page);
+    await mergeCommitsThroughSignedCli(page, {
+      success: false,
+      error: 'error: gpg failed to sign the data',
+    });
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await mergeFromBranchList(page, 'feature/test');
+    // The user is told the merge failed...
+    await expect(page.locator('.toast', { hasText: 'Merge failed' })).toBeVisible();
+
+    // ...and the panel shows the failure ONCE: the real `git commit -S` row
+    // carrying the error, with no second red `≈ git merge` twin beside it.
+    await expect(appPanel.locator('.entry')).toHaveCount(1);
+    const failedEntry = appPanel
+      .locator('.entry')
+      .filter({ has: page.locator('.status-dot.failure') })
+      .first();
+    await expect(failedEntry.locator('.entry-command.failure')).toHaveText(
+      `git commit -S -m "Merge branch 'feature/test'"`
+    );
+    await expect(appPanel.locator('.entry-command', { hasText: 'git merge' })).toHaveCount(0);
+    await expect(appPanel.locator('.synth-mark')).toHaveCount(0);
+
+    await failedEntry.locator('.entry-header').click();
+    await expect(failedEntry.locator('.entry-output.failure')).toContainText(
+      'gpg failed to sign the data'
+    );
+  });
+
+  test('app plumbing never shows up as a command in the panel', async ({ page }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    // Fire the plumbing through the REAL IPC wrapper, exactly as the app does:
+    // `sync_app_menu` at startup and on every tab open/close and shortcut
+    // rebind, the browse/scan commands from "Add repository", and the search
+    // index maintenance that follows a refresh. None is a git operation the
+    // user ran, and none has a git line, so each used to leave a bare IPC-name
+    // row in every repository's panel on every launch.
+    const plumbing = [
+      'sync_app_menu',
+      'classify_repository_path',
+      'scan_for_repositories',
+      'cancel_repository_scan',
+      'refresh_search_index',
+      'build_search_index',
+      'drop_search_index',
+    ];
+    await page.evaluate(async (commands: string[]) => {
+      // @ts-expect-error - dynamic import resolved by Vite at runtime
+      const mod = await import('/src/services/tauri-api.ts');
+      const invokeCommand = mod.invokeCommand as (
+        command: string,
+        args?: unknown
+      ) => Promise<unknown>;
+      for (const command of commands) {
+        await invokeCommand(command, { path: '/tmp/test-repo' });
+      }
+    }, plumbing);
+
+    // A real operation still logs, so the assertions below are not vacuous.
+    await app.executeCommand('Create stash');
+    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    await expect(promptInput).toBeVisible();
+    await promptInput.fill('plumbing probe');
+    await page.locator('lv-prompt-dialog .btn-primary').click();
+
+    await expect(
+      appPanel.locator('.entry-command', { hasText: 'git stash push' })
+    ).toHaveCount(1);
+
+    // ...and none of the plumbing left a row of its own.
+    for (const command of plumbing) {
+      await expect(
+        appPanel.locator('.entry-command', { hasText: command }),
+        command
+      ).toHaveCount(0);
+    }
+  });
+
+  test('a late read from the backend never replaces a settled operation\'s row', async ({
+    page,
+  }) => {
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    // "Set upstream" has no git line, so its operation knows no subcommand
+    // and matched ANY real run. Then a read the backend happened to report —
+    // `git worktree list --porcelain` when the Worktrees dialog opened within
+    // the late-claim window — took the settled operation's row and replaced
+    // it with a command the user never ran.
+    await page.evaluate(async () => {
+      // @ts-expect-error - dynamic import resolved by Vite at runtime
+      const mod = await import('/src/services/tauri-api.ts');
+      const invokeCommand = mod.invokeCommand as (
+        command: string,
+        args?: unknown
+      ) => Promise<unknown>;
+      await invokeCommand('set_upstream_branch', {
+        path: '/tmp/test-repo',
+        branch: 'main',
+        upstream: 'origin/main',
+      });
+      (
+        window as unknown as {
+          __EMIT_TAURI_EVENT__: (event: string, payload: unknown) => void;
+        }
+      ).__EMIT_TAURI_EVENT__('git-command-executed', {
+        command: 'git worktree list --porcelain',
+        output: 'worktree /tmp/test-repo',
+        success: true,
+        durationMs: 8,
+        repoPath: '/tmp/test-repo',
+      });
+    });
+
+    // The operation the user ran is still there...
+    await expect(appPanel.locator('.entry-command', { hasText: 'set_upstream_branch' })).toHaveCount(
+      1
+    );
+    // ...and the real run, if reported at all, stands on a row of its own.
+    await expect(appPanel.locator('.entry')).toHaveCount(2);
+  });
+
+  test('cancelling a running fetch adds no row of its own', async ({ page }) => {
+    const { startCommandCapture, injectCommandHang, waitForCommand } = await import(
+      '../fixtures/test-helpers'
+    );
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+    await clearEntries(page);
+
+    await startCommandCapture(page);
+    await injectCommandHang(page, 'fetch');
+    await page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i }).click();
+    await waitForCommand(page, 'fetch');
+
+    await page.locator('lv-progress-indicator .cancel-btn').click();
+    await waitForCommand(page, 'cancel_operation');
+    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+
+    // The cancel itself is not a git operation and carries no repository, so
+    // it must not leave a bare `cancel_operation` row in every panel.
+    await expect(appPanel.locator('.entry-command', { hasText: 'cancel_operation' })).toHaveCount(
+      0
+    );
+  });
+
+  test('a failing operation shows its git line and its error output', async ({ page }) => {
+    const { injectCommandError } = await import('../fixtures/test-helpers');
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await injectCommandError(
+      page,
+      'create_stash',
+      'error: cannot stash: your index contains uncommitted changes',
+      'STASH_FAILED'
+    );
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+
+    await app.executeCommand('Create stash');
+    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    await expect(promptInput).toBeVisible();
+    await promptInput.fill('doomed');
+    await page.locator('lv-prompt-dialog .btn-primary').click();
+
+    // The failure is marked, and the git line is still readable
+    const failedEntry = appPanel.locator('.entry').filter({ has: page.locator('.status-dot.failure') }).first();
+    await expect(failedEntry.locator('.entry-command.failure')).toContainText(
+      'git stash push --include-untracked -m doomed'
+    );
+
+    // Expanding it shows the backend's error output, styled as an error
+    await failedEntry.locator('.entry-header').click();
+    await expect(failedEntry.locator('.entry-output.failure')).toContainText(
+      'your index contains uncommitted changes'
+    );
+  });
+
+  test('a credentialed URL in an error is redacted before it reaches the panel', async ({
+    page,
+  }) => {
+    const { injectCommandError } = await import('../fixtures/test-helpers');
+    const { AppPage } = await import('../pages/app.page');
+    const app = new AppPage(page);
+
+    await injectCommandError(
+      page,
+      'create_stash',
+      'failed talking to https://someone:ghp_0123456789abcdefghij@github.com/o/r.git',
+      'AUTH'
+    );
+
+    await app.executeCommand('Toggle Output Panel');
+    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    await expect(appPanel).toBeVisible();
+
+    await app.executeCommand('Create stash');
+    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    await expect(promptInput).toBeVisible();
+    await promptInput.fill('leak probe');
+    await page.locator('lv-prompt-dialog .btn-primary').click();
+
+    const failedEntry = appPanel.locator('.entry').filter({ has: page.locator('.status-dot.failure') }).first();
+    await failedEntry.locator('.entry-header').click();
+
+    const output = failedEntry.locator('.entry-output');
+    // The token is gone; the host survives so the entry still says where.
+    await expect(output).toContainText('***@github.com/o/r.git');
+    await expect(output).not.toContainText('ghp_');
   });
 });

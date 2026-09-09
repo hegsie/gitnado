@@ -5,6 +5,7 @@
 
 pub mod commands;
 pub mod error;
+pub mod menu;
 pub mod models;
 pub mod services;
 pub mod utils;
@@ -90,6 +91,14 @@ pub fn run() {
     tracing::info!("Starting Gitnado");
 
     // Build the app with plugins
+    // The identifier changed with the 0.9.0 rename, which moves the per-app
+    // config and data directories. This must happen BEFORE the builder: the
+    // window-state plugin reads `<app_config_dir>/.window-state.json` in its
+    // own setup, which runs ahead of the setup closure below, and writes it
+    // back on exit — so adopting later would restore the default geometry and
+    // then overwrite the migrated file with it.
+    crate::utils::app_paths::adopt_legacy_identifier_dirs_early();
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -145,10 +154,15 @@ pub fn run() {
         .manage(CancellationRegistry::default())
         .manage(RemoteOpRegistry::default())
         .manage(SharedCommitIndex::default())
+        // Offline mode and the remote allowlist, enforced backend-side. The
+        // same handle `services::security::global()` hands the guards, so a
+        // guard is one line at the top of a command instead of a new `State`
+        // parameter on every network command.
+        .manage(services::security::global().clone())
         .setup(|app| {
-            // The identifier changed with the 0.9.0 rename, which moves the
-            // per-app config/data directories; carry over the old ones so
-            // settings and downloaded models survive the upgrade.
+            // Backstop for the adoption done before the builder: idempotent,
+            // and it covers a platform whose resolved directory does not match
+            // the roots used there.
             for dir in [app.path().app_config_dir(), app.path().app_data_dir()]
                 .into_iter()
                 .flatten()
@@ -156,8 +170,40 @@ pub fn run() {
                 crate::utils::app_paths::adopt_legacy_identifier_dir(&dir);
             }
 
+            // Report every `git` subprocess the app runs to the Output panel.
+            // Installed before anything else in setup so a command run during
+            // startup is not silently dropped. The payload is built (and
+            // redacted) in utils::command; this only carries it to the
+            // frontend, which `src/services/git-output.service.ts` listens for.
+            {
+                let emitter = app.handle().clone();
+                crate::utils::set_git_command_log_sink(move |entry| {
+                    let _ = emitter.emit("git-command-executed", entry);
+                });
+            }
+
             // Initialize AI state with config directory
             let config_dir = app.path().app_config_dir().unwrap_or_default();
+
+            // Adopt the security settings the last run was told about, BEFORE
+            // anything can run. The frontend pushes them again once its shell
+            // mounts, but a fetch triggered in between (auto-fetch resuming a
+            // restored repository, a deep link) must not slip through the gap.
+            services::security::global().init(config_dir.clone());
+
+            // Keep them in sync from the frontend settings store. Same shape as
+            // the tray listener below: the frontend emits on startup and on
+            // every change.
+            app.listen("update-security-settings", move |event| {
+                if let Some(settings) = services::security::global().apply_payload(event.payload())
+                {
+                    tracing::info!(
+                        "Security settings updated: offline={}, allowlist entries={}",
+                        settings.offline_mode,
+                        settings.remote_allowlist.len()
+                    );
+                }
+            });
             app.manage(create_ai_state(config_dir.clone()));
 
             // Initialize local AI state with models directory
@@ -211,6 +257,14 @@ pub fn run() {
                 } else {
                     tracing::warn!("Main window not found, skipping devtools");
                 }
+            }
+
+            // Install the native application menu bar. A failure here must not
+            // stop the app from starting — the command palette and the toolbar
+            // still reach every action — so it is logged and startup continues
+            // with no menu (the frontend's sync then reports it and moves on).
+            if let Err(e) = menu::init_app_menu(app.handle()) {
+                tracing::error!("Failed to build the application menu: {}", e);
             }
 
             // Set up system tray
@@ -303,7 +357,12 @@ pub fn run() {
                 });
             }
 
-            // Start auto-update checking (every 24 hours)
+            // Start auto-update checking (every 24 hours).
+            //
+            // Started unconditionally: each tick runs the offline-mode /
+            // allowlist gate itself and simply skips while a policy forbids it
+            // (see services/update_service.rs), so the schedule survives the
+            // setting being turned on and off without a restart.
             let update_state = app.state::<services::UpdateState>().inner().clone();
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -315,6 +374,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::repository::open_repository,
+            commands::repo_scan::classify_repository_path,
+            commands::repo_scan::scan_for_repositories,
+            commands::repo_scan::cancel_repository_scan,
             commands::repository::clone_repository,
             commands::repository::cancel_clone,
             commands::repository::init_repository,
@@ -381,6 +443,7 @@ pub fn run() {
             commands::remote::deepen_repository,
             commands::remote::unshallow_repository,
             commands::merge::merge,
+            commands::merge::preview_merge,
             commands::merge::abort_merge,
             commands::merge::commit_merge,
             commands::merge::rebase,
@@ -480,6 +543,7 @@ pub fn run() {
             commands::lfs::get_lfs_files,
             commands::lfs::lfs_pull,
             commands::lfs::lfs_fetch,
+            commands::lfs::get_lfs_endpoint,
             commands::lfs::lfs_prune,
             commands::lfs::lfs_migrate,
             // Repository maintenance
@@ -492,6 +556,8 @@ pub fn run() {
             commands::maintenance::run_prune,
             commands::maintenance::get_repository_stats,
             commands::maintenance::get_pack_info,
+            // Application menu bar
+            commands::menu::sync_app_menu,
             commands::gpg::get_gpg_config,
             commands::gpg::get_gpg_keys,
             commands::gpg::set_signing_key,
@@ -597,6 +663,7 @@ pub fn run() {
             commands::github::get_workflow_runs,
             commands::github::get_check_runs,
             commands::github::get_commit_status,
+            commands::github::list_github_repositories,
             // GitHub Issues
             commands::github::list_issues,
             commands::github::get_issue,
@@ -626,6 +693,7 @@ pub fn run() {
             commands::azure_devops::create_azure_devops_work_item,
             commands::azure_devops::list_ado_pipeline_runs,
             commands::azure_devops::list_ado_organizations,
+            commands::azure_devops::list_ado_repositories,
             // GitLab integration
             commands::gitlab::check_gitlab_connection,
             commands::gitlab::detect_gitlab_repo,
@@ -636,6 +704,7 @@ pub fn run() {
             commands::gitlab::create_gitlab_issue,
             commands::gitlab::list_gitlab_pipelines,
             commands::gitlab::get_gitlab_labels,
+            commands::gitlab::list_gitlab_projects,
             // Bitbucket integration
             commands::bitbucket::store_bitbucket_credentials,
             commands::bitbucket::get_bitbucket_credentials,
@@ -649,6 +718,7 @@ pub fn run() {
             commands::bitbucket::list_bitbucket_issues,
             commands::bitbucket::create_bitbucket_issue,
             commands::bitbucket::list_bitbucket_pipelines,
+            commands::bitbucket::list_bitbucket_repositories,
             // Commit templates
             commands::templates::get_commit_template,
             commands::templates::list_templates,

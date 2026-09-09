@@ -7,6 +7,7 @@
  */
 
 import { invokeCommand } from './tauri-api.ts';
+import { checkOutboundHostAllowed } from './git.service.ts';
 import { loggers } from '../utils/logger.ts';
 
 const log = loggers.credential;
@@ -527,11 +528,42 @@ export interface AppInstallation {
   targetType: string;
 }
 
+/**
+ * The host the GitHub App endpoints reach — the same one `providerApiHost` in
+ * git.service checks the allowlist against, and the same one
+ * `services/github_app.rs` guards on the backend.
+ */
+const GITHUB_API_HOST = 'https://api.github.com';
+
+/**
+ * Refuse a GitHub App call that offline mode or the allowlist forbids.
+ *
+ * Only the two App endpoints that leave the machine use this: reading and
+ * removing the stored config are keyring operations, and gating them would
+ * make offline mode hide the way to disconnect an App.
+ *
+ * Silent, matching `invokeProviderCommand` in git.service: every caller here
+ * reports a thrown message, and a toast as well would say it twice.
+ */
+async function guardGitHubAppNetwork(operation: string): Promise<void> {
+  const reason = await checkOutboundHostAllowed(GITHUB_API_HOST);
+  if (!reason) return;
+  throw new Error(
+    reason === 'allowlist'
+      ? `${operation} needs api.github.com, which is not in your remote allowlist. Add it in Settings > Security.`
+      : `${operation} needs api.github.com, and offline mode is enabled. Turn it off in Settings > Security.`,
+  );
+}
+
 export async function configureGitHubApp(
   appId: number,
   privateKeyPem: string,
   installationId: number,
 ): Promise<GitHubConnectionStatus> {
+  // The command mints an installation token from GitHub before it stores
+  // anything, so it is an outbound request even though it reads as "save
+  // these settings".
+  await guardGitHubAppNetwork('Configuring a GitHub App');
   const result = await invokeCommand<GitHubConnectionStatus>('configure_github_app', {
     appId,
     privateKeyPem,
@@ -562,6 +594,7 @@ export async function listGitHubAppInstallations(
   appId: number,
   privateKeyPem: string,
 ): Promise<AppInstallation[]> {
+  await guardGitHubAppNetwork('Listing GitHub App installations');
   const result = await invokeCommand<AppInstallation[]>('list_github_app_installations', { appId, privateKeyPem });
   if (!result.success) {
     throw new Error(result.error?.message ?? 'Failed to list GitHub App installations');

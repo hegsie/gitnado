@@ -159,4 +159,108 @@ describe('lv-output-panel', () => {
     btn.click();
     expect(closed).to.be.true;
   });
+
+  describe('git command lines', () => {
+    it('shows the git command line rather than the IPC name', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('create_commit', '', true, {
+        gitCommand: 'git commit -m "fix the bug"',
+        synthesized: true,
+        durationMs: 42,
+      });
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.entry-command')!.textContent!.trim()).to.equal(
+        'git commit -m "fix the bug"',
+      );
+      // The IPC name stays visible so the entry is still traceable.
+      expect(el.shadowRoot!.querySelector('.entry-ipc')!.textContent!.trim()).to.equal(
+        'create_commit',
+      );
+    });
+
+    it('marks a synthesised line and explains it in a legend', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('checkout', '', true, {
+        gitCommand: 'git checkout main',
+        synthesized: true,
+      });
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.synth-mark')).to.exist;
+      expect(el.shadowRoot!.querySelector('.entry-command.synthesized')).to.exist;
+      const legend = el.shadowRoot!.querySelector('.legend');
+      expect(legend, 'legend explains the marker').to.exist;
+      expect(legend!.textContent).to.contain('libgit2');
+    });
+
+    it('does not mark — or explain away — a command that really ran', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('git rebase --continue', 'Successfully rebased.', true, {
+        gitCommand: 'git rebase --continue',
+        synthesized: false,
+        durationMs: 180,
+      });
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.synth-mark')).to.not.exist;
+      expect(el.shadowRoot!.querySelector('.entry-ipc')).to.not.exist;
+      expect(el.shadowRoot!.querySelector('.legend'), 'no libgit2 legend').to.not.exist;
+    });
+
+    it('falls back to the IPC name when there is no git line', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('start_auto_fetch', '', true);
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.entry-command')!.textContent!.trim()).to.equal(
+        'start_auto_fetch',
+      );
+      expect(el.shadowRoot!.querySelector('.synth-mark')).to.not.exist;
+    });
+
+    it('shows timing when it was measured, and nothing when it was not', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('a', '', true, { durationMs: 84 });
+      logGitCommand('b', '', true, { durationMs: 1500 });
+      logGitCommand('c', '', true, { durationMs: 65_000 });
+      logGitCommand('d', '', true);
+      await el.updateComplete;
+
+      const durations = Array.from(
+        el.shadowRoot!.querySelectorAll('.entry-duration'),
+      ).map((n) => n.textContent!.trim());
+      // Newest first: c, b, a — `d` has no duration and renders none.
+      expect(durations).to.deep.equal(['1m 05s', '1.5s', '84ms']);
+    });
+
+    it('styles a failed command output distinctly from a successful one', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('push', 'error: failed to push some refs', false, {
+        gitCommand: 'git push origin main',
+        synthesized: false,
+      });
+      await el.updateComplete;
+
+      (el.shadowRoot!.querySelector('.entry-header') as HTMLElement).click();
+      await el.updateComplete;
+
+      const output = el.shadowRoot!.querySelector('.entry-output');
+      expect(output!.classList.contains('failure')).to.be.true;
+      expect(output!.textContent).to.contain('error: failed to push some refs');
+    });
+
+    it('explains an expanded entry that captured no output', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('checkout', '', true, { gitCommand: 'git checkout main' });
+      await el.updateComplete;
+
+      (el.shadowRoot!.querySelector('.entry-header') as HTMLElement).click();
+      await el.updateComplete;
+
+      const output = el.shadowRoot!.querySelector('.entry-output.empty-output');
+      expect(output, 'an expanded row is never an unexplained empty box').to.exist;
+      expect(output!.textContent).to.contain('no output');
+    });
+  });
 });

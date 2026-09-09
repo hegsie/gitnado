@@ -4,14 +4,28 @@
 
 use crate::error::{GitnadoError, Result};
 use crate::services::ai::{
-    AiProviderInfo, AiProviderType, AiState, AiUnavailable, AnalysisFinding, CommitSplitSuggestion,
-    ConflictExplanation, ConflictResolutionSuggestion, FindingCategory, GeneratedChangelog,
-    GeneratedCommitMessage, GeneratedPrDescription, ReflogMatch, RiskLevel, Severity,
-    StagedAnalysis, CHANGELOG_PROMPT, COMMIT_SPLIT_PROMPT, CONFLICT_EXPLAIN_PROMPT,
+    AiProviderInfo, AiProviderType, AiService, AiState, AiUnavailable, AnalysisFinding,
+    CommitSplitSuggestion, ConflictExplanation, ConflictResolutionSuggestion, FindingCategory,
+    GeneratedChangelog, GeneratedCommitMessage, GeneratedPrDescription, ReflogMatch, RiskLevel,
+    Severity, StagedAnalysis, CHANGELOG_PROMPT, COMMIT_SPLIT_PROMPT, CONFLICT_EXPLAIN_PROMPT,
     CONFLICT_RESOLUTION_PROMPT, MAX_CHANGELOG_BYTES, MAX_CONFLICT_CONTEXT_BYTES, MAX_DIFF_BYTES,
     PR_DESCRIPTION_PROMPT, REFLOG_MATCH_PROMPT, VIBE_CHECK_PROMPT,
 };
 use tauri::{command, State};
+
+/// Refuse an AI request that would leave the machine.
+///
+/// Only the provider CHOSEN in Settings is decided here. When nothing is
+/// chosen the request falls back to whatever is reachable, and
+/// `AiService::resolve_provider` already skips every provider the security
+/// settings forbid — so there is nothing to refuse up front, and refusing
+/// anyway would break a perfectly local fallback.
+fn guard_ai_request(service: &AiService) -> Result<()> {
+    match service.active_provider_endpoint() {
+        Some(endpoint) => crate::services::security::guard_endpoint(&endpoint),
+        None => Ok(()),
+    }
+}
 
 /// Get list of all AI providers with their status
 #[command]
@@ -72,6 +86,7 @@ pub async fn test_ai_provider(
     provider_type: AiProviderType,
 ) -> Result<bool> {
     let service = state.read().await;
+    crate::services::security::guard_endpoint(&service.endpoint_for(provider_type))?;
     service
         .test_provider(provider_type)
         .await
@@ -102,6 +117,7 @@ pub async fn generate_commit_message(
 
     // Generate message using the active provider
     let service = state.read().await;
+    guard_ai_request(&service)?;
     service
         .generate_commit_message(diff)
         .await
@@ -147,6 +163,7 @@ pub async fn suggest_conflict_resolution(
     context_after: Option<String>,
 ) -> Result<ConflictResolutionSuggestion> {
     let service = state.read().await;
+    guard_ai_request(&service)?;
 
     // Build the user prompt with file context
     let mut user_prompt = String::new();
@@ -232,6 +249,7 @@ pub async fn generate_changelog(
     let truncated = truncate_content(&commits_text, MAX_CHANGELOG_BYTES);
 
     let service = state.read().await;
+    guard_ai_request(&service)?;
     let response = service
         .generate_text(CHANGELOG_PROMPT, truncated, Some(2000))
         .await
@@ -289,6 +307,7 @@ pub async fn explain_conflict(
     ));
 
     let service = state.read().await;
+    guard_ai_request(&service)?;
     let response = service
         .generate_text(CONFLICT_EXPLAIN_PROMPT, &user_prompt, Some(500))
         .await
@@ -329,6 +348,7 @@ pub async fn find_reflog_entry(
     let system_prompt = REFLOG_MATCH_PROMPT.replace("{query}", &query);
 
     let service = state.read().await;
+    guard_ai_request(&service)?;
     let response = service
         .generate_text(&system_prompt, &reflog_text, Some(300))
         .await
@@ -424,6 +444,11 @@ pub async fn analyze_staged_changes(
     // AI analysis for complexity and quality
     let truncated = truncate_content(&diff, MAX_DIFF_BYTES);
     let service = state.read().await;
+    // A refusal from the security gate is reported the same way a provider
+    // failure is, NOT as a command error: the regex secret scan above is local
+    // and already ran, and throwing its findings away because the AI half was
+    // blocked would be a worse answer than saying which half ran.
+    let blocked = guard_ai_request(&service).err().map(|e| e.to_string());
 
     // Both failure arms used to be dropped on the floor. A provider that had
     // stopped since the availability check, a missing model, a dead network or
@@ -431,18 +456,21 @@ pub async fn analyze_staged_changes(
     // the regex secret findings — rendered as a completed check reading "No
     // issues found". The user was told their staged changes had been reviewed
     // when nothing had reviewed them.
-    let ai_error = match service
-        .generate_text(VIBE_CHECK_PROMPT, truncated, Some(1000))
-        .await
-    {
-        Ok(response) => match parse_vibe_check_response(&response) {
-            Ok(ai_analysis) => {
-                findings.extend(ai_analysis.findings);
-                None
-            }
-            Err(e) => Some(format!("could not read the model's response: {}", e)),
+    let ai_error = match blocked {
+        Some(reason) => Some(reason),
+        None => match service
+            .generate_text(VIBE_CHECK_PROMPT, truncated, Some(1000))
+            .await
+        {
+            Ok(response) => match parse_vibe_check_response(&response) {
+                Ok(ai_analysis) => {
+                    findings.extend(ai_analysis.findings);
+                    None
+                }
+                Err(e) => Some(format!("could not read the model's response: {}", e)),
+            },
+            Err(e) => Some(e.to_string()),
         },
-        Err(e) => Some(e.to_string()),
     };
     let ai_analysis_ran = ai_error.is_none();
 
@@ -514,6 +542,7 @@ pub async fn generate_pr_description(
     let system_prompt = PR_DESCRIPTION_PROMPT.replace("{title}", &title);
 
     let service = state.read().await;
+    guard_ai_request(&service)?;
     let response = service
         .generate_text(&system_prompt, truncated, Some(1500))
         .await
@@ -553,6 +582,7 @@ pub async fn suggest_commit_splits(
     let truncated = truncate_content(&diff, MAX_DIFF_BYTES);
 
     let service = state.read().await;
+    guard_ai_request(&service)?;
     let response = service
         .generate_text(COMMIT_SPLIT_PROMPT, truncated, Some(1500))
         .await

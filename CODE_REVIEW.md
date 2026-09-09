@@ -46,6 +46,12 @@ The findings below were manually verified against source code. Some original fin
 | **MEDIUM** | No security scanning in CI | Added `security-audit` job with `npm audit` and `cargo audit`. |
 | **MEDIUM** | Vulnerable `brace-expansion@5.0.3` | Updated via `npm audit fix` to patched version. |
 
+### ✅ CSP hardening follow-up
+
+| # | Finding | Fix |
+|---|---------|-----|
+| **MEDIUM** | CSP was missing `object-src`, `base-uri`, `frame-src` and `form-action`, and allowed the webview to connect to any `https:` host — a large exfiltration surface next to the (intentional) `$HOME/**` filesystem scope | Added `object-src 'none'`, `base-uri 'self'`, `frame-src 'none'`, `form-action 'self'`. Narrowed `connect-src` to `'self'`: the webview makes no remote requests (no `fetch`/XHR/`WebSocket`/`EventSource` to a remote host in `src/`, no `@tauri-apps/plugin-http`) — every provider API call, OAuth token exchange, updater check and AI request runs in Rust via `reqwest`. Dropped `http://127.0.0.1` from both `img-src` and `connect-src`: the OAuth loopback server is a Rust `TcpListener` and the authorize URL opens in the system browser, so the webview never talks to loopback. `img-src` keeps `https:` on purpose — avatar URLs come from the provider APIs at runtime and self-hosted GitHub/GitLab/Bitbucket/Azure DevOps/OIDC instances make the host unknowable at build time. Full per-directive rationale and a regression test live in `src-tauri/tests/csp_policy.rs` (`tauri.conf.json` cannot carry comments — the `config-json5` feature is not enabled). |
+
 ---
 
 ## 0. CRITICAL - Security & Memory Issues

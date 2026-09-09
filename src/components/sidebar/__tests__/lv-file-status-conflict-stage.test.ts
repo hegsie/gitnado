@@ -25,6 +25,7 @@ const invokeHistory: Array<{ command: string; args?: unknown }> = [];
 import { expect, fixture, html } from '@open-wc/testing';
 import '../lv-file-status.ts';
 import type { LvFileStatus } from '../lv-file-status.ts';
+import { uiStore } from '../../../stores/ui.store.ts';
 import type { StatusEntry } from '../../../types/git.types.ts';
 
 // ── Test data ──────────────────────────────────────────────────────────────
@@ -45,8 +46,15 @@ interface FileStatusInternal {
   unstagedFiles: StatusEntry[];
   selectedFiles: Set<string>;
   handleStageFile: (file: StatusEntry, e: Event) => Promise<void>;
-  handleStageAll: () => Promise<void>;
+  /**
+   * "Stage everything the list shows" — what the section button, the s
+   * shortcut and the palette's "Stage all changes" all reach. With no path
+   * filter typed (as here) the shown set is the whole unstaged list.
+   */
+  handleStageAllShown: () => Promise<void>;
+  handleUnstageAllShown: () => Promise<void>;
   handleStageSelected: () => Promise<void>;
+  filterQuery: string;
 }
 
 function internalOf(el: LvFileStatus): FileStatusInternal {
@@ -86,6 +94,8 @@ async function renderFileStatus(entries: StatusEntry[]): Promise<LvFileStatus> {
 describe('lv-file-status conflicted staging guards', () => {
   beforeEach(() => {
     invokeHistory.length = 0;
+    const state = uiStore.getState();
+    state.toasts.forEach((t) => state.removeToast(t.id));
   });
 
   it('staging a conflicted file opens the conflict flow instead of staging markers', async () => {
@@ -110,7 +120,7 @@ describe('lv-file-status conflicted staging guards', () => {
     const el = await renderFileStatus([clean, conflicted]);
 
     invokeHistory.length = 0;
-    await internalOf(el).handleStageAll();
+    await internalOf(el).handleStageAllShown();
 
     const calls = stageCalls();
     expect(calls.length).to.equal(1);
@@ -122,7 +132,7 @@ describe('lv-file-status conflicted staging guards', () => {
     const el = await renderFileStatus([conflicted]);
 
     invokeHistory.length = 0;
-    await internalOf(el).handleStageAll();
+    await internalOf(el).handleStageAllShown();
 
     expect(stageCalls().length).to.equal(0);
   });
@@ -218,6 +228,100 @@ describe('lv-file-status conflicted staging guards', () => {
     const calls = discardCalls();
     expect(calls.length).to.equal(1);
     expect((calls[0].args as { paths: string[] }).paths).to.deep.equal(['src/ok.ts']);
+  });
+
+  // ── The filtered-scope toast must count what was really staged ─────────
+  // A conflicted file inside the filtered set is dropped before the backend
+  // call, so counting the SHOWN files would have the toast claim more than
+  // was staged — and contradict the "conflicted file skipped" warning that
+  // goes out alongside it.
+
+  function toastMessages(): string[] {
+    return uiStore.getState().toasts.map((t) => t.message);
+  }
+
+  it('reports the staged count, not the shown count, when the filter hides a conflict', async () => {
+    const entries = [
+      makeEntry({ path: 'src/feat-a.ts' }),
+      makeEntry({ path: 'src/feat-b.ts', status: 'conflicted', isConflicted: true }),
+      makeEntry({ path: 'src/other-c.ts' }),
+      makeEntry({ path: 'src/other-d.ts' }),
+    ];
+    const el = await renderFileStatus(entries);
+    const internal = internalOf(el);
+    internal.filterQuery = 'feat';
+    await el.updateComplete;
+
+    invokeHistory.length = 0;
+    const state = uiStore.getState();
+    state.toasts.forEach((t) => state.removeToast(t.id));
+    await internal.handleStageAllShown();
+
+    const calls = stageCalls();
+    expect(calls.length).to.equal(1);
+    expect((calls[0].args as { paths: string[] }).paths).to.deep.equal(['src/feat-a.ts']);
+
+    const messages = toastMessages();
+    expect(
+      messages.some((m) => m.includes('Staged 1 of 4 files')),
+      `expected a "Staged 1 of 4 files" toast, got: ${JSON.stringify(messages)}`,
+    ).to.be.true;
+    expect(messages.some((m) => m.includes('Staged 2 of 4 files'))).to.be.false;
+    // The skipped-conflict warning still goes out and no longer contradicts it.
+    expect(messages.some((m) => m.includes('1 conflicted file skipped'))).to.be.true;
+  });
+
+  it('does not blame the filter for a file only the conflict guard skipped', async () => {
+    // The filter shows BOTH unstaged files, so it is hiding nothing: the one
+    // file left unstaged was skipped by the conflict guard, which said so in
+    // its own warning. A "the filter is hiding the rest" toast here would
+    // contradict that warning and name a filter that withheld nothing.
+    const entries = [
+      makeEntry({ path: 'src/feat-a.ts' }),
+      makeEntry({ path: 'src/feat-b.ts', status: 'conflicted', isConflicted: true }),
+    ];
+    const el = await renderFileStatus(entries);
+    const internal = internalOf(el);
+    internal.filterQuery = 'feat';
+    await el.updateComplete;
+
+    invokeHistory.length = 0;
+    const state = uiStore.getState();
+    state.toasts.forEach((t) => state.removeToast(t.id));
+    await internal.handleStageAllShown();
+
+    const calls = stageCalls();
+    expect(calls.length).to.equal(1);
+    expect((calls[0].args as { paths: string[] }).paths).to.deep.equal(['src/feat-a.ts']);
+
+    const messages = toastMessages();
+    expect(
+      messages.some((m) => m.includes('is hiding the rest')),
+      `the filter hid nothing, so no filtered-scope toast is due; got: ${JSON.stringify(messages)}`,
+    ).to.be.false;
+    // The conflict warning is still the one and only explanation.
+    expect(messages.some((m) => m.includes('1 conflicted file skipped'))).to.be.true;
+  });
+
+  it('reports the unstaged count for a filtered unstage', async () => {
+    const entries = [
+      makeEntry({ path: 'src/feat-a.ts', isStaged: true }),
+      makeEntry({ path: 'src/other-c.ts', isStaged: true }),
+      makeEntry({ path: 'src/other-d.ts', isStaged: true }),
+    ];
+    const el = await renderFileStatus(entries);
+    const internal = internalOf(el);
+    internal.filterQuery = 'feat';
+    await el.updateComplete;
+
+    const state = uiStore.getState();
+    state.toasts.forEach((t) => state.removeToast(t.id));
+    await internal.handleUnstageAllShown();
+
+    expect(
+      toastMessages().some((m) => m.includes('Unstaged 1 of 3 files')),
+      `expected an "Unstaged 1 of 3 files" toast, got: ${JSON.stringify(toastMessages())}`,
+    ).to.be.true;
   });
 
   it('discard-selected with only conflicted files discards nothing', async () => {

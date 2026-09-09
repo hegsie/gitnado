@@ -20,13 +20,14 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import { repositoryStore } from '../../../stores/repository.store.ts';
 import type { LvCommitPanel } from '../lv-commit-panel.ts';
 import type { CommitTemplate } from '../../../services/git.service.ts';
 
 // Import the actual component — registers <lv-commit-panel> custom element
 import '../lv-commit-panel.ts';
+import { collectUnhandledRejections } from '../../../test-utils/unhandled-rejections.ts';
 
 // ── Test data ──────────────────────────────────────────────────────────────
 const REPO_PATH = '/test/repo';
@@ -307,5 +308,33 @@ describe('lv-commit-panel templates (fixture-based)', () => {
       const summaryInput = el.shadowRoot!.querySelector('.summary-input') as HTMLTextAreaElement;
       expect(summaryInput.value).to.equal('Plain commit message with no variables');
     });
+  });
+});
+
+describe('lv-commit-panel teardown without the event plugin internals', () => {
+  beforeEach(() => {
+    setupDefaultMocks();
+    setupStoreWithBranch('feature/test');
+    delete (globalThis as Record<string, unknown>).__TAURI_EVENT_PLUGIN_INTERNALS__;
+  });
+
+  afterEach(() => {
+    repositoryStore.getState().reset();
+  });
+
+  it('disconnects without an unhandled rejection', async () => {
+    // listen() succeeds against the mock, so the panel holds a real unlisten
+    // closure for `model-download-complete`; that closure reads
+    // __TAURI_EVENT_PLUGIN_INTERNALS__, which does not exist here.
+    const el = await renderCommitPanel();
+    await waitUntil(
+      () => (el as unknown as { modelCompleteUnlisten?: unknown }).modelCompleteUnlisten !== undefined,
+      'the model-download listener never attached',
+    );
+
+    const rejections = await collectUnhandledRejections(() => {
+      el.remove();
+    });
+    expect(rejections, 'teardown must not reject').to.deep.equal([]);
   });
 });

@@ -178,6 +178,30 @@ describe('git.service - Diff operations', () => {
       expect(args.staged).to.be.true;
     });
 
+    it('forwards the render options in camelCase', async () => {
+      mockInvoke = () => Promise.resolve({ path: 'file.ts', hunks: [] });
+
+      await getFileDiff('/test/repo', 'file.ts', false, 100, {
+        contextLines: 0,
+        ignoreWhitespace: 'change',
+      });
+      const args = lastInvokedArgs as Record<string, unknown>;
+      expect(args.contextLines).to.equal(0);
+      expect(args.ignoreWhitespace).to.equal('change');
+      expect(args.maxLines).to.equal(100);
+      expect(Object.keys(args)).to.not.include('ignore_whitespace');
+      expect(Object.keys(args)).to.not.include('context_lines');
+    });
+
+    it('omits the render options when none are given', async () => {
+      mockInvoke = () => Promise.resolve({ path: 'file.ts', hunks: [] });
+
+      await getFileDiff('/test/repo', 'file.ts');
+      const args = lastInvokedArgs as Record<string, unknown>;
+      expect(args.contextLines).to.be.undefined;
+      expect(args.ignoreWhitespace).to.be.undefined;
+    });
+
     it('returns file diff with hunks', async () => {
       const mockFileDiff = {
         path: 'component.tsx',
@@ -301,6 +325,20 @@ describe('git.service - Diff operations', () => {
       expect(args.commitOid).to.equal('abc123');
       expect(args.filePath).to.equal('src/main.ts');
       expect(result.success).to.be.true;
+    });
+
+    it('forwards the render options in camelCase', async () => {
+      mockInvoke = () => Promise.resolve({ path: 'src/main.ts', hunks: [] });
+
+      await getCommitFileDiff('/test/repo', 'abc123', 'src/main.ts', undefined, {
+        contextLines: 12,
+        ignoreWhitespace: 'all',
+      });
+      const args = lastInvokedArgs as Record<string, unknown>;
+      expect(args.contextLines).to.equal(12);
+      expect(args.ignoreWhitespace).to.equal('all');
+      expect(Object.keys(args)).to.not.include('ignore_whitespace');
+      expect(Object.keys(args)).to.not.include('context_lines');
     });
 
     it('returns file diff for specific commit', async () => {

@@ -29,6 +29,7 @@ let cbId = 0;
 import { expect } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
+import { dialogs } from '../stores/dialog.store.ts';
 // Side-effect import so showPrompt finds the singleton already in the DOM.
 import '../components/dialogs/lv-prompt-dialog.ts';
 import type { LvPromptDialog } from '../components/dialogs/lv-prompt-dialog.ts';
@@ -90,6 +91,14 @@ function emptyRepoData(repo: Repository) {
 function commit(oid: string) {
   return { oid, summary: `summary of ${oid}`, body: null };
 }
+
+// Which dialogs are open is module state, and several tests here drive a shell
+// that is never connected to the document (so its connectedCallback reset never
+// runs). Clear it per test to keep the isolation each instance used to get for
+// free from its own `@state()` flags.
+beforeEach(() => {
+  dialogs.reset();
+});
 
 describe('app-shell destructive guards', () => {
   beforeEach(() => {
@@ -316,7 +325,7 @@ describe('app-shell destructive guards', () => {
         configurable: true,
         get: () => ({ hasUnsavedEdits: true, editingPath: path }),
       });
-      (el as any).showDiff = true;
+      dialogs.open('diff');
       return el;
     }
 
@@ -334,7 +343,7 @@ describe('app-shell destructive guards', () => {
       const warning = uiStore.getState().toasts.find((t) => t.type === 'warning');
       expect(warning, 'the loss is reported').to.not.be.undefined;
       expect(warning!.message).to.contain('src/main.ts');
-      expect((el as any).showDiff, 'and the pane still closes').to.equal(false);
+      expect(dialogs.isOpen('diff'), 'and the pane still closes').to.equal(false);
     });
 
     it('a clean editor closes quietly', async () => {
@@ -343,7 +352,7 @@ describe('app-shell destructive guards', () => {
         configurable: true,
         get: () => ({ hasUnsavedEdits: false, editingPath: null }),
       });
-      (el as any).showDiff = true;
+      dialogs.open('diff');
       uiStore.setState({ toasts: [] });
 
       (el as any).handleCloseDiff();
@@ -365,7 +374,7 @@ describe('app-shell destructive guards', () => {
       const warning = uiStore.getState().toasts.find((t) => t.type === 'warning');
       expect(warning, 'the loss is reported').to.not.be.undefined;
       expect(warning!.message).to.contain('src/main.ts');
-      expect((el as any).showBlame, 'and blame still opens').to.equal(true);
+      expect(dialogs.isOpen('blame'), 'and blame still opens').to.equal(true);
     });
 
     it('opening file history from the commit panel warns the same way', async () => {
@@ -381,7 +390,7 @@ describe('app-shell destructive guards', () => {
       const warning = uiStore.getState().toasts.find((t) => t.type === 'warning');
       expect(warning, 'the loss is reported').to.not.be.undefined;
       expect(warning!.message).to.contain('src/main.ts');
-      expect((el as any).showFileHistory, 'and the history pane still opens').to.equal(true);
+      expect(dialogs.isOpen('fileHistory'), 'and the history pane still opens').to.equal(true);
     });
 
     it('closing with no diff open says nothing', async () => {

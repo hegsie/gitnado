@@ -12,10 +12,15 @@ import { sharedStyles, animationStyles } from '../../styles/shared-styles.ts';
 import { unifiedProfileStore, type AccountConnectionStatus, type ConnectionStatus } from '../../stores/unified-profile.store.ts';
 import { repositoryStore, type OpenRepository } from '../../stores/repository.store.ts';
 import * as unifiedProfileService from '../../services/unified-profile.service.ts';
-import { fetch as gitFetch, pull as gitPull, push as gitPush, getRemoteStatus, isNetworkGateRefusal, isOperationCancelled } from '../../services/git.service.ts';
-import { progressService } from '../../services/progress.service.ts';
-import { showErrorWithSuggestion } from '../../services/error-suggestion.service.ts';
+import { getRemoteStatus } from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
+import {
+  runFetch,
+  runPull,
+  runPush,
+  runningRemoteOperation,
+  type RemoteOperationKind,
+} from '../../services/remote-operations.service.ts';
 import {
   INTEGRATION_TYPE_NAMES,
   matchesUrlPattern,
@@ -27,15 +32,12 @@ import type { UnifiedProfile, IntegrationAccount, IntegrationType, ProfileAssign
 import './lv-profile-card.ts';
 import './lv-integration-card.ts';
 import './lv-repository-card.ts';
+import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
 import {
-  tryAcquireRefOpOrWarn,
-  releaseRefOp,
-  RefLockController,
-  releasePush,
-  isPushRunning,
-  tryAcquirePush,
-  warnRepositoryBusy,
-} from '../../utils/ref-lock.ts';
+  knownToHaveNoRemote,
+  noRemoteButtonLabel,
+  showNoRemoteToast,
+} from '../../utils/remote-availability.ts';
 
 const STORAGE_KEY = 'lv-context-dashboard-expanded';
 
@@ -603,9 +605,6 @@ export class LvContextDashboard extends LitElement {
   @state() private repositoryAssignments: Record<string, string> = {};
   @state() private isProfileDropdownOpen = false;
   @state() private isApplyingProfile = false;
-  @state() private isFetching = false;
-  @state() private isPulling = false;
-  @state() private isPushing = false;
   @state() private ahead = 0;
   @state() private behind = 0;
 
@@ -704,205 +703,106 @@ export class LvContextDashboard extends LitElement {
   }
 
   /**
-   * Observe the shared working-tree lock, not just claim it.
+   * Observe the shared locks, not just claim them.
    *
-   * Pull claims it (see handlePull) but the button was bound to
-   * isRemoteOperationInProgress alone, which only ever tracked this component
-   * — so during a sidebar checkout the dashboard's Pull stayed lit and did
-   * nothing but raise a refusal toast. Fetch and Push do not touch the working
-   * tree, so they keep the local gate only.
+   * Every remote button's spinner and disabled state is now module state
+   * (remote-operations.service holds the slot; ref-lock.ts holds the
+   * working-tree and push slots), which Lit cannot observe on its own. This
+   * controller subscribes to ALL of those transitions and re-renders on each
+   * one, which is what lets a dashboard button show the fetch a keyboard
+   * shortcut started — the two surfaces used to disagree about what the app
+   * was doing, because these flags were component-local.
    */
   private lock = new RefLockController(this, () => this.activeRepository?.repository.path);
 
+  /** The fetch/pull/push running against this repo, from ANY surface. */
+  private get remoteOperation(): RemoteOperationKind | undefined {
+    return runningRemoteOperation(this.activeRepository?.repository.path);
+  }
+
   private get isRemoteOperationInProgress(): boolean {
-    return this.isFetching || this.isPulling || this.isPushing;
+    return this.remoteOperation !== undefined;
   }
 
   /**
-   * Failure reporting shared by the dashboard's three remote buttons.
+   * Whether this repository has anywhere to fetch, pull or push TO.
    *
-   * These used to lean on git.service's own toast and additionally write
-   * `repositoryStore.setError(...)`, which has no render sink anywhere in the
-   * app — so the store write was dead and the toast was a raw message with no
-   * recovery action. The toolbar and command-palette copies of these same three
-   * operations run silent and route through the suggestion service, which is
-   * what turns "non-fast-forward" into a Pull Now button and an auth failure
-   * into Open Settings. Reaching the same operation from the dashboard must not
-   * mean losing that.
+   * The toolbar renders the SAME three buttons directly above these and has
+   * always disabled them for a repository with no remote — a freshly
+   * `git init`ed folder, say. These three did not, so the greyed-out Fetch
+   * with its explanation sat right on top of an identical, bright, enabled
+   * Fetch that started a progress row and failed with git's own wording. The
+   * rule and its phrasing are shared with the toolbar (remote-availability.ts)
+   * so the two surfaces cannot drift apart again.
+   *
+   * "Has one" until the remotes have actually been read: the store seeds an
+   * empty list on every tab it opens, and treating that as an answer greyed
+   * the three buttons out on every freshly opened repository until
+   * `get_remotes` came back.
    */
-  private reportRemoteFailure(
-    result: { error?: { code?: string; message?: string } },
-    operation: 'fetch' | 'pull' | 'push',
-    fallback: string,
-    repoPath: string,
-  ): void {
-    // A security-gate block or a declined confirm already spoke for itself; a
-    // red error on top tells the user their own settings failed.
-    if (isNetworkGateRefusal(result.error)) return;
-    // Neither is a cancel the user asked for — but it must still be
-    // acknowledged, or the row simply vanishes with no explanation.
-    if (isOperationCancelled(result.error)) {
-      showToast(`${operation[0].toUpperCase()}${operation.slice(1)} cancelled`, 'info');
-      return;
-    }
-    showErrorWithSuggestion(result.error?.message ?? '', fallback, {
-      operation,
-      repoPath,
-    });
+  private get hasRemote(): boolean {
+    return !knownToHaveNoRemote(this.activeRepository);
   }
 
-  // No success toasts in these three: the backend emits
-  // remote-operation-completed and setupRemoteOperationListeners toasts it,
-  // naming the remote. Adding our own stacked two messages on one click — the
-  // rule the toolbar handlers already follow.
-  private async handleFetch(): Promise<void> {
-    if (!this.activeRepository || this.isFetching) return;
-
-    // Captured before the await: a fetch is slow, and the refresh and any
-    // error must name the repo the button was clicked in, not whichever tab
-    // is active when the network call returns.
-    const repoPath = this.activeRepository.repository.path;
-    this.isFetching = true;
-    // Cancellable, like every other fetch surface: the row's Cancel button
-    // sends this id back through `cancel_operation`, which is what lets the
-    // backend abort the transfer.
-    const opId = progressService.startOperation('fetch', 'Fetching from remote...', {
-      cancellable: true,
-    });
-    try {
-      const result = await gitFetch({ path: repoPath, silent: true, operationId: opId });
-      if (!result.success) {
-        progressService.failOperation(opId);
-        this.reportRemoteFailure(result, 'fetch', 'Fetch failed', repoPath);
-      } else {
-        progressService.completeOperation(opId);
-        // Refresh repository data after fetch
-        this.dispatchEvent(new CustomEvent('repository-refresh', {
-          bubbles: true,
-          composed: true,
-          // Names the repo the operation ran ON. Without it app-shell falls
-          // back to handleRefresh(), which targets whichever tab is active —
-          // so a fetch/pull/push the user started and then tabbed away from
-          // refreshed the wrong repository and left the right one stale.
-          detail: { repoPath },
-        }));
-        await this.loadRemoteStatus();
-      }
-    } finally {
-      // Belt and braces: a throw between start and the branches above would
-      // otherwise leave the row spinning forever.
-      progressService.completeOperation(opId);
-      this.isFetching = false;
-    }
+  /** The tooltip for one of the three buttons, explaining a disabled state the
+   * user would otherwise have to guess at. */
+  private remoteButtonTitle(action: string, whenAvailable: string): string {
+    return this.hasRemote ? whenAvailable : noRemoteButtonLabel(action);
   }
 
-  private async handlePull(): Promise<void> {
-    if (!this.activeRepository || this.isPulling) return;
-
-    const repoPath = this.activeRepository.repository.path;
-    // The fifth surface reaching pull. The other four claim the shared
-    // working-tree lock; this one lives in src/components/dashboard/, a
-    // directory no sweep had touched, and gated only on its own isPulling —
-    // so a dashboard Pull ran beside a sidebar checkout, and every destructive
-    // control stayed enabled for the duration of the pull. The backend's
-    // ensure_pullable only refuses on a non-Clean state, which a checkout or a
-    // discard does not produce.
-    if (!tryAcquireRefOpOrWarn(repoPath)) return;
-    this.isPulling = true;
-    // Cancellable only up to the point the merge starts — see
-    // commands/remote.rs::pull_branch.
-    const opId = progressService.startOperation('pull', 'Pulling from remote...', {
-      cancellable: true,
-    });
-    try {
-      const result = await gitPull({ path: repoPath, silent: true, operationId: opId });
-      progressService.completeOperation(opId);
-      if (result.success) {
-        this.dispatchEvent(new CustomEvent('repository-refresh', {
-          bubbles: true,
-          composed: true,
-          // Names the repo the operation ran ON. Without it app-shell falls
-          // back to handleRefresh(), which targets whichever tab is active —
-          // so a fetch/pull/push the user started and then tabbed away from
-          // refreshed the wrong repository and left the right one stale.
-          detail: { repoPath },
-        }));
-        await this.loadRemoteStatus();
-      } else if (
-        result.error?.code === 'MERGE_CONFLICT' ||
-        result.error?.code === 'REBASE_CONFLICT'
-      ) {
-        // The pull LANDED and left a conflicted index and MERGE_HEAD behind.
-        // Reporting it as a red "Pull failed" and stopping — which is all this
-        // surface did — reads as "nothing happened" and leaves the user in a
-        // mid-merge repository with no route to the resolution dialog. Every
-        // other pull surface opens it; this one is a descendant of app-shell,
-        // so the bubbling composed event it already listens for reaches it.
-        const isRebase = result.error.code === 'REBASE_CONFLICT';
-        showToast(
-          `Pull produced conflicts — resolve them to finish the ${isRebase ? 'rebase' : 'merge'}`,
-          'warning',
-        );
-        this.dispatchEvent(new CustomEvent('merge-conflict', {
-          bubbles: true,
-          composed: true,
-          detail: {
-            repositoryPath: repoPath,
-            operationType: isRebase ? 'rebase' : 'merge',
-          },
-        }));
-      } else {
-        this.reportRemoteFailure(result, 'pull', 'Pull failed', repoPath);
-      }
-    } finally {
-      progressService.completeOperation(opId);
-      this.isPulling = false;
-      releaseRefOp(repoPath);
-    }
+  /**
+   * The three buttons are a call into the shared runner and nothing else.
+   *
+   * They used to carry their own copy of the whole operation — component-local
+   * in-flight flags no other surface could see, no progress row at all, and a
+   * bespoke refresh — while app-shell's shortcut and palette copies did it
+   * differently. remote-operations.service owns the locks, the progress row,
+   * the conflict routing, the failure toast and the pinned refresh, so both
+   * surfaces now behave identically. The repo path is captured before the
+   * runner's awaits so a tab switch mid-operation cannot redirect the result.
+   *
+   * No success toast: the backend emits `remote-operation-completed` and
+   * setupRemoteOperationListeners toasts it, naming the remote. Ahead/behind
+   * is re-read by `handleRepoRefresh` when app-shell answers the runner's
+   * pinned refresh request with its own `repository-refresh` broadcast, so
+   * these badges update whichever surface started the operation.
+   */
+  private handleFetch(): Promise<void> {
+    const repoPath = this.activeRepository?.repository.path;
+    if (!repoPath) return Promise.resolve();
+    if (!this.warnIfNoRemote(repoPath)) return Promise.resolve();
+    return runFetch(repoPath);
   }
 
-  /** Claim the shared push slot, reporting the refusal like its siblings. */
-  private tryAcquirePushOrWarn(repoPath: string): boolean {
-    if (tryAcquirePush(repoPath)) return true;
-    warnRepositoryBusy();
+  private handlePull(): Promise<void> {
+    const repoPath = this.activeRepository?.repository.path;
+    if (!repoPath) return Promise.resolve();
+    if (!this.warnIfNoRemote(repoPath)) return Promise.resolve();
+    return runPull(repoPath);
+  }
+
+  private handlePush(): Promise<void> {
+    const repoPath = this.activeRepository?.repository.path;
+    if (!repoPath) return Promise.resolve();
+    if (!this.warnIfNoRemote(repoPath)) return Promise.resolve();
+    return runPush(repoPath);
+  }
+
+  /**
+   * True when the operation may go ahead. The three buttons carry `?disabled`
+   * for this, so a click only lands in the race window between a render and
+   * the click — where a silent return would look like a dead button, exactly
+   * as the toolbar's own `handleRemoteAction` says.
+   */
+  private warnIfNoRemote(repoPath: string): boolean {
+    if (this.hasRemote) return true;
+    // Said through the shared helper, so this surface refuses in the same
+    // words, with the same once-per-burst de-duplication and the same remedy
+    // button as the runner every other route goes through. The path is passed
+    // rather than assumed from the active tab, because the remedy button is
+    // pressed later than it is built.
+    showNoRemoteToast(repoPath);
     return false;
-  }
-
-  private async handlePush(): Promise<void> {
-    if (!this.activeRepository || this.isPushing) return;
-
-    const repoPath = this.activeRepository.repository.path;
-    // The shared push slot, not just isPushing. A rejected push raises a Force
-    // Push suggestion toast; app-shell holds this slot across that confirm
-    // precisely so a second, plain push cannot race the force push the user is
-    // authorising — and this button could not see a flag private to app-shell.
-    if (!this.tryAcquirePushOrWarn(repoPath)) return;
-    this.isPushing = true;
-    const opId = progressService.startOperation('push', 'Pushing to remote...', {
-      cancellable: true,
-    });
-    try {
-      const result = await gitPush({ path: repoPath, silent: true, operationId: opId });
-      progressService.completeOperation(opId);
-      if (!result.success) {
-        this.reportRemoteFailure(result, 'push', 'Push failed', repoPath);
-      } else {
-        this.dispatchEvent(new CustomEvent('repository-refresh', {
-          bubbles: true,
-          composed: true,
-          // Names the repo the operation ran ON. Without it app-shell falls
-          // back to handleRefresh(), which targets whichever tab is active —
-          // so a fetch/pull/push the user started and then tabbed away from
-          // refreshed the wrong repository and left the right one stale.
-          detail: { repoPath },
-        }));
-        await this.loadRemoteStatus();
-      }
-    } finally {
-      progressService.completeOperation(opId);
-      this.isPushing = false;
-      releasePush(repoPath);
-    }
   }
 
   private toggleExpanded(): void {
@@ -1266,10 +1166,10 @@ export class LvContextDashboard extends LitElement {
 
         <div class="remote-buttons">
           <button
-            class="remote-btn ${this.isFetching ? 'loading' : ''}"
-            title="Fetch from remote"
+            class="remote-btn ${this.remoteOperation === 'fetch' ? 'loading' : ''}"
+            title=${this.remoteButtonTitle('Fetch', 'Fetch from remote')}
             @click=${this.handleFetch}
-            ?disabled=${this.isRemoteOperationInProgress}
+            ?disabled=${this.isRemoteOperationInProgress || !this.hasRemote}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
@@ -1281,10 +1181,13 @@ export class LvContextDashboard extends LitElement {
           </button>
           <div class="remote-btn-wrapper">
             <button
-              class="remote-btn ${this.isPulling ? 'loading' : ''}"
-              title="Pull from remote${this.behind > 0 ? ` (${this.behind} commits behind)` : ''}"
+              class="remote-btn ${this.remoteOperation === 'pull' ? 'loading' : ''}"
+              title=${this.remoteButtonTitle(
+                'Pull',
+                `Pull from remote${this.behind > 0 ? ` (${this.behind} commits behind)` : ''}`,
+              )}
               @click=${this.handlePull}
-              ?disabled=${this.isRemoteOperationInProgress || this.lock.busy}
+              ?disabled=${this.isRemoteOperationInProgress || this.lock.busy || !this.hasRemote}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 3v18"></path>
@@ -1296,10 +1199,15 @@ export class LvContextDashboard extends LitElement {
           </div>
           <div class="remote-btn-wrapper">
             <button
-              class="remote-btn ${this.isPushing ? 'loading' : ''}"
-              title="Push to remote${this.ahead > 0 ? ` (${this.ahead} commits ahead)` : ''}"
+              class="remote-btn ${this.remoteOperation === 'push' ? 'loading' : ''}"
+              title=${this.remoteButtonTitle(
+                'Push',
+                `Push to remote${this.ahead > 0 ? ` (${this.ahead} commits ahead)` : ''}`,
+              )}
               @click=${this.handlePush}
-              ?disabled=${this.isRemoteOperationInProgress || isPushRunning(this.activeRepository?.repository.path)}
+              ?disabled=${this.isRemoteOperationInProgress
+                || isPushRunning(this.activeRepository?.repository.path)
+                || !this.hasRemote}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 3v18"></path>

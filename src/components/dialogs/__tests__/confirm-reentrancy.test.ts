@@ -38,7 +38,9 @@ let statusEntries: unknown[] = [];
     if (command === 'get_submodules') return [];
     if (command === 'get_remotes') return [];
     if (command === 'get_workspaces') return [];
-    if (command === 'get_lfs_status') return { installed: true, tracked: [], objects: [] };
+    if (command === 'get_lfs_status') {
+      return { installed: true, version: '3.0.0', enabled: true, patterns: [] };
+    }
     return null;
   },
   transformCallback: () => 0,

@@ -112,6 +112,44 @@ function localAiMocks(overrides: Record<string, unknown> = {}) {
 }
 
 /** Open the settings dialog via keyboard shortcut */
+interface SettingsStoreWindow {
+  __GITNADO_STORES__?: {
+    settingsStore?: {
+      getState: () => {
+        setOfflineMode: (on: boolean) => void;
+        setRemoteAllowlist: (list: string[]) => void;
+      };
+    };
+  };
+}
+
+/** Set the security settings through the store, the way the app itself does. */
+async function setSecurity(
+  page: Page,
+  security: { offlineMode?: boolean; remoteAllowlist?: string[] },
+): Promise<void> {
+  await page.waitForFunction(
+    () =>
+      typeof (window as unknown as SettingsStoreWindow).__GITNADO_STORES__?.settingsStore !==
+      'undefined',
+  );
+  await page.evaluate((s) => {
+    const store = (
+      window as unknown as SettingsStoreWindow
+    ).__GITNADO_STORES__!.settingsStore!.getState();
+    if (s.offlineMode !== undefined) store.setOfflineMode(s.offlineMode);
+    if (s.remoteAllowlist !== undefined) store.setRemoteAllowlist(s.remoteAllowlist);
+  }, security);
+}
+
+/**
+ * The Offline Mode switch, in the Security section of the same scrolling page
+ * as the AI provider picker. `lv-toggle` renders a `button[role="switch"]` in
+ * its shadow root; Playwright pierces it.
+ */
+const offlineToggle =
+  'lv-settings-dialog .setting-row:has(.setting-name:text-is("Offline Mode")) lv-toggle button[role="switch"]';
+
 async function openSettings(page: Page) {
   await page.keyboard.press('Meta+,');
   await expect(page.locator('lv-settings-dialog')).toBeVisible();
@@ -476,6 +514,128 @@ test.describe('Settings Dialog — Cloud provider test', () => {
       'OpenAI is not available. Check your API key and try again.'
     );
     await expect(row.locator('.status-indicator').last()).toContainText('Failed');
+  });
+
+  /**
+   * With offline mode on, the backend deliberately does not probe a cloud
+   * provider: probing an OpenAI-compatible endpoint is an outbound models-list
+   * request, and this list is exactly what Settings renders in order to offer
+   * the switch that turns that provider off. The provider must therefore still
+   * be listed and selectable, labelled as unchecked rather than as broken.
+   */
+  test('lists an unprobed cloud provider as not checked, not as unavailable', async ({ page }) => {
+    await injectCommandMock(page, localAiMocks({
+      get_ai_providers: [
+        ...mockProvidersUnavailable.map((p) => ({ ...p, probed: true })),
+        { ...mockOpenAiProvider, probed: false },
+      ],
+    }));
+    await setSecurity(page, { offlineMode: true });
+    await openSettings(page);
+
+    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    await expect(option).toHaveCount(1);
+    await expect(option).toContainText('(Not checked - offline)');
+    // The other providers were probed, so they keep their real verdict.
+    await expect(
+      page.locator('lv-settings-dialog option', { hasText: 'Anthropic Claude' })
+    ).toContainText('(API key required)');
+  });
+
+  /**
+   * `probed: false` is equally what comes back when offline mode is OFF and the
+   * provider's host is simply not in the remote allowlist. Blaming offline mode
+   * there points the user at a switch they never turned on — and the Security
+   * tab one click away shows it off — so the label has to name the allowlist.
+   */
+  test('names the remote allowlist when an unprobed provider is blocked with offline mode off', async ({ page }) => {
+    await injectCommandMock(page, localAiMocks({
+      get_ai_providers: [
+        ...mockProvidersUnavailable.map((p) => ({ ...p, probed: true })),
+        { ...mockOpenAiProvider, probed: false },
+      ],
+    }));
+    await setSecurity(page, { offlineMode: false, remoteAllowlist: ['github.com'] });
+    await openSettings(page);
+
+    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    await expect(option).toHaveCount(1);
+    await expect(option).toContainText('(Not checked - not in your remote allowlist)');
+    await expect(option).not.toContainText('offline');
+  });
+
+  /**
+   * The two halves of that label used to come from different moments: `probed`
+   * is the backend's answer, fetched once when the dialog opens, while offline
+   * mode is a switch in the Security section of the SAME scrolling page. So the
+   * instant the user did what the label told them — flip Offline Mode off, one
+   * section up — the label fell through to blaming a remote allowlist they had
+   * never configured. Driving the toggle is the only way to catch that; passing
+   * both values to the helper consistently is exactly what hid it.
+   */
+  test('turning Offline Mode off does not make the label blame an allowlist that does not exist', async ({ page }) => {
+    await injectCommandMock(page, localAiMocks({
+      get_ai_providers: [
+        ...mockProvidersUnavailable.map((p) => ({ ...p, probed: true })),
+        { ...mockOpenAiProvider, probed: false },
+      ],
+    }));
+    await setSecurity(page, { offlineMode: true, remoteAllowlist: [] });
+    await openSettings(page);
+
+    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    await expect(option).toContainText('(Not checked - offline)');
+
+    await page.locator(offlineToggle).click();
+
+    // The backend has not been re-asked yet, so the provider is still unprobed.
+    // What must never happen is the label inventing a policy to blame.
+    await expect(option).not.toContainText('remote allowlist');
+    await expect(option).toContainText('(Not checked)');
+  });
+
+  /**
+   * And the flow has to finish: `probed` is the backend's verdict under the OLD
+   * policy, so without re-asking, the provider sat at "(Not checked)" until the
+   * dialog was reopened or the Refresh button was found.
+   */
+  test('the provider label picks up the fresh verdict after the switch, without reopening', async ({ page }) => {
+    await injectCommandMock(page, localAiMocks({
+      get_ai_providers: [
+        ...mockProvidersUnavailable.map((p) => ({ ...p, probed: true })),
+        { ...mockOpenAiProvider, probed: false },
+      ],
+    }));
+    await setSecurity(page, { offlineMode: true, remoteAllowlist: [] });
+    await openSettings(page);
+
+    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    await expect(option).toContainText('(Not checked - offline)');
+
+    // With the policy lifted the backend probes the provider for real.
+    await injectCommandMock(page, {
+      get_ai_providers: [
+        ...mockProvidersUnavailable.map((p) => ({ ...p, probed: true })),
+        { ...mockOpenAiProvider, probed: true, available: true },
+      ],
+    });
+    await page.locator(offlineToggle).click();
+
+    await expect(option).toContainText('(Available)');
+  });
+
+  test('a probed but unreachable cloud provider still reads as unavailable', async ({ page }) => {
+    await injectCommandMock(page, localAiMocks({
+      get_ai_providers: [
+        ...mockProvidersUnavailable.map((p) => ({ ...p, probed: true })),
+        { ...mockOpenAiProvider, probed: true },
+      ],
+    }));
+    await openSettings(page);
+
+    await expect(
+      page.locator('lv-settings-dialog option', { hasText: 'OpenAI' })
+    ).toContainText('(Unavailable)');
   });
 
   test('shows Working and no error when the OpenAI test succeeds', async ({ page }) => {

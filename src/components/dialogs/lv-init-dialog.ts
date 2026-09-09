@@ -188,12 +188,18 @@ export class LvInitDialog extends LitElement {
 
   @query('lv-modal') private modal!: LvModal;
 
-  public open(): void {
+  /**
+   * @param path Optional folder to pre-fill, so "initialise this folder"
+   *   flows (a folder dropped on the window that is not a repository) do not
+   *   make the user find it again in the picker.
+   */
+  public open(path?: string): void {
     // An init already in flight owns this component; reset() would
     // clear `isInitializing` and re-enable the button for a second concurrent run,
     // and the first run's close() would then yank shut the reopened session.
     if (this.isInitializing) return;
     this.reset();
+    if (path) this.path = path;
     // Seed from the "Default Branch Name" setting on every open so the
     // dialog always reflects the current preference.
     this.initialBranch = settingsStore.getState().defaultBranchName;

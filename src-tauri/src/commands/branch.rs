@@ -12,108 +12,111 @@ const STALE_THRESHOLD_DAYS: i64 = 90;
 /// Get all branches in the repository
 #[command]
 pub async fn get_branches(path: String) -> Result<Vec<Branch>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mut branches = Vec::new();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mut branches = Vec::new();
 
-    let head = repo.head().ok();
-    let _head_oid = head.as_ref().and_then(|h| h.target());
+        let head = repo.head().ok();
+        let _head_oid = head.as_ref().and_then(|h| h.target());
 
-    // Calculate stale threshold (90 days ago in seconds since epoch)
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let stale_threshold = now - (STALE_THRESHOLD_DAYS * 24 * 60 * 60);
+        // Calculate stale threshold (90 days ago in seconds since epoch)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let stale_threshold = now - (STALE_THRESHOLD_DAYS * 24 * 60 * 60);
 
-    for branch_result in repo.branches(None)? {
-        let (branch, branch_type) = branch_result?;
-        let name = branch.name()?.unwrap_or("").to_string();
-        let reference = branch.get();
+        for branch_result in repo.branches(None)? {
+            let (branch, branch_type) = branch_result?;
+            let name = branch.name()?.unwrap_or("").to_string();
+            let reference = branch.get();
 
-        let is_remote = branch_type == git2::BranchType::Remote;
+            let is_remote = branch_type == git2::BranchType::Remote;
 
-        // Skip the remote's symbolic HEAD pointer (refs/remotes/origin/HEAD),
-        // which every clone has.
-        //
-        // It is a pointer at the remote's default branch, not a branch of its
-        // own: `git branch -r` renders it as "origin/HEAD -> origin/main" and
-        // never offers it for checkout. Listing it produced a row named
-        // "origin/HEAD" with an empty target oid and no timestamp — a symbolic
-        // ref has no direct target — and checking that row out derived the
-        // local branch name "HEAD", which libgit2 rejects as invalid.
-        if is_remote && reference.kind() == Some(git2::ReferenceType::Symbolic) {
-            continue;
-        }
+            // Skip the remote's symbolic HEAD pointer (refs/remotes/origin/HEAD),
+            // which every clone has.
+            //
+            // It is a pointer at the remote's default branch, not a branch of its
+            // own: `git branch -r` renders it as "origin/HEAD -> origin/main" and
+            // never offers it for checkout. Listing it produced a row named
+            // "origin/HEAD" with an empty target oid and no timestamp — a symbolic
+            // ref has no direct target — and checking that row out derived the
+            // local branch name "HEAD", which libgit2 rejects as invalid.
+            if is_remote && reference.kind() == Some(git2::ReferenceType::Symbolic) {
+                continue;
+            }
 
-        let is_head = head
-            .as_ref()
-            .map(|h| h.name() == reference.name())
-            .unwrap_or(false);
-
-        let target_oid = reference
-            .target()
-            .map(|oid| oid.to_string())
-            .unwrap_or_default();
-
-        // Get the last commit timestamp for this branch
-        let last_commit_timestamp = reference.target().and_then(|oid| {
-            repo.find_commit(oid)
-                .ok()
-                .map(|commit| commit.time().seconds())
-        });
-
-        // Branch is stale if it's not HEAD and hasn't been updated in threshold days
-        let is_stale = !is_head
-            && last_commit_timestamp
-                .map(|ts| ts < stale_threshold)
+            let is_head = head
+                .as_ref()
+                .map(|h| h.name() == reference.name())
                 .unwrap_or(false);
 
-        let upstream = branch
-            .upstream()
-            .ok()
-            .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+            let target_oid = reference
+                .target()
+                .map(|oid| oid.to_string())
+                .unwrap_or_default();
 
-        let ahead_behind = if !is_remote {
-            if let (Some(local_oid), Some(upstream_branch)) =
-                (reference.target(), branch.upstream().ok())
-            {
-                if let Some(upstream_oid) = upstream_branch.get().target() {
-                    repo.graph_ahead_behind(local_oid, upstream_oid)
-                        .ok()
-                        .map(|(ahead, behind)| AheadBehind { ahead, behind })
+            // Get the last commit timestamp for this branch
+            let last_commit_timestamp = reference.target().and_then(|oid| {
+                repo.find_commit(oid)
+                    .ok()
+                    .map(|commit| commit.time().seconds())
+            });
+
+            // Branch is stale if it's not HEAD and hasn't been updated in threshold days
+            let is_stale = !is_head
+                && last_commit_timestamp
+                    .map(|ts| ts < stale_threshold)
+                    .unwrap_or(false);
+
+            let upstream = branch
+                .upstream()
+                .ok()
+                .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+
+            let ahead_behind = if !is_remote {
+                if let (Some(local_oid), Some(upstream_branch)) =
+                    (reference.target(), branch.upstream().ok())
+                {
+                    if let Some(upstream_oid) = upstream_branch.get().target() {
+                        repo.graph_ahead_behind(local_oid, upstream_oid)
+                            .ok()
+                            .map(|(ahead, behind)| AheadBehind { ahead, behind })
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
-        branches.push(Branch {
-            name: name.clone(),
-            shorthand: if is_remote {
-                // For remote branches, strip the remote name prefix (e.g., "origin/main" -> "main")
-                name.split_once('/')
-                    .map(|x| x.1)
-                    .unwrap_or(&name)
-                    .to_string()
-            } else {
-                // For local branches, use the full name (e.g., "feature/my-fix")
-                name.clone()
-            },
-            is_head,
-            is_remote,
-            upstream,
-            target_oid,
-            ahead_behind,
-            last_commit_timestamp,
-            is_stale,
-        });
-    }
+            branches.push(Branch {
+                name: name.clone(),
+                shorthand: if is_remote {
+                    // For remote branches, strip the remote name prefix (e.g., "origin/main" -> "main")
+                    name.split_once('/')
+                        .map(|x| x.1)
+                        .unwrap_or(&name)
+                        .to_string()
+                } else {
+                    // For local branches, use the full name (e.g., "feature/my-fix")
+                    name.clone()
+                },
+                is_head,
+                is_remote,
+                upstream,
+                target_oid,
+                ahead_behind,
+                last_commit_timestamp,
+                is_stale,
+            });
+        }
 
-    Ok(branches)
+        Ok(branches)
+    })
+    .await
 }
 
 /// Create a new branch
@@ -124,132 +127,138 @@ pub async fn create_branch(
     start_point: Option<String>,
     checkout: Option<bool>,
 ) -> Result<Branch> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // "Checkout new branch after creation" is the dialog's default, so this
-    // switches branches without being called checkout — which is how it was
-    // missed when ensure_checkoutable was added to the two commands that are.
-    // Checked BEFORE the ref is created so a refusal leaves nothing behind.
-    if checkout.unwrap_or(false) {
-        ensure_checkoutable(&repo)?;
-    }
-
-    let commit = if let Some(ref start) = start_point {
-        let obj = repo.revparse_single(start)?;
-        obj.peel_to_commit()?
-    } else {
-        repo.head()?.peel_to_commit()?
-    };
-
-    let branch = repo.branch(&name, &commit, false)?;
-    let reference = branch.get();
-
-    if checkout.unwrap_or(false) {
-        let old_head = crate::commands::hooks::head_oid_string(&repo);
-        let obj = reference.peel(git2::ObjectType::Commit)?;
-        // The checkout is fallible (a dirty file that differs between HEAD and
-        // the start point conflicts), and the ref already exists by now. Roll
-        // it back so "create failed" stays literally true — otherwise the
-        // dialog showed an error while the refs watcher made the branch appear
-        // in the sidebar, and a retry dead-ended on "already exists".
-        let switch = (|| -> Result<()> {
-            repo.checkout_tree(&obj, None)?;
-            repo.set_head(reference.name().map_err(|_| {
-                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
-            })?)?;
-            Ok(())
-        })();
-        if let Err(e) = switch {
-            if let Ok(mut created) = repo.find_branch(&name, git2::BranchType::Local) {
-                let _ = created.delete();
-            }
-            return Err(e);
+        // "Checkout new branch after creation" is the dialog's default, so this
+        // switches branches without being called checkout — which is how it was
+        // missed when ensure_checkoutable was added to the two commands that are.
+        // Checked BEFORE the ref is created so a refusal leaves nothing behind.
+        if checkout.unwrap_or(false) {
+            ensure_checkoutable(&repo)?;
         }
-        let new_head = crate::commands::hooks::head_oid_string(&repo);
-        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
-    }
 
-    Ok(Branch {
-        name: name.clone(),
-        shorthand: name.clone(),
-        is_head: checkout.unwrap_or(false),
-        is_remote: false,
-        upstream: None,
-        target_oid: commit.id().to_string(),
-        ahead_behind: None,
-        last_commit_timestamp: Some(commit.time().seconds()),
-        is_stale: false, // Newly created branches are never stale
+        let commit = if let Some(ref start) = start_point {
+            let obj = repo.revparse_single(start)?;
+            obj.peel_to_commit()?
+        } else {
+            repo.head()?.peel_to_commit()?
+        };
+
+        let branch = repo.branch(&name, &commit, false)?;
+        let reference = branch.get();
+
+        if checkout.unwrap_or(false) {
+            let old_head = crate::commands::hooks::head_oid_string(&repo);
+            let obj = reference.peel(git2::ObjectType::Commit)?;
+            // The checkout is fallible (a dirty file that differs between HEAD and
+            // the start point conflicts), and the ref already exists by now. Roll
+            // it back so "create failed" stays literally true — otherwise the
+            // dialog showed an error while the refs watcher made the branch appear
+            // in the sidebar, and a retry dead-ended on "already exists".
+            let switch = (|| -> Result<()> {
+                repo.checkout_tree(&obj, None)?;
+                repo.set_head(reference.name().map_err(|_| {
+                    GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
+                })?)?;
+                Ok(())
+            })();
+            if let Err(e) = switch {
+                if let Ok(mut created) = repo.find_branch(&name, git2::BranchType::Local) {
+                    let _ = created.delete();
+                }
+                return Err(e);
+            }
+            let new_head = crate::commands::hooks::head_oid_string(&repo);
+            crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+        }
+
+        Ok(Branch {
+            name: name.clone(),
+            shorthand: name.clone(),
+            is_head: checkout.unwrap_or(false),
+            is_remote: false,
+            upstream: None,
+            target_oid: commit.id().to_string(),
+            ahead_behind: None,
+            last_commit_timestamp: Some(commit.time().seconds()),
+            is_stale: false, // Newly created branches are never stale
+        })
     })
+    .await
 }
 
 /// Delete a branch
 #[command]
 pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let mut branch = repo
-        .find_branch(&name, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(name.clone()))?;
+        let mut branch = repo
+            .find_branch(&name, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(name.clone()))?;
 
-    // Enforce preventDeletion branch rules HERE rather than only in the cleanup
-    // dialog's candidate listing: the sidebar and the graph ref menu call this
-    // command directly, so a rule the UI displays as active was inert on both
-    // of those surfaces. Checked before the force branch so force cannot bypass
-    // an explicit protection rule.
-    // Propagated, NOT unwrap_or_default: load_rules errors both when the file
-    // is unreadable and when it fails to parse (save_rules is a non-atomic
-    // write, so a crash mid-save can truncate it). Defaulting to "no rules"
-    // would make an unreadable rule set indistinguishable from an empty one and
-    // silently disable every protection in the repo — a protection that fails
-    // open is worse than none, because the UI still shows the branch as
-    // protected.
-    let rules = super::branch_rules::load_rules(Path::new(&path))?;
-    if super::branch_rules::is_deletion_prevented(&rules, &name) {
-        return Err(GitnadoError::OperationFailed(format!(
-            "Branch \"{}\" is protected by a branch rule and cannot be deleted. Remove the rule first.",
-            name
-        )));
-    }
-
-    if force.unwrap_or(false) {
-        branch.delete()?;
-    } else {
-        // Check if branch is merged before deleting.
-        //
-        // An UNBORN HEAD is not an error here. On an orphan branch with no
-        // commits (`git checkout --orphan gh-pages`, the standard way to start
-        // a docs branch) repo.head() fails, and propagating that reported
-        // "reference 'refs/heads/gh-pages' not found" — naming a branch the
-        // user had not selected. Worse, the frontend gates its Force Delete
-        // escalation on /not fully merged/i, so that message hid the one
-        // recovery the app offers, even though force delete works fine here.
-        // Canonical git says "not fully merged" in this state.
-        let head = match repo.head() {
-            Ok(h) => h,
-            Err(_) => {
-                return Err(GitnadoError::OperationFailed(
-                    "Branch is not fully merged. Use force to delete anyway.".to_string(),
-                ))
-            }
-        };
-        if let (Some(head_oid), Some(branch_oid)) = (head.target(), branch.get().target()) {
-            // A branch is fully merged into HEAD when HEAD is at or descends
-            // from the branch tip. The equality case matters: `git branch -d`
-            // deletes a branch that points at the same commit as HEAD, but
-            // graph_descendant_of returns false for equal oids.
-            if head_oid == branch_oid || repo.graph_descendant_of(head_oid, branch_oid)? {
-                branch.delete()?;
-            } else {
-                return Err(GitnadoError::OperationFailed(
-                    "Branch is not fully merged. Use force to delete anyway.".to_string(),
-                ));
-            }
-        } else {
-            branch.delete()?;
+        // Enforce preventDeletion branch rules HERE rather than only in the cleanup
+        // dialog's candidate listing: the sidebar and the graph ref menu call this
+        // command directly, so a rule the UI displays as active was inert on both
+        // of those surfaces. Checked before the force branch so force cannot bypass
+        // an explicit protection rule.
+        // Propagated, NOT unwrap_or_default: load_rules errors both when the file
+        // is unreadable and when it fails to parse (save_rules is a non-atomic
+        // write, so a crash mid-save can truncate it). Defaulting to "no rules"
+        // would make an unreadable rule set indistinguishable from an empty one and
+        // silently disable every protection in the repo — a protection that fails
+        // open is worse than none, because the UI still shows the branch as
+        // protected.
+        let rules = super::branch_rules::load_rules(Path::new(&path))?;
+        if super::branch_rules::is_deletion_prevented(&rules, &name) {
+            return Err(GitnadoError::OperationFailed(format!(
+                "Branch \"{}\" is protected by a branch rule and cannot be deleted. Remove the rule first.",
+                name
+            )));
         }
-    }
 
-    Ok(())
+        if force.unwrap_or(false) {
+            branch.delete()?;
+        } else {
+            // Check if branch is merged before deleting.
+            //
+            // An UNBORN HEAD is not an error here. On an orphan branch with no
+            // commits (`git checkout --orphan gh-pages`, the standard way to start
+            // a docs branch) repo.head() fails, and propagating that reported
+            // "reference 'refs/heads/gh-pages' not found" — naming a branch the
+            // user had not selected. Worse, the frontend gates its Force Delete
+            // escalation on /not fully merged/i, so that message hid the one
+            // recovery the app offers, even though force delete works fine here.
+            // Canonical git says "not fully merged" in this state.
+            let head = match repo.head() {
+                Ok(h) => h,
+                Err(_) => {
+                    return Err(GitnadoError::OperationFailed(
+                        "Branch is not fully merged. Use force to delete anyway.".to_string(),
+                    ))
+                }
+            };
+            if let (Some(head_oid), Some(branch_oid)) = (head.target(), branch.get().target()) {
+                // A branch is fully merged into HEAD when HEAD is at or descends
+                // from the branch tip. The equality case matters: `git branch -d`
+                // deletes a branch that points at the same commit as HEAD, but
+                // graph_descendant_of returns false for equal oids.
+                if head_oid == branch_oid || repo.graph_descendant_of(head_oid, branch_oid)? {
+                    branch.delete()?;
+                } else {
+                    return Err(GitnadoError::OperationFailed(
+                        "Branch is not fully merged. Use force to delete anyway.".to_string(),
+                    ));
+                }
+            } else {
+                branch.delete()?;
+            }
+        }
+
+        Ok(())
+    })
+    .await
 }
 
 /// Rename a branch
@@ -264,80 +273,83 @@ pub async fn rename_branch(
     new_name: String,
     update_tracking: Option<bool>,
 ) -> Result<Branch> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let mut branch = repo
-        .find_branch(&old_name, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(old_name.clone()))?;
+        let mut branch = repo
+            .find_branch(&old_name, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(old_name.clone()))?;
 
-    // Capture existing upstream info before rename
-    let upstream_name = branch
-        .upstream()
-        .ok()
-        .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
-
-    branch.rename(&new_name, false)?;
-
-    // Get the renamed branch to return updated info
-    let mut renamed_branch = repo.find_branch(&new_name, git2::BranchType::Local)?;
-
-    // Re-apply upstream tracking if requested (default: true)
-    let should_update = update_tracking.unwrap_or(true);
-    if should_update {
-        if let Some(ref up_name) = upstream_name {
-            // Re-set the upstream on the renamed branch
-            let _ = renamed_branch.set_upstream(Some(up_name));
-            // Re-fetch the branch after setting upstream
-            renamed_branch = repo.find_branch(&new_name, git2::BranchType::Local)?;
-        }
-    }
-
-    let reference = renamed_branch.get();
-    let target_oid = reference
-        .target()
-        .map(|o| o.to_string())
-        .unwrap_or_default();
-
-    let is_head = repo
-        .head()
-        .ok()
-        .map(|h| h.name() == reference.name())
-        .unwrap_or(false);
-
-    let upstream = renamed_branch
-        .upstream()
-        .ok()
-        .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
-
-    // Get the last commit timestamp
-    let last_commit_timestamp = reference.target().and_then(|oid| {
-        repo.find_commit(oid)
+        // Capture existing upstream info before rename
+        let upstream_name = branch
+            .upstream()
             .ok()
-            .map(|commit| commit.time().seconds())
-    });
+            .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
 
-    // Calculate if stale (if not HEAD)
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let stale_threshold = now - (STALE_THRESHOLD_DAYS * 24 * 60 * 60);
-    let is_stale = !is_head
-        && last_commit_timestamp
-            .map(|ts| ts < stale_threshold)
+        branch.rename(&new_name, false)?;
+
+        // Get the renamed branch to return updated info
+        let mut renamed_branch = repo.find_branch(&new_name, git2::BranchType::Local)?;
+
+        // Re-apply upstream tracking if requested (default: true)
+        let should_update = update_tracking.unwrap_or(true);
+        if should_update {
+            if let Some(ref up_name) = upstream_name {
+                // Re-set the upstream on the renamed branch
+                let _ = renamed_branch.set_upstream(Some(up_name));
+                // Re-fetch the branch after setting upstream
+                renamed_branch = repo.find_branch(&new_name, git2::BranchType::Local)?;
+            }
+        }
+
+        let reference = renamed_branch.get();
+        let target_oid = reference
+            .target()
+            .map(|o| o.to_string())
+            .unwrap_or_default();
+
+        let is_head = repo
+            .head()
+            .ok()
+            .map(|h| h.name() == reference.name())
             .unwrap_or(false);
 
-    Ok(Branch {
-        name: new_name.clone(),
-        shorthand: new_name,
-        is_head,
-        is_remote: false,
-        upstream,
-        target_oid,
-        ahead_behind: None,
-        last_commit_timestamp,
-        is_stale,
+        let upstream = renamed_branch
+            .upstream()
+            .ok()
+            .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+
+        // Get the last commit timestamp
+        let last_commit_timestamp = reference.target().and_then(|oid| {
+            repo.find_commit(oid)
+                .ok()
+                .map(|commit| commit.time().seconds())
+        });
+
+        // Calculate if stale (if not HEAD)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let stale_threshold = now - (STALE_THRESHOLD_DAYS * 24 * 60 * 60);
+        let is_stale = !is_head
+            && last_commit_timestamp
+                .map(|ts| ts < stale_threshold)
+                .unwrap_or(false);
+
+        Ok(Branch {
+            name: new_name.clone(),
+            shorthand: new_name,
+            is_head,
+            is_remote: false,
+            upstream,
+            target_oid,
+            ahead_behind: None,
+            last_commit_timestamp,
+            is_stale,
+        })
     })
+    .await
 }
 
 /// Checkout a branch or commit
@@ -538,146 +550,152 @@ pub(crate) fn ensure_checkoutable(repo: &git2::Repository) -> Result<()> {
 
 #[command]
 pub async fn checkout(path: String, ref_name: String, force: Option<bool>) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    ensure_checkoutable(&repo)?;
-    // BEFORE checkout_tree — see branch_checked_out_elsewhere.
-    ensure_not_checked_out_elsewhere(&repo, &ref_name)?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        ensure_checkoutable(&repo)?;
+        // BEFORE checkout_tree — see branch_checked_out_elsewhere.
+        ensure_not_checked_out_elsewhere(&repo, &ref_name)?;
 
-    // Capture HEAD before the switch so the post-checkout hook receives the
-    // correct <old-ref> argument (githooks(5)).
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
+        // Capture HEAD before the switch so the post-checkout hook receives the
+        // correct <old-ref> argument (githooks(5)).
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
 
-    let mut checkout_opts = git2::build::CheckoutBuilder::new();
-    if force.unwrap_or(false) {
-        checkout_opts.force();
-    } else {
-        checkout_opts.safe();
-    }
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        if force.unwrap_or(false) {
+            checkout_opts.force();
+        } else {
+            checkout_opts.safe();
+        }
 
-    // The working tree must always be checked out from the same commit HEAD
-    // ends up pointing at, so resolve the effective target ref FIRST. In
-    // particular, checking out a remote branch when a same-named local branch
-    // already exists must check out the LOCAL branch (like `git checkout`),
-    // not the remote tip — otherwise tree and HEAD diverge.
-    if let Ok(branch) = repo.find_branch(&ref_name, git2::BranchType::Local) {
-        let obj = branch.get().peel(git2::ObjectType::Commit)?;
-        repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
-        repo.set_head(branch.get().name().map_err(|_| {
-            GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
-        })?)?;
-    } else if let Ok(remote_branch) = repo.find_branch(&ref_name, git2::BranchType::Remote) {
-        // Checking out a remote branch - use or create a local tracking branch.
-        // Extract the branch name without the remote prefix (e.g., "origin/feature" -> "feature")
-        let remote_name = remote_branch
-            .get()
-            .shorthand()
-            .unwrap_or(&ref_name)
-            .to_string();
+        // The working tree must always be checked out from the same commit HEAD
+        // ends up pointing at, so resolve the effective target ref FIRST. In
+        // particular, checking out a remote branch when a same-named local branch
+        // already exists must check out the LOCAL branch (like `git checkout`),
+        // not the remote tip — otherwise tree and HEAD diverge.
+        if let Ok(branch) = repo.find_branch(&ref_name, git2::BranchType::Local) {
+            let obj = branch.get().peel(git2::ObjectType::Commit)?;
+            repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
+            repo.set_head(branch.get().name().map_err(|_| {
+                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
+            })?)?;
+        } else if let Ok(remote_branch) = repo.find_branch(&ref_name, git2::BranchType::Remote) {
+            // Checking out a remote branch - use or create a local tracking branch.
+            // Extract the branch name without the remote prefix (e.g., "origin/feature" -> "feature")
+            let remote_name = remote_branch
+                .get()
+                .shorthand()
+                .unwrap_or(&ref_name)
+                .to_string();
 
-        if let Some(slash_pos) = remote_name.find('/') {
-            let local_name = &remote_name[slash_pos + 1..];
+            if let Some(slash_pos) = remote_name.find('/') {
+                let local_name = &remote_name[slash_pos + 1..];
 
-            if let Ok(local_branch) = repo.find_branch(local_name, git2::BranchType::Local) {
-                // Local branch exists: check out ITS tree, not the remote tip
-                let obj = local_branch.get().peel(git2::ObjectType::Commit)?;
-                repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
-                repo.set_head(local_branch.get().name().map_err(|_| {
-                    GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
-                })?)?;
-            } else {
-                // Create new local branch from the remote branch.
-                //
-                // The ref must exist BEFORE the working tree is rewritten. A
-                // failure here (invalid derived name such as "HEAD" from
-                // refs/remotes/origin/HEAD, or a D/F conflict against an
-                // existing refs/heads/<name>/*) would otherwise return with the
-                // tree already holding the remote tip while HEAD still names the
-                // old branch — the whole inter-branch diff appears staged and
-                // committing writes the other branch's tree onto this one.
-                let commit = remote_branch.get().peel_to_commit()?;
-                let mut new_branch = repo.branch(local_name, &commit, false)?;
-
-                // Upstream tracking is best-effort: the branch already exists, so
-                // a tracking-config failure must not abort the checkout (matches
-                // checkout_with_autostash).
-                let _ = new_branch.set_upstream(Some(&remote_name));
-
-                let branch_ref = new_branch
-                    .get()
-                    .name()
-                    .map_err(|_| {
+                if let Ok(local_branch) = repo.find_branch(local_name, git2::BranchType::Local) {
+                    // Local branch exists: check out ITS tree, not the remote tip
+                    let obj = local_branch.get().peel(git2::ObjectType::Commit)?;
+                    repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
+                    repo.set_head(local_branch.get().name().map_err(|_| {
                         GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
-                    })?
-                    .to_string();
+                    })?)?;
+                } else {
+                    // Create new local branch from the remote branch.
+                    //
+                    // The ref must exist BEFORE the working tree is rewritten. A
+                    // failure here (invalid derived name such as "HEAD" from
+                    // refs/remotes/origin/HEAD, or a D/F conflict against an
+                    // existing refs/heads/<name>/*) would otherwise return with the
+                    // tree already holding the remote tip while HEAD still names the
+                    // old branch — the whole inter-branch diff appears staged and
+                    // committing writes the other branch's tree onto this one.
+                    let commit = remote_branch.get().peel_to_commit()?;
+                    let mut new_branch = repo.branch(local_name, &commit, false)?;
 
-                // Roll the new ref back if the tree cannot be written, so a
-                // failed checkout leaves no half-created branch behind.
-                if let Err(e) = repo.checkout_tree(commit.as_object(), Some(&mut checkout_opts)) {
-                    let _ = new_branch.delete();
-                    return Err(e.into());
-                }
+                    // Upstream tracking is best-effort: the branch already exists, so
+                    // a tracking-config failure must not abort the checkout (matches
+                    // checkout_with_autostash).
+                    let _ = new_branch.set_upstream(Some(&remote_name));
 
-                // Moving HEAD is the LAST thing that can fail, and by then the
-                // working tree already holds the remote tip. Returning there
-                // left HEAD naming the old branch over the other branch's
-                // content: the whole inter-branch diff reads as uncommitted
-                // work, and committing it writes the other branch's tree onto
-                // this one — the exact corruption creating the ref early is
-                // meant to prevent, just one step later. Reachable through a
-                // HEAD.lock left by a crashed process or a concurrent git.
-                //
-                // So put the tree back, then drop the ref, and report the
-                // original failure.
-                //
-                // The restore is `force()`, and has to be: the files to undo
-                // now differ from HEAD, so a `safe()` checkout reads them as
-                // local modifications and refuses to touch the very files it
-                // needs to revert. That is safe here only because the checkout
-                // above ran `safe()` and SUCCEEDED — which means no tracked
-                // file carried a conflicting local edit, so everything this
-                // reverts is content we just wrote ourselves. Untracked files
-                // are not touched either way.
-                if let Err(e) = repo.set_head(&branch_ref) {
-                    let restored = repo
-                        .head()
-                        .and_then(|h| h.peel_to_commit())
-                        .and_then(|prev| {
-                            let mut restore = git2::build::CheckoutBuilder::new();
-                            restore.force();
-                            repo.checkout_tree(prev.as_object(), Some(&mut restore))
-                        })
-                        .is_ok();
-                    let _ = new_branch.delete();
+                    let branch_ref = new_branch
+                        .get()
+                        .name()
+                        .map_err(|_| {
+                            GitnadoError::OperationFailed(
+                                "Invalid reference name encoding".to_string(),
+                            )
+                        })?
+                        .to_string();
 
-                    if !restored {
-                        return Err(GitnadoError::OperationFailed(format!(
-                            "Could not switch to {}: {}. The working tree still holds \
-                             {}'s content — check it out again to recover.",
-                            local_name, e, remote_name
-                        )));
+                    // Roll the new ref back if the tree cannot be written, so a
+                    // failed checkout leaves no half-created branch behind.
+                    if let Err(e) = repo.checkout_tree(commit.as_object(), Some(&mut checkout_opts))
+                    {
+                        let _ = new_branch.delete();
+                        return Err(e.into());
                     }
-                    return Err(e.into());
+
+                    // Moving HEAD is the LAST thing that can fail, and by then the
+                    // working tree already holds the remote tip. Returning there
+                    // left HEAD naming the old branch over the other branch's
+                    // content: the whole inter-branch diff reads as uncommitted
+                    // work, and committing it writes the other branch's tree onto
+                    // this one — the exact corruption creating the ref early is
+                    // meant to prevent, just one step later. Reachable through a
+                    // HEAD.lock left by a crashed process or a concurrent git.
+                    //
+                    // So put the tree back, then drop the ref, and report the
+                    // original failure.
+                    //
+                    // The restore is `force()`, and has to be: the files to undo
+                    // now differ from HEAD, so a `safe()` checkout reads them as
+                    // local modifications and refuses to touch the very files it
+                    // needs to revert. That is safe here only because the checkout
+                    // above ran `safe()` and SUCCEEDED — which means no tracked
+                    // file carried a conflicting local edit, so everything this
+                    // reverts is content we just wrote ourselves. Untracked files
+                    // are not touched either way.
+                    if let Err(e) = repo.set_head(&branch_ref) {
+                        let restored = repo
+                            .head()
+                            .and_then(|h| h.peel_to_commit())
+                            .and_then(|prev| {
+                                let mut restore = git2::build::CheckoutBuilder::new();
+                                restore.force();
+                                repo.checkout_tree(prev.as_object(), Some(&mut restore))
+                            })
+                            .is_ok();
+                        let _ = new_branch.delete();
+
+                        if !restored {
+                            return Err(GitnadoError::OperationFailed(format!(
+                                "Could not switch to {}: {}. The working tree still holds \
+                                 {}'s content — check it out again to recover.",
+                                local_name, e, remote_name
+                            )));
+                        }
+                        return Err(e.into());
+                    }
                 }
+            } else {
+                // Couldn't parse remote name, detach HEAD
+                let commit = remote_branch.get().peel_to_commit()?;
+                repo.checkout_tree(commit.as_object(), Some(&mut checkout_opts))?;
+                repo.set_head_detached(commit.id())?;
             }
         } else {
-            // Couldn't parse remote name, detach HEAD
-            let commit = remote_branch.get().peel_to_commit()?;
-            repo.checkout_tree(commit.as_object(), Some(&mut checkout_opts))?;
+            // Not a branch (could be a commit SHA or tag), detach HEAD
+            let obj = repo.revparse_single(&ref_name)?;
+            let commit = obj.peel_to_commit()?;
+            repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
             repo.set_head_detached(commit.id())?;
         }
-    } else {
-        // Not a branch (could be a commit SHA or tag), detach HEAD
-        let obj = repo.revparse_single(&ref_name)?;
-        let commit = obj.peel_to_commit()?;
-        repo.checkout_tree(&obj, Some(&mut checkout_opts))?;
-        repo.set_head_detached(commit.id())?;
-    }
 
-    // Branch/commit switch complete — run post-checkout (flag=1), non-blocking.
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+        // Branch/commit switch complete — run post-checkout (flag=1), non-blocking.
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Set the upstream branch for a local branch
@@ -690,8 +708,9 @@ pub async fn set_upstream_branch(
     let path_clone = path.clone();
     let branch_clone = branch.clone();
 
-    // Wrap git2 operations in a block so they're dropped before the await
-    {
+    // git2 operations run on the blocking pool and are dropped before the
+    // await: git2 handles are not `Send`, so none may cross it.
+    crate::utils::blocking_git(move || {
         let repo = git2::Repository::open(Path::new(&path))?;
 
         let mut local_branch = repo
@@ -721,7 +740,9 @@ pub async fn set_upstream_branch(
 
         // Set the upstream using the shorthand form
         local_branch.set_upstream(Some(&upstream_short))?;
-    }
+        Ok(())
+    })
+    .await?;
 
     // Return the updated tracking info
     get_branch_tracking_info(path_clone, branch_clone).await
@@ -730,111 +751,117 @@ pub async fn set_upstream_branch(
 /// Remove the upstream tracking for a local branch
 #[command]
 pub async fn unset_upstream_branch(path: String, branch: String) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let mut local_branch = repo
-        .find_branch(&branch, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
+        let mut local_branch = repo
+            .find_branch(&branch, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
-    // Remove the upstream (ignore error if no upstream was set)
-    let _ = local_branch.set_upstream(None);
+        // Remove the upstream (ignore error if no upstream was set)
+        let _ = local_branch.set_upstream(None);
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Get detailed tracking information for a branch
 #[command]
 pub async fn get_branch_tracking_info(path: String, branch: String) -> Result<BranchTrackingInfo> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let local_branch = repo
-        .find_branch(&branch, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
+        let local_branch = repo
+            .find_branch(&branch, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(branch.clone()))?;
 
-    let local_oid = local_branch
-        .get()
-        .target()
-        .ok_or_else(|| GitnadoError::OperationFailed("Branch has no target".to_string()))?;
+        let local_oid = local_branch
+            .get()
+            .target()
+            .ok_or_else(|| GitnadoError::OperationFailed("Branch has no target".to_string()))?;
 
-    // Try to get upstream info
-    let upstream_result = local_branch.upstream();
+        // Try to get upstream info
+        let upstream_result = local_branch.upstream();
 
-    match upstream_result {
-        Ok(upstream_branch) => {
-            let upstream_name = upstream_branch
-                .name()?
-                .map(|s| s.to_string())
-                .unwrap_or_default();
+        match upstream_result {
+            Ok(upstream_branch) => {
+                let upstream_name = upstream_branch
+                    .name()?
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
 
-            // Parse remote and remote branch from upstream name (e.g., "origin/main")
-            let (remote, remote_branch) = if let Some((r, b)) = upstream_name.split_once('/') {
-                (Some(r.to_string()), Some(b.to_string()))
-            } else {
-                (None, Some(upstream_name.clone()))
-            };
+                // Parse remote and remote branch from upstream name (e.g., "origin/main")
+                let (remote, remote_branch) = if let Some((r, b)) = upstream_name.split_once('/') {
+                    (Some(r.to_string()), Some(b.to_string()))
+                } else {
+                    (None, Some(upstream_name.clone()))
+                };
 
-            // Calculate ahead/behind
-            let upstream_oid = upstream_branch.get().target();
-            let (ahead, behind) = if let Some(up_oid) = upstream_oid {
-                repo.graph_ahead_behind(local_oid, up_oid)
-                    .map(|(a, b)| (a as u32, b as u32))
-                    .unwrap_or((0, 0))
-            } else {
-                (0, 0)
-            };
-
-            Ok(BranchTrackingInfo {
-                local_branch: branch,
-                upstream: Some(format!("refs/remotes/{}", upstream_name)),
-                ahead,
-                behind,
-                remote,
-                remote_branch,
-                is_gone: false,
-            })
-        }
-        Err(e) => {
-            // Check if upstream is configured but the remote branch is gone
-            let config = repo.config()?;
-            let merge_key = format!("branch.{}.merge", branch);
-            let remote_key = format!("branch.{}.remote", branch);
-
-            let has_merge = config.get_string(&merge_key).is_ok();
-            let remote_name = config.get_string(&remote_key).ok();
-
-            if has_merge && remote_name.is_some() {
-                // Upstream is configured but branch is gone
-                let remote = remote_name;
-                let remote_branch = config
-                    .get_string(&merge_key)
-                    .ok()
-                    .map(|m| m.strip_prefix("refs/heads/").unwrap_or(&m).to_string());
+                // Calculate ahead/behind
+                let upstream_oid = upstream_branch.get().target();
+                let (ahead, behind) = if let Some(up_oid) = upstream_oid {
+                    repo.graph_ahead_behind(local_oid, up_oid)
+                        .map(|(a, b)| (a as u32, b as u32))
+                        .unwrap_or((0, 0))
+                } else {
+                    (0, 0)
+                };
 
                 Ok(BranchTrackingInfo {
                     local_branch: branch,
-                    upstream: None,
-                    ahead: 0,
-                    behind: 0,
+                    upstream: Some(format!("refs/remotes/{}", upstream_name)),
+                    ahead,
+                    behind,
                     remote,
                     remote_branch,
-                    is_gone: true,
-                })
-            } else if e.code() == git2::ErrorCode::NotFound {
-                // No upstream configured
-                Ok(BranchTrackingInfo {
-                    local_branch: branch,
-                    upstream: None,
-                    ahead: 0,
-                    behind: 0,
-                    remote: None,
-                    remote_branch: None,
                     is_gone: false,
                 })
-            } else {
-                Err(e.into())
+            }
+            Err(e) => {
+                // Check if upstream is configured but the remote branch is gone
+                let config = repo.config()?;
+                let merge_key = format!("branch.{}.merge", branch);
+                let remote_key = format!("branch.{}.remote", branch);
+
+                let has_merge = config.get_string(&merge_key).is_ok();
+                let remote_name = config.get_string(&remote_key).ok();
+
+                if has_merge && remote_name.is_some() {
+                    // Upstream is configured but branch is gone
+                    let remote = remote_name;
+                    let remote_branch = config
+                        .get_string(&merge_key)
+                        .ok()
+                        .map(|m| m.strip_prefix("refs/heads/").unwrap_or(&m).to_string());
+
+                    Ok(BranchTrackingInfo {
+                        local_branch: branch,
+                        upstream: None,
+                        ahead: 0,
+                        behind: 0,
+                        remote,
+                        remote_branch,
+                        is_gone: true,
+                    })
+                } else if e.code() == git2::ErrorCode::NotFound {
+                    // No upstream configured
+                    Ok(BranchTrackingInfo {
+                        local_branch: branch,
+                        upstream: None,
+                        ahead: 0,
+                        behind: 0,
+                        remote: None,
+                        remote_branch: None,
+                        is_gone: false,
+                    })
+                } else {
+                    Err(e.into())
+                }
             }
         }
-    }
+    })
+    .await
 }
 
 /// Create an orphan branch (a branch with no parent commits)
@@ -847,50 +874,53 @@ pub async fn get_branch_tracking_info(path: String, branch: String) -> Result<Br
 /// refused rather than half-performed. See the body for why.
 #[command]
 pub async fn create_orphan_branch(path: String, name: String, checkout: bool) -> Result<()> {
-    // `git checkout --orphan` is the only way to start an orphan branch, and it
-    // ALWAYS switches to it. That is not a limitation of this command: an
-    // unborn branch has no ref until its first commit, so there is nothing to
-    // create and leave behind.
-    //
-    // checkout=false used to run `git checkout -` afterwards to switch back,
-    // and that never worked — `--orphan` writes no HEAD reflog entry, so
-    // `@{-1}` does not resolve and git fails with "pathspec '-' did not match
-    // any file(s) known to git". The command returned an error AND left HEAD on
-    // the unborn orphan, where repo.head() fails for the whole app: the graph,
-    // the branch list and the status panel all go blank — after the user
-    // explicitly asked NOT to switch.
-    //
-    // Refused up front, so the repository is never touched.
-    if !checkout {
-        return Err(GitnadoError::OperationFailed(
-            "An orphan branch has no commits, so it is not a branch until its first commit is \
-             made — git cannot create one without switching to it. Check it out, make the first \
-             commit, then switch back."
-                .to_string(),
-        ));
-    }
+    crate::utils::blocking_git(move || {
+        // `git checkout --orphan` is the only way to start an orphan branch, and it
+        // ALWAYS switches to it. That is not a limitation of this command: an
+        // unborn branch has no ref until its first commit, so there is nothing to
+        // create and leave behind.
+        //
+        // checkout=false used to run `git checkout -` afterwards to switch back,
+        // and that never worked — `--orphan` writes no HEAD reflog entry, so
+        // `@{-1}` does not resolve and git fails with "pathspec '-' did not match
+        // any file(s) known to git". The command returned an error AND left HEAD on
+        // the unborn orphan, where repo.head() fails for the whole app: the graph,
+        // the branch list and the status panel all go blank — after the user
+        // explicitly asked NOT to switch.
+        //
+        // Refused up front, so the repository is never touched.
+        if !checkout {
+            return Err(GitnadoError::OperationFailed(
+                "An orphan branch has no commits, so it is not a branch until its first commit is \
+                 made — git cannot create one without switching to it. Check it out, make the first \
+                 commit, then switch back."
+                    .to_string(),
+            ));
+        }
 
-    let mut args = vec!["checkout", "--orphan"];
-    let name_ref = name.as_str();
-    args.push(name_ref);
+        let mut args = vec!["checkout", "--orphan"];
+        let name_ref = name.as_str();
+        args.push(name_ref);
 
-    let output = crate::utils::create_command("git")
-        .current_dir(&path)
-        .args(&args)
-        .output()
-        .map_err(|e| {
-            GitnadoError::OperationFailed(format!("Failed to run git checkout --orphan: {}", e))
-        })?;
+        let output = crate::utils::create_command("git")
+            .current_dir(&path)
+            .args(&args)
+            .output()
+            .map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to run git checkout --orphan: {}", e))
+            })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "Git checkout --orphan failed: {}",
-            stderr
-        )));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "Git checkout --orphan failed: {}",
+                stderr
+            )));
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Result of checkout with auto-stash
@@ -946,475 +976,478 @@ pub async fn checkout_with_autostash(
     ref_name: String,
     auto_stash: Option<bool>,
 ) -> Result<CheckoutWithStashResult> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
-    ensure_checkoutable(&repo)?;
-    // BEFORE the stash and BEFORE checkout_tree. Refusing later meant the tree
-    // was already rewritten and the auto-stash could not be popped back over
-    // the staged entries checkout_tree had left.
-    ensure_not_checked_out_elsewhere(&repo, &ref_name)?;
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
+        ensure_checkoutable(&repo)?;
+        // BEFORE the stash and BEFORE checkout_tree. Refusing later meant the tree
+        // was already rewritten and the auto-stash could not be popped back over
+        // the staged entries checkout_tree had left.
+        ensure_not_checked_out_elsewhere(&repo, &ref_name)?;
 
-    // Capture HEAD before the switch for the post-checkout hook's <old-ref>.
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
+        // Capture HEAD before the switch for the post-checkout hook's <old-ref>.
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
 
-    // Check if there are uncommitted changes
-    let has_changes = auto_stash.unwrap_or(true) && {
-        let statuses = repo.statuses(None)?;
-        statuses.iter().any(|s| {
-            let flags = s.status();
-            flags.intersects(
-                git2::Status::WT_MODIFIED
-                    | git2::Status::WT_NEW
-                    | git2::Status::WT_DELETED
-                    | git2::Status::WT_RENAMED
-                    | git2::Status::WT_TYPECHANGE
-                    | git2::Status::INDEX_MODIFIED
-                    | git2::Status::INDEX_NEW
-                    | git2::Status::INDEX_DELETED
-                    | git2::Status::INDEX_RENAMED
-                    | git2::Status::INDEX_TYPECHANGE,
-            )
-        })
-    }; // statuses is dropped here
+        // Check if there are uncommitted changes
+        let has_changes = auto_stash.unwrap_or(true) && {
+            let statuses = repo.statuses(None)?;
+            statuses.iter().any(|s| {
+                let flags = s.status();
+                flags.intersects(
+                    git2::Status::WT_MODIFIED
+                        | git2::Status::WT_NEW
+                        | git2::Status::WT_DELETED
+                        | git2::Status::WT_RENAMED
+                        | git2::Status::WT_TYPECHANGE
+                        | git2::Status::INDEX_MODIFIED
+                        | git2::Status::INDEX_NEW
+                        | git2::Status::INDEX_DELETED
+                        | git2::Status::INDEX_RENAMED
+                        | git2::Status::INDEX_TYPECHANGE,
+                )
+            })
+        }; // statuses is dropped here
 
-    let mut stashed = false;
-    let mut stash_oid: Option<git2::Oid> = None;
+        let mut stashed = false;
+        let mut stash_oid: Option<git2::Oid> = None;
 
-    // If there are changes, stash them
-    if has_changes {
-        let sig = repo.signature()?;
-        let stash_message = format!("Auto-stash before checkout to {}", ref_name);
+        // If there are changes, stash them
+        if has_changes {
+            let sig = repo.signature()?;
+            let stash_message = format!("Auto-stash before checkout to {}", ref_name);
 
-        match repo.stash_save(
-            &sig,
-            &stash_message,
-            Some(git2::StashFlags::INCLUDE_UNTRACKED),
-        ) {
-            Ok(oid) => {
-                stashed = true;
-                stash_oid = Some(oid);
-            }
-            Err(e) => {
-                return Ok(CheckoutWithStashResult {
-                    success: false,
-                    stashed: false,
-                    stash_applied: false,
-                    stash_conflict: false,
-                    stash_oid: stash_oid.map(|o| o.to_string()),
-                    message: format!("Failed to stash changes: {}", e.message()),
-                });
-            }
-        }
-    }
-
-    // Get target commit OID for checkout. Errors are produced as closure
-    // values (NOT early function returns) so the map_err below actually runs
-    // and restores the auto-stash on failure.
-    let resolve_result: std::result::Result<(git2::Oid, bool, bool), String> = (|| {
-        let is_local = repo.find_branch(&ref_name, git2::BranchType::Local).is_ok();
-        let is_remote = !is_local
-            && (repo
-                .find_branch(&ref_name, git2::BranchType::Remote)
-                .is_ok()
-                || repo
-                    .find_reference(&format!("refs/remotes/{}", ref_name))
-                    .is_ok());
-
-        // The working tree must be checked out from the commit HEAD ends up
-        // pointing at. A remote branch whose same-named local branch already
-        // exists checks out the LOCAL branch tip (mirrors `git checkout`),
-        // not the remote tip — otherwise tree and HEAD diverge.
-        if is_remote {
-            let local_name = ref_name
-                .find('/')
-                .map(|pos| &ref_name[pos + 1..])
-                .unwrap_or(ref_name.as_str());
-            if let Ok(local) = repo.find_branch(local_name, git2::BranchType::Local) {
-                let commit = local
-                    .get()
-                    .peel_to_commit()
-                    .map_err(|e| format!("Could not resolve commit: {}", e.message()))?;
-                return Ok((commit.id(), is_local, is_remote));
-            }
-        }
-
-        let obj = repo
-            .revparse_single(&ref_name)
-            .map_err(|e| format!("Could not find ref '{}': {}", ref_name, e.message()))?;
-        let commit = obj
-            .peel_to_commit()
-            .map_err(|e| format!("Could not resolve commit: {}", e.message()))?;
-        Ok((commit.id(), is_local, is_remote))
-    })();
-
-    let (target_oid, is_local_branch, is_remote_branch) = match resolve_result {
-        Ok(v) => v,
-        Err(msg) => {
-            // Restore the stash if the checkout target failed to resolve.
-            // Resolved by oid, not popped positionally: a stash created by
-            // another surface or a terminal in the meantime sits at index 0 and
-            // would be applied and destroyed in place of the auto-stash. The
-            // checkout-failure path below has always verified the oid; this one
-            // did not. Best effort — a failure to restore must not mask the
-            // resolution error the user actually needs to see.
-            //
-            // A failure to restore must not MASK the resolution error the user
-            // needs to see — but not masking and not mentioning are different
-            // things. The sibling arm below concatenates both; this one
-            // discarded the restore's outcome, so the user was told only
-            // "could not find ref" while looking at an empty working tree with
-            // no hint that their changes were sitting in the stash list.
-            let restore_note = if stashed {
-                match auto_stash_index(&mut repo, stash_oid) {
-                    Some(idx) => match repo.stash_pop(idx, None) {
-                        Ok(()) => "",
-                        Err(_) => {
-                            " Your changes could not be restored — they are still in \
-                             the stash list, apply them manually."
-                        }
-                    },
-                    None => {
-                        " Your changes could not be found to restore — they are still \
-                         in the stash list, apply them manually."
-                    }
+            match repo.stash_save(
+                &sig,
+                &stash_message,
+                Some(git2::StashFlags::INCLUDE_UNTRACKED),
+            ) {
+                Ok(oid) => {
+                    stashed = true;
+                    stash_oid = Some(oid);
                 }
-            } else {
-                ""
-            };
-            return Err(GitnadoError::OperationFailed(format!(
-                "{}{}",
-                msg, restore_note
-            )));
+                Err(e) => {
+                    return Ok(CheckoutWithStashResult {
+                        success: false,
+                        stashed: false,
+                        stash_applied: false,
+                        stash_conflict: false,
+                        stash_oid: stash_oid.map(|o| o.to_string()),
+                        message: format!("Failed to stash changes: {}", e.message()),
+                    });
+                }
+            }
         }
-    };
 
-    // Routed through autostash_failure like every other exit past the stash.
-    //
-    // This was the ONE that abandoned the user's work silently: a bare
-    // "Could not find object" with the whole working tree gone and nothing
-    // saying it was in the stash list. The comment here claimed a borrow
-    // prevented the restore; `repo` is already &mut and autostash_failure
-    // takes &mut, so it does not. Resolved before the borrow below begins.
-    let find_error: Option<String> = match repo.find_object(target_oid, None) {
-        Ok(_) => None,
-        Err(e) => Some(format!("Could not find object: {}", e.message())),
-    };
-    if let Some(msg) = find_error {
-        return Err(autostash_failure(&mut repo, stashed, stash_oid, &msg));
-    }
+        // Get target commit OID for checkout. Errors are produced as closure
+        // values (NOT early function returns) so the map_err below actually runs
+        // and restores the auto-stash on failure.
+        let resolve_result: std::result::Result<(git2::Oid, bool, bool), String> = (|| {
+            let is_local = repo.find_branch(&ref_name, git2::BranchType::Local).is_ok();
+            let is_remote = !is_local
+                && (repo
+                    .find_branch(&ref_name, git2::BranchType::Remote)
+                    .is_ok()
+                    || repo
+                        .find_reference(&format!("refs/remotes/{}", ref_name))
+                        .is_ok());
 
-    // Create the local tracking branch BEFORE the working tree is rewritten.
-    //
-    // Creating it inside the set_head closure below put it AFTER checkout_tree,
-    // so a failure (invalid derived name such as "HEAD", or a D/F conflict
-    // against an existing refs/heads/<name>/*) reached autostash_failure with
-    // the tree already at the target commit — popping the auto-stash over the
-    // wrong tree while HEAD still named the old branch. Failing here leaves the
-    // working tree untouched, so the restore lands on the tree it came from.
-    // Records a branch created by THIS call, so a later failure can roll it back
-    // the way checkout() does. Without it a failing checkout_tree left the new
-    // tracking branch behind, making a failed checkout non-transactional.
-    let mut created_branch: Option<String> = None;
+            // The working tree must be checked out from the commit HEAD ends up
+            // pointing at. A remote branch whose same-named local branch already
+            // exists checks out the LOCAL branch tip (mirrors `git checkout`),
+            // not the remote tip — otherwise tree and HEAD diverge.
+            if is_remote {
+                let local_name = ref_name
+                    .find('/')
+                    .map(|pos| &ref_name[pos + 1..])
+                    .unwrap_or(ref_name.as_str());
+                if let Ok(local) = repo.find_branch(local_name, git2::BranchType::Local) {
+                    let commit = local
+                        .get()
+                        .peel_to_commit()
+                        .map_err(|e| format!("Could not resolve commit: {}", e.message()))?;
+                    return Ok((commit.id(), is_local, is_remote));
+                }
+            }
 
-    if is_remote_branch {
-        let local_name = if let Some(pos) = ref_name.find('/') {
-            &ref_name[pos + 1..]
-        } else {
-            ref_name.as_str()
+            let obj = repo
+                .revparse_single(&ref_name)
+                .map_err(|e| format!("Could not find ref '{}': {}", ref_name, e.message()))?;
+            let commit = obj
+                .peel_to_commit()
+                .map_err(|e| format!("Could not resolve commit: {}", e.message()))?;
+            Ok((commit.id(), is_local, is_remote))
+        })();
+
+        let (target_oid, is_local_branch, is_remote_branch) = match resolve_result {
+            Ok(v) => v,
+            Err(msg) => {
+                // Restore the stash if the checkout target failed to resolve.
+                // Resolved by oid, not popped positionally: a stash created by
+                // another surface or a terminal in the meantime sits at index 0 and
+                // would be applied and destroyed in place of the auto-stash. The
+                // checkout-failure path below has always verified the oid; this one
+                // did not. Best effort — a failure to restore must not mask the
+                // resolution error the user actually needs to see.
+                //
+                // A failure to restore must not MASK the resolution error the user
+                // needs to see — but not masking and not mentioning are different
+                // things. The sibling arm below concatenates both; this one
+                // discarded the restore's outcome, so the user was told only
+                // "could not find ref" while looking at an empty working tree with
+                // no hint that their changes were sitting in the stash list.
+                let restore_note = if stashed {
+                    match auto_stash_index(&mut repo, stash_oid) {
+                        Some(idx) => match repo.stash_pop(idx, None) {
+                            Ok(()) => "",
+                            Err(_) => {
+                                " Your changes could not be restored — they are still in \
+                                 the stash list, apply them manually."
+                            }
+                        },
+                        None => {
+                            " Your changes could not be found to restore — they are still \
+                             in the stash list, apply them manually."
+                        }
+                    }
+                } else {
+                    ""
+                };
+                return Err(GitnadoError::OperationFailed(format!(
+                    "{}{}",
+                    msg, restore_note
+                )));
+            }
         };
 
-        if repo
-            .find_branch(local_name, git2::BranchType::Local)
-            .is_err()
-        {
-            let create_error: Option<String> = match repo.find_commit(target_oid) {
-                Ok(commit) => match repo.branch(local_name, &commit, false) {
-                    Ok(mut new_branch) => {
-                        // Best effort: tracking config must not abort the checkout.
-                        let _ = new_branch.set_upstream(Some(&ref_name));
-                        created_branch = Some(local_name.to_string());
-                        None
-                    }
-                    Err(e) => Some(format!(
-                        "Could not create local branch '{}': {}",
-                        local_name,
-                        e.message()
-                    )),
-                },
-                Err(e) => Some(format!("Could not find object: {}", e.message())),
-            };
-
-            if let Some(msg) = create_error {
-                return Err(autostash_failure(&mut repo, stashed, stash_oid, &msg));
-            }
-        }
-    }
-
-    // Perform checkout using the OID
-    let checkout_error: Option<String> = {
-        let obj = repo.find_object(target_oid, None)?;
-        let mut checkout_opts = git2::build::CheckoutBuilder::new();
-        checkout_opts.safe();
-
-        match repo.checkout_tree(&obj, Some(&mut checkout_opts)) {
-            Ok(()) => None,
-            Err(e) => Some(e.message().to_string()),
-        }
-    }; // obj dropped here
-
-    if let Some(msg) = checkout_error {
-        // Roll back a branch this call created. The checkout failed, so the ref
-        // must not outlive it — otherwise a retry sees a branch that already
-        // exists and silently takes the "local branch exists" path instead.
-        rollback_created_branch(&repo, created_branch.as_deref());
-
-        // Restore the auto-stash now the checkout has failed.
+        // Routed through autostash_failure like every other exit past the stash.
         //
-        // Resolved by oid rather than verified at index 0: `git stash push`
-        // prepends, so a stash created during the (multi-second) checkout
-        // pushes ours down a slot. The old check only compared against index 0,
-        // so it declined to restore and returned a bare "Checkout failed" —
-        // leaving the user with an empty working tree, their changes in the
-        // stash list, and nothing on screen saying so.
-        return Err(autostash_failure(&mut repo, stashed, stash_oid, &msg));
-    }
+        // This was the ONE that abandoned the user's work silently: a bare
+        // "Could not find object" with the whole working tree gone and nothing
+        // saying it was in the stash list. The comment here claimed a borrow
+        // prevented the restore; `repo` is already &mut and autostash_failure
+        // takes &mut, so it does not. Resolved before the borrow below begins.
+        let find_error: Option<String> = match repo.find_object(target_oid, None) {
+            Ok(_) => None,
+            Err(e) => Some(format!("Could not find object: {}", e.message())),
+        };
+        if let Some(msg) = find_error {
+            return Err(autostash_failure(&mut repo, stashed, stash_oid, &msg));
+        }
 
-    // Set HEAD.
-    //
-    // Propagated, not swallowed. checkout_tree above has ALREADY rewritten the
-    // working tree to the target commit, so skipping set_head leaves HEAD and
-    // the working tree describing different commits — and this function went
-    // on to return success: true, so the UI toasted "Switched to <branch>" and
-    // the user was left on the old branch with the whole inter-branch diff
-    // showing as uncommitted modifications. `if let Ok(..)` made that the
-    // outcome whenever the branch was deleted from a terminal during the
-    // checkout. The plain `checkout` command has always used `?` here.
-    let set_head_result = (|| -> Result<()> {
-        if is_local_branch {
-            let branch = repo.find_branch(&ref_name, git2::BranchType::Local)?;
-            repo.set_head(branch.get().name().map_err(|_| {
-                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
-            })?)?;
-        } else if is_remote_branch {
-            // Check out a remote branch by finding or creating a local tracking branch.
-            // e.g., "origin/feature-x" → local branch "feature-x" tracking "origin/feature-x"
+        // Create the local tracking branch BEFORE the working tree is rewritten.
+        //
+        // Creating it inside the set_head closure below put it AFTER checkout_tree,
+        // so a failure (invalid derived name such as "HEAD", or a D/F conflict
+        // against an existing refs/heads/<name>/*) reached autostash_failure with
+        // the tree already at the target commit — popping the auto-stash over the
+        // wrong tree while HEAD still named the old branch. Failing here leaves the
+        // working tree untouched, so the restore lands on the tree it came from.
+        // Records a branch created by THIS call, so a later failure can roll it back
+        // the way checkout() does. Without it a failing checkout_tree left the new
+        // tracking branch behind, making a failed checkout non-transactional.
+        let mut created_branch: Option<String> = None;
+
+        if is_remote_branch {
             let local_name = if let Some(pos) = ref_name.find('/') {
                 &ref_name[pos + 1..]
             } else {
-                &ref_name
+                ref_name.as_str()
             };
 
-            // Use existing local branch if it exists, otherwise create one
-            let local_branch =
-                if let Ok(existing) = repo.find_branch(local_name, git2::BranchType::Local) {
-                    existing
-                } else {
-                    let commit = repo.find_commit(target_oid)?;
-                    let mut new_branch = repo.branch(local_name, &commit, false)?;
-                    // Best effort: set upstream tracking (may fail if remote config is incomplete)
-                    let _ = new_branch.set_upstream(Some(&ref_name));
-                    new_branch
+            if repo
+                .find_branch(local_name, git2::BranchType::Local)
+                .is_err()
+            {
+                let create_error: Option<String> = match repo.find_commit(target_oid) {
+                    Ok(commit) => match repo.branch(local_name, &commit, false) {
+                        Ok(mut new_branch) => {
+                            // Best effort: tracking config must not abort the checkout.
+                            let _ = new_branch.set_upstream(Some(&ref_name));
+                            created_branch = Some(local_name.to_string());
+                            None
+                        }
+                        Err(e) => Some(format!(
+                            "Could not create local branch '{}': {}",
+                            local_name,
+                            e.message()
+                        )),
+                    },
+                    Err(e) => Some(format!("Could not find object: {}", e.message())),
                 };
 
-            let name = local_branch.get().name().map_err(|_| {
-                GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
-            })?;
-            repo.set_head(name)?;
-        } else {
-            repo.set_head_detached(target_oid)?;
-        }
-        Ok(())
-    })();
-
-    // Routed through the SAME restore path a failed checkout_tree takes.
-    // Propagating alone still left the auto-stash orphaned and unmentioned:
-    // the tree is at the target commit, HEAD is not, and the raw set_head
-    // error says nothing about where the user's changes went.
-    if let Err(err) = set_head_result {
-        rollback_created_branch(&repo, created_branch.as_deref());
-        return Err(autostash_failure(
-            &mut repo,
-            stashed,
-            stash_oid,
-            &err.to_string(),
-        ));
-    }
-
-    // HEAD/working tree switched — run post-checkout (flag=1), non-blocking.
-    // Runs before the stash re-apply so it fires even if re-applying conflicts.
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
-
-    // If we stashed, try to re-apply the stash.
-    if stashed {
-        // Use stash_APPLY (not stash_pop): the stash must survive until we KNOW
-        // the changes landed cleanly. git2's stash_pop is unsafe here in two
-        // empirically-verified ways:
-        //   - an UNSTAGED conflicting change makes apply return Ok while leaving
-        //     a conflicted index; stash_pop would then DROP the stash, destroying
-        //     the user's only copy of their work.
-        //   - a STAGED conflicting change makes apply fail with ECONFLICT.
-        // So we apply, then inspect the index ourselves and only drop the stash
-        // when it is genuinely clean.
-        //
-        // Reinstate the index so files the user had staged before the checkout
-        // come back staged instead of silently becoming unstaged.
-        let mut stash_apply_opts = git2::StashApplyOptions::new();
-        stash_apply_opts.reinstantiate_index();
-        let mut checkout_opts = git2::build::CheckoutBuilder::new();
-        checkout_opts.safe();
-        stash_apply_opts.checkout_options(checkout_opts);
-
-        let conflict_message = format!(
-            "Switched to {} but re-applying your stashed changes produced conflicts. \
-             Resolve them, then the stash will be dropped.",
-            ref_name
-        );
-
-        // Resolved by OID, not assumed to be 0 — see auto_stash_index.
-        let stash_idx = match auto_stash_index(&mut repo, stash_oid) {
-            Some(idx) => idx,
-            None => {
-                return Ok(CheckoutWithStashResult {
-                    success: true,
-                    stashed: true,
-                    stash_applied: false,
-                    stash_conflict: false,
-                    stash_oid: stash_oid.map(|o| o.to_string()),
-                    message: format!(
-                        "Switched to {}, but your stashed changes could not be found to \
-                         re-apply. They are still in the stash list — apply them manually.",
-                        ref_name
-                    ),
-                });
+                if let Some(msg) = create_error {
+                    return Err(autostash_failure(&mut repo, stashed, stash_oid, &msg));
+                }
             }
-        };
+        }
 
-        match repo.stash_apply(stash_idx, Some(&mut stash_apply_opts)) {
-            Ok(()) => {
-                // Apply reported success, but an unstaged conflicting change can
-                // land conflicts in the index while still returning Ok. Only drop
-                // the stash when the index is truly conflict-free.
-                if repo.index()?.has_conflicts() {
+        // Perform checkout using the OID
+        let checkout_error: Option<String> = {
+            let obj = repo.find_object(target_oid, None)?;
+            let mut checkout_opts = git2::build::CheckoutBuilder::new();
+            checkout_opts.safe();
+
+            match repo.checkout_tree(&obj, Some(&mut checkout_opts)) {
+                Ok(()) => None,
+                Err(e) => Some(e.message().to_string()),
+            }
+        }; // obj dropped here
+
+        if let Some(msg) = checkout_error {
+            // Roll back a branch this call created. The checkout failed, so the ref
+            // must not outlive it — otherwise a retry sees a branch that already
+            // exists and silently takes the "local branch exists" path instead.
+            rollback_created_branch(&repo, created_branch.as_deref());
+
+            // Restore the auto-stash now the checkout has failed.
+            //
+            // Resolved by oid rather than verified at index 0: `git stash push`
+            // prepends, so a stash created during the (multi-second) checkout
+            // pushes ours down a slot. The old check only compared against index 0,
+            // so it declined to restore and returned a bare "Checkout failed" —
+            // leaving the user with an empty working tree, their changes in the
+            // stash list, and nothing on screen saying so.
+            return Err(autostash_failure(&mut repo, stashed, stash_oid, &msg));
+        }
+
+        // Set HEAD.
+        //
+        // Propagated, not swallowed. checkout_tree above has ALREADY rewritten the
+        // working tree to the target commit, so skipping set_head leaves HEAD and
+        // the working tree describing different commits — and this function went
+        // on to return success: true, so the UI toasted "Switched to <branch>" and
+        // the user was left on the old branch with the whole inter-branch diff
+        // showing as uncommitted modifications. `if let Ok(..)` made that the
+        // outcome whenever the branch was deleted from a terminal during the
+        // checkout. The plain `checkout` command has always used `?` here.
+        let set_head_result = (|| -> Result<()> {
+            if is_local_branch {
+                let branch = repo.find_branch(&ref_name, git2::BranchType::Local)?;
+                repo.set_head(branch.get().name().map_err(|_| {
+                    GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
+                })?)?;
+            } else if is_remote_branch {
+                // Check out a remote branch by finding or creating a local tracking branch.
+                // e.g., "origin/feature-x" → local branch "feature-x" tracking "origin/feature-x"
+                let local_name = if let Some(pos) = ref_name.find('/') {
+                    &ref_name[pos + 1..]
+                } else {
+                    &ref_name
+                };
+
+                // Use existing local branch if it exists, otherwise create one
+                let local_branch =
+                    if let Ok(existing) = repo.find_branch(local_name, git2::BranchType::Local) {
+                        existing
+                    } else {
+                        let commit = repo.find_commit(target_oid)?;
+                        let mut new_branch = repo.branch(local_name, &commit, false)?;
+                        // Best effort: set upstream tracking (may fail if remote config is incomplete)
+                        let _ = new_branch.set_upstream(Some(&ref_name));
+                        new_branch
+                    };
+
+                let name = local_branch.get().name().map_err(|_| {
+                    GitnadoError::OperationFailed("Invalid reference name encoding".to_string())
+                })?;
+                repo.set_head(name)?;
+            } else {
+                repo.set_head_detached(target_oid)?;
+            }
+            Ok(())
+        })();
+
+        // Routed through the SAME restore path a failed checkout_tree takes.
+        // Propagating alone still left the auto-stash orphaned and unmentioned:
+        // the tree is at the target commit, HEAD is not, and the raw set_head
+        // error says nothing about where the user's changes went.
+        if let Err(err) = set_head_result {
+            rollback_created_branch(&repo, created_branch.as_deref());
+            return Err(autostash_failure(
+                &mut repo,
+                stashed,
+                stash_oid,
+                &err.to_string(),
+            ));
+        }
+
+        // HEAD/working tree switched — run post-checkout (flag=1), non-blocking.
+        // Runs before the stash re-apply so it fires even if re-applying conflicts.
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+
+        // If we stashed, try to re-apply the stash.
+        if stashed {
+            // Use stash_APPLY (not stash_pop): the stash must survive until we KNOW
+            // the changes landed cleanly. git2's stash_pop is unsafe here in two
+            // empirically-verified ways:
+            //   - an UNSTAGED conflicting change makes apply return Ok while leaving
+            //     a conflicted index; stash_pop would then DROP the stash, destroying
+            //     the user's only copy of their work.
+            //   - a STAGED conflicting change makes apply fail with ECONFLICT.
+            // So we apply, then inspect the index ourselves and only drop the stash
+            // when it is genuinely clean.
+            //
+            // Reinstate the index so files the user had staged before the checkout
+            // come back staged instead of silently becoming unstaged.
+            let mut stash_apply_opts = git2::StashApplyOptions::new();
+            stash_apply_opts.reinstantiate_index();
+            let mut checkout_opts = git2::build::CheckoutBuilder::new();
+            checkout_opts.safe();
+            stash_apply_opts.checkout_options(checkout_opts);
+
+            let conflict_message = format!(
+                "Switched to {} but re-applying your stashed changes produced conflicts. \
+                 Resolve them, then the stash will be dropped.",
+                ref_name
+            );
+
+            // Resolved by OID, not assumed to be 0 — see auto_stash_index.
+            let stash_idx = match auto_stash_index(&mut repo, stash_oid) {
+                Some(idx) => idx,
+                None => {
                     return Ok(CheckoutWithStashResult {
                         success: true,
                         stashed: true,
                         stash_applied: false,
-                        stash_conflict: true,
+                        stash_conflict: false,
                         stash_oid: stash_oid.map(|o| o.to_string()),
-                        message: conflict_message,
+                        message: format!(
+                            "Switched to {}, but your stashed changes could not be found to \
+                             re-apply. They are still in the stash list — apply them manually.",
+                            ref_name
+                        ),
                     });
                 }
-                repo.stash_drop(stash_idx)?;
-                return Ok(CheckoutWithStashResult {
-                    success: true,
-                    stashed: true,
-                    stash_applied: true,
-                    stash_conflict: false,
-                    stash_oid: stash_oid.map(|o| o.to_string()),
-                    message: format!("Switched to {} and re-applied stashed changes", ref_name),
-                });
-            }
-            Err(e) => {
-                // git2 signals a stash-apply conflict as either MergeConflict
-                // (index-level) or Conflict (checkout-level, often with an empty
-                // message), so match both.
-                let has_conflicts = e.code() == git2::ErrorCode::MergeConflict
-                    || e.code() == git2::ErrorCode::Conflict
-                    || e.message().contains("conflict")
-                    || e.message().contains("CONFLICT");
+            };
 
-                if has_conflicts {
-                    // A staged conflicting change fails the reinstate-index apply.
-                    // Retry WITHOUT reinstating the index: applied unstaged-style,
-                    // the conflict lands in the index (mirroring `git stash apply`)
-                    // where the conflict-resolution flow can pick it up. The stash
-                    // is kept for that flow to drop after resolution.
-                    let mut retry_opts = git2::StashApplyOptions::new();
-                    let mut retry_checkout = git2::build::CheckoutBuilder::new();
-                    retry_checkout.safe();
-                    retry_opts.checkout_options(retry_checkout);
+            match repo.stash_apply(stash_idx, Some(&mut stash_apply_opts)) {
+                Ok(()) => {
+                    // Apply reported success, but an unstaged conflicting change can
+                    // land conflicts in the index while still returning Ok. Only drop
+                    // the stash when the index is truly conflict-free.
+                    if repo.index()?.has_conflicts() {
+                        return Ok(CheckoutWithStashResult {
+                            success: true,
+                            stashed: true,
+                            stash_applied: false,
+                            stash_conflict: true,
+                            stash_oid: stash_oid.map(|o| o.to_string()),
+                            message: conflict_message,
+                        });
+                    }
+                    repo.stash_drop(stash_idx)?;
+                    return Ok(CheckoutWithStashResult {
+                        success: true,
+                        stashed: true,
+                        stash_applied: true,
+                        stash_conflict: false,
+                        stash_oid: stash_oid.map(|o| o.to_string()),
+                        message: format!("Switched to {} and re-applied stashed changes", ref_name),
+                    });
+                }
+                Err(e) => {
+                    // git2 signals a stash-apply conflict as either MergeConflict
+                    // (index-level) or Conflict (checkout-level, often with an empty
+                    // message), so match both.
+                    let has_conflicts = e.code() == git2::ErrorCode::MergeConflict
+                        || e.code() == git2::ErrorCode::Conflict
+                        || e.message().contains("conflict")
+                        || e.message().contains("CONFLICT");
 
-                    // Re-resolved: the failed apply above may itself have
-                    // changed the stash list. A missing entry must produce the
-                    // same refusal the initial resolve gives — falling back to
-                    // the earlier position would apply and drop whatever now
-                    // occupies it, which is the exact bug auto_stash_index
-                    // exists to close.
-                    let retry_idx = match auto_stash_index(&mut repo, stash_oid) {
-                        Some(idx) => idx,
-                        None => {
+                    if has_conflicts {
+                        // A staged conflicting change fails the reinstate-index apply.
+                        // Retry WITHOUT reinstating the index: applied unstaged-style,
+                        // the conflict lands in the index (mirroring `git stash apply`)
+                        // where the conflict-resolution flow can pick it up. The stash
+                        // is kept for that flow to drop after resolution.
+                        let mut retry_opts = git2::StashApplyOptions::new();
+                        let mut retry_checkout = git2::build::CheckoutBuilder::new();
+                        retry_checkout.safe();
+                        retry_opts.checkout_options(retry_checkout);
+
+                        // Re-resolved: the failed apply above may itself have
+                        // changed the stash list. A missing entry must produce the
+                        // same refusal the initial resolve gives — falling back to
+                        // the earlier position would apply and drop whatever now
+                        // occupies it, which is the exact bug auto_stash_index
+                        // exists to close.
+                        let retry_idx = match auto_stash_index(&mut repo, stash_oid) {
+                            Some(idx) => idx,
+                            None => {
+                                return Ok(CheckoutWithStashResult {
+                                    success: true,
+                                    stashed: true,
+                                    stash_applied: false,
+                                    stash_conflict: false,
+                                    stash_oid: stash_oid.map(|o| o.to_string()),
+                                    message: format!(
+                                        "Switched to {}, but your stashed changes could not be \
+                                         found to re-apply. They are still in the stash list — \
+                                         apply them manually.",
+                                        ref_name
+                                    ),
+                                });
+                            }
+                        };
+                        if repo.stash_apply(retry_idx, Some(&mut retry_opts)).is_ok() {
+                            if repo.index()?.has_conflicts() {
+                                return Ok(CheckoutWithStashResult {
+                                    success: true,
+                                    stashed: true,
+                                    stash_applied: false,
+                                    stash_conflict: true,
+                                    stash_oid: stash_oid.map(|o| o.to_string()),
+                                    message: conflict_message,
+                                });
+                            }
+                            // The retry applied cleanly (no conflicts). The stashed
+                            // changes ARE now in the working tree, so the stash must be
+                            // dropped — otherwise it lingers and a later apply/pop would
+                            // duplicate or conflict with the already-applied changes.
+                            // The staged status could not be reinstated on this path, so
+                            // note that in the message.
+                            repo.stash_drop(retry_idx)?;
                             return Ok(CheckoutWithStashResult {
                                 success: true,
                                 stashed: true,
-                                stash_applied: false,
+                                stash_applied: true,
                                 stash_conflict: false,
                                 stash_oid: stash_oid.map(|o| o.to_string()),
                                 message: format!(
-                                    "Switched to {}, but your stashed changes could not be \
-                                     found to re-apply. They are still in the stash list — \
-                                     apply them manually.",
+                                    "Switched to {} and re-applied stashed changes (staged status was not preserved)",
                                     ref_name
                                 ),
                             });
                         }
-                    };
-                    if repo.stash_apply(retry_idx, Some(&mut retry_opts)).is_ok() {
-                        if repo.index()?.has_conflicts() {
-                            return Ok(CheckoutWithStashResult {
-                                success: true,
-                                stashed: true,
-                                stash_applied: false,
-                                stash_conflict: true,
-                                stash_oid: stash_oid.map(|o| o.to_string()),
-                                message: conflict_message,
-                            });
-                        }
-                        // The retry applied cleanly (no conflicts). The stashed
-                        // changes ARE now in the working tree, so the stash must be
-                        // dropped — otherwise it lingers and a later apply/pop would
-                        // duplicate or conflict with the already-applied changes.
-                        // The staged status could not be reinstated on this path, so
-                        // note that in the message.
-                        repo.stash_drop(retry_idx)?;
-                        return Ok(CheckoutWithStashResult {
-                            success: true,
-                            stashed: true,
-                            stash_applied: true,
-                            stash_conflict: false,
-                            stash_oid: stash_oid.map(|o| o.to_string()),
-                            message: format!(
-                                "Switched to {} and re-applied stashed changes (staged status was not preserved)",
-                                ref_name
-                            ),
-                        });
                     }
-                }
 
-                // Could not re-apply — the stash remains in the list untouched.
-                return Ok(CheckoutWithStashResult {
-                    success: true,
-                    stashed: true,
-                    stash_applied: false,
-                    stash_conflict: false,
-                    stash_oid: stash_oid.map(|o| o.to_string()),
-                    message: format!(
-                        "Switched to {} but failed to re-apply stash: {}. Your changes remain stashed.",
-                        ref_name,
-                        e.message()
-                    ),
-                });
+                    // Could not re-apply — the stash remains in the list untouched.
+                    return Ok(CheckoutWithStashResult {
+                        success: true,
+                        stashed: true,
+                        stash_applied: false,
+                        stash_conflict: false,
+                        stash_oid: stash_oid.map(|o| o.to_string()),
+                        message: format!(
+                            "Switched to {} but failed to re-apply stash: {}. Your changes remain stashed.",
+                            ref_name,
+                            e.message()
+                        ),
+                    });
+                }
             }
         }
-    }
 
-    Ok(CheckoutWithStashResult {
-        success: true,
-        stashed: false,
-        stash_applied: false,
-        stash_conflict: false,
-        stash_oid: stash_oid.map(|o| o.to_string()),
-        message: format!("Switched to {}", ref_name),
+        Ok(CheckoutWithStashResult {
+            success: true,
+            stashed: false,
+            stash_applied: false,
+            stash_conflict: false,
+            stash_oid: stash_oid.map(|o| o.to_string()),
+            message: format!("Switched to {}", ref_name),
+        })
     })
+    .await
 }
 
 #[cfg(test)]

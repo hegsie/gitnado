@@ -823,6 +823,9 @@ export class LvLfsDialog extends LitElement {
 
   private renderContent() {
     if (!this.status) return '';
+    // The backend always sends `patterns` (a Vec); tolerate its absence anyway,
+    // because a throw inside render() rejects the whole update.
+    const patterns = this.status.patterns ?? [];
 
     if (!this.status.installed) {
       return html`
@@ -884,9 +887,9 @@ export class LvLfsDialog extends LitElement {
                 <span class="section-title">Tracked Patterns</span>
               </div>
               <div class="pattern-list">
-                ${this.status.patterns.length === 0
+                ${patterns.length === 0
                   ? html`<span class="empty-text">No patterns configured</span>`
-                  : this.status.patterns.map(
+                  : patterns.map(
                       (p) => html`
                         <div class="pattern-item">
                           <span class="pattern-text">${p.pattern}</span>

@@ -6,6 +6,15 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { checkOutboundHostAllowed } from './git.service.ts';
+
+/**
+ * Where the embedding model's files come from
+ * (`hf_file_url` in src-tauri/src/services/embedding/embedding_model.rs).
+ *
+ * Building and searching the index are local; downloading the model is not.
+ */
+const MODEL_DOWNLOAD_HOST = 'https://huggingface.co';
 
 export interface VectorSearchResult {
   oid: string;
@@ -122,8 +131,21 @@ class EmbeddingIndexService {
 
   /**
    * Download the embedding model
+   *
+   * Gated for the same reason the local-AI model download is: it is a ~90MB
+   * transfer to huggingface.co, and offline mode promises to stop it. The
+   * refusal is thrown rather than returned because every other method here
+   * reports failure that way.
    */
   async downloadModel(): Promise<void> {
+    const reason = await checkOutboundHostAllowed(MODEL_DOWNLOAD_HOST);
+    if (reason) {
+      throw new Error(
+        reason === 'allowlist'
+          ? 'Downloading the embedding model needs huggingface.co, which is not in your remote allowlist. Add it in Settings > Security.'
+          : 'Offline mode is enabled, so the embedding model cannot be downloaded. Turn it off in Settings > Security.',
+      );
+    }
     await invoke<void>('download_embedding_model');
   }
 

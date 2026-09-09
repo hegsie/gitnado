@@ -15,41 +15,44 @@ use crate::utils::create_command;
 /// Get repository status
 #[command]
 pub async fn get_status(path: String) -> Result<Vec<StatusEntry>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let mut opts = git2::StatusOptions::new();
-    // update_index(true): refresh racy-git entries so files whose content
-    // matches the index drop out of status. Without it, a rewrite with
-    // identical content (common after checkout/rebase) shows as "M" in the
-    // UI but produces an empty content-diff — the user then hits
-    // "File not found in diff" when they click it.
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .include_ignored(false)
-        .include_unmodified(false)
-        .update_index(true);
+        let mut opts = git2::StatusOptions::new();
+        // update_index(true): refresh racy-git entries so files whose content
+        // matches the index drop out of status. Without it, a rewrite with
+        // identical content (common after checkout/rebase) shows as "M" in the
+        // UI but produces an empty content-diff — the user then hits
+        // "File not found in diff" when they click it.
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false)
+            .include_unmodified(false)
+            .update_index(true);
 
-    let statuses = repo.statuses(Some(&mut opts))?;
-    let mut entries = Vec::new();
+        let statuses = repo.statuses(Some(&mut opts))?;
+        let mut entries = Vec::new();
 
-    for entry in statuses.iter() {
-        let path = entry.path().unwrap_or("").to_string();
-        let status = entry.status();
+        for entry in statuses.iter() {
+            let path = entry.path().unwrap_or("").to_string();
+            let status = entry.status();
 
-        // A file can have both staged AND unstaged changes
-        // We need to return separate entries for each
-        let staged_entry = get_staged_status(status, &path);
-        let unstaged_entry = get_unstaged_status(status, &path);
+            // A file can have both staged AND unstaged changes
+            // We need to return separate entries for each
+            let staged_entry = get_staged_status(status, &path);
+            let unstaged_entry = get_unstaged_status(status, &path);
 
-        if let Some(entry) = staged_entry {
-            entries.push(entry);
+            if let Some(entry) = staged_entry {
+                entries.push(entry);
+            }
+            if let Some(entry) = unstaged_entry {
+                entries.push(entry);
+            }
         }
-        if let Some(entry) = unstaged_entry {
-            entries.push(entry);
-        }
-    }
 
-    Ok(entries)
+        Ok(entries)
+    })
+    .await
 }
 
 /// Get sorted file status with enriched metadata for file tree display
@@ -332,184 +335,193 @@ fn get_unstaged_status(status: git2::Status, path: &str) -> Option<StatusEntry> 
 /// Stage files
 #[command]
 pub async fn stage_files(path: String, paths: Vec<String>) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mut index = repo.index()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mut index = repo.index()?;
 
-    for file_path in paths {
-        let full_path = validate_path_within_repo(Path::new(&path), &file_path)?;
-        // Use symlink_metadata (does NOT follow symlinks) rather than
-        // Path::exists (which follows them). A dangling symlink — one whose
-        // target does not exist — must still be staged as a 120000 blob
-        // containing the link target, exactly as `git add` does; treating it
-        // as a deletion would silently stage the symlink's removal.
-        if std::fs::symlink_metadata(&full_path).is_ok() {
-            index.add_path(Path::new(&file_path))?;
-        } else {
-            index.remove_path(Path::new(&file_path))?;
+        for file_path in paths {
+            let full_path = validate_path_within_repo(Path::new(&path), &file_path)?;
+            // Use symlink_metadata (does NOT follow symlinks) rather than
+            // Path::exists (which follows them). A dangling symlink — one whose
+            // target does not exist — must still be staged as a 120000 blob
+            // containing the link target, exactly as `git add` does; treating it
+            // as a deletion would silently stage the symlink's removal.
+            if std::fs::symlink_metadata(&full_path).is_ok() {
+                index.add_path(Path::new(&file_path))?;
+            } else {
+                index.remove_path(Path::new(&file_path))?;
+            }
         }
-    }
 
-    index.write()?;
-    Ok(())
+        index.write()?;
+        Ok(())
+    })
+    .await
 }
 
 /// Unstage files
 #[command]
 pub async fn unstage_files(path: String, paths: Vec<String>) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Resolve the HEAD commit. On an unborn branch (a freshly initialized
-    // repository with no commits yet) there is no HEAD, and `git reset --
-    // <paths>` resolves against the empty tree — equivalent to removing the
-    // requested paths from the index. Propagating repo.head()'s error here
-    // would wrongly make unstaging impossible until the first commit exists.
-    let head_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        // Resolve the HEAD commit. On an unborn branch (a freshly initialized
+        // repository with no commits yet) there is no HEAD, and `git reset --
+        // <paths>` resolves against the empty tree — equivalent to removing the
+        // requested paths from the index. Propagating repo.head()'s error here
+        // would wrongly make unstaging impossible until the first commit exists.
+        let head_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
 
-    let mut index = repo.index()?;
+        let mut index = repo.index()?;
 
-    for file_path in paths {
-        let path_obj = Path::new(&file_path);
+        for file_path in paths {
+            let path_obj = Path::new(&file_path);
 
-        match &head_commit {
-            Some(commit) => {
-                let head_tree = commit.tree()?;
-                if head_tree.get_path(path_obj).is_ok() {
-                    // Reset to HEAD version
-                    repo.reset_default(Some(commit.as_object()), [path_obj])?;
-                } else {
-                    // Remove from index (was newly added)
+            match &head_commit {
+                Some(commit) => {
+                    let head_tree = commit.tree()?;
+                    if head_tree.get_path(path_obj).is_ok() {
+                        // Reset to HEAD version
+                        repo.reset_default(Some(commit.as_object()), [path_obj])?;
+                    } else {
+                        // Remove from index (was newly added)
+                        index.remove_path(path_obj)?;
+                    }
+                }
+                None => {
+                    // Unborn HEAD: reset against the empty tree == drop from index.
                     index.remove_path(path_obj)?;
                 }
             }
-            None => {
-                // Unborn HEAD: reset against the empty tree == drop from index.
-                index.remove_path(path_obj)?;
-            }
         }
-    }
 
-    index.write()?;
-    Ok(())
+        index.write()?;
+        Ok(())
+    })
+    .await
 }
 
 /// Discard changes in working directory
 #[command]
 pub async fn discard_changes(path: String, paths: Vec<String>) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let repo_path = Path::new(&path);
 
-    // Get HEAD tree (may not exist for initial commit)
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let index = repo.index()?;
+        // Get HEAD tree (may not exist for initial commit)
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        let index = repo.index()?;
 
-    // "Discard changes" mirrors `git checkout -- <pathspec>`, which restores
-    // the working tree from the INDEX — never from HEAD. Restoring from HEAD
-    // would silently overwrite staged content (e.g. a file with staged edits
-    // plus later unstaged edits would lose the staged version, which is never
-    // committed and has no reflog: unrecoverable data loss). So:
-    //   1. Tracked (present in the index): restore the worktree from the index.
-    //   2. Untracked (not in the index and not in HEAD): delete it.
-    // A path in HEAD but absent from the index is a staged deletion; there is
-    // no worktree change to discard, so it is left untouched.
-    let mut index_paths: Vec<&str> = Vec::new();
-    let mut untracked_paths: Vec<std::path::PathBuf> = Vec::new();
+        // "Discard changes" mirrors `git checkout -- <pathspec>`, which restores
+        // the working tree from the INDEX — never from HEAD. Restoring from HEAD
+        // would silently overwrite staged content (e.g. a file with staged edits
+        // plus later unstaged edits would lose the staged version, which is never
+        // committed and has no reflog: unrecoverable data loss). So:
+        //   1. Tracked (present in the index): restore the worktree from the index.
+        //   2. Untracked (not in the index and not in HEAD): delete it.
+        // A path in HEAD but absent from the index is a staged deletion; there is
+        // no worktree change to discard, so it is left untouched.
+        let mut index_paths: Vec<&str> = Vec::new();
+        let mut untracked_paths: Vec<std::path::PathBuf> = Vec::new();
 
-    for file_path in &paths {
-        // Validate BEFORE any git2 lookup. git2's Index::get_path panics
-        // outright on a path beginning with `..`, so an unvalidated traversal
-        // crashes this command across the IPC boundary rather than returning an
-        // error. It also guards the untracked branch below, which is the only
-        // place in this file that deletes recursively.
-        let full_path = validate_path_within_repo(repo_path, file_path)?;
+        for file_path in &paths {
+            // Validate BEFORE any git2 lookup. git2's Index::get_path panics
+            // outright on a path beginning with `..`, so an unvalidated traversal
+            // crashes this command across the IPC boundary rather than returning an
+            // error. It also guards the untracked branch below, which is the only
+            // place in this file that deletes recursively.
+            let full_path = validate_path_within_repo(repo_path, file_path)?;
 
-        let path_obj = Path::new(file_path);
+            let path_obj = Path::new(file_path);
 
-        // Check if file exists in HEAD
-        let in_head = head_tree
-            .as_ref()
-            .map(|t| t.get_path(path_obj).is_ok())
-            .unwrap_or(false);
+            // Check if file exists in HEAD
+            let in_head = head_tree
+                .as_ref()
+                .map(|t| t.get_path(path_obj).is_ok())
+                .unwrap_or(false);
 
-        // Check if file exists in index
-        let in_index = index.get_path(path_obj, 0).is_some();
+            // Check if file exists in index
+            let in_index = index.get_path(path_obj, 0).is_some();
 
-        if in_index {
-            // Tracked - restore the worktree from the staged (index) version.
-            index_paths.push(file_path);
-        } else if !in_head {
-            // Untracked - need to delete it.
-            untracked_paths.push(full_path);
-        }
-        // in_head && !in_index: staged deletion, nothing to discard.
-    }
-
-    // An untracked ENTRY can be an entire repository: libgit2 does not descend
-    // into a directory holding .git, so a nested repo surfaces in the file list
-    // as one ordinary row. Discarding it would remove its objects, refs and
-    // unpushed commits with nothing recoverable — and unlike Clean, which is a
-    // deliberate confirmed dialog, discarding a row in the sidebar reads as
-    // "throw away my edit".
-    //
-    // Scanned for ALL selected paths BEFORE anything is deleted, the same
-    // all-or-nothing shape clean_files uses for its containment validation.
-    // The check used to live inside the deletion loop, so a ten-file
-    // "Discard all selected" whose fifth entry was a nested repo deleted the
-    // first four — untracked, so no object, no reflog, no trash — and then
-    // returned the error, while the user read "would destroy its history" and
-    // reasonably concluded nothing had happened.
-    for full_path in &untracked_paths {
-        // symlink_metadata, not is_dir(): a symlink to a directory must never
-        // be descended into, only unlinked.
-        let is_dir = std::fs::symlink_metadata(full_path)
-            .map(|m| m.file_type().is_dir())
-            .unwrap_or(false);
-        if is_dir && crate::utils::contains_nested_repo(full_path) {
-            return Err(crate::error::GitnadoError::OperationFailed(format!(
-                "'{}' contains a git repository — discarding it would destroy its history. \
-                 Nothing was discarded. Use the Clean Working Directory dialog, which asks \
-                 for confirmation before removing a nested repository.",
-                full_path.display()
-            )));
-        }
-    }
-
-    // Restore tracked files from the index (matches `git checkout -- <path>`).
-    if !index_paths.is_empty() {
-        let mut checkout_opts = git2::build::CheckoutBuilder::new();
-        checkout_opts.force();
-        checkout_opts.remove_untracked(false);
-        // CheckoutBuilder::path() adds a PATHSPEC, not a literal path: without
-        // this, a filename containing a glob metacharacter (`*`, `?`, `[`, `\`)
-        // also matches its neighbours. Discarding `report[1].md` would then
-        // force-restore `report1.md` too, silently destroying uncommitted work
-        // in a file the confirm never named.
-        checkout_opts.disable_pathspec_match(true);
-
-        for file_path in &index_paths {
-            checkout_opts.path(file_path);
+            if in_index {
+                // Tracked - restore the worktree from the staged (index) version.
+                index_paths.push(file_path);
+            } else if !in_head {
+                // Untracked - need to delete it.
+                untracked_paths.push(full_path);
+            }
+            // in_head && !in_index: staged deletion, nothing to discard.
         }
 
-        let mut fresh_index = repo.index()?;
-        repo.checkout_index(Some(&mut fresh_index), Some(&mut checkout_opts))?;
-    }
-
-    // Delete untracked files. symlink_metadata, not exists()/is_dir(): both
-    // FOLLOW symlinks, so a dangling link would be skipped (left on disk)
-    // and a link to a directory would be reported as a directory. The
-    // symlink itself is what must go — never its target.
-    // Paths were containment-checked during classification above, and
-    // nested-repo-checked immediately above.
-    for full_path in untracked_paths {
-        if let Ok(meta) = std::fs::symlink_metadata(&full_path) {
-            if meta.file_type().is_dir() {
-                std::fs::remove_dir_all(&full_path)?;
-            } else {
-                std::fs::remove_file(&full_path)?;
+        // An untracked ENTRY can be an entire repository: libgit2 does not descend
+        // into a directory holding .git, so a nested repo surfaces in the file list
+        // as one ordinary row. Discarding it would remove its objects, refs and
+        // unpushed commits with nothing recoverable — and unlike Clean, which is a
+        // deliberate confirmed dialog, discarding a row in the sidebar reads as
+        // "throw away my edit".
+        //
+        // Scanned for ALL selected paths BEFORE anything is deleted, the same
+        // all-or-nothing shape clean_files uses for its containment validation.
+        // The check used to live inside the deletion loop, so a ten-file
+        // "Discard all selected" whose fifth entry was a nested repo deleted the
+        // first four — untracked, so no object, no reflog, no trash — and then
+        // returned the error, while the user read "would destroy its history" and
+        // reasonably concluded nothing had happened.
+        for full_path in &untracked_paths {
+            // symlink_metadata, not is_dir(): a symlink to a directory must never
+            // be descended into, only unlinked.
+            let is_dir = std::fs::symlink_metadata(full_path)
+                .map(|m| m.file_type().is_dir())
+                .unwrap_or(false);
+            if is_dir && crate::utils::contains_nested_repo(full_path) {
+                return Err(crate::error::GitnadoError::OperationFailed(format!(
+                    "'{}' contains a git repository — discarding it would destroy its history. \
+                     Nothing was discarded. Use the Clean Working Directory dialog, which asks \
+                     for confirmation before removing a nested repository.",
+                    full_path.display()
+                )));
             }
         }
-    }
 
-    Ok(())
+        // Restore tracked files from the index (matches `git checkout -- <path>`).
+        if !index_paths.is_empty() {
+            let mut checkout_opts = git2::build::CheckoutBuilder::new();
+            checkout_opts.force();
+            checkout_opts.remove_untracked(false);
+            // CheckoutBuilder::path() adds a PATHSPEC, not a literal path: without
+            // this, a filename containing a glob metacharacter (`*`, `?`, `[`, `\`)
+            // also matches its neighbours. Discarding `report[1].md` would then
+            // force-restore `report1.md` too, silently destroying uncommitted work
+            // in a file the confirm never named.
+            checkout_opts.disable_pathspec_match(true);
+
+            for file_path in &index_paths {
+                checkout_opts.path(file_path);
+            }
+
+            let mut fresh_index = repo.index()?;
+            repo.checkout_index(Some(&mut fresh_index), Some(&mut checkout_opts))?;
+        }
+
+        // Delete untracked files. symlink_metadata, not exists()/is_dir(): both
+        // FOLLOW symlinks, so a dangling link would be skipped (left on disk)
+        // and a link to a directory would be reported as a directory. The
+        // symlink itself is what must go — never its target.
+        // Paths were containment-checked during classification above, and
+        // nested-repo-checked immediately above.
+        for full_path in untracked_paths {
+            if let Ok(meta) = std::fs::symlink_metadata(&full_path) {
+                if meta.file_type().is_dir() {
+                    std::fs::remove_dir_all(&full_path)?;
+                } else {
+                    std::fs::remove_file(&full_path)?;
+                }
+            }
+        }
+
+        Ok(())
+    })
+    .await
 }
 
 /// Apply a patch to the index. Internal helper shared by stage_hunk /
@@ -551,7 +563,7 @@ fn apply_patch_to_index(repo_path: &str, patch: &str, reverse: bool) -> Result<(
 /// and applies it to the index using git apply --cached
 #[command]
 pub async fn stage_hunk(repo_path: String, patch: String) -> Result<()> {
-    apply_patch_to_index(&repo_path, &patch, false)
+    crate::utils::blocking_git(move || apply_patch_to_index(&repo_path, &patch, false)).await
 }
 
 /// Unstage a specific hunk from the index
@@ -559,7 +571,7 @@ pub async fn stage_hunk(repo_path: String, patch: String) -> Result<()> {
 /// Takes a patch string and applies it in reverse to unstage
 #[command]
 pub async fn unstage_hunk(repo_path: String, patch: String) -> Result<()> {
-    apply_patch_to_index(&repo_path, &patch, true)
+    crate::utils::blocking_git(move || apply_patch_to_index(&repo_path, &patch, true)).await
 }
 
 /// Write content to a file and optionally stage it
@@ -571,25 +583,28 @@ pub async fn write_file_content(
     content: String,
     stage_after: Option<bool>,
 ) -> Result<()> {
-    let full_path = validate_path_within_repo(Path::new(&repo_path), &file_path)?;
+    crate::utils::blocking_git(move || {
+        let full_path = validate_path_within_repo(Path::new(&repo_path), &file_path)?;
 
-    // Ensure parent directory exists
-    if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+        // Ensure parent directory exists
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
-    // Write content to file
-    std::fs::write(&full_path, content)?;
+        // Write content to file
+        std::fs::write(&full_path, content)?;
 
-    // Optionally stage the file
-    if stage_after.unwrap_or(false) {
-        let repo = git2::Repository::open(Path::new(&repo_path))?;
-        let mut index = repo.index()?;
-        index.add_path(Path::new(&file_path))?;
-        index.write()?;
-    }
+        // Optionally stage the file
+        if stage_after.unwrap_or(false) {
+            let repo = git2::Repository::open(Path::new(&repo_path))?;
+            let mut index = repo.index()?;
+            index.add_path(Path::new(&file_path))?;
+            index.write()?;
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Read file content from working directory or index
@@ -599,32 +614,35 @@ pub async fn read_file_content(
     file_path: String,
     from_index: Option<bool>,
 ) -> Result<String> {
-    if from_index.unwrap_or(false) {
-        // Read from index
-        let repo = git2::Repository::open(Path::new(&repo_path))?;
-        let index = repo.index()?;
+    crate::utils::blocking_git(move || {
+        if from_index.unwrap_or(false) {
+            // Read from index
+            let repo = git2::Repository::open(Path::new(&repo_path))?;
+            let index = repo.index()?;
 
-        if let Some(entry) = index.get_path(Path::new(&file_path), 0) {
-            let blob = repo.find_blob(entry.id)?;
-            let content = String::from_utf8_lossy(blob.content()).to_string();
-            return Ok(content);
-        }
+            if let Some(entry) = index.get_path(Path::new(&file_path), 0) {
+                let blob = repo.find_blob(entry.id)?;
+                let content = String::from_utf8_lossy(blob.content()).to_string();
+                return Ok(content);
+            }
 
-        Err(crate::error::GitnadoError::OperationFailed(
-            "File not found in index".to_string(),
-        ))
-    } else {
-        // Read from working directory. A MISSING file gets its own error
-        // code — callers must be able to tell "the file is gone" (e.g. a
-        // staged deletion) from "the file exists but could not be decoded"
-        // (legacy encoding), which are presented very differently.
-        let full_path = validate_path_within_repo(Path::new(&repo_path), &file_path)?;
-        if !full_path.exists() {
-            return Err(crate::error::GitnadoError::FileNotFound(file_path));
+            Err(crate::error::GitnadoError::OperationFailed(
+                "File not found in index".to_string(),
+            ))
+        } else {
+            // Read from working directory. A MISSING file gets its own error
+            // code — callers must be able to tell "the file is gone" (e.g. a
+            // staged deletion) from "the file exists but could not be decoded"
+            // (legacy encoding), which are presented very differently.
+            let full_path = validate_path_within_repo(Path::new(&repo_path), &file_path)?;
+            if !full_path.exists() {
+                return Err(crate::error::GitnadoError::FileNotFound(file_path));
+            }
+            let content = std::fs::read_to_string(&full_path)?;
+            Ok(content)
         }
-        let content = std::fs::read_to_string(&full_path)?;
-        Ok(content)
-    }
+    })
+    .await
 }
 
 /// Strip trailing whitespace from files
@@ -632,34 +650,37 @@ pub async fn read_file_content(
 /// Reads each file, removes trailing whitespace from every line, and writes it back.
 #[command]
 pub async fn strip_trailing_whitespace(path: String, file_paths: Vec<String>) -> Result<()> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    for file_path in &file_paths {
-        let full_path = validate_path_within_repo(repo_path, file_path)?;
+        for file_path in &file_paths {
+            let full_path = validate_path_within_repo(repo_path, file_path)?;
 
-        if !full_path.exists() || !full_path.is_file() {
-            continue;
+            if !full_path.exists() || !full_path.is_file() {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&full_path)?;
+
+            let stripped: String = content
+                .lines()
+                .map(|line| line.trim_end())
+                .collect::<Vec<&str>>()
+                .join("\n");
+
+            // Preserve final newline if original file had one
+            let result = if content.ends_with('\n') {
+                format!("{}\n", stripped)
+            } else {
+                stripped
+            };
+
+            std::fs::write(&full_path, result)?;
         }
 
-        let content = std::fs::read_to_string(&full_path)?;
-
-        let stripped: String = content
-            .lines()
-            .map(|line| line.trim_end())
-            .collect::<Vec<&str>>()
-            .join("\n");
-
-        // Preserve final newline if original file had one
-        let result = if content.ends_with('\n') {
-            format!("{}\n", stripped)
-        } else {
-            stripped
-        };
-
-        std::fs::write(&full_path, result)?;
-    }
-
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Get hunks for a file diff (staged or unstaged)
@@ -667,83 +688,87 @@ pub async fn strip_trailing_whitespace(path: String, file_paths: Vec<String>) ->
 /// Returns structured hunk information for partial staging UI.
 #[command]
 pub async fn get_file_hunks(path: String, file_path: String, staged: bool) -> Result<FileHunks> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let diff = if staged {
-        // Staged: diff between HEAD and index
-        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-        let mut opts = git2::DiffOptions::new();
-        opts.pathspec(&file_path);
-        repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?
-    } else {
-        // Unstaged: diff between index and working directory
-        let mut opts = git2::DiffOptions::new();
-        opts.pathspec(&file_path);
-        repo.diff_index_to_workdir(None, Some(&mut opts))?
-    };
+        let diff = if staged {
+            // Staged: diff between HEAD and index
+            let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+            let mut opts = git2::DiffOptions::new();
+            opts.pathspec(&file_path);
+            repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?
+        } else {
+            // Unstaged: diff between index and working directory
+            let mut opts = git2::DiffOptions::new();
+            opts.pathspec(&file_path);
+            repo.diff_index_to_workdir(None, Some(&mut opts))?
+        };
 
-    let mut hunks: Vec<IndexedDiffHunk> = Vec::new();
-    let mut total_additions: u32 = 0;
-    let mut total_deletions: u32 = 0;
+        let mut hunks: Vec<IndexedDiffHunk> = Vec::new();
+        let mut total_additions: u32 = 0;
+        let mut total_deletions: u32 = 0;
 
-    // Iterate through patches for each delta
-    let num_deltas = diff.deltas().len();
-    for delta_idx in 0..num_deltas {
-        if let Ok(Some(patch)) = git2::Patch::from_diff(&diff, delta_idx) {
-            let num_hunks = patch.num_hunks();
-            for hunk_idx in 0..num_hunks {
-                if let Ok((hunk, num_lines)) = patch.hunk(hunk_idx) {
-                    let header = String::from_utf8_lossy(hunk.header()).trim().to_string();
-                    let mut lines = Vec::new();
+        // Iterate through patches for each delta
+        let num_deltas = diff.deltas().len();
+        for delta_idx in 0..num_deltas {
+            if let Ok(Some(patch)) = git2::Patch::from_diff(&diff, delta_idx) {
+                let num_hunks = patch.num_hunks();
+                for hunk_idx in 0..num_hunks {
+                    if let Ok((hunk, num_lines)) = patch.hunk(hunk_idx) {
+                        let header = String::from_utf8_lossy(hunk.header()).trim().to_string();
+                        let mut lines = Vec::new();
 
-                    for line_idx in 0..num_lines {
-                        if let Ok(diff_line) = patch.line_in_hunk(hunk_idx, line_idx) {
-                            let origin = diff_line.origin();
-                            let content = String::from_utf8_lossy(diff_line.content()).to_string();
+                        for line_idx in 0..num_lines {
+                            if let Ok(diff_line) = patch.line_in_hunk(hunk_idx, line_idx) {
+                                let origin = diff_line.origin();
+                                let content =
+                                    String::from_utf8_lossy(diff_line.content()).to_string();
 
-                            let line_type = match origin {
-                                '+' => {
-                                    total_additions += 1;
-                                    "addition"
-                                }
-                                '-' => {
-                                    total_deletions += 1;
-                                    "deletion"
-                                }
-                                ' ' => "context",
-                                _ => continue,
-                            };
+                                let line_type = match origin {
+                                    '+' => {
+                                        total_additions += 1;
+                                        "addition"
+                                    }
+                                    '-' => {
+                                        total_deletions += 1;
+                                        "deletion"
+                                    }
+                                    ' ' => "context",
+                                    _ => continue,
+                                };
 
-                            lines.push(HunkDiffLine {
-                                line_type: line_type.to_string(),
-                                content,
-                                old_line_number: diff_line.old_lineno(),
-                                new_line_number: diff_line.new_lineno(),
-                            });
+                                lines.push(HunkDiffLine {
+                                    line_type: line_type.to_string(),
+                                    content,
+                                    old_line_number: diff_line.old_lineno(),
+                                    new_line_number: diff_line.new_lineno(),
+                                });
+                            }
                         }
-                    }
 
-                    hunks.push(IndexedDiffHunk {
-                        index: hunks.len() as u32,
-                        old_start: hunk.old_start(),
-                        old_lines: hunk.old_lines(),
-                        new_start: hunk.new_start(),
-                        new_lines: hunk.new_lines(),
-                        header,
-                        lines,
-                        is_staged: staged,
-                    });
+                        hunks.push(IndexedDiffHunk {
+                            index: hunks.len() as u32,
+                            old_start: hunk.old_start(),
+                            old_lines: hunk.old_lines(),
+                            new_start: hunk.new_start(),
+                            new_lines: hunk.new_lines(),
+                            header,
+                            lines,
+                            is_staged: staged,
+                        });
+                    }
                 }
             }
         }
-    }
 
-    Ok(FileHunks {
-        file_path,
-        hunks,
-        total_additions,
-        total_deletions,
+        Ok(FileHunks {
+            file_path,
+            hunks,
+            total_additions,
+            total_deletions,
+        })
     })
+    .await
 }
 
 /// Append one unified-diff line (`prefix` + `content`) to `patch`.
@@ -800,19 +825,22 @@ pub async fn stage_hunk_by_index(path: String, file_path: String, hunk_index: u3
     // Get the unstaged hunks
     let file_hunks = get_file_hunks(path.clone(), file_path.clone(), false).await?;
 
-    let hunk = file_hunks
-        .hunks
-        .iter()
-        .find(|h| h.index == hunk_index)
-        .ok_or_else(|| {
-            crate::error::GitnadoError::OperationFailed(format!(
-                "Hunk index {} not found for file {}",
-                hunk_index, file_path
-            ))
-        })?;
+    crate::utils::blocking_git(move || {
+        let hunk = file_hunks
+            .hunks
+            .iter()
+            .find(|h| h.index == hunk_index)
+            .ok_or_else(|| {
+                crate::error::GitnadoError::OperationFailed(format!(
+                    "Hunk index {} not found for file {}",
+                    hunk_index, file_path
+                ))
+            })?;
 
-    let patch = build_hunk_patch(&file_path, hunk);
-    apply_patch_to_index(&path, &patch, false)
+        let patch = build_hunk_patch(&file_path, hunk);
+        apply_patch_to_index(&path, &patch, false)
+    })
+    .await
 }
 
 /// Unstage a specific hunk by index
@@ -824,19 +852,22 @@ pub async fn unstage_hunk_by_index(path: String, file_path: String, hunk_index: 
     // Get the staged hunks
     let file_hunks = get_file_hunks(path.clone(), file_path.clone(), true).await?;
 
-    let hunk = file_hunks
-        .hunks
-        .iter()
-        .find(|h| h.index == hunk_index)
-        .ok_or_else(|| {
-            crate::error::GitnadoError::OperationFailed(format!(
-                "Hunk index {} not found for file {}",
-                hunk_index, file_path
-            ))
-        })?;
+    crate::utils::blocking_git(move || {
+        let hunk = file_hunks
+            .hunks
+            .iter()
+            .find(|h| h.index == hunk_index)
+            .ok_or_else(|| {
+                crate::error::GitnadoError::OperationFailed(format!(
+                    "Hunk index {} not found for file {}",
+                    hunk_index, file_path
+                ))
+            })?;
 
-    let patch = build_hunk_patch(&file_path, hunk);
-    apply_patch_to_index(&path, &patch, true)
+        let patch = build_hunk_patch(&file_path, hunk);
+        apply_patch_to_index(&path, &patch, true)
+    })
+    .await
 }
 
 /// Stage specific lines from a diff
@@ -853,106 +884,109 @@ pub async fn stage_lines(
     // Get the unstaged hunks to find lines
     let file_hunks = get_file_hunks(path.clone(), file_path.clone(), false).await?;
 
-    // Collect all lines across all hunks with a global index
-    let mut global_line_idx: u32 = 0;
-    let mut selected_hunks: Vec<(IndexedDiffHunk, Vec<usize>)> = Vec::new();
+    crate::utils::blocking_git(move || {
+        // Collect all lines across all hunks with a global index
+        let mut global_line_idx: u32 = 0;
+        let mut selected_hunks: Vec<(IndexedDiffHunk, Vec<usize>)> = Vec::new();
 
-    for hunk in &file_hunks.hunks {
-        let mut selected_line_indices = Vec::new();
-        for (local_idx, _line) in hunk.lines.iter().enumerate() {
-            if global_line_idx >= start_line && global_line_idx <= end_line {
-                selected_line_indices.push(local_idx);
+        for hunk in &file_hunks.hunks {
+            let mut selected_line_indices = Vec::new();
+            for (local_idx, _line) in hunk.lines.iter().enumerate() {
+                if global_line_idx >= start_line && global_line_idx <= end_line {
+                    selected_line_indices.push(local_idx);
+                }
+                global_line_idx += 1;
             }
-            global_line_idx += 1;
+            if !selected_line_indices.is_empty() {
+                selected_hunks.push((hunk.clone(), selected_line_indices));
+            }
         }
-        if !selected_line_indices.is_empty() {
-            selected_hunks.push((hunk.clone(), selected_line_indices));
+
+        if selected_hunks.is_empty() {
+            return Err(crate::error::GitnadoError::OperationFailed(
+                "No lines found in the specified range".to_string(),
+            ));
         }
-    }
 
-    if selected_hunks.is_empty() {
-        return Err(crate::error::GitnadoError::OperationFailed(
-            "No lines found in the specified range".to_string(),
-        ));
-    }
+        // Build a patch that includes only the selected lines
+        // For lines not selected, we convert additions to nothing (skip them)
+        // and deletions to context lines
+        let mut patch = String::new();
+        patch.push_str(&format!("--- a/{}\n", file_path));
+        patch.push_str(&format!("+++ b/{}\n", file_path));
 
-    // Build a patch that includes only the selected lines
-    // For lines not selected, we convert additions to nothing (skip them)
-    // and deletions to context lines
-    let mut patch = String::new();
-    patch.push_str(&format!("--- a/{}\n", file_path));
-    patch.push_str(&format!("+++ b/{}\n", file_path));
+        for (hunk, selected_indices) in &selected_hunks {
+            // Rebuild the hunk with only selected changes
+            let mut hunk_body = String::new();
+            let mut old_count: u32 = 0;
+            let mut new_count: u32 = 0;
 
-    for (hunk, selected_indices) in &selected_hunks {
-        // Rebuild the hunk with only selected changes
-        let mut hunk_body = String::new();
-        let mut old_count: u32 = 0;
-        let mut new_count: u32 = 0;
+            for (idx, line) in hunk.lines.iter().enumerate() {
+                let is_selected = selected_indices.contains(&idx);
 
-        for (idx, line) in hunk.lines.iter().enumerate() {
-            let is_selected = selected_indices.contains(&idx);
-
-            match line.line_type.as_str() {
-                "context" => {
-                    push_diff_line(&mut hunk_body, ' ', &line.content);
-                    old_count += 1;
-                    new_count += 1;
-                }
-                "addition" if is_selected => {
-                    push_diff_line(&mut hunk_body, '+', &line.content);
-                    new_count += 1;
-                }
-                // Not-selected additions fall through to _ => {} (omitted)
-                "deletion" => {
-                    if is_selected {
-                        push_diff_line(&mut hunk_body, '-', &line.content);
-                        old_count += 1;
-                    } else {
-                        // Not selected deletions become context lines
+                match line.line_type.as_str() {
+                    "context" => {
                         push_diff_line(&mut hunk_body, ' ', &line.content);
                         old_count += 1;
                         new_count += 1;
                     }
+                    "addition" if is_selected => {
+                        push_diff_line(&mut hunk_body, '+', &line.content);
+                        new_count += 1;
+                    }
+                    // Not-selected additions fall through to _ => {} (omitted)
+                    "deletion" => {
+                        if is_selected {
+                            push_diff_line(&mut hunk_body, '-', &line.content);
+                            old_count += 1;
+                        } else {
+                            // Not selected deletions become context lines
+                            push_diff_line(&mut hunk_body, ' ', &line.content);
+                            old_count += 1;
+                            new_count += 1;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
+
+            // Write hunk header
+            patch.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                hunk.old_start, old_count, hunk.new_start, new_count
+            ));
+
+            patch.push_str(&hunk_body);
         }
 
-        // Write hunk header
-        patch.push_str(&format!(
-            "@@ -{},{} +{},{} @@\n",
-            hunk.old_start, old_count, hunk.new_start, new_count
-        ));
+        // Apply the patch
+        let temp_dir = std::env::temp_dir();
+        let patch_file = temp_dir.join(format!("gitnado_stage_lines_{}.patch", std::process::id()));
 
-        patch.push_str(&hunk_body);
-    }
+        let mut file = std::fs::File::create(&patch_file)?;
+        file.write_all(patch.as_bytes())?;
+        file.flush()?;
+        drop(file);
 
-    // Apply the patch
-    let temp_dir = std::env::temp_dir();
-    let patch_file = temp_dir.join(format!("gitnado_stage_lines_{}.patch", std::process::id()));
+        let output = create_command("git")
+            .args(["apply", "--cached", "--unidiff-zero"])
+            .arg(&patch_file)
+            .current_dir(&path)
+            .output()?;
 
-    let mut file = std::fs::File::create(&patch_file)?;
-    file.write_all(patch.as_bytes())?;
-    file.flush()?;
-    drop(file);
+        let _ = std::fs::remove_file(&patch_file);
 
-    let output = create_command("git")
-        .args(["apply", "--cached", "--unidiff-zero"])
-        .arg(&patch_file)
-        .current_dir(&path)
-        .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(crate::error::GitnadoError::OperationFailed(format!(
+                "Failed to stage lines: {}",
+                stderr
+            )));
+        }
 
-    let _ = std::fs::remove_file(&patch_file);
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crate::error::GitnadoError::OperationFailed(format!(
-            "Failed to stage lines: {}",
-            stderr
-        )));
-    }
-
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1346,8 +1380,15 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
         repo.create_file("README.md", "# Test Repo");
 
-        let result =
-            get_file_diff(repo.path_str(), "README.md".to_string(), Some(false), None).await;
+        let result = get_file_diff(
+            repo.path_str(),
+            "README.md".to_string(),
+            Some(false),
+            None,
+            None,
+            None,
+        )
+        .await;
 
         // Either Ok (file has no real changes, returned as empty diff via
         // fallback) or Err (the explicit "not found in diff" path). Must

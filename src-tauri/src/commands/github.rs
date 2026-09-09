@@ -5,8 +5,22 @@ use serde::{Deserialize, Serialize};
 use tauri::command;
 
 use crate::error::{GitnadoError, Result};
+use crate::models::{ProviderRepository, ProviderRepositoryPage};
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
+
+/// The HTTP client every outbound GitHub API call in this module goes through.
+///
+/// Offline mode and the remote allowlist are enforced HERE rather than at each
+/// command: `reqwest::Client::new()` was already the first thing every
+/// network-touching function in this file does, so making it the one
+/// constructor means a command added later cannot forget the check. The host is
+/// the fixed API base, matching what the frontend gate checks the allowlist
+/// against (`providerApiHost` in src/services/git.service.ts).
+fn api_client() -> Result<reqwest::Client> {
+    crate::services::security::guard_url(GITHUB_API_BASE)?;
+    Ok(reqwest::Client::new())
+}
 
 /// GitHub user information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,14 +223,34 @@ pub struct DetectedGitHubRepo {
 /// expire after an hour, so a stored one would leave the integration dead again
 /// shortly after it started working.
 async fn resolve_github_token(token: Option<String>) -> Result<String> {
+    Ok(resolve_github_token_with_source(token).await?.0)
+}
+
+/// Where a resolved token came from.
+///
+/// Only the repository listing needs to know: an App installation token is not
+/// a user, so `/user/repos` refuses it and the installation's own repository
+/// endpoint has to be used instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitHubTokenSource {
+    /// A per-account personal access / OAuth token supplied by the caller.
+    User,
+    /// A token minted from the configured GitHub App installation.
+    AppInstallation,
+}
+
+/// `resolve_github_token`, plus which of the two credential kinds it found.
+async fn resolve_github_token_with_source(
+    token: Option<String>,
+) -> Result<(String, GitHubTokenSource)> {
     if let Some(t) = token {
         if !t.is_empty() {
-            return Ok(t);
+            return Ok((t, GitHubTokenSource::User));
         }
     }
 
     if let Some(app_token) = github_app_installation_token().await? {
-        return Ok(app_token);
+        return Ok((app_token, GitHubTokenSource::AppInstallation));
     }
 
     Err(GitnadoError::OperationFailed(
@@ -241,9 +275,9 @@ async fn github_app_installation_token() -> Result<Option<String>> {
 
     let jwt = github_app::generate_jwt(cfg.app_id, &cfg.private_key_pem)
         .map_err(GitnadoError::OperationFailed)?;
-    let token = github_app::get_installation_token(&jwt, cfg.installation_id)
-        .await
-        .map_err(GitnadoError::OperationFailed)?;
+    // Already a `GitnadoError`, so a gate refusal stays `NetworkBlocked`
+    // rather than being flattened into a generic failure.
+    let token = github_app::get_installation_token(&jwt, cfg.installation_id).await?;
 
     Ok(Some(token.token))
 }
@@ -281,7 +315,7 @@ pub async fn check_github_connection(token: Option<String>) -> Result<GitHubConn
         },
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!("{}/user", GITHUB_API_BASE))
         .header("Authorization", format!("Bearer {}", token))
@@ -431,6 +465,173 @@ fn should_fetch_more_issues(collected: usize, per_page: u32, fetches: u32) -> bo
 }
 
 // ============================================================================
+// Repository Listing Commands
+// ============================================================================
+
+/// Default page size for the account repository listing.
+///
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// discloses it to the user ("Showing the first N …").
+const REPOSITORIES_DEFAULT_PER_PAGE: u32 = 30;
+
+/// One repository as `/user/repos` and `/installation/repositories` return it.
+#[derive(Deserialize)]
+struct ApiRepoListEntry {
+    id: u64,
+    name: String,
+    full_name: String,
+    private: bool,
+    description: Option<String>,
+    clone_url: String,
+    html_url: Option<String>,
+    default_branch: Option<String>,
+    pushed_at: Option<String>,
+    owner: Option<ApiRepoOwner>,
+}
+
+#[derive(Deserialize)]
+struct ApiRepoOwner {
+    login: String,
+}
+
+/// `/installation/repositories` wraps the array; `/user/repos` returns it bare.
+#[derive(Deserialize)]
+struct ApiInstallationRepos {
+    repositories: Vec<ApiRepoListEntry>,
+}
+
+/// Turn one GitHub repository page into the shared listing shape.
+///
+/// Split out from the request so the mapping, the empty case and the next-page
+/// arithmetic are testable without a network.
+fn parse_github_repository_page(
+    body: &str,
+    from_app: bool,
+    per_page: u32,
+    page: u32,
+) -> Result<ProviderRepositoryPage> {
+    let entries: Vec<ApiRepoListEntry> = if from_app {
+        serde_json::from_str::<ApiInstallationRepos>(body)
+            .map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
+            })?
+            .repositories
+    } else {
+        serde_json::from_str(body).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
+        })?
+    };
+
+    let next_page = next_page_after(page, entries.len(), per_page);
+
+    Ok(ProviderRepositoryPage {
+        repositories: entries
+            .into_iter()
+            .map(|repo| {
+                // `full_name` is "owner/name"; fall back to it when the owner
+                // object is absent, which the installation listing allows.
+                let owner = repo
+                    .owner
+                    .map(|o| o.login)
+                    .or_else(|| {
+                        repo.full_name
+                            .rsplit_once('/')
+                            .map(|(owner, _)| owner.to_string())
+                    })
+                    .unwrap_or_default();
+                ProviderRepository {
+                    id: repo.id.to_string(),
+                    name: repo.name,
+                    owner,
+                    full_name: repo.full_name,
+                    description: repo.description,
+                    is_private: repo.private,
+                    clone_url: repo.clone_url,
+                    web_url: repo.html_url,
+                    default_branch: repo.default_branch,
+                    last_pushed_at: repo.pushed_at,
+                }
+            })
+            .collect(),
+        next_page,
+    })
+}
+
+/// The error a failed repository listing reports.
+///
+/// A 401 means the account's stored credential is dead — the picker offers
+/// "reconnect this account" for `AUTH_REQUIRED` rather than showing a raw API
+/// string. Everything else (403 rate limits included, whose body explains
+/// itself) keeps the module's usual message shape.
+fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return GitnadoError::AuthenticationRequired;
+    }
+    GitnadoError::OperationFailed(format!("GitHub API error {}: {}", status, body))
+}
+
+/// List the repositories the authenticated account can clone.
+///
+/// One page per call — an account can own hundreds, and the picker loads the
+/// next page only when the user asks for it. Sorted by last push so the
+/// repository someone is most likely to want is on the first page.
+#[command]
+pub async fn list_github_repositories(
+    per_page: Option<u32>,
+    page: Option<u32>,
+    token: Option<String>,
+) -> Result<ProviderRepositoryPage> {
+    let (token, source) = resolve_github_token_with_source(token).await?;
+    let per_page = per_page.unwrap_or(REPOSITORIES_DEFAULT_PER_PAGE);
+    let page = page.unwrap_or(1).max(1);
+    let from_app = source == GitHubTokenSource::AppInstallation;
+
+    let client = api_client()?;
+    // An App installation token authenticates as the installation, not a user,
+    // so `/user/repos` answers it with 403. Its repositories live behind the
+    // installation endpoint instead — the same one `configure_github_app` uses
+    // to verify the token.
+    let url = if from_app {
+        format!("{}/installation/repositories", GITHUB_API_BASE)
+    } else {
+        format!("{}/user/repos", GITHUB_API_BASE)
+    };
+
+    let mut request = client
+        .get(url)
+        .query(&pagination_query(per_page, Some(page)))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("User-Agent", "Gitnado-Git-Client")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+
+    if !from_app {
+        // Everything the user can push to or clone, most recently pushed first.
+        // The installation endpoint takes neither parameter.
+        request = request.query(&[
+            ("affiliation", "owner,collaborator,organization_member"),
+            ("sort", "pushed"),
+        ]);
+    }
+
+    let response = request.send().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to fetch repositories: {}", e))
+    })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(map_repository_list_error(status, &body));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read repositories: {}", e))
+    })?;
+
+    parse_github_repository_page(&body, from_app, per_page, page)
+}
+
+// ============================================================================
 // Pull Request Commands
 // ============================================================================
 
@@ -449,7 +650,7 @@ pub async fn list_pull_requests(
     let state = state.unwrap_or_else(|| "open".to_string());
     let per_page = per_page.unwrap_or(30);
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/pulls",
@@ -553,7 +754,7 @@ pub async fn get_pull_request(
 ) -> Result<PullRequestDetails> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/pulls/{}",
@@ -727,7 +928,7 @@ pub async fn create_pull_request(
         draft: input.draft,
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(format!(
             "{}/repos/{}/{}/pulls",
@@ -822,7 +1023,7 @@ pub async fn get_pull_request_reviews(
 ) -> Result<Vec<PullRequestReview>> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/pulls/{}/reviews",
@@ -906,7 +1107,7 @@ pub async fn get_workflow_runs(
 
     let per_page = per_page.unwrap_or(20);
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let mut request = client
         .get(format!(
             "{}/repos/{}/{}/actions/runs",
@@ -990,7 +1191,7 @@ pub async fn get_check_runs(
 ) -> Result<Vec<CheckRun>> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/commits/{}/check-runs",
@@ -1059,7 +1260,7 @@ pub async fn get_commit_status(
 ) -> Result<String> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/commits/{}/status",
@@ -1214,7 +1415,7 @@ pub async fn list_issues(
         description: Option<String>,
     }
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let mut current = page.unwrap_or(1).max(1);
     let mut collected: Vec<IssueSummary> = Vec::new();
     let mut fetches = 0u32;
@@ -1328,7 +1529,7 @@ pub async fn get_issue(
 ) -> Result<IssueSummary> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/issues/{}",
@@ -1458,7 +1659,7 @@ pub async fn create_issue(
         assignees: input.assignees,
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(format!(
             "{}/repos/{}/{}/issues",
@@ -1577,7 +1778,7 @@ pub async fn update_issue_state(
         state: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .patch(format!(
             "{}/repos/{}/{}/issues/{}",
@@ -1693,7 +1894,7 @@ pub async fn get_issue_comments(
 
     let per_page = per_page.unwrap_or(30);
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/issues/{}/comments",
@@ -1776,7 +1977,7 @@ pub async fn add_issue_comment(
         body: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(format!(
             "{}/repos/{}/{}/issues/{}/comments",
@@ -1864,7 +2065,7 @@ pub async fn get_repo_labels(
         description: Option<String>,
     }
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let mut current = 1u32;
     let mut fetches = 0u32;
     let mut labels: Vec<Label> = Vec::new();
@@ -1982,7 +2183,7 @@ pub async fn list_releases(
 
     let per_page = per_page.unwrap_or(30);
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/releases",
@@ -2069,7 +2270,7 @@ pub async fn get_release_by_tag(
 ) -> Result<ReleaseSummary> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/releases/tags/{}",
@@ -2151,7 +2352,7 @@ pub async fn get_latest_release(
 ) -> Result<ReleaseSummary> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/repos/{}/{}/releases/latest",
@@ -2262,7 +2463,7 @@ pub async fn create_release(
         generate_release_notes: input.generate_release_notes,
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(format!(
             "{}/repos/{}/{}/releases",
@@ -2346,7 +2547,7 @@ pub async fn delete_release(
 ) -> Result<()> {
     let token = resolve_github_token(token).await?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .delete(format!(
             "{}/repos/{}/{}/releases/{}",
@@ -2375,6 +2576,7 @@ pub async fn delete_release(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
 
     // ========================================================================
     // GitHubUser Parsing Tests
@@ -2730,6 +2932,137 @@ mod tests {
         assert!(result.is_err(), "expected error for incomplete JSON");
     }
 
+    // ========================================================================
+    // Repository Listing Tests
+    // ========================================================================
+
+    const REPO_PAGE_JSON: &str = r#"[
+        {
+            "id": 1,
+            "name": "gitnado",
+            "full_name": "octocat/gitnado",
+            "private": true,
+            "description": "A git client",
+            "clone_url": "https://github.com/octocat/gitnado.git",
+            "html_url": "https://github.com/octocat/gitnado",
+            "default_branch": "main",
+            "pushed_at": "2024-05-01T10:00:00Z",
+            "owner": { "login": "octocat" }
+        },
+        {
+            "id": 2,
+            "name": "hello",
+            "full_name": "octocat/hello",
+            "private": false,
+            "description": null,
+            "clone_url": "https://github.com/octocat/hello.git",
+            "html_url": "https://github.com/octocat/hello",
+            "default_branch": "master",
+            "pushed_at": null,
+            "owner": { "login": "octocat" }
+        }
+    ]"#;
+
+    #[test]
+    fn test_parse_github_repository_page_maps_fields() {
+        let page =
+            parse_github_repository_page(REPO_PAGE_JSON, false, 30, 1).expect("page should parse");
+
+        assert_eq!(page.repositories.len(), 2);
+        let first = &page.repositories[0];
+        assert_eq!(first.id, "1");
+        assert_eq!(first.name, "gitnado");
+        assert_eq!(first.owner, "octocat");
+        assert_eq!(first.full_name, "octocat/gitnado");
+        assert_eq!(first.description.as_deref(), Some("A git client"));
+        assert!(first.is_private);
+        assert_eq!(first.clone_url, "https://github.com/octocat/gitnado.git");
+        assert_eq!(first.default_branch.as_deref(), Some("main"));
+        assert_eq!(
+            first.last_pushed_at.as_deref(),
+            Some("2024-05-01T10:00:00Z")
+        );
+        // A public repository with no description or push date still maps.
+        assert!(!page.repositories[1].is_private);
+        assert_eq!(page.repositories[1].description, None);
+        assert_eq!(page.repositories[1].last_pushed_at, None);
+    }
+
+    #[test]
+    fn test_parse_github_repository_page_pagination() {
+        // A full page means there may be another one.
+        let full =
+            parse_github_repository_page(REPO_PAGE_JSON, false, 2, 1).expect("page should parse");
+        assert_eq!(full.next_page, Some(2));
+
+        // A short page is the last one.
+        let short =
+            parse_github_repository_page(REPO_PAGE_JSON, false, 30, 1).expect("page should parse");
+        assert_eq!(short.next_page, None);
+
+        // Paging carries on from the requested page, not from 1.
+        let later =
+            parse_github_repository_page(REPO_PAGE_JSON, false, 2, 4).expect("page should parse");
+        assert_eq!(later.next_page, Some(5));
+    }
+
+    #[test]
+    fn test_parse_github_repository_page_empty() {
+        let page = parse_github_repository_page("[]", false, 30, 1).expect("page should parse");
+        assert!(page.repositories.is_empty());
+        // Nothing to load: an empty page must not offer a next one.
+        assert_eq!(page.next_page, None);
+    }
+
+    #[test]
+    fn test_parse_github_repository_page_installation_shape() {
+        // A GitHub App installation token gets the wrapped shape, and an entry
+        // with no owner object falls back to the owner in `full_name`.
+        let json = r#"{
+            "total_count": 1,
+            "repositories": [
+                {
+                    "id": 7,
+                    "name": "infra",
+                    "full_name": "acme/infra",
+                    "private": true,
+                    "description": null,
+                    "clone_url": "https://github.com/acme/infra.git",
+                    "html_url": "https://github.com/acme/infra",
+                    "default_branch": "main",
+                    "pushed_at": "2024-01-01T00:00:00Z"
+                }
+            ]
+        }"#;
+
+        let page = parse_github_repository_page(json, true, 30, 1).expect("page should parse");
+        assert_eq!(page.repositories.len(), 1);
+        assert_eq!(page.repositories[0].owner, "acme");
+    }
+
+    #[test]
+    fn test_map_repository_list_error_auth() {
+        // A dead credential is reported as AUTH_REQUIRED so the picker can
+        // offer to reconnect the account instead of showing an API string.
+        let err = map_repository_list_error(reqwest::StatusCode::UNAUTHORIZED, "Bad credentials");
+        assert!(matches!(err, GitnadoError::AuthenticationRequired));
+
+        // Everything else keeps its message — a 403 rate limit explains itself.
+        let other =
+            map_repository_list_error(reqwest::StatusCode::FORBIDDEN, "API rate limit exceeded");
+        assert!(other.to_string().contains("API rate limit exceeded"));
+        assert!(matches!(other, GitnadoError::OperationFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn test_list_github_repositories_no_token() {
+        let _policy = no_policy();
+        // No token and no GitHub App configured: the command must refuse rather
+        // than issue an unauthenticated request.
+        let result = list_github_repositories(Some(10), Some(1), Some(String::new())).await;
+        assert!(result.is_err());
+    }
+
     /// The keyring key constant must follow the expected naming pattern.
     #[test]
     fn test_github_app_keyring_key_format() {
@@ -2802,13 +3135,13 @@ pub async fn configure_github_app(
     let jwt = github_app::generate_jwt(app_id, &private_key_pem)
         .map_err(GitnadoError::OperationFailed)?;
 
-    // Get an installation token to verify it works
-    let token = github_app::get_installation_token(&jwt, installation_id)
-        .await
-        .map_err(GitnadoError::OperationFailed)?;
+    // Get an installation token to verify it works. `get_installation_token`
+    // goes through the module's guarded client, so this no longer reaches
+    // GitHub before the gate has had its say.
+    let token = github_app::get_installation_token(&jwt, installation_id).await?;
 
     // Verify the token works by checking connection
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(format!(
             "{}/installation/repositories?per_page=1",
@@ -2903,7 +3236,5 @@ pub async fn list_github_app_installations(
     let jwt = github_app::generate_jwt(app_id, &private_key_pem)
         .map_err(GitnadoError::OperationFailed)?;
 
-    github_app::list_installations(&jwt)
-        .await
-        .map_err(GitnadoError::OperationFailed)
+    github_app::list_installations(&jwt).await
 }

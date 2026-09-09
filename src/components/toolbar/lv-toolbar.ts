@@ -28,6 +28,29 @@ import type { LvCloneDialog } from '../dialogs/lv-clone-dialog.ts';
 import type { LvInitDialog } from '../dialogs/lv-init-dialog.ts';
 import type { LvSearchBar, SearchFilter } from './lv-search-bar.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
+import { RefLockController, isPushRunning } from '../../utils/ref-lock.ts';
+import {
+  knownToHaveNoRemote,
+  noRemoteButtonLabel,
+  showNoRemoteToast,
+} from '../../utils/remote-availability.ts';
+import { runningRemoteOperation } from '../../services/remote-operations.service.ts';
+
+/** The three remote operations the toolbar exposes. */
+type RemoteOp = 'fetch' | 'pull' | 'push';
+
+/**
+ * The shortcut key registered for each operation in keyboard.service.ts
+ * (Ctrl+Shift+F/P/U). Kept next to the buttons so the tooltip and the
+ * aria-keyshortcuts value can never drift apart: both are built from THIS
+ * table and the same `isMacPlatform` test, so a screen reader is never told
+ * Control while the tooltip shows ⌘.
+ */
+const REMOTE_SHORTCUT_KEYS: Record<RemoteOp, string> = {
+  fetch: 'F',
+  pull: 'P',
+  push: 'U',
+};
 
 @customElement('lv-toolbar')
 export class LvToolbar extends LitElement {
@@ -355,6 +378,64 @@ export class LvToolbar extends LitElement {
         margin: var(--spacing-xs) 0;
         background: var(--color-border);
       }
+
+      /* Fetch / Pull / Push — the same 32px menu-btn density as every other
+         toolbar button, plus room for the ahead/behind count badge. */
+      .remote-actions {
+        gap: var(--spacing-xs);
+        padding: 0 var(--spacing-sm);
+        border-left: 1px solid var(--color-border);
+      }
+
+      .remote-btn {
+        position: relative;
+      }
+
+      /* Nothing to pull/push right now: still clickable (the counts are only
+         as fresh as the last fetch), but visibly not calling for a click. */
+      .remote-btn.idle {
+        opacity: 0.55;
+      }
+
+      .remote-btn.idle:hover {
+        opacity: 1;
+      }
+
+      .remote-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .remote-btn:disabled:hover {
+        background: transparent;
+        color: var(--color-text-secondary);
+      }
+
+      /* Same shape and the same two colours the dashboard badges use, so the
+         two surfaces read as one thing: primary for incoming, success for
+         outgoing. */
+      .remote-count {
+        position: absolute;
+        top: -1px;
+        right: -1px;
+        min-width: 14px;
+        height: 14px;
+        padding: 0 3px;
+        border-radius: var(--radius-full, 7px);
+        color: white;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 14px;
+        text-align: center;
+      }
+
+      .remote-btn.pull .remote-count {
+        background: var(--color-primary);
+      }
+
+      .remote-btn.push .remote-count {
+        background: var(--color-success);
+      }
     `,
   ];
 
@@ -410,12 +491,34 @@ export class LvToolbar extends LitElement {
         this.searchBar?.focus();
       });
     });
+
+    // The native menu bar's File items are routed here by app-shell rather
+    // than reimplemented: these are the same handlers the toolbar buttons run,
+    // dialogs and error toasts included.
+    this.addEventListener('open-repository', this.handleMenuOpenRepo);
+    this.addEventListener('clone-repository', this.handleMenuCloneRepo);
+    this.addEventListener('init-repository', this.handleMenuInitRepo);
   }
+
+  private handleMenuOpenRepo = (): void => {
+    void this.handleOpenRepo();
+  };
+
+  private handleMenuCloneRepo = (): void => {
+    this.handleCloneRepo();
+  };
+
+  private handleMenuInitRepo = (): void => {
+    this.handleInitRepo();
+  };
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this.unsubscribe?.();
     this._resizeObserver?.disconnect();
+    this.removeEventListener('open-repository', this.handleMenuOpenRepo);
+    this.removeEventListener('clone-repository', this.handleMenuCloneRepo);
+    this.removeEventListener('init-repository', this.handleMenuInitRepo);
     if (this.menuEscapeListenerAttached) {
       document.removeEventListener('keydown', this.handleMenuEscape, { capture: true });
       this.menuEscapeListenerAttached = false;
@@ -609,6 +712,200 @@ export class LvToolbar extends LitElement {
     return this.openRepositories[this.activeIndex];
   }
 
+  /**
+   * Observe the shared operation locks so the remote buttons re-render when
+   * an operation starts or ends anywhere in the app.
+   *
+   * The locks are module state Lit cannot see (src/utils/ref-lock.ts); the
+   * controller's subscription fires on every claim and release of BOTH the
+   * working-tree lock and the push slot, which is what makes the in-flight
+   * disabled states below reactive. `busy` itself is the working-tree lock —
+   * the one a pull claims.
+   */
+  private lock = new RefLockController(this, () => this.activeRepo?.repository.path);
+
+  /**
+   * macOS, tested exactly the way keyboard.service.ts tests it.
+   *
+   * Case-insensitive on purpose: `navigator.platform` reports "MacIntel" and
+   * "MacPPC" but also "iPad"/"iPhone" for a WKWebView, and the old
+   * `includes('Mac')` here disagreed with keyboard.service's
+   * `toLowerCase().includes('mac')` — the two must answer the same question
+   * the same way or the tooltip teaches a shortcut the service never bound.
+   */
+  private get isMacPlatform(): boolean {
+    return navigator.platform.toLowerCase().includes('mac');
+  }
+
+  /**
+   * The keyboard shortcut for each remote operation, formatted the way
+   * keyboard.service.ts formats it, so the tooltip teaches the shortcut.
+   */
+  private remoteShortcut(op: RemoteOp): string {
+    const key = REMOTE_SHORTCUT_KEYS[op];
+    return this.isMacPlatform ? `⌘⇧${key}` : `Ctrl+Shift+${key}`;
+  }
+
+  /**
+   * The same shortcut, in the modifier tokens `aria-keyshortcuts` defines.
+   *
+   * Platform-aware for the same reason the tooltip is: on macOS the combo the
+   * tooltip shows is ⌘⇧, which is Meta+Shift — and keyboard.service really does
+   * accept it, because getShortcutKey() hashes ctrl and meta to the same
+   * "mod". A hard-coded Control+Shift+… announced a chord the visible tooltip
+   * contradicted, which is the one thing a screen-reader user cannot check.
+   */
+  private remoteAriaShortcut(op: RemoteOp): string {
+    return `${this.isMacPlatform ? 'Meta' : 'Control'}+Shift+${REMOTE_SHORTCUT_KEYS[op]}`;
+  }
+
+  /**
+   * Label, tooltip, count badge and disabled state for one remote button.
+   *
+   * The ahead/behind numbers come from the SAME place the repository tabs
+   * already read them (repo.currentBranch.aheadBehind — see renderTabBadges),
+   * so the toolbar never asks the backend for them twice and the two can
+   * never disagree.
+   *
+   * The in-flight flags read the SAME source the context dashboard's copies of
+   * these buttons read (`runningRemoteOperation`, lv-context-dashboard.ts):
+   * fetch, pull and push share ONE per-repository slot inside
+   * remote-operations.service, because they are not independent — a pull moves
+   * HEAD under a push, and a pruning fetch rewrites the refs a pull just
+   * resolved. Reading that one slot is what keeps the two mouse surfaces from
+   * disagreeing about what the app is doing, and stops a click landing on a
+   * button the runner will only refuse.
+   *
+   * The two extra locks are the ones the runner also takes and other features
+   * hold on their own: the working-tree lock a pull needs (any sidebar
+   * checkout, reset or discard holds it too) and the per-repo push slot that
+   * makes Push and Force Push mutually exclusive across the force-push
+   * confirm.
+   */
+  private remoteButtonState(op: RemoteOp): {
+    disabled: boolean;
+    idle: boolean;
+    count: number;
+    label: string;
+  } {
+    const repo = this.activeRepo;
+    const path = repo?.repository.path;
+    const shortcut = this.remoteShortcut(op);
+    const name = { fetch: 'Fetch', pull: 'Pull', push: 'Push' }[op];
+
+    if (!repo) {
+      return { disabled: true, idle: false, count: 0, label: `${name} — open a repository first` };
+    }
+    // Shared with the context dashboard's copies of these three buttons, so
+    // the two surfaces cannot disagree about whether a repository has anywhere
+    // to fetch from — or about how to say that it has not.
+    // Only once the remotes have actually been READ: `remotes: []` is also
+    // what the store holds for the moment between opening the tab and
+    // `get_remotes` answering, and greying the three buttons out over that
+    // gap told every freshly opened repository it had no remote.
+    if (knownToHaveNoRemote(repo)) {
+      return { disabled: true, idle: false, count: 0, label: noRemoteButtonLabel(name) };
+    }
+
+    const running = runningRemoteOperation(path);
+    const inFlight =
+      running !== undefined ||
+      (op === 'pull' && this.lock.busy) ||
+      (op === 'push' && isPushRunning(path));
+    if (inFlight) {
+      // Name the operation that is actually holding the repository. All three
+      // buttons go down together on the shared slot, so "Push already in
+      // progress…" on the Push button during a fetch would be a lie; and the
+      // working-tree and push slots can be held by a checkout or a force push,
+      // which this surface cannot name at all.
+      const reason =
+        running === op
+          ? `${name} already in progress…`
+          : running !== undefined
+            ? `${name} — a ${running} is already running in this repository`
+            : `${name} — an operation is already running in this repository`;
+      return { disabled: true, idle: false, count: 0, label: reason };
+    }
+
+    const ab = repo.currentBranch?.aheadBehind;
+    const ahead = ab?.ahead ?? 0;
+    const behind = ab?.behind ?? 0;
+    const branch = repo.currentBranch?.shorthand ?? 'HEAD';
+
+    if (op === 'fetch') {
+      return { disabled: false, idle: false, count: 0, label: `Fetch from remote (${shortcut})` };
+    }
+    if (op === 'pull') {
+      return {
+        disabled: false,
+        idle: behind === 0,
+        count: behind,
+        label:
+          behind > 0
+            ? `Pull ${behind} incoming commit${behind === 1 ? '' : 's'} into ${branch} (${shortcut})`
+            : `Pull from remote — nothing to pull right now (${shortcut})`,
+      };
+    }
+    // Push. A branch with no upstream has no ahead count and is never "up to
+    // date": pushing it publishes it (the backend sets the upstream), so it
+    // must not be dimmed as if there were nothing to do.
+    const hasUpstream = Boolean(repo.currentBranch?.upstream);
+    if (!hasUpstream) {
+      return {
+        disabled: false,
+        idle: false,
+        count: 0,
+        label: `Push ${branch} to remote — it has no upstream yet (${shortcut})`,
+      };
+    }
+    return {
+      disabled: false,
+      idle: ahead === 0,
+      count: ahead,
+      label:
+        ahead > 0
+          ? `Push ${ahead} local commit${ahead === 1 ? '' : 's'} from ${branch} (${shortcut})`
+          : `Push to remote — nothing to push (${shortcut})`,
+    };
+  }
+
+  /**
+   * Run a remote operation through the path that already owns it.
+   *
+   * These three operations are implemented once, in
+   * remote-operations.service, which app-shell's handleFetch/handlePull/
+   * handlePush hand off to: it claims the shared locks, drives the progress
+   * row, routes failures through the suggestion service and asks for the
+   * refresh. The toolbar must not grow a second copy of any of that — it
+   * dispatches, app-shell runs it.
+   */
+  private handleRemoteAction(op: RemoteOp): void {
+    const repo = this.activeRepo;
+    // The buttons carry ?disabled for both of these, so they are only
+    // reachable in the race window between a render and the click — but a
+    // silent return there would look like a dead button.
+    if (!repo) {
+      showToast('Please open a repository first', 'warning');
+      return;
+    }
+    if (knownToHaveNoRemote(repo)) {
+      // Said through the shared helper, so this surface refuses in the same
+      // words, with the same once-per-burst de-duplication and the same
+      // remedy button as the runner every other route goes through. The
+      // repository it names is this one — the toolbar always shows the active
+      // tab — but it is passed rather than assumed, because the button is
+      // pressed later than it is built.
+      showNoRemoteToast(repo.repository.path);
+      return;
+    }
+    this.dispatchEvent(
+      new CustomEvent(`remote-${op}`, {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   private handleToggleSearch(): void {
     this.showSearch = !this.showSearch;
     if (this.showSearch) {
@@ -646,8 +943,12 @@ export class LvToolbar extends LitElement {
   }
 
   private detectProvider(repo: OpenRepository): 'github' | 'ado' | 'gitlab' | 'bitbucket' | null {
-    const originRemote = repo.remotes.find(r => r.name === 'origin') ?? repo.remotes[0];
-    if (!originRemote) return null;
+    // The store seeds `remotes` as [] and the backend returns a Vec, so it is
+    // never missing in the app — but this runs inside render(), where a throw
+    // rejects the whole toolbar update. Tolerate a missing collection.
+    const remotes = repo.remotes ?? [];
+    const originRemote = remotes.find(r => r.name === 'origin') ?? remotes[0];
+    if (!originRemote?.url) return null;
 
     const url = originRemote.url.toLowerCase();
     if (url.includes('github.com') || url.includes('github.')) return 'github';
@@ -783,7 +1084,9 @@ export class LvToolbar extends LitElement {
   }
 
   private renderTabBadges(repo: OpenRepository) {
-    const dirty = repo.status.length > 0;
+    // Same tolerance as detectProvider: never missing in the app, but a
+    // render function must not throw on a missing collection.
+    const dirty = (repo.status ?? []).length > 0;
     const ab = repo.currentBranch?.aheadBehind;
     const showAheadBehind = ab && (ab.ahead > 0 || ab.behind > 0);
     return html`
@@ -797,6 +1100,50 @@ export class LvToolbar extends LitElement {
       ${dirty
         ? html`<span class="tab-dirty" title="Uncommitted changes" aria-label="Uncommitted changes"></span>`
         : nothing}
+    `;
+  }
+
+  private renderRemoteButton(op: RemoteOp) {
+    const { disabled, idle, count, label } = this.remoteButtonState(op);
+    const icon = {
+      fetch: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+        <path d="M3 3v5h5"></path>
+        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path>
+        <path d="M16 16h5v5"></path>
+      </svg>`,
+      pull: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 3v18"></path>
+        <path d="M5 16l7 7 7-7"></path>
+      </svg>`,
+      push: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 3v18"></path>
+        <path d="M5 8l7-7 7 7"></path>
+      </svg>`,
+    }[op];
+    return html`
+      <button
+        class="menu-btn remote-btn ${op} ${idle ? 'idle' : ''}"
+        title="${label}"
+        aria-label="${label}"
+        aria-keyshortcuts=${this.remoteAriaShortcut(op)}
+        ?disabled=${disabled}
+        @click=${() => this.handleRemoteAction(op)}
+      >
+        ${icon}
+        ${count > 0
+          ? html`<span class="remote-count" aria-hidden="true">${count}</span>`
+          : nothing}
+      </button>
+    `;
+  }
+
+  private renderRemoteActions() {
+    return html`
+      <div class="toolbar-section remote-actions" role="group" aria-label="Remote operations">
+        ${this.renderRemoteButton('fetch')} ${this.renderRemoteButton('pull')}
+        ${this.renderRemoteButton('push')}
+      </div>
     `;
   }
 
@@ -1048,6 +1395,8 @@ export class LvToolbar extends LitElement {
             `
           : nothing}
       </div>
+
+      ${this.renderRemoteActions()}
 
       ${this.renderTabListMenu()} ${this.renderTabContextMenu()}
 

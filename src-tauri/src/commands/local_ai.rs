@@ -68,6 +68,13 @@ pub async fn download_model(
     let model_path = local.model_manager.get_model_path(&model_id);
     drop(local);
 
+    // Offline mode / the remote allowlist, checked BEFORE the download is
+    // spawned so the user gets a refusal from the click rather than a silent
+    // multi-gigabyte transfer to huggingface.co. `do_download` guards the same
+    // URL again at the socket; this half is the one that can answer the
+    // command (see services/security.rs).
+    crate::services::ai::local::model_manager::guard_model_download(&entry)?;
+
     // Clone AI state Arc for use in the background task
     let ai_state_inner = ai_state.inner().clone();
 

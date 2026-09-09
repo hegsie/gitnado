@@ -158,6 +158,48 @@ describe('lv-command-palette', () => {
       expect(internal.searchQuery).to.equal('');
     });
 
+    it('opens pre-filtered when an entry point supplies an initial query', async () => {
+      // The native menu's "Switch Branch…" resolves to this palette rather
+      // than to a second switcher, so it opens on the branch entries instead
+      // of dropping the user on the full command list to type it out.
+      el.initialQuery = 'Switch to ';
+      el.open = true;
+      await el.updateComplete;
+      await new Promise(r => requestAnimationFrame(r));
+      await el.updateComplete;
+
+      const input = el.shadowRoot!.querySelector('.search-input') as HTMLInputElement;
+      expect(input.value, 'the box shows what it filtered by').to.equal('Switch to ');
+
+      const labels = Array.from(
+        el.shadowRoot!.querySelectorAll('.command .command-label')
+      ).map(node => node.textContent!.trim());
+      expect(labels.length, 'the branches are listed').to.be.greaterThan(0);
+      for (const branch of ['main', 'feature/login', 'bugfix/crash']) {
+        expect(labels).to.include(`Switch to ${branch}`);
+      }
+      // Prefix match scores 80 — above anything that only fuzzy-matches — so a
+      // branch is what Enter runs.
+      expect(labels[0]).to.match(/^Switch to /);
+    });
+
+    it('drops a pre-filled query when the next entry point supplies none', async () => {
+      el.initialQuery = 'Switch to ';
+      el.open = true;
+      await el.updateComplete;
+      el.open = false;
+      await el.updateComplete;
+
+      el.initialQuery = '';
+      el.open = true;
+      await el.updateComplete;
+      await new Promise(r => requestAnimationFrame(r));
+      await el.updateComplete;
+
+      const internal = el as unknown as { searchQuery: string };
+      expect(internal.searchQuery, 'Ctrl+P still opens the whole list').to.equal('');
+    });
+
     it('resets selected index when opened', async () => {
       el.open = true;
       await el.updateComplete;

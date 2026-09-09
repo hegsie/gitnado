@@ -7,6 +7,7 @@ import {
   startCommandCapture,
   startCommandCaptureWithMocks,
   findCommand,
+  getCapturedCommands,
   injectCommandError,
   injectCommandMock,
   autoConfirmDialogs,
@@ -1221,5 +1222,138 @@ test.describe('Drag-Drop Merge Error Toast', () => {
     const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible({ timeout: 10000 });
     await expect(toastMessage).toContainText('Merge failed');
+  });
+});
+
+test.describe('Merge Conflict Prediction', () => {
+  let leftPanel: LeftPanelPage;
+
+  const BRANCHES = [
+    {
+      name: 'main',
+      shorthand: 'main',
+      isHead: true,
+      isRemote: false,
+      upstream: null,
+      targetOid: 'abc123',
+      isStale: false,
+    },
+    {
+      name: 'feature-drag',
+      shorthand: 'feature-drag',
+      isHead: false,
+      isRemote: false,
+      upstream: null,
+      targetOid: 'def456',
+      isStale: false,
+    },
+  ];
+
+  test.beforeEach(async ({ page }) => {
+    leftPanel = new LeftPanelPage(page);
+    await setupOpenRepository(page, { branches: BRANCHES });
+  });
+
+  /** The text of the first confirm dialog raised during the run. */
+  async function firstConfirmMessage(page: import('@playwright/test').Page): Promise<string> {
+    const commands = await getCapturedCommands(page);
+    const confirm = commands.find((c) => c.command === 'plugin:dialog|message');
+    return ((confirm?.args as { message?: string } | undefined)?.message) ?? '';
+  }
+
+  test('warns which files would conflict before the merge runs', async ({ page }) => {
+    await startCommandCapture(page);
+    await autoConfirmDialogs(page);
+    await injectCommandMock(page, {
+      preview_merge: {
+        outcome: 'normal',
+        conflictCount: 3,
+        conflictingFiles: ['src/a.ts', 'src/b.ts', 'src/c.ts'],
+        unrelatedHistories: false,
+        operationInProgress: null,
+      },
+      merge: null,
+    });
+
+    await leftPanel.openBranchContextMenu('feature-drag');
+    const mergeMenuItem = page.locator('.context-menu-item', { hasText: 'Merge into current branch' });
+    await mergeMenuItem.waitFor({ state: 'visible' });
+    await mergeMenuItem.click();
+
+    await waitForCommand(page, 'merge');
+
+    // The prediction reached the user in the confirm...
+    const message = await firstConfirmMessage(page);
+    expect(message).toContain('3 files would conflict:');
+    expect(message).toContain('src/a.ts');
+    expect(message).toContain('src/c.ts');
+    expect(message).toContain('You can still merge');
+
+    // ...and it did so BEFORE the merge touched the working tree.
+    const commands = await getCapturedCommands(page);
+    const previewAt = commands.findIndex((c) => c.command === 'preview_merge');
+    const confirmAt = commands.findIndex((c) => c.command === 'plugin:dialog|message');
+    const mergeAt = commands.findIndex((c) => c.command === 'merge');
+    expect(previewAt).toBeGreaterThanOrEqual(0);
+    expect(confirmAt).toBeGreaterThan(previewAt);
+    expect(mergeAt).toBeGreaterThan(confirmAt);
+
+    // Previewed against the branch that was right-clicked.
+    const previews = await findCommand(page, 'preview_merge');
+    expect((previews[0].args as { sourceRef?: string }).sourceRef).toBe('feature-drag');
+
+    // Confirming still merges — the prediction warns, it does not block.
+    const toastMessage = page.locator('lv-toast-container .toast.success .toast-message');
+    await expect(toastMessage).toBeVisible({ timeout: 10000 });
+    await expect(toastMessage).toContainText('Merged feature-drag');
+  });
+
+  test('says a clean merge will create a merge commit', async ({ page }) => {
+    await startCommandCapture(page);
+    await autoConfirmDialogs(page);
+    await injectCommandMock(page, {
+      preview_merge: {
+        outcome: 'normal',
+        conflictCount: 0,
+        conflictingFiles: [],
+        unrelatedHistories: false,
+        operationInProgress: null,
+      },
+      merge: null,
+    });
+
+    await leftPanel.openBranchContextMenu('feature-drag');
+    const mergeMenuItem = page.locator('.context-menu-item', { hasText: 'Merge into current branch' });
+    await mergeMenuItem.waitFor({ state: 'visible' });
+    await mergeMenuItem.click();
+
+    await waitForCommand(page, 'merge');
+
+    const message = await firstConfirmMessage(page);
+    expect(message).toContain('merge commit');
+    expect(message).not.toContain('would conflict');
+  });
+
+  test('confirms without a prediction when the preview fails', async ({ page }) => {
+    await startCommandCapture(page);
+    await autoConfirmDialogs(page);
+    await injectCommandMock(page, { merge: null });
+    await injectCommandError(page, 'preview_merge', 'preview unavailable');
+
+    await leftPanel.openBranchContextMenu('feature-drag');
+    const mergeMenuItem = page.locator('.context-menu-item', { hasText: 'Merge into current branch' });
+    await mergeMenuItem.waitFor({ state: 'visible' });
+    await mergeMenuItem.click();
+
+    await waitForCommand(page, 'merge');
+
+    // A failed prediction must not block the merge or leave a half-written confirm.
+    const message = await firstConfirmMessage(page);
+    expect(message).toContain('Merge "feature-drag" into the current branch?');
+    expect(message).not.toContain('would conflict');
+
+    const toastMessage = page.locator('lv-toast-container .toast.success .toast-message');
+    await expect(toastMessage).toBeVisible({ timeout: 10000 });
+    await expect(toastMessage).toContainText('Merged feature-drag');
   });
 });

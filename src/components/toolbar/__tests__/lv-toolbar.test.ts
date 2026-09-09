@@ -17,11 +17,70 @@ let mockInvoke: (command: string, args?: unknown) => Promise<unknown> = () => Pr
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture, html, waitUntil } from '@open-wc/testing';
 import type { LvToolbar } from '../lv-toolbar.ts';
 import '../lv-toolbar.ts';
 import { repositoryStore, uiStore } from '../../../stores/index.ts';
-import type { Repository, Branch, StatusEntry } from '../../../types/git.types.ts';
+import { dialogs } from '../../../stores/dialog.store.ts';
+import type { Repository, Branch, Remote, StatusEntry } from '../../../types/git.types.ts';
+import {
+  resetRefOpLocks,
+  tryAcquireRefOp,
+  tryAcquirePush,
+  releaseRefOp,
+  releasePush,
+} from '../../../utils/ref-lock.ts';
+import { settingsStore } from '../../../stores/settings.store.ts';
+import { runFetch, runPush } from '../../../services/remote-operations.service.ts';
+import { collectUnhandledRejections } from '../../../test-utils/unhandled-rejections.ts';
+
+/**
+ * Commands parked until the test releases them, so a real operation can be
+ * held open across an assertion.
+ *
+ * The in-flight states below are driven by starting the SHARED runner, not by
+ * poking a lock key by hand: fetch, pull and push claim one per-repository
+ * slot inside remote-operations.service and register which of the three holds
+ * it, and only a claim made that way is visible to `runningRemoteOperation` —
+ * which is what both this toolbar and the context dashboard read. A test that
+ * claimed a key directly would pass against a toolbar reading a key nothing
+ * claims.
+ */
+let parkedCommands = new Map<string, Array<(value: unknown) => void>>();
+
+/** Hold `command` open until `releaseCommand` lets it finish. */
+function parkCommand(command: string): void {
+  parkedCommands.set(command, []);
+}
+
+function releaseCommand(command: string): void {
+  for (const resolve of parkedCommands.get(command) ?? []) resolve(null);
+  parkedCommands.delete(command);
+}
+
+/** An invoke that resolves everything with null, except parked commands. */
+function parkingInvoke(command: string): Promise<unknown> {
+  const waiting = parkedCommands.get(command);
+  if (waiting) {
+    return new Promise((resolve) => {
+      waiting.push(resolve);
+    });
+  }
+  return Promise.resolve(null);
+}
+
+/**
+ * Wait until `command` reached the Tauri boundary.
+ *
+ * git.service resolves the remote, checks the security gate and looks up a
+ * credential before it invokes, each behind its own await.
+ */
+function waitForInvoke(command: string): Promise<void> {
+  return waitUntil(
+    () => Boolean(parkedCommands.get(command)?.length),
+    `Timed out waiting for ${command}`,
+  );
+}
 
 function mockRepo(path: string, name: string): Repository {
   return {
@@ -52,6 +111,12 @@ function mockBranch(aheadBehind?: { ahead: number; behind: number }): Branch {
 }
 
 const dirtyEntry = { path: 'a.txt', status: 'modified', isStaged: false } as unknown as StatusEntry;
+
+const originRemote: Remote = {
+  name: 'origin',
+  url: 'https://example.com/test/repo.git',
+  pushUrl: null,
+};
 
 async function createToolbar(): Promise<LvToolbar> {
   return fixture<LvToolbar>(html`<lv-toolbar></lv-toolbar>`);
@@ -459,6 +524,376 @@ describe('lv-toolbar repository tabs', () => {
     });
   });
 
+  describe('remote operation buttons', () => {
+    /** A repo with a remote and an upstream branch — the normal case. */
+    function openRemoteRepo(aheadBehind?: { ahead: number; behind: number }): string {
+      const path = '/repo/one';
+      repositoryStore.getState().addRepository(mockRepo(path, 'one'));
+      repositoryStore.getState().updateRepoData(path, {
+        remotes: [originRemote],
+        currentBranch: mockBranch(aheadBehind),
+      });
+      return path;
+    }
+
+    function remoteBtn(el: LvToolbar, op: 'fetch' | 'pull' | 'push'): HTMLButtonElement {
+      const btn = el.shadowRoot!.querySelector(`.remote-btn.${op}`);
+      expect(btn, `${op} button`).to.exist;
+      return btn as HTMLButtonElement;
+    }
+
+    beforeEach(() => {
+      parkedCommands = new Map();
+      mockInvoke = (command: string) => parkingInvoke(command);
+      settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+    });
+
+    afterEach(() => {
+      // Release anything still parked first: a runner left awaiting its
+      // invoke would hold the shared slot into the next test.
+      for (const command of [...parkedCommands.keys()]) releaseCommand(command);
+      resetRefOpLocks();
+      settingsStore.setState({ offlineMode: false, confirmNetworkOps: false, remoteAllowlist: [] });
+    });
+
+    it('renders Fetch, Pull and Push with labels and shortcut hints', async () => {
+      openRemoteRepo({ ahead: 0, behind: 0 });
+      const el = await createToolbar();
+
+      const group = el.shadowRoot!.querySelector('.remote-actions');
+      expect(group, 'remote actions group').to.exist;
+      expect(group!.getAttribute('role')).to.equal('group');
+
+      for (const op of ['fetch', 'pull', 'push'] as const) {
+        const btn = remoteBtn(el, op);
+        // Accessible name and tooltip agree, and both name the operation
+        expect(btn.getAttribute('aria-label')).to.equal(btn.title);
+        expect(btn.getAttribute('aria-label')!.toLowerCase()).to.contain(op);
+        expect(btn.getAttribute('aria-keyshortcuts')).to.contain('Control+Shift+');
+        // Native buttons: reachable and activatable from the keyboard
+        expect(btn.tagName).to.equal('BUTTON');
+      }
+    });
+
+    it('advertises the macOS chord it shows, rather than Control', async () => {
+      // aria-keyshortcuts was hard-coded to Control+Shift+… while the visible
+      // tooltip was platform-aware, so a macOS screen-reader user was told a
+      // chord the tooltip beside it contradicted. keyboard.service hashes ctrl
+      // and meta to the same "mod", so ⌘⇧ really is bound.
+      Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
+      try {
+        openRemoteRepo({ ahead: 0, behind: 0 });
+        const el = await createToolbar();
+
+        for (const [op, key] of [['fetch', 'F'], ['pull', 'P'], ['push', 'U']] as const) {
+          const btn = remoteBtn(el, op);
+          expect(btn.getAttribute('aria-keyshortcuts'), `${op} chord`).to.equal(
+            `Meta+Shift+${key}`,
+          );
+          expect(btn.title, 'and the visible tooltip agrees').to.contain(`⌘⇧${key}`);
+        }
+      } finally {
+        Reflect.deleteProperty(navigator, 'platform');
+      }
+    });
+
+    it('advertises Control+Shift off macOS, matching its tooltip', async () => {
+      Object.defineProperty(navigator, 'platform', { value: 'Linux x86_64', configurable: true });
+      try {
+        openRemoteRepo({ ahead: 0, behind: 0 });
+        const el = await createToolbar();
+
+        for (const [op, key] of [['fetch', 'F'], ['pull', 'P'], ['push', 'U']] as const) {
+          const btn = remoteBtn(el, op);
+          expect(btn.getAttribute('aria-keyshortcuts'), `${op} chord`).to.equal(
+            `Control+Shift+${key}`,
+          );
+          expect(btn.title).to.contain(`Ctrl+Shift+${key}`);
+        }
+      } finally {
+        Reflect.deleteProperty(navigator, 'platform');
+      }
+    });
+
+    it('disables all three with an explanation when no repository is open', async () => {
+      const el = await createToolbar();
+
+      for (const op of ['fetch', 'pull', 'push'] as const) {
+        const btn = remoteBtn(el, op);
+        expect(btn.disabled, `${op} disabled`).to.be.true;
+        expect(btn.title).to.contain('open a repository first');
+      }
+    });
+
+    it('disables all three when the repository has no remote', async () => {
+      repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
+      repositoryStore.getState().updateRepoData('/repo/one', {
+        // git ANSWERED: there are none. The empty seed the store starts a tab
+        // with is a different case, covered below.
+        remotes: [],
+        currentBranch: mockBranch({ ahead: 1, behind: 1 }),
+      });
+      const el = await createToolbar();
+
+      for (const op of ['fetch', 'pull', 'push'] as const) {
+        const btn = remoteBtn(el, op);
+        expect(btn.disabled, `${op} disabled`).to.be.true;
+        expect(btn.title).to.contain('no remote configured');
+      }
+    });
+
+    it('leaves all three available while the remotes have not been read yet', async () => {
+      // A tab is opened with `remotes: []` before anything has asked git, and
+      // that is the same value a genuinely remoteless repository ends up with.
+      // Reading the seed as an answer greyed the three buttons out — and
+      // refused the shortcuts — on every freshly opened or cloned repository
+      // until `get_remotes` came back.
+      repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'));
+      repositoryStore.getState().updateRepoData('/repo/one', {
+        currentBranch: mockBranch({ ahead: 1, behind: 1 }),
+      });
+      const el = await createToolbar();
+
+      for (const op of ['fetch', 'pull', 'push'] as const) {
+        const btn = remoteBtn(el, op);
+        expect(btn.disabled, `${op} is not refused on an unread collection`).to.be.false;
+        expect(btn.title).to.not.contain('no remote configured');
+      }
+    });
+
+    it('shows the behind count on Pull and the ahead count on Push', async () => {
+      openRemoteRepo({ ahead: 2, behind: 5 });
+      const el = await createToolbar();
+
+      const pull = remoteBtn(el, 'pull');
+      const push = remoteBtn(el, 'push');
+      expect(pull.querySelector('.remote-count')!.textContent!.trim()).to.equal('5');
+      expect(push.querySelector('.remote-count')!.textContent!.trim()).to.equal('2');
+      expect(pull.title).to.contain('5 incoming commits');
+      expect(push.title).to.contain('2 local commits');
+      // Something to do — neither is dimmed
+      expect(pull.classList.contains('idle')).to.be.false;
+      expect(push.classList.contains('idle')).to.be.false;
+      // Fetch never carries a count
+      expect(remoteBtn(el, 'fetch').querySelector('.remote-count')).to.not.exist;
+    });
+
+    it('dims Pull and Push, without disabling them, when there is nothing to do', async () => {
+      openRemoteRepo({ ahead: 0, behind: 0 });
+      const el = await createToolbar();
+
+      const pull = remoteBtn(el, 'pull');
+      const push = remoteBtn(el, 'push');
+      expect(pull.classList.contains('idle')).to.be.true;
+      expect(push.classList.contains('idle')).to.be.true;
+      expect(pull.disabled).to.be.false;
+      expect(push.disabled).to.be.false;
+      expect(pull.title).to.contain('nothing to pull');
+      expect(push.title).to.contain('nothing to push');
+      expect(pull.querySelector('.remote-count')).to.not.exist;
+      expect(push.querySelector('.remote-count')).to.not.exist;
+    });
+
+    it('keeps Push undimmed for a branch that has no upstream yet', async () => {
+      const path = '/repo/one';
+      repositoryStore.getState().addRepository(mockRepo(path, 'one'));
+      repositoryStore.getState().updateRepoData(path, {
+        remotes: [originRemote],
+        currentBranch: { ...mockBranch(), upstream: null },
+      });
+      const el = await createToolbar();
+
+      const push = remoteBtn(el, 'push');
+      expect(push.disabled).to.be.false;
+      expect(push.classList.contains('idle')).to.be.false;
+      expect(push.title).to.contain('no upstream yet');
+    });
+
+    it('disables Fetch while a fetch is in flight and re-enables it after', async () => {
+      const path = openRemoteRepo({ ahead: 0, behind: 0 });
+      const el = await createToolbar();
+
+      // Started through the shared runner — the way EVERY surface starts a
+      // fetch (the dashboard button, Ctrl+Shift+F, the palette and this
+      // toolbar all land in remote-operations.service). Claiming a key by
+      // hand would prove nothing about the key production actually uses.
+      parkCommand('fetch');
+      const running = runFetch(path);
+      await waitForInvoke('fetch');
+      await el.updateComplete;
+
+      expect(remoteBtn(el, 'fetch').disabled, 'Fetch is refused while it runs').to.be.true;
+      expect(remoteBtn(el, 'fetch').title).to.contain('already in progress');
+
+      releaseCommand('fetch');
+      await running;
+      await el.updateComplete;
+      expect(remoteBtn(el, 'fetch').disabled).to.be.false;
+      expect(remoteBtn(el, 'fetch').title).to.contain('Fetch from remote');
+    });
+
+    it('disables Pull and Push too while a fetch holds the repository, naming it', async () => {
+      // The three share ONE per-repository slot, so a running fetch refuses a
+      // pull and a push as well. The toolbar used to leave both lit: the click
+      // reached the runner, which refused it — a pointless toast at best, and
+      // for Fetch a completely silent no-op.
+      const path = openRemoteRepo({ ahead: 2, behind: 3 });
+      const el = await createToolbar();
+
+      parkCommand('fetch');
+      const running = runFetch(path);
+      await waitForInvoke('fetch');
+      await el.updateComplete;
+
+      for (const op of ['pull', 'push'] as const) {
+        const btn = remoteBtn(el, op);
+        expect(btn.disabled, `${op} is refused while a fetch runs`).to.be.true;
+        // Named, so the tooltip says what the app is actually doing.
+        expect(btn.title).to.contain('a fetch is already running');
+      }
+
+      releaseCommand('fetch');
+      await running;
+      await el.updateComplete;
+      expect(remoteBtn(el, 'pull').disabled).to.be.false;
+      expect(remoteBtn(el, 'push').disabled).to.be.false;
+    });
+
+    it('disables Fetch and Pull while a push started elsewhere holds the repository', async () => {
+      const path = openRemoteRepo({ ahead: 2, behind: 1 });
+      const el = await createToolbar();
+
+      parkCommand('push');
+      const running = runPush(path);
+      await waitForInvoke('push');
+      await el.updateComplete;
+
+      expect(remoteBtn(el, 'fetch').disabled).to.be.true;
+      expect(remoteBtn(el, 'fetch').title).to.contain('a push is already running');
+      expect(remoteBtn(el, 'pull').disabled).to.be.true;
+      expect(remoteBtn(el, 'push').disabled).to.be.true;
+      expect(remoteBtn(el, 'push').title).to.contain('already in progress');
+
+      releaseCommand('push');
+      await running;
+      await el.updateComplete;
+      expect(remoteBtn(el, 'fetch').disabled).to.be.false;
+    });
+
+    it('disables Pull while any working-tree operation holds the repository', async () => {
+      const path = openRemoteRepo({ ahead: 0, behind: 3 });
+      const el = await createToolbar();
+
+      tryAcquireRefOp(path);
+      await el.updateComplete;
+      const pull = remoteBtn(el, 'pull');
+      expect(pull.disabled).to.be.true;
+      expect(pull.title).to.contain('already running in this repository');
+
+      releaseRefOp(path);
+      await el.updateComplete;
+      expect(remoteBtn(el, 'pull').disabled).to.be.false;
+    });
+
+    it('disables Push while a push holds the repository push slot', async () => {
+      const path = openRemoteRepo({ ahead: 2, behind: 0 });
+      const el = await createToolbar();
+
+      tryAcquirePush(path);
+      await el.updateComplete;
+      expect(remoteBtn(el, 'push').disabled).to.be.true;
+      // A force push holds this slot too, and the toolbar cannot tell which —
+      // so the tooltip must not claim a plain push specifically.
+      expect(remoteBtn(el, 'push').title).to.contain('already running in this repository');
+
+      releasePush(path);
+      await el.updateComplete;
+      expect(remoteBtn(el, 'push').disabled).to.be.false;
+    });
+
+    it('dispatches the matching remote event so app-shell runs the operation', async () => {
+      openRemoteRepo({ ahead: 2, behind: 2 });
+      const el = await createToolbar();
+
+      for (const op of ['fetch', 'pull', 'push'] as const) {
+        let detected: CustomEvent | null = null;
+        const listener = (e: Event) => { detected = e as CustomEvent; };
+        el.addEventListener(`remote-${op}`, listener);
+        remoteBtn(el, op).click();
+        el.removeEventListener(`remote-${op}`, listener);
+
+        expect(detected, `remote-${op} dispatched`).to.not.be.null;
+        expect(detected!.bubbles, 'reaches app-shell').to.be.true;
+        expect(detected!.composed, 'crosses the shadow boundary').to.be.true;
+      }
+    });
+
+    it('warns instead of failing silently if a click lands with no remote', async () => {
+      const path = openRemoteRepo({ ahead: 1, behind: 0 });
+      const el = await createToolbar();
+      uiStore.setState({ toasts: [] });
+
+      // The remote disappears (removed from another surface) between the
+      // render and the click — the button is still the one the user pressed.
+      repositoryStore.getState().updateRepoData(path, { remotes: [] });
+      let dispatched = false;
+      el.addEventListener('remote-push', () => { dispatched = true; });
+      (el as unknown as { handleRemoteAction: (op: string) => void }).handleRemoteAction('push');
+
+      expect(dispatched, 'no operation is started').to.be.false;
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast, 'a warning is shown').to.exist;
+      expect(toast!.message).to.contain('No remote configured');
+      // "add one first" has to be reachable from where the user is told it.
+      expect(toast!.action?.label, 'with the way to add one').to.contain('Add a remote');
+      toast!.action!.callback();
+      expect(dialogs.isOpen('remotes'), 'which opens the Remotes dialog').to.equal(true);
+      dialogs.close('remotes');
+    });
+
+    it('does not arm the remotes dialog once the tab it belongs to is gone', async () => {
+      // The offer outlives the repository: `remotes` is repo-scoped, and
+      // app-shell sweeps those shut inside the store subscription — which runs
+      // when the tab closes, BEFORE this press. Opening it here only set a
+      // flag nothing would clear, and the dialog sprang up over the next
+      // repository opened.
+      const path = openRemoteRepo({ ahead: 1, behind: 0 });
+      const el = await createToolbar();
+      uiStore.setState({ toasts: [] });
+      dialogs.close('remotes');
+      repositoryStore.getState().updateRepoData(path, { remotes: [] });
+
+      (el as unknown as { handleRemoteAction: (op: string) => void }).handleRemoteAction('push');
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast?.action?.label, 'the remedy is offered').to.contain('Add a remote');
+
+      repositoryStore.getState().reset();
+      toast!.action!.callback();
+
+      expect(dialogs.isOpen('remotes'), 'nothing is armed for the next repository').to.equal(
+        false,
+      );
+      expect(
+        uiStore.getState().toasts.at(-1)?.message,
+        'and the press is answered, not swallowed',
+      ).to.contain('no longer open');
+    });
+
+    it('warns instead of failing silently if a click lands with no repository', async () => {
+      const el = await createToolbar();
+      uiStore.setState({ toasts: [] });
+
+      let dispatched = false;
+      el.addEventListener('remote-fetch', () => { dispatched = true; });
+      (el as unknown as { handleRemoteAction: (op: string) => void }).handleRemoteAction('fetch');
+
+      expect(dispatched, 'no operation is started').to.be.false;
+      const toast = uiStore.getState().toasts.at(-1);
+      expect(toast, 'a warning is shown').to.exist;
+      expect(toast!.message).to.contain('open a repository');
+    });
+  });
+
   describe('event surface', () => {
     // app-shell used to carry an `@repository-refresh` binding on <lv-toolbar>
     // that could never fire: neither the toolbar nor the clone/init dialogs it
@@ -515,5 +950,110 @@ describe('lv-toolbar repository tabs', () => {
       // And the store error is still set for any listener.
       expect(repositoryStore.getState().error).to.contain('not a git repository');
     });
+  });
+});
+
+describe('lv-toolbar menu bar routed actions', () => {
+  // The native menu bar's File items are forwarded here by app-shell instead of
+  // being reimplemented, so each one must land on the toolbar's own handler.
+  beforeEach(() => {
+    repositoryStore.getState().reset();
+    mockInvoke = () => Promise.resolve(null);
+  });
+
+  it('opens the clone dialog for the Clone Repository menu item', async () => {
+    const el = await createToolbar();
+    const dialog = el.shadowRoot!.querySelector('lv-clone-dialog')!;
+    let opened = 0;
+    (dialog as unknown as { open: () => void }).open = () => {
+      opened++;
+    };
+
+    el.dispatchEvent(new CustomEvent('clone-repository'));
+
+    expect(opened).to.equal(1);
+  });
+
+  it('opens the init dialog for the New Repository menu item', async () => {
+    const el = await createToolbar();
+    const dialog = el.shadowRoot!.querySelector('lv-init-dialog')!;
+    let opened = 0;
+    (dialog as unknown as { open: () => void }).open = () => {
+      opened++;
+    };
+
+    el.dispatchEvent(new CustomEvent('init-repository'));
+
+    expect(opened).to.equal(1);
+  });
+
+  it('runs the same folder picker for the Open Repository menu item', async () => {
+    const calls: string[] = [];
+    mockInvoke = (command: string) => {
+      calls.push(command);
+      return Promise.resolve(null);
+    };
+    const el = await createToolbar();
+
+    el.dispatchEvent(new CustomEvent('open-repository'));
+    await waitUntil(
+      () => calls.some((c) => c.startsWith('plugin:dialog|open')),
+      'the folder picker to open',
+    );
+  });
+
+  it('stops listening once the toolbar is disconnected', async () => {
+    const el = await createToolbar();
+    const dialog = el.shadowRoot!.querySelector('lv-clone-dialog')!;
+    let opened = 0;
+    (dialog as unknown as { open: () => void }).open = () => {
+      opened++;
+    };
+
+    el.remove();
+    el.dispatchEvent(new CustomEvent('clone-repository'));
+
+    expect(opened).to.equal(0);
+  });
+});
+
+// The store seeds every collection (`createEmptyRepoData`) and the backend
+// returns `Vec`s, so `remotes`/`status` are never missing in the app. But a
+// render function must not throw on a missing collection: a throw inside
+// render() rejects the whole toolbar update, and the rejection is charged to
+// whichever test happens to be running.
+describe('lv-toolbar tabs for a repo missing its collections', () => {
+  beforeEach(() => {
+    repositoryStore.getState().reset();
+    mockInvoke = () => Promise.resolve(null);
+  });
+
+  it('renders the tab with no provider icon and no dirty badge, and never throws', async () => {
+    const el = await createToolbar();
+    const bare = { repository: mockRepo('/repo/bare', 'bare'), branches: [], currentBranch: null };
+    repositoryStore.setState({
+      openRepositories: [
+        bare,
+        { ...bare, repository: mockRepo('/repo/nulls', 'nulls'), remotes: null, status: null },
+      ] as never,
+      activeIndex: 0,
+    });
+
+    const rejections = await collectUnhandledRejections(async () => {
+      await el.updateComplete;
+    });
+
+    expect(rejections, 'the render must not reject').to.deep.equal([]);
+    expect(tabs(el)).to.have.length(2);
+    expect(el.shadowRoot!.querySelector('.provider-icon')).to.equal(null);
+    expect(el.shadowRoot!.querySelector('.tab-dirty')).to.equal(null);
+    // The remote buttons read the same collection and must degrade the same
+    // way: a collection that is missing is one nobody has READ, so the button
+    // stays available — git's own error is the fallback — rather than telling
+    // the user this repository has no remote. What it must never do is crash.
+    const fetchBtn = el.shadowRoot!.querySelector('.remote-btn.fetch') as HTMLButtonElement | null;
+    expect(fetchBtn, 'the fetch button is rendered').to.not.equal(null);
+    expect(fetchBtn!.disabled, 'unread is not the same as absent').to.be.false;
+    expect(fetchBtn!.getAttribute('title')).to.match(/remote/i);
   });
 });

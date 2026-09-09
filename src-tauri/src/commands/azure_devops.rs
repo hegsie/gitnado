@@ -3,6 +3,7 @@
 //! Provides integration with Azure DevOps for pull requests, work items, and pipelines.
 
 use crate::error::{GitnadoError, Result};
+use crate::models::{ProviderRepository, ProviderRepositoryPage};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -148,6 +149,22 @@ fn get_auth_header(token: &str) -> String {
     }
 }
 
+/// The API host every outbound Azure DevOps call in this module reaches.
+///
+/// The identity endpoints live on `vssps.dev.azure.com` and
+/// `app.vssps.visualstudio.com`, but the allowlist is checked against
+/// `dev.azure.com` — the same host the frontend gate checks
+/// (`providerApiHost` in src/services/git.service.ts). Being stricter here
+/// would refuse an operation the user can see being allowed in Settings.
+const ADO_API_HOST: &str = "https://dev.azure.com";
+
+/// The HTTP client every outbound Azure DevOps call goes through — see the note
+/// on GitHub's `api_client` for why the gate lives on the client constructor.
+fn api_client() -> Result<reqwest::Client> {
+    crate::services::security::guard_url(ADO_API_HOST)?;
+    Ok(reqwest::Client::new())
+}
+
 fn build_api_url(organization: &str, project: &str, path: &str) -> String {
     format!(
         "https://dev.azure.com/{}/{}/_apis/{}?api-version={}",
@@ -225,7 +242,7 @@ pub async fn check_ado_connection(
         }
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
 
     // Use the profile endpoint to verify connection and get user info
     let url = format!(
@@ -381,7 +398,7 @@ pub async fn get_ado_pull_request(
         ),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", get_auth_header(&token))
@@ -547,7 +564,7 @@ pub async fn list_ado_pull_requests(
         &ado_pr_query_params(status.as_deref(), top),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", get_auth_header(&token))
@@ -677,7 +694,7 @@ pub async fn create_ado_pull_request(
         is_draft: input.is_draft,
     };
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(&url)
         .header("Authorization", get_auth_header(&token))
@@ -792,7 +809,7 @@ pub async fn get_ado_work_items(
         &format!("ids={}&fields=System.Id,System.Title,System.WorkItemType,System.State,System.AssignedTo,System.CreatedDate", ids_str),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", get_auth_header(&token))
@@ -943,7 +960,7 @@ pub async fn query_ado_work_items(
         query: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(&url)
         .header("Authorization", get_auth_header(&token))
@@ -1059,7 +1076,7 @@ pub async fn create_azure_devops_work_item(
 
     let patch = build_create_work_item_patch(&input);
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .post(&url)
         .header("Authorization", get_auth_header(&token))
@@ -1184,7 +1201,7 @@ async fn resolve_ado_repository_id(
         &ado_repository_lookup_path(repository),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", get_auth_header(token))
@@ -1239,7 +1256,7 @@ pub async fn list_ado_pipeline_runs(
         &ado_pipeline_query_params(top, &repository_id),
     );
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
     let response = client
         .get(&url)
         .header("Authorization", get_auth_header(&token))
@@ -1329,7 +1346,7 @@ pub async fn list_ado_pipeline_runs(
 pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrganization>> {
     let token = resolve_ado_token(token)?;
 
-    let client = reqwest::Client::new();
+    let client = api_client()?;
 
     // Step 1: Resolve the member id via the org-less profile endpoint.
     let profile_url =
@@ -1422,9 +1439,297 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
         .collect())
 }
 
+// ============================================================================
+// Repository Listing Commands
+// ============================================================================
+
+/// Default page size for the account repository listing.
+///
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// discloses it to the user.
+const REPOSITORIES_DEFAULT_PER_PAGE: u32 = 30;
+
+/// The error a failed repository listing reports.
+///
+/// A 401 means the account's PAT/OAuth token is dead — reported as
+/// `AUTH_REQUIRED` so the picker can offer "reconnect this account" instead of
+/// a raw API string. Azure DevOps also answers an unusable credential with 203
+/// and an HTML sign-in page, which is treated the same way. Anything else keeps
+/// the module's usual message shape.
+fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
+    if status == reqwest::StatusCode::UNAUTHORIZED
+        || status == reqwest::StatusCode::NON_AUTHORITATIVE_INFORMATION
+    {
+        return GitnadoError::AuthenticationRequired;
+    }
+    GitnadoError::OperationFailed(format!("Azure DevOps API error {}: {}", status, body))
+}
+
+#[derive(Deserialize)]
+struct ApiRepoListResponse {
+    value: Vec<ApiRepoListEntry>,
+}
+
+#[derive(Deserialize)]
+struct ApiRepoListEntry {
+    id: String,
+    name: String,
+    project: Option<ApiRepoProject>,
+    #[serde(rename = "defaultBranch")]
+    default_branch: Option<String>,
+    #[serde(rename = "remoteUrl")]
+    remote_url: Option<String>,
+    #[serde(rename = "webUrl")]
+    web_url: Option<String>,
+    #[serde(rename = "isDisabled")]
+    is_disabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ApiRepoProject {
+    name: String,
+    visibility: Option<String>,
+}
+
+/// Turn the org-wide repository list into one page of the shared listing shape.
+///
+/// Azure DevOps' `git/repositories` endpoint takes no paging parameters and
+/// answers with every repository at once, so the page is cut here. Split out
+/// from the request so the mapping, the empty case and the paging are testable
+/// without a network.
+fn parse_ado_repository_page(
+    body: &str,
+    per_page: u32,
+    page: u32,
+) -> Result<ProviderRepositoryPage> {
+    let data: ApiRepoListResponse = serde_json::from_str(body).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
+    })?;
+
+    let all: Vec<ProviderRepository> = data
+        .value
+        .into_iter()
+        // A disabled repository cannot be cloned, so offering it would be a
+        // dead end.
+        .filter(|repo| !repo.is_disabled.unwrap_or(false))
+        .filter_map(|repo| {
+            let clone_url = repo.remote_url?;
+            let (owner, visibility) = match repo.project {
+                Some(p) => (p.name, p.visibility),
+                None => (String::new(), None),
+            };
+            let full_name = if owner.is_empty() {
+                repo.name.clone()
+            } else {
+                format!("{}/{}", owner, repo.name)
+            };
+            Some(ProviderRepository {
+                id: repo.id,
+                name: repo.name,
+                owner,
+                full_name,
+                // Azure DevOps repositories carry no description; the project
+                // does, and it is not the repository's own.
+                description: None,
+                is_private: visibility.as_deref() != Some("public"),
+                clone_url,
+                web_url: repo.web_url,
+                default_branch: repo
+                    .default_branch
+                    .map(|b| b.strip_prefix("refs/heads/").unwrap_or(&b).to_string()),
+                // The endpoint reports no push date.
+                last_pushed_at: None,
+            })
+        })
+        .collect();
+
+    let per_page = per_page.max(1) as usize;
+    let start = (page.max(1) as usize - 1).saturating_mul(per_page);
+    let end = start.saturating_add(per_page).min(all.len());
+    let repositories = if start >= all.len() {
+        Vec::new()
+    } else {
+        all[start..end].to_vec()
+    };
+    let next_page = if end < all.len() {
+        Some(page.max(1) + 1)
+    } else {
+        None
+    };
+
+    Ok(ProviderRepositoryPage {
+        repositories,
+        next_page,
+    })
+}
+
+/// List the Git repositories in an Azure DevOps organization.
+///
+/// Scoped to the organization the account is configured with, across every
+/// project the token can see.
+#[command]
+pub async fn list_ado_repositories(
+    organization: String,
+    per_page: Option<u32>,
+    page: Option<u32>,
+    token: Option<String>,
+) -> Result<ProviderRepositoryPage> {
+    let token = resolve_ado_token(token)?;
+    let per_page = per_page.unwrap_or(REPOSITORIES_DEFAULT_PER_PAGE);
+    let page = page.unwrap_or(1).max(1);
+
+    // Organization-scoped: no project segment, so one call covers every project
+    // the token can read.
+    let url = format!(
+        "https://dev.azure.com/{}/_apis/git/repositories?api-version={}",
+        organization, AZURE_DEVOPS_API_VERSION
+    );
+    debug!("Requesting: {}", url);
+
+    let client = api_client()?;
+    let response = client
+        .get(&url)
+        .header("Authorization", get_auth_header(&token))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| {
+            error!("HTTP request failed: {}", e);
+            GitnadoError::OperationFailed(format!("Failed to fetch repositories: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        error!("Azure DevOps API error: status={}", status);
+        return Err(map_repository_list_error(status, &body));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read repositories: {}", e))
+    })?;
+
+    parse_ado_repository_page(&body, per_page, page)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::security::test_support::no_policy;
+
+    // ========================================================================
+    // Repository Listing Tests
+    // ========================================================================
+
+    const ADO_REPO_LIST_JSON: &str = r#"{
+        "count": 3,
+        "value": [
+            {
+                "id": "r1",
+                "name": "gitnado",
+                "project": { "name": "Tools", "visibility": "private" },
+                "defaultBranch": "refs/heads/main",
+                "remoteUrl": "https://dev.azure.com/org/Tools/_git/gitnado",
+                "webUrl": "https://dev.azure.com/org/Tools/_git/gitnado"
+            },
+            {
+                "id": "r2",
+                "name": "docs",
+                "project": { "name": "Tools", "visibility": "public" },
+                "defaultBranch": null,
+                "remoteUrl": "https://dev.azure.com/org/Tools/_git/docs",
+                "webUrl": null
+            },
+            {
+                "id": "r3",
+                "name": "retired",
+                "project": { "name": "Tools", "visibility": "private" },
+                "defaultBranch": "refs/heads/main",
+                "remoteUrl": "https://dev.azure.com/org/Tools/_git/retired",
+                "webUrl": null,
+                "isDisabled": true
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn test_parse_ado_repository_page_maps_fields() {
+        let page = parse_ado_repository_page(ADO_REPO_LIST_JSON, 30, 1).expect("page should parse");
+
+        // The disabled repository cannot be cloned, so it is not offered.
+        assert_eq!(page.repositories.len(), 2);
+        let first = &page.repositories[0];
+        assert_eq!(first.id, "r1");
+        assert_eq!(first.name, "gitnado");
+        assert_eq!(first.owner, "Tools");
+        assert_eq!(first.full_name, "Tools/gitnado");
+        assert!(first.is_private);
+        assert_eq!(
+            first.clone_url,
+            "https://dev.azure.com/org/Tools/_git/gitnado"
+        );
+        // The ref prefix is stripped so the branch reads like every other
+        // provider's default branch.
+        assert_eq!(first.default_branch.as_deref(), Some("main"));
+        // The endpoint reports no push date, and inventing one would be a lie.
+        assert_eq!(first.last_pushed_at, None);
+        assert!(!page.repositories[1].is_private);
+    }
+
+    #[test]
+    fn test_parse_ado_repository_page_paginates_in_memory() {
+        // The endpoint takes no paging parameters, so the page is cut here.
+        let first = parse_ado_repository_page(ADO_REPO_LIST_JSON, 1, 1).expect("page should parse");
+        assert_eq!(first.repositories.len(), 1);
+        assert_eq!(first.repositories[0].name, "gitnado");
+        assert_eq!(first.next_page, Some(2));
+
+        let second =
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, 1, 2).expect("page should parse");
+        assert_eq!(second.repositories.len(), 1);
+        assert_eq!(second.repositories[0].name, "docs");
+        // Two clonable repositories, so page 2 is the last one.
+        assert_eq!(second.next_page, None);
+
+        // A page past the end is empty rather than an error or a panic.
+        let beyond =
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, 1, 9).expect("page should parse");
+        assert!(beyond.repositories.is_empty());
+        assert_eq!(beyond.next_page, None);
+    }
+
+    #[test]
+    fn test_parse_ado_repository_page_empty() {
+        let page = parse_ado_repository_page(r#"{ "count": 0, "value": [] }"#, 30, 1)
+            .expect("page should parse");
+        assert!(page.repositories.is_empty());
+        assert_eq!(page.next_page, None);
+    }
+
+    #[test]
+    fn test_map_repository_list_error_auth() {
+        let unauthorized = map_repository_list_error(reqwest::StatusCode::UNAUTHORIZED, "TF400813");
+        assert!(matches!(unauthorized, GitnadoError::AuthenticationRequired));
+
+        // Azure DevOps answers a dead credential with a 203 sign-in page rather
+        // than a 401, so that is an auth failure too.
+        let sign_in = map_repository_list_error(
+            reqwest::StatusCode::NON_AUTHORITATIVE_INFORMATION,
+            "<html>sign in</html>",
+        );
+        assert!(matches!(sign_in, GitnadoError::AuthenticationRequired));
+
+        let other = map_repository_list_error(reqwest::StatusCode::NOT_FOUND, "org not found");
+        assert!(matches!(other, GitnadoError::OperationFailed(_)));
+        assert!(other.to_string().contains("org not found"));
+    }
+
+    #[tokio::test]
+    async fn test_list_ado_repositories_no_token() {
+        let _policy = no_policy();
+        let result = list_ado_repositories("myorg".to_string(), None, None, None).await;
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_build_work_items_wiql_scopes_to_me() {

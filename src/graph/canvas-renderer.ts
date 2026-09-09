@@ -40,6 +40,11 @@ export interface RenderConfig {
    * Fetch author avatars from Gravatar. When false no network requests are
    * made for avatars and colored initials are drawn instead (privacy/offline
    * opt-out).
+   *
+   * The effective value is computed by `utils/avatar-policy.ts`, not read from
+   * the "Show Avatars" setting directly: these are `new Image()` loads, so
+   * they bypass the Tauri-command network gate and Offline Mode / the remote
+   * allowlist have to be applied here instead.
    */
   fetchAvatars: boolean;
   /** Show icons in ref labels */
@@ -124,7 +129,11 @@ const DEFAULT_CONFIG: RenderConfig = {
   showLabels: false,
   showFps: false,
   showAvatars: false,
-  fetchAvatars: true,
+  // Default-deny: a renderer built without an explicit policy decision must
+  // not reach out to gravatar.com. The on-screen renderer passes an effective
+  // value computed by `utils/avatar-policy.ts`; the export renderer passes a
+  // literal `false` because it paints once, synchronously.
+  fetchAvatars: false,
   showRefIcons: true,
   refsColumnWidth: 200,
   statsColumnWidth: 80,
@@ -458,8 +467,30 @@ export class CanvasRenderer {
    * Update configuration
    */
   setConfig(config: Partial<RenderConfig>): void {
+    const wasFetching = this.config.fetchAvatars;
     this.config = { ...this.config, ...config };
+    // Turning avatar fetching off (Offline Mode switched on mid-session, say)
+    // must stop the requests that are already on the wire too, not just the
+    // next ones — otherwise enabling Offline Mode still leaks the authors
+    // currently on screen to gravatar.com.
+    if (wasFetching && !this.config.fetchAvatars) {
+      this.abortPendingAvatarLoads();
+    }
     this.markDirty();
+  }
+
+  /**
+   * Cancel every in-flight avatar request and forget that they were loading,
+   * so a later re-enable starts them again from scratch.
+   */
+  private abortPendingAvatarLoads(): void {
+    for (const img of this.pendingAvatarImages) {
+      img.onload = null;
+      img.onerror = null;
+      img.src = '';
+    }
+    this.pendingAvatarImages.clear();
+    this.avatarLoadingSet.clear();
   }
 
   /**
@@ -2229,14 +2260,8 @@ export class CanvasRenderer {
     this.dprMediaQuery?.removeEventListener('change', this.handleDprChange);
     this.dprMediaQuery = null;
     // Abort pending avatar loads to release closure references
-    for (const img of this.pendingAvatarImages) {
-      img.onload = null;
-      img.onerror = null;
-      img.src = '';
-    }
-    this.pendingAvatarImages.clear();
+    this.abortPendingAvatarLoads();
     this.avatarCache.clear();
-    this.avatarLoadingSet.clear();
     this.failedAvatars.clear();
     this.commitStats.clear();
     this.commitSignatures.clear();

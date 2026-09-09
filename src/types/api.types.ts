@@ -27,7 +27,15 @@ export interface OpenRepositoryCommand {
 export interface CloneRepositoryCommand {
   url: string;
   path: string;
-  bare?: boolean;
+  /*
+   * The backend also accepts `bare`, and it is deliberately NOT declared here.
+   * A bare clone has no working tree, and nothing in this app branches on
+   * `Repository.isBare`: staging, the diff, file status and the commit panel
+   * would all be operating on a repository that cannot have any of them. Until
+   * the UI can present a bare repository honestly, offering the option would
+   * only produce a broken window.
+   */
+  /** Clone and check out this branch instead of the remote's default. */
   branch?: string;
   token?: string;
   depth?: number;

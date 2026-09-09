@@ -92,10 +92,9 @@ pub async fn merge(
         }
 
         // Find the commit to merge
-        let reference = repo
-            .find_reference(&format!("refs/heads/{}", source_ref))
-            .or_else(|_| repo.find_reference(&format!("refs/remotes/{}", source_ref)))
-            .or_else(|_| repo.find_reference(&source_ref))?;
+        // Shared with `preview_merge`, so the preview can never resolve a
+        // different commit than the merge it is previewing.
+        let reference = find_merge_ref(&repo, &source_ref)?;
 
         let annotated_commit = repo.reference_to_annotated_commit(&reference)?;
         let (analysis, _preference) = repo.merge_analysis(&[&annotated_commit])?;
@@ -339,6 +338,162 @@ fn default_merge_message(repo: &git2::Repository, source_ref: &str) -> String {
         }
         _ => base,
     }
+}
+
+/// How many conflicting paths a preview lists.
+///
+/// The COUNT is always exact; only the list is capped. A merge that rewrites a
+/// whole tree can conflict in tens of thousands of paths, and shipping all of
+/// them over IPC to render "…and 40,000 more" costs far more than the preview
+/// saves.
+const MERGE_PREVIEW_PATH_CAP: usize = 50;
+
+/// What merging `source_ref` would do, computed without touching the working
+/// tree, the index, or any ref.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreview {
+    /// `upToDate`, `fastForward`, `normal` or `unborn`.
+    pub outcome: String,
+    /// Exact number of paths that would conflict. Zero unless `outcome` is
+    /// `normal` — a fast-forward and an up-to-date merge cannot conflict.
+    pub conflict_count: usize,
+    /// The conflicting paths, sorted, capped at `MERGE_PREVIEW_PATH_CAP`.
+    pub conflicting_files: Vec<String>,
+    /// The two sides share no common ancestor.
+    pub unrelated_histories: bool,
+    /// Set when the repository is already mid-merge/rebase/cherry-pick, naming
+    /// the state. `merge` refuses outright in that case, so the confirm has to
+    /// be able to say so BEFORE the user commits to the operation.
+    pub operation_in_progress: Option<String>,
+}
+
+/// Resolve a merge source the way `merge` itself does.
+///
+/// refs/heads FIRST, then refs/remotes, then the name verbatim — see the
+/// comment at the sidebar call sites about `origin/feature` vs `feature`. The
+/// preview and the merge MUST resolve identically, or the preview describes a
+/// merge of a different commit than the one that actually runs.
+fn find_merge_ref<'repo>(
+    repo: &'repo git2::Repository,
+    name: &str,
+) -> Result<git2::Reference<'repo>> {
+    repo.find_reference(&format!("refs/heads/{}", name))
+        .or_else(|_| repo.find_reference(&format!("refs/remotes/{}", name)))
+        .or_else(|_| repo.find_reference(name))
+        .map_err(Into::into)
+}
+
+/// Predict a merge without performing it.
+///
+/// The rebase equivalent (`preview_rebase`) has to shell out to `git rebase` in
+/// a throwaway worktree, because replaying a series of commits has no in-memory
+/// form. A merge does: libgit2 merges the two trees into an index that never
+/// leaves memory, so this needs no worktree, writes no `index.lock`, moves no
+/// ref and leaves nothing to clean up — which also means it cannot deadlock
+/// against, or corrupt, a real operation running on the same repository. Every
+/// caller runs it inside the working-tree claim it already holds for the merge
+/// it is about to confirm (see `utils/ref-lock.ts`), so a preview never runs
+/// concurrently with another ref operation either.
+///
+/// `into_ref` names the branch the merge will land on; omit it for HEAD. The
+/// drag-to-merge path checks the target branch out FIRST and merges into that,
+/// so previewing against HEAD there would describe a merge into the branch the
+/// user is leaving.
+#[command]
+pub async fn preview_merge(
+    path: String,
+    source_ref: String,
+    into_ref: Option<String>,
+) -> Result<MergePreview> {
+    let repo = git2::Repository::open(Path::new(&path))?;
+
+    // Read-only: reported, not refused. The preview is still worth computing —
+    // the user wants to know what the merge would do once the current operation
+    // is concluded — and `merge` produces the actionable refusal itself.
+    let operation_in_progress = match repo.state() {
+        git2::RepositoryState::Clean => None,
+        state => Some(format!("{:?}", state)),
+    };
+
+    let source = find_merge_ref(&repo, &source_ref)?;
+    let annotated_commit = repo.reference_to_annotated_commit(&source)?;
+
+    let our_ref = match into_ref.as_deref().filter(|r| !r.is_empty()) {
+        Some(name) => Some(find_merge_ref(&repo, name)?),
+        None => None,
+    };
+
+    let (analysis, _preference) = match our_ref.as_ref() {
+        Some(our) => repo.merge_analysis_for_ref(our, &[&annotated_commit])?,
+        None => repo.merge_analysis(&[&annotated_commit])?,
+    };
+
+    let mut preview = MergePreview {
+        outcome: "normal".to_string(),
+        conflict_count: 0,
+        conflicting_files: Vec::new(),
+        unrelated_histories: false,
+        operation_in_progress,
+    };
+
+    // UP_TO_DATE before UNBORN before FAST_FORWARD: libgit2 sets FASTFORWARD
+    // alongside UNBORN, and "this will fast-forward" is the wrong thing to tell
+    // someone whose branch has no commits at all.
+    if analysis.is_up_to_date() {
+        preview.outcome = "upToDate".to_string();
+        return Ok(preview);
+    }
+    if analysis.is_unborn() {
+        preview.outcome = "unborn".to_string();
+        return Ok(preview);
+    }
+    if analysis.is_fast_forward() {
+        preview.outcome = "fastForward".to_string();
+        return Ok(preview);
+    }
+
+    // A real merge commit. Up-to-date, unborn and fast-forward are all handled
+    // above, so both sides are known to exist and peel.
+    let our_commit = match our_ref.as_ref() {
+        Some(our) => our.peel_to_commit()?,
+        None => repo.head()?.peel_to_commit()?,
+    };
+    let their_commit = repo.find_commit(annotated_commit.id())?;
+
+    // No merge base at all. libgit2 merges unrelated histories against an empty
+    // ancestor rather than refusing the way the git CLI does without
+    // --allow-unrelated-histories, so `merge` WILL go through with it — the
+    // preview says so instead of leaving the user to discover it.
+    preview.unrelated_histories = match repo.merge_base(our_commit.id(), their_commit.id()) {
+        Ok(_) => false,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => true,
+        Err(e) => return Err(e.into()),
+    };
+
+    // `None` options: exactly what `merge` passes to `repo.merge()`, so the
+    // prediction is made with the same rename detection and conflict rules the
+    // real merge will use.
+    let merged = repo.merge_commits(&our_commit, &their_commit, None)?;
+
+    if merged.has_conflicts() {
+        // One path occupies up to three conflict stages; "N files would
+        // conflict" is a count of distinct paths, not of index entries.
+        let mut paths = std::collections::BTreeSet::new();
+        for conflict in merged.conflicts()? {
+            let conflict = conflict?;
+            // Any stage names the path. A delete/modify conflict has no `our`
+            // or no `their` entry, so all three have to be tried or those
+            // conflicts go unnamed.
+            if let Some(entry) = conflict.our.or(conflict.their).or(conflict.ancestor) {
+                paths.insert(String::from_utf8_lossy(&entry.path).into_owned());
+            }
+        }
+        preview.conflict_count = paths.len();
+        preview.conflicting_files = paths.into_iter().take(MERGE_PREVIEW_PATH_CAP).collect();
+    }
+
+    Ok(preview)
 }
 
 /// Abort an in-progress merge.
@@ -3315,13 +3470,25 @@ mod tests {
         // which dies on the null stdin Command::output() gives it, leaving a
         // paused rebase and a detached HEAD.
         //
-        // The env is scrubbed deliberately: a machine with EDITOR set would mask
-        // the bug this covers.
-        std::env::remove_var("EDITOR");
-        std::env::remove_var("VISUAL");
-        std::env::remove_var("GIT_EDITOR");
-
+        // A machine with EDITOR set would mask the bug this covers, so the
+        // masking has to be shut off — but NOT by scrubbing the process
+        // environment, which this test used to do. `remove_var` mutates state
+        // shared by all 2959 tests running in parallel, and on macOS a
+        // concurrent `unsetenv`/`getenv` (libgit2 reads GIT_* constantly, and
+        // is outside std's env lock) corrupts the environ block: the whole
+        // harness aborted with no message, nondeterministically.
+        //
+        // git consults GIT_EDITOR, then core.editor, then VISUAL, then EDITOR.
+        // Trapping core.editor in THIS repository's own config therefore does
+        // the same job locally and does it better: ambient VISUAL/EDITOR are
+        // never reached, and if the command under test ever stops setting
+        // GIT_EDITOR the rebase fails loudly instead of opening something.
         let repo = TestRepo::with_initial_commit();
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("core.editor", "false")
+            .unwrap();
         let base = repo.head_oid().to_string();
         repo.create_commit("first", &[("a.txt", "a")]);
         repo.create_commit("second", &[("b.txt", "b")]);
@@ -4214,6 +4381,312 @@ mod tests {
         repo.create_commit("Feature change", &[("shared.txt", "feature content")]);
         repo.checkout_branch(&initial_branch);
         repo.create_commit("Main change", &[("shared.txt", "main content")]);
+    }
+
+    // ── Merge preview ────────────────────────────────────────────────────────
+
+    /// The whole point: name the files that would conflict, before the working
+    /// tree is in a conflicted state.
+    #[tokio::test]
+    async fn test_preview_merge_reports_the_conflicting_paths() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_commit(
+            "Add shared",
+            &[("shared.txt", "base"), ("other.txt", "base")],
+        );
+        repo.create_branch("feature");
+        repo.checkout_branch("feature");
+        repo.create_commit(
+            "Feature change",
+            &[("shared.txt", "feature"), ("other.txt", "feature")],
+        );
+        repo.checkout_branch(&initial_branch);
+        repo.create_commit(
+            "Main change",
+            &[("shared.txt", "main"), ("other.txt", "main")],
+        );
+
+        let preview = preview_merge(repo.path_str(), "feature".to_string(), None)
+            .await
+            .expect("preview should succeed even though the merge conflicts");
+
+        assert_eq!(preview.outcome, "normal");
+        assert_eq!(preview.conflict_count, 2);
+        assert_eq!(
+            preview.conflicting_files,
+            vec!["other.txt".to_string(), "shared.txt".to_string()],
+            "the exact conflicting paths must be named, sorted"
+        );
+        assert!(!preview.unrelated_histories);
+        assert!(preview.operation_in_progress.is_none());
+    }
+
+    /// A preview that mutated anything would be worse than no preview at all:
+    /// the user asked what WOULD happen, not for it to happen.
+    #[tokio::test]
+    async fn test_preview_merge_leaves_the_working_tree_and_index_untouched() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_commit("Add shared", &[("shared.txt", "base")]);
+        repo.create_branch("feature");
+        repo.checkout_branch("feature");
+        repo.create_commit("Feature change", &[("shared.txt", "feature")]);
+        repo.checkout_branch(&initial_branch);
+        repo.create_commit("Main change", &[("shared.txt", "main")]);
+
+        // An uncommitted edit as well, so a preview that checked anything out
+        // would be caught destroying work rather than just moving the index.
+        repo.create_file("dirty.txt", "uncommitted");
+
+        let head_before = repo.head_oid();
+        let index_before = repo.repo().index().unwrap().write_tree().unwrap();
+        let workdir_before =
+            std::fs::read_to_string(repo.path.join("shared.txt")).expect("shared.txt");
+        let reflog_before = repo.repo().reflog("HEAD").map(|l| l.len()).unwrap_or(0);
+
+        let preview = preview_merge(repo.path_str(), "feature".to_string(), None)
+            .await
+            .expect("preview should succeed");
+        assert_eq!(preview.conflict_count, 1, "sanity: this merge conflicts");
+
+        let after = repo.repo();
+        assert_eq!(after.head().unwrap().target().unwrap(), head_before);
+        assert_eq!(
+            after.index().unwrap().write_tree().unwrap(),
+            index_before,
+            "the on-disk index must be byte-identical after a preview"
+        );
+        assert!(
+            !after.index().unwrap().has_conflicts(),
+            "the preview must not stage conflicts"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("shared.txt")).unwrap(),
+            workdir_before,
+            "the working copy must not gain conflict markers"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("dirty.txt")).unwrap(),
+            "uncommitted",
+            "uncommitted work must survive a preview"
+        );
+        assert_eq!(after.state(), git2::RepositoryState::Clean);
+        assert!(!after.path().join("MERGE_HEAD").exists());
+        assert_eq!(after.worktrees().unwrap().len(), 0, "no ghost worktree");
+        assert_eq!(
+            after.reflog("HEAD").map(|l| l.len()).unwrap_or(0),
+            reflog_before,
+            "no ref moved"
+        );
+    }
+
+    /// A branch ahead of HEAD with no divergence fast-forwards.
+    #[tokio::test]
+    async fn test_preview_merge_reports_a_fast_forward() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_branch("feature");
+        repo.checkout_branch("feature");
+        repo.create_commit("Feature file", &[("feature.txt", "feature")]);
+        repo.checkout_branch(&initial_branch);
+
+        let preview = preview_merge(repo.path_str(), "feature".to_string(), None)
+            .await
+            .expect("preview should succeed");
+
+        assert_eq!(preview.outcome, "fastForward");
+        assert_eq!(preview.conflict_count, 0);
+        assert!(preview.conflicting_files.is_empty());
+    }
+
+    /// Divergent branches touching different files need a merge commit and
+    /// conflict in nothing.
+    #[tokio::test]
+    async fn test_preview_merge_reports_a_clean_merge_commit() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_branch("feature");
+        repo.checkout_branch("feature");
+        repo.create_commit("Feature file", &[("feature.txt", "feature")]);
+        repo.checkout_branch(&initial_branch);
+        repo.create_commit("Main file", &[("main.txt", "main")]);
+
+        let preview = preview_merge(repo.path_str(), "feature".to_string(), None)
+            .await
+            .expect("preview should succeed");
+
+        assert_eq!(preview.outcome, "normal");
+        assert_eq!(preview.conflict_count, 0);
+        assert!(preview.conflicting_files.is_empty());
+        assert!(!preview.unrelated_histories);
+    }
+
+    /// Merging an ancestor changes nothing, and the confirm must say so rather
+    /// than promising a merge commit that will never be recorded.
+    #[tokio::test]
+    async fn test_preview_merge_reports_up_to_date() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_branch("feature");
+        repo.checkout_branch(&initial_branch);
+        repo.create_commit("Main file", &[("main.txt", "main")]);
+
+        let preview = preview_merge(repo.path_str(), "feature".to_string(), None)
+            .await
+            .expect("preview should succeed");
+
+        assert_eq!(preview.outcome, "upToDate");
+        assert_eq!(preview.conflict_count, 0);
+    }
+
+    /// libgit2 merges unrelated histories rather than refusing the way the CLI
+    /// does, so the preview is the only place a user can be warned.
+    #[tokio::test]
+    async fn test_preview_merge_reports_unrelated_histories() {
+        let repo = TestRepo::with_initial_commit();
+        let repository = repo.repo();
+        let signature = repository.signature().unwrap();
+
+        // An orphan commit: a tree of its own with no parents at all.
+        let orphan_tree = {
+            let mut builder = repository.treebuilder(None).unwrap();
+            let blob = repository.blob(b"orphan").unwrap();
+            builder.insert("orphan.txt", blob, 0o100644).unwrap();
+            let oid = builder.write().unwrap();
+            repository.find_tree(oid).unwrap()
+        };
+        let orphan = repository
+            .commit(
+                Some("refs/heads/orphan"),
+                &signature,
+                &signature,
+                "Orphan root",
+                &orphan_tree,
+                &[],
+            )
+            .unwrap();
+        assert!(repository.find_commit(orphan).is_ok());
+
+        let preview = preview_merge(repo.path_str(), "orphan".to_string(), None)
+            .await
+            .expect("preview should succeed for unrelated histories");
+
+        assert_eq!(preview.outcome, "normal");
+        assert!(
+            preview.unrelated_histories,
+            "the two sides share no merge base"
+        );
+    }
+
+    /// A branch with no commits yet: `merge` cannot fast-forward a HEAD that
+    /// does not point at anything, so "this will fast-forward" would be a lie.
+    #[tokio::test]
+    async fn test_preview_merge_reports_an_unborn_head() {
+        let repo = TestRepo::new();
+        let repository = repo.repo();
+        let signature = repository.signature().unwrap();
+        let tree = {
+            let mut builder = repository.treebuilder(None).unwrap();
+            let blob = repository.blob(b"seed").unwrap();
+            builder.insert("seed.txt", blob, 0o100644).unwrap();
+            let oid = builder.write().unwrap();
+            repository.find_tree(oid).unwrap()
+        };
+        repository
+            .commit(
+                Some("refs/heads/seed"),
+                &signature,
+                &signature,
+                "Seed",
+                &tree,
+                &[],
+            )
+            .unwrap();
+
+        let preview = preview_merge(repo.path_str(), "seed".to_string(), None)
+            .await
+            .expect("preview should succeed on an unborn HEAD");
+
+        assert_eq!(preview.outcome, "unborn");
+        assert_eq!(preview.conflict_count, 0);
+    }
+
+    /// A repository already mid-merge: the preview still answers, and names the
+    /// state that will make the real merge refuse.
+    #[tokio::test]
+    async fn test_preview_merge_reports_an_operation_in_progress() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_commit("Add shared", &[("shared.txt", "base")]);
+        repo.create_branch("feature");
+        repo.checkout_branch("feature");
+        repo.create_commit("Feature change", &[("shared.txt", "feature")]);
+        repo.checkout_branch(&initial_branch);
+        repo.create_commit("Main change", &[("shared.txt", "main")]);
+
+        // Leave the repository in the state a conflicted merge leaves it in.
+        merge(repo.path_str(), "feature".to_string(), None, None, None)
+            .await
+            .expect_err("this merge conflicts");
+        assert_eq!(repo.repo().state(), git2::RepositoryState::Merge);
+
+        let preview = preview_merge(repo.path_str(), "feature".to_string(), None)
+            .await
+            .expect("the preview is read-only and must still answer");
+
+        assert_eq!(preview.operation_in_progress.as_deref(), Some("Merge"));
+    }
+
+    /// The drop-onto-another-branch path checks the target out and merges into
+    /// THAT, so a preview against HEAD would describe the wrong merge.
+    #[tokio::test]
+    async fn test_preview_merge_predicts_a_merge_into_another_branch() {
+        let repo = TestRepo::with_initial_commit();
+        let initial_branch = repo.current_branch();
+        repo.create_commit("Add shared", &[("shared.txt", "base")]);
+        repo.create_branch("target");
+        repo.create_branch("source");
+
+        repo.checkout_branch("source");
+        repo.create_commit("Source change", &[("shared.txt", "source")]);
+
+        repo.checkout_branch("target");
+        repo.create_commit("Target change", &[("shared.txt", "target")]);
+
+        // HEAD is somewhere else entirely, and merging source into it is clean.
+        repo.checkout_branch(&initial_branch);
+
+        let into_head = preview_merge(repo.path_str(), "source".to_string(), None)
+            .await
+            .expect("preview should succeed");
+        assert_eq!(into_head.conflict_count, 0, "sanity: clean against HEAD");
+
+        let into_target = preview_merge(
+            repo.path_str(),
+            "source".to_string(),
+            Some("target".to_string()),
+        )
+        .await
+        .expect("preview should succeed");
+
+        assert_eq!(into_target.outcome, "normal");
+        assert_eq!(
+            into_target.conflicting_files,
+            vec!["shared.txt".to_string()]
+        );
+    }
+
+    /// An unknown ref must fail loudly rather than come back as a clean merge.
+    #[tokio::test]
+    async fn test_preview_merge_errors_on_an_unknown_source() {
+        let repo = TestRepo::with_initial_commit();
+
+        let result = preview_merge(repo.path_str(), "no-such-branch".to_string(), None).await;
+        assert!(
+            result.is_err(),
+            "an unknown source must not be reported as a clean merge"
+        );
     }
 
     // ── Ghost-rebase preview ─────────────────────────────────────────────────

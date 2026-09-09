@@ -375,6 +375,59 @@ describe('lv-export-import-dialog', () => {
       expect(q<HTMLInputElement>(el, `input[data-oid="${OID_MID}"]`).checked).to.be.true;
     });
 
+    it('pre-checks every commit of a graph multi-selection', async () => {
+      const el = await openDialogAt({
+        tab: 'patch',
+        patchMode: 'create',
+        commitOids: [OID_NEW, OID_OLD],
+      });
+
+      expect(q<HTMLInputElement>(el, `input[data-oid="${OID_NEW}"]`).checked).to.be.true;
+      expect(q<HTMLInputElement>(el, `input[data-oid="${OID_OLD}"]`).checked).to.be.true;
+      expect(q<HTMLInputElement>(el, `input[data-oid="${OID_MID}"]`).checked).to.be.false;
+      expect(q<HTMLElement>(el, '[data-testid="patch-selected-count"]').textContent).to.contain(
+        '2 selected',
+      );
+    });
+
+    it('keeps every deep-linked commit visible under a filter that hides them', async () => {
+      // The rows the dialog says are ticked have to stay on screen, or the
+      // count claims a selection the user cannot see or undo.
+      const el = await openDialogAt({
+        tab: 'patch',
+        patchMode: 'create',
+        commitOids: [OID_NEW, OID_OLD],
+      });
+
+      const filter = q<HTMLInputElement>(el, '#commit-filter');
+      filter.value = 'middle';
+      filter.dispatchEvent(new Event('input'));
+      await settle(el);
+
+      expect(q<HTMLInputElement>(el, `input[data-oid="${OID_NEW}"]`).checked).to.be.true;
+      expect(q<HTMLInputElement>(el, `input[data-oid="${OID_OLD}"]`).checked).to.be.true;
+      expect(el.shadowRoot?.querySelectorAll('.list-row.pinned')).to.have.length(2);
+      expect(el.shadowRoot?.querySelector('.empty'), 'the matching row is still listed').to.not
+        .exist;
+    });
+
+    it('writes a multi-selection series oldest first', async () => {
+      dialogOpenResult = '/tmp/patches';
+      const el = await openDialogAt({
+        tab: 'patch',
+        patchMode: 'create',
+        commitOids: [OID_NEW, OID_OLD],
+      });
+
+      await click(el, '[data-testid="patch-create"]');
+
+      expect(argsOf('create_patch')).to.deep.equal({
+        path: REPO_PATH,
+        commitOids: [OID_OLD, OID_NEW],
+        outputPath: '/tmp/patches',
+      });
+    });
+
     it('Check runs a dry run and applies nothing', async () => {
       dialogOpenResult = '/tmp/fix.patch';
       const el = await openDialogAt({ tab: 'patch', patchMode: 'apply' });

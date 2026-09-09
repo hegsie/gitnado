@@ -3978,7 +3978,11 @@ mod tests {
     /// root, so the explicit removal — the step that handles files ADDED by the
     /// operation, which a path-scoped checkout_head cannot restore because they
     /// are absent from HEAD — silently did nothing and left the file behind.
-    #[cfg(unix)]
+    ///
+    /// Not macOS: APFS and HFS+ validate file names as UTF-8 and refuse to
+    /// create this one at all, so the situation the test describes cannot
+    /// arise there. Running it anyway only produced a failed `fs::write`.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[tokio::test]
     async fn test_abort_cherry_pick_removes_added_non_utf8_path() {
         use std::os::unix::ffi::OsStrExt;

@@ -270,6 +270,30 @@ describe('git.service - cloneRepository token lookup', () => {
     expect(args.token, "the caller's token wins").to.equal('explicit');
   });
 
+  // The clone dialog offers Cancel before the command is sent, and the backend
+  // resets its cancellation flag when a clone starts — so a cancel that landed
+  // during the token lookup has to be honoured HERE, or the clone runs anyway.
+  it('does not send the clone when the caller reports it cancelled', async () => {
+    const result = await cloneRepository(
+      { url: 'https://github.com/octocat/repo.git', path: '/dest/repo' },
+      { isCancelled: () => true },
+    );
+
+    expect(result.success).to.be.false;
+    expect(result.error?.code).to.equal('OPERATION_CANCELLED');
+    expect(invokedCommands).to.not.include('clone_repository');
+  });
+
+  it('sends the clone when the caller reports it not cancelled', async () => {
+    const result = await cloneRepository(
+      { url: 'https://github.com/octocat/repo.git', path: '/dest/repo' },
+      { isCancelled: () => false },
+    );
+
+    expect(result.success).to.be.true;
+    expect(invokedCommands).to.include('clone_repository');
+  });
+
   it('clones without a token when the credential lookup fails', async () => {
     unifiedProfileStore.getState().setAccounts([account('gitlab', 'gl-1', 'https://gitlab.com')]);
     seedAccountToken('gitlab', 'gl-1', 'gl-tok');

@@ -6,23 +6,31 @@ use crate::services::update_service::{
 };
 use tauri::{command, AppHandle, State};
 
-/// Check for updates manually (does not auto-install)
+/// Check for updates manually (does not auto-install).
+///
+/// Both this and [`download_and_install_update`] are gated against offline
+/// mode and the remote allowlist inside the service, so the refusal arrives
+/// here already carrying its `NetworkBlocked` identity — the frontend reads it
+/// as `BLOCKED`, exactly like every other refused network operation. Wrapping
+/// it in `OperationFailed` (which this used to do for every error) would have
+/// reported a security refusal as a failed update check.
 #[command]
 pub async fn check_for_update(app: AppHandle) -> Result<UpdateCheckEvent> {
-    check_for_update_manual(&app)
-        .await
-        .map_err(crate::error::GitnadoError::OperationFailed)
+    check_for_update_manual(&app).await
 }
 
 /// Download and install the available update
 #[command]
 pub async fn download_and_install_update(app: AppHandle) -> Result<()> {
-    install_update(&app)
-        .await
-        .map_err(crate::error::GitnadoError::OperationFailed)
+    install_update(&app).await
 }
 
-/// Start automatic update checking
+/// Start automatic update checking.
+///
+/// Deliberately NOT gated: this only schedules a timer, and every tick of that
+/// timer runs the gate itself (`services/update_service.rs`). Refusing to
+/// schedule while offline mode is on would mean turning it back off never
+/// resumed updates until the next launch.
 #[command]
 pub async fn start_auto_update_check(
     app: AppHandle,

@@ -6,6 +6,7 @@
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invokeCommand } from './tauri-api.ts';
+import { showToast } from './notification.service.ts';
 
 export interface FileChangeEvent {
   repoPath: string;
@@ -23,9 +24,56 @@ let unlisten: UnlistenFn | null = null;
 let listenerSetup: Promise<void> | null = null;
 const handlers: Set<FileChangeHandler> = new Set();
 
+// Repositories the user has already been told about. A failed watch is
+// retried by every caller that touches the repo (tab restore, panel remount,
+// repo switch), and one toast per attempt would bury the app in warnings.
+const warnedPaths: Set<string> = new Set();
+
+/** Last path segment, so the toast names the repository the user knows. */
+function repositoryLabel(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
+/**
+ * Tell the user that auto-refresh is not running for a repository.
+ *
+ * Watch registration fails silently as far as the UI is concerned — the
+ * commonest cause on Linux is an exhausted `fs.inotify.max_user_watches`
+ * budget — and without this the app just quietly stops noticing outside
+ * changes. The backend error already names the watch limit (and the sysctl to
+ * raise) when that is the cause, so it is passed straight through.
+ */
+function reportWatchFailure(path: string, error: unknown): void {
+  if (warnedPaths.has(path)) return;
+  warnedPaths.add(path);
+
+  const raw = error instanceof Error ? error.message : String(error);
+  const detail = raw.trim().replace(/\.$/, '');
+  showToast(
+    `Auto-refresh is unavailable for "${repositoryLabel(path)}" — ${detail}. ` +
+      'Changes made outside Gitnado will not appear until you refresh manually.',
+    'warning',
+    15000,
+    {
+      label: 'Retry',
+      callback: () => {
+        // Allow a fresh warning if the retry fails too
+        warnedPaths.delete(path);
+        void startWatching(path).catch(() => {
+          /* reported by reportWatchFailure */
+        });
+      },
+    }
+  );
+}
+
 /**
  * Start watching a repository for file changes. Other repositories already
  * being watched are unaffected.
+ *
+ * A failure is surfaced to the user as a warning toast (see
+ * `reportWatchFailure`) as well as rejecting, so callers only need to log.
  */
 export async function startWatching(path: string): Promise<void> {
   // Set up the (single) event listener if not already done
@@ -50,19 +98,34 @@ export async function startWatching(path: string): Promise<void> {
       }
     );
   }
-  await listenerSetup;
+  try {
+    await listenerSetup;
 
-  // Start watching on the backend
-  const result = await invokeCommand<void>('start_watching', { path });
-  if (!result.success) {
-    throw new Error(result.error?.message ?? 'Failed to start watching');
+    // Start watching on the backend
+    const result = await invokeCommand<void>('start_watching', { path });
+    if (!result.success) {
+      throw new Error(result.error?.message ?? 'Failed to start watching');
+    }
+  } catch (err) {
+    reportWatchFailure(path, err);
+    throw err;
   }
+
+  // Watching works again — a later failure may warn afresh
+  warnedPaths.delete(path);
 }
 
 /**
  * Stop watching a repository. With no path, stop watching all repositories.
  */
 export async function stopWatching(path?: string): Promise<void> {
+  // A repo the user closed and reopens later deserves a fresh warning if it
+  // still can't be watched
+  if (path) {
+    warnedPaths.delete(path);
+  } else {
+    warnedPaths.clear();
+  }
   const result = await invokeCommand<void>('stop_watching', { path: path ?? null });
   if (!result.success) {
     throw new Error(result.error?.message ?? 'Failed to stop watching');
@@ -90,5 +153,6 @@ export async function cleanup(): Promise<void> {
   }
   listenerSetup = null;
   handlers.clear();
+  warnedPaths.clear();
   await stopWatching();
 }

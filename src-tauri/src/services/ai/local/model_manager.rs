@@ -14,6 +14,23 @@ use tokio::sync::RwLock;
 
 use super::model_registry::ModelEntry;
 
+/// The URL a model's weights are fetched from.
+pub fn model_download_url(entry: &ModelEntry) -> String {
+    format!(
+        "https://huggingface.co/{}/resolve/main/{}",
+        entry.hf_repo, entry.hf_filename
+    )
+}
+
+/// Offline mode / the remote allowlist, for a model download.
+///
+/// One function so the command that STARTS the download and the request that
+/// actually opens the socket check the same destination — a guard on a URL the
+/// caller had to restate is a guard that drifts. See `services/security.rs`.
+pub fn guard_model_download(entry: &ModelEntry) -> crate::error::Result<()> {
+    crate::services::security::guard_url(&model_download_url(entry))
+}
+
 /// Status of a model in the local store
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,10 +197,12 @@ impl ModelManager {
         app_handle: &AppHandle,
         cancel_flag: &Arc<AtomicBool>,
     ) -> Result<(), String> {
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            entry.hf_repo, entry.hf_filename
-        );
+        // The backstop half of the network gate (see services/security.rs):
+        // this download is spawned onto a background task, so a caller that
+        // forgot the frontend gate would otherwise stream multiple gigabytes
+        // from huggingface.co with offline mode on and nothing to refuse it.
+        guard_model_download(entry).map_err(|e| e.to_string())?;
+        let url = model_download_url(entry);
 
         let client = reqwest::Client::new();
         let response = client

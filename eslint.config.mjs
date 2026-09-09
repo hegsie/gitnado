@@ -4,7 +4,10 @@ import overlayStackMembership from './eslint-rules/overlay-stack-membership.mjs'
 
 export default tseslint.config(
   {
-    ignores: ['node_modules/', 'dist/', 'src-tauri/'],
+    // src/i18n/generated/ is written by `npm run localize:build`; it is
+    // committed so the app builds without the localization toolchain, but it is
+    // machine output and nobody edits it, so it is not linted.
+    ignores: ['node_modules/', 'dist/', 'src-tauri/', 'src/i18n/generated/'],
   },
   {
     files: ['src/**/*.ts'],

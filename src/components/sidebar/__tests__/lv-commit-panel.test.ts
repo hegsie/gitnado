@@ -723,7 +723,7 @@ describe('lv-commit-panel', () => {
       const internal = el as unknown as {
         summary: string;
         description: string;
-        draftCache: Map<string, { summary: string; description: string; conventionalMode: boolean; selectedType: string; scope: string }>;
+        draftCache: Map<string, { summary: string; description: string; conventionalMode: boolean; selectedType: string; scope: string; signOff: boolean; coAuthors: Array<{ name: string; email: string }> }>;
       };
 
       // Pre-populate cache
@@ -733,6 +733,8 @@ describe('lv-commit-panel', () => {
         conventionalMode: false,
         selectedType: 'feat',
         scope: '',
+        signOff: false,
+        coAuthors: [],
       });
 
       el.repositoryPath = '/other/repo';

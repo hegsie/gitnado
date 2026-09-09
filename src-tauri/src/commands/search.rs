@@ -117,103 +117,109 @@ pub async fn search_in_files(
     file_pattern: Option<String>,
     max_results: Option<u32>,
 ) -> Result<Vec<SearchFileResult>> {
-    let case_sensitive = case_sensitive.unwrap_or(false);
-    let use_regex = regex.unwrap_or(false);
-    let max_results = max_results.unwrap_or(1000);
+    crate::utils::blocking_git(move || {
+        let case_sensitive = case_sensitive.unwrap_or(false);
+        let use_regex = regex.unwrap_or(false);
+        let max_results = max_results.unwrap_or(1000);
 
-    let mut cmd = Command::new("git");
-    // `--no-color` and `--no-column` because the output is parsed field by
-    // field: `color.grep` (or `color.ui`) set to `always` wraps the path and
-    // the line number in SGR escapes even into a pipe, so the line-number
-    // parse fails and every match is silently dropped, and `grep.column`
-    // inserts an extra column field that would end up prefixed to the reported
-    // line content. `-z` because the default `path:line:content` framing is
-    // ambiguous and lossy: a path containing a colon shifts every field (and
-    // the match is then dropped by the line-number parse), a path containing a
-    // newline splits one record into two, and `core.quotePath` — on by default
-    // — emits any path with a non-ASCII byte double-quoted and octal-escaped,
-    // which would be shown to the user and opened as a file that does not
-    // exist. `-I` because `git grep -z` still prints an unframed
-    // `Binary file <path> matches` line, which would desynchronise the
-    // NUL-framed reader. Kept in step with the workspace grep, which parses the
-    // same records.
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("grep")
-        .arg("--no-color")
-        .arg("--no-column")
-        .arg("-n")
-        .arg("-z")
-        .arg("-I");
+        let mut cmd = Command::new("git");
+        // `--no-color` and `--no-column` because the output is parsed field by
+        // field: `color.grep` (or `color.ui`) set to `always` wraps the path and
+        // the line number in SGR escapes even into a pipe, so the line-number
+        // parse fails and every match is silently dropped, and `grep.column`
+        // inserts an extra column field that would end up prefixed to the reported
+        // line content. `-z` because the default `path:line:content` framing is
+        // ambiguous and lossy: a path containing a colon shifts every field (and
+        // the match is then dropped by the line-number parse), a path containing a
+        // newline splits one record into two, and `core.quotePath` — on by default
+        // — emits any path with a non-ASCII byte double-quoted and octal-escaped,
+        // which would be shown to the user and opened as a file that does not
+        // exist. `-I` because `git grep -z` still prints an unframed
+        // `Binary file <path> matches` line, which would desynchronise the
+        // NUL-framed reader. Kept in step with the workspace grep, which parses the
+        // same records.
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("grep")
+            .arg("--no-color")
+            .arg("--no-column")
+            .arg("-n")
+            .arg("-z")
+            .arg("-I");
 
-    if !case_sensitive {
-        cmd.arg("-i");
-    }
+        if !case_sensitive {
+            cmd.arg("-i");
+        }
 
-    if use_regex {
-        cmd.arg("-E");
-    } else {
-        // Non-regex ("plain text") search must match the query literally, exactly
-        // like `git grep -F`. Without -F, git grep treats the pattern as a basic
-        // regular expression: literal queries like "a.c" over-match ("abc") and
-        // queries containing regex metacharacters like "a[" fatally error.
-        cmd.arg("-F");
-    }
+        if use_regex {
+            cmd.arg("-E");
+        } else {
+            // Non-regex ("plain text") search must match the query literally, exactly
+            // like `git grep -F`. Without -F, git grep treats the pattern as a basic
+            // regular expression: literal queries like "a.c" over-match ("abc") and
+            // queries containing regex metacharacters like "a[" fatally error.
+            cmd.arg("-F");
+        }
 
-    cmd.arg("--").arg(&query);
+        cmd.arg("--").arg(&query);
 
-    if let Some(ref pattern) = file_pattern {
-        cmd.arg(pattern);
-    }
+        if let Some(ref pattern) = file_pattern {
+            cmd.arg(pattern);
+        }
 
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git grep: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git grep: {}", e))
+        })?;
 
-    // git grep returns exit code 1 when no matches are found (not an error)
-    if !output.status.success() && output.status.code() != Some(1) {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git grep failed: {}",
-            stderr
-        )));
-    }
+        // git grep returns exit code 1 when no matches are found (not an error)
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git grep failed: {}",
+                stderr
+            )));
+        }
 
-    let records = read_grep_records(
-        &mut std::io::Cursor::new(&output.stdout),
-        max_results as usize,
-    )
-    .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read git grep output: {}", e)))?;
+        let records = read_grep_records(
+            &mut std::io::Cursor::new(&output.stdout),
+            max_results as usize,
+        )
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to read git grep output: {}", e))
+        })?;
 
-    let mut file_map: HashMap<String, Vec<SearchResult>> = HashMap::new();
+        let mut file_map: HashMap<String, Vec<SearchResult>> = HashMap::new();
 
-    for (file_path, line_number, line_content) in records {
-        let (match_start, match_end) = find_match_position(&line_content, &query, case_sensitive);
+        for (file_path, line_number, line_content) in records {
+            let (match_start, match_end) =
+                find_match_position(&line_content, &query, case_sensitive);
 
-        let result = SearchResult {
-            file_path: file_path.clone(),
-            line_number,
-            line_content,
-            match_start,
-            match_end,
-        };
+            let result = SearchResult {
+                file_path: file_path.clone(),
+                line_number,
+                line_content,
+                match_start,
+                match_end,
+            };
 
-        file_map.entry(file_path).or_default().push(result);
-    }
+            file_map.entry(file_path).or_default().push(result);
+        }
 
-    let results: Vec<SearchFileResult> = file_map
-        .into_iter()
-        .map(|(file_path, matches)| {
-            let match_count = matches.len() as u32;
-            SearchFileResult {
-                file_path,
-                matches,
-                match_count,
-            }
-        })
-        .collect();
+        let results: Vec<SearchFileResult> = file_map
+            .into_iter()
+            .map(|(file_path, matches)| {
+                let match_count = matches.len() as u32;
+                SearchFileResult {
+                    file_path,
+                    matches,
+                    match_count,
+                }
+            })
+            .collect();
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 /// Search for a pattern within the current diff (staged or unstaged)
@@ -223,116 +229,119 @@ pub async fn search_in_diff(
     query: String,
     staged: Option<bool>,
 ) -> Result<Vec<SearchResult>> {
-    let is_staged = staged.unwrap_or(false);
+    crate::utils::blocking_git(move || {
+        let is_staged = staged.unwrap_or(false);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(&path).arg("diff").arg("--unified=0");
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&path).arg("diff").arg("--unified=0");
 
-    if is_staged {
-        cmd.arg("--cached");
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git diff: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git diff failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let query_lower = query.to_lowercase();
-    let mut results: Vec<SearchResult> = Vec::new();
-    let mut current_file = String::new();
-    // The old-side path parsed from the "--- a/<path>" header. Needed for deleted
-    // files, whose new-side header is "+++ /dev/null" and thus carries no path.
-    let mut old_file = String::new();
-    // Separate counters for the two sides of the hunk: added lines advance the
-    // new-side counter, removed lines advance the old-side counter.
-    let mut current_new_line: u32 = 0;
-    let mut current_old_line: u32 = 0;
-
-    for line in stdout.lines() {
-        // Track the old-side path from the "--- a/<path>" header (or /dev/null
-        // for added files). Must be checked before the generic "-" line handling.
-        if let Some(rest) = line.strip_prefix("--- ") {
-            old_file = rest.strip_prefix("a/").unwrap_or(rest).to_string();
-            continue;
-        }
-        // Track the current file from the new-side header. Deleted files report
-        // "+++ /dev/null", so fall back to the old-side path parsed above.
-        if let Some(rest) = line.strip_prefix("+++ ") {
-            current_file = match rest.strip_prefix("b/") {
-                Some(path) => path.to_string(),
-                None => old_file.clone(),
-            };
-            continue;
+        if is_staged {
+            cmd.arg("--cached");
         }
 
-        // Parse hunk header for line numbers: @@ -oldStart,count +newStart,count @@
-        if line.starts_with("@@") {
-            let mut tokens = line.split(' ');
-            let _ = tokens.next(); // "@@"
-            if let Some(old_tok) = tokens.next() {
-                current_old_line = old_tok
-                    .trim_start_matches('-')
-                    .split(',')
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            }
-            if let Some(new_tok) = tokens.next() {
-                current_new_line = new_tok
-                    .trim_start_matches('+')
-                    .split(',')
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-            }
-            continue;
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git diff: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git diff failed: {}",
+                stderr
+            )));
         }
 
-        // Check added lines for the query (new-side numbering).
-        if line.starts_with('+') && !line.starts_with("+++") {
-            let content = &line[1..]; // Strip the '+' prefix
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let query_lower = query.to_lowercase();
+        let mut results: Vec<SearchResult> = Vec::new();
+        let mut current_file = String::new();
+        // The old-side path parsed from the "--- a/<path>" header. Needed for deleted
+        // files, whose new-side header is "+++ /dev/null" and thus carries no path.
+        let mut old_file = String::new();
+        // Separate counters for the two sides of the hunk: added lines advance the
+        // new-side counter, removed lines advance the old-side counter.
+        let mut current_new_line: u32 = 0;
+        let mut current_old_line: u32 = 0;
 
-            if content.to_lowercase().contains(&query_lower) {
-                let (match_start, match_end) = find_match_position(content, &query, false);
-
-                results.push(SearchResult {
-                    file_path: current_file.clone(),
-                    line_number: current_new_line,
-                    line_content: content.to_string(),
-                    match_start,
-                    match_end,
-                });
+        for line in stdout.lines() {
+            // Track the old-side path from the "--- a/<path>" header (or /dev/null
+            // for added files). Must be checked before the generic "-" line handling.
+            if let Some(rest) = line.strip_prefix("--- ") {
+                old_file = rest.strip_prefix("a/").unwrap_or(rest).to_string();
+                continue;
+            }
+            // Track the current file from the new-side header. Deleted files report
+            // "+++ /dev/null", so fall back to the old-side path parsed above.
+            if let Some(rest) = line.strip_prefix("+++ ") {
+                current_file = match rest.strip_prefix("b/") {
+                    Some(path) => path.to_string(),
+                    None => old_file.clone(),
+                };
+                continue;
             }
 
-            current_new_line += 1;
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            let content = &line[1..]; // Strip the '-' prefix
-
-            if content.to_lowercase().contains(&query_lower) {
-                let (match_start, match_end) = find_match_position(content, &query, false);
-
-                results.push(SearchResult {
-                    file_path: current_file.clone(),
-                    line_number: current_old_line,
-                    line_content: content.to_string(),
-                    match_start,
-                    match_end,
-                });
+            // Parse hunk header for line numbers: @@ -oldStart,count +newStart,count @@
+            if line.starts_with("@@") {
+                let mut tokens = line.split(' ');
+                let _ = tokens.next(); // "@@"
+                if let Some(old_tok) = tokens.next() {
+                    current_old_line = old_tok
+                        .trim_start_matches('-')
+                        .split(',')
+                        .next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                }
+                if let Some(new_tok) = tokens.next() {
+                    current_new_line = new_tok
+                        .trim_start_matches('+')
+                        .split(',')
+                        .next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                }
+                continue;
             }
 
-            current_old_line += 1;
+            // Check added lines for the query (new-side numbering).
+            if line.starts_with('+') && !line.starts_with("+++") {
+                let content = &line[1..]; // Strip the '+' prefix
+
+                if content.to_lowercase().contains(&query_lower) {
+                    let (match_start, match_end) = find_match_position(content, &query, false);
+
+                    results.push(SearchResult {
+                        file_path: current_file.clone(),
+                        line_number: current_new_line,
+                        line_content: content.to_string(),
+                        match_start,
+                        match_end,
+                    });
+                }
+
+                current_new_line += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                let content = &line[1..]; // Strip the '-' prefix
+
+                if content.to_lowercase().contains(&query_lower) {
+                    let (match_start, match_end) = find_match_position(content, &query, false);
+
+                    results.push(SearchResult {
+                        file_path: current_file.clone(),
+                        line_number: current_old_line,
+                        line_content: content.to_string(),
+                        match_start,
+                        match_end,
+                    });
+                }
+
+                current_old_line += 1;
+            }
         }
-    }
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 /// Search for commits where a string was added or removed (pickaxe search)
@@ -342,68 +351,71 @@ pub async fn search_in_commits(
     query: String,
     max_commits: Option<u32>,
 ) -> Result<Vec<DiffSearchResult>> {
-    let max_commits = max_commits.unwrap_or(100);
+    crate::utils::blocking_git(move || {
+        let max_commits = max_commits.unwrap_or(100);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        .arg(format!("-S{}", query))
-        .arg("--format=%H|%an|%at|%s")
-        .arg(format!("-{}", max_commits))
-        .arg("--name-only");
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            .arg(format!("-S{}", query))
+            .arg("--format=%H|%an|%at|%s")
+            .arg(format!("-{}", max_commits))
+            .arg("--name-only");
 
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e))
+        })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git log failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results: Vec<DiffSearchResult> = Vec::new();
-    let mut current_commit_id = String::new();
-    let mut current_author = String::new();
-    let mut current_date: i64 = 0;
-    let mut current_message = String::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git log failed: {}",
+                stderr
+            )));
         }
 
-        // Check if this is a commit header line (contains | separators)
-        if line.contains('|') {
-            let parts: Vec<&str> = line.splitn(4, '|').collect();
-            if parts.len() == 4 {
-                current_commit_id = parts[0].to_string();
-                current_author = parts[1].to_string();
-                current_date = parts[2].parse().unwrap_or(0);
-                current_message = parts[3].to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut results: Vec<DiffSearchResult> = Vec::new();
+        let mut current_commit_id = String::new();
+        let mut current_author = String::new();
+        let mut current_date: i64 = 0;
+        let mut current_message = String::new();
+
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
                 continue;
+            }
+
+            // Check if this is a commit header line (contains | separators)
+            if line.contains('|') {
+                let parts: Vec<&str> = line.splitn(4, '|').collect();
+                if parts.len() == 4 {
+                    current_commit_id = parts[0].to_string();
+                    current_author = parts[1].to_string();
+                    current_date = parts[2].parse().unwrap_or(0);
+                    current_message = parts[3].to_string();
+                    continue;
+                }
+            }
+
+            // Otherwise it's a file name
+            if !current_commit_id.is_empty() {
+                results.push(DiffSearchResult {
+                    commit_id: current_commit_id.clone(),
+                    author: current_author.clone(),
+                    date: current_date,
+                    message: current_message.clone(),
+                    file_path: line.to_string(),
+                    line_content: String::new(),
+                });
             }
         }
 
-        // Otherwise it's a file name
-        if !current_commit_id.is_empty() {
-            results.push(DiffSearchResult {
-                commit_id: current_commit_id.clone(),
-                author: current_author.clone(),
-                date: current_date,
-                message: current_message.clone(),
-                file_path: line.to_string(),
-                line_content: String::new(),
-            });
-        }
-    }
-
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 /// Search in commit messages using git log --grep
@@ -413,56 +425,59 @@ pub async fn search_in_commit_messages(
     query: String,
     max_commits: Option<u32>,
 ) -> Result<Vec<DiffSearchResult>> {
-    let max_commits = max_commits.unwrap_or(100);
+    crate::utils::blocking_git(move || {
+        let max_commits = max_commits.unwrap_or(100);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        .arg(format!("--grep={}", query))
-        .arg("-i")
-        // Match the query literally (like `git log --grep=… -F`). Without -F the
-        // query is treated as a regex, so "v1.2" would spuriously match "v1x2"
-        // and invalid patterns like "fix a[" would make git log exit non-zero.
-        .arg("--fixed-strings")
-        .arg("--format=%H|%an|%at|%s")
-        .arg(format!("-{}", max_commits));
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            .arg(format!("--grep={}", query))
+            .arg("-i")
+            // Match the query literally (like `git log --grep=… -F`). Without -F the
+            // query is treated as a regex, so "v1.2" would spuriously match "v1x2"
+            // and invalid patterns like "fix a[" would make git log exit non-zero.
+            .arg("--fixed-strings")
+            .arg("--format=%H|%an|%at|%s")
+            .arg(format!("-{}", max_commits));
 
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e))
+        })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git log failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results: Vec<DiffSearchResult> = Vec::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git log failed: {}",
+                stderr
+            )));
         }
 
-        let parts: Vec<&str> = line.splitn(4, '|').collect();
-        if parts.len() == 4 {
-            results.push(DiffSearchResult {
-                commit_id: parts[0].to_string(),
-                author: parts[1].to_string(),
-                date: parts[2].parse().unwrap_or(0),
-                message: parts[3].to_string(),
-                file_path: String::new(),
-                line_content: String::new(),
-            });
-        }
-    }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut results: Vec<DiffSearchResult> = Vec::new();
 
-    Ok(results)
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.splitn(4, '|').collect();
+            if parts.len() == 4 {
+                results.push(DiffSearchResult {
+                    commit_id: parts[0].to_string(),
+                    author: parts[1].to_string(),
+                    date: parts[2].parse().unwrap_or(0),
+                    message: parts[3].to_string(),
+                    file_path: String::new(),
+                    line_content: String::new(),
+                });
+            }
+        }
+
+        Ok(results)
+    })
+    .await
 }
 
 /// A commit returned from content/file search
@@ -499,99 +514,102 @@ pub async fn search_commits_by_content(
     ignore_case: Option<bool>,
     max_count: Option<u32>,
 ) -> Result<Vec<SearchCommit>> {
-    let max_count = max_count.unwrap_or(100);
-    let use_regex = regex.unwrap_or(false);
-    let case_insensitive = ignore_case.unwrap_or(false);
+    crate::utils::blocking_git(move || {
+        let max_count = max_count.unwrap_or(100);
+        let use_regex = regex.unwrap_or(false);
+        let case_insensitive = ignore_case.unwrap_or(false);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        // Use NUL (%x00) as the field separator so that a commit subject (%s) or
-        // author name (%an) containing '|' cannot be misparsed into the wrong
-        // field. File names from --name-only never contain NUL, so they remain
-        // unambiguously distinguishable from header lines.
-        .arg("--format=%H%x00%h%x00%s%x00%an%x00%at")
-        .arg("--name-only")
-        .arg(format!("-{}", max_count));
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            // Use NUL (%x00) as the field separator so that a commit subject (%s) or
+            // author name (%an) containing '|' cannot be misparsed into the wrong
+            // field. File names from --name-only never contain NUL, so they remain
+            // unambiguously distinguishable from header lines.
+            .arg("--format=%H%x00%h%x00%s%x00%an%x00%at")
+            .arg("--name-only")
+            .arg(format!("-{}", max_count));
 
-    // Use -G for regex (grep in diff), -S for exact string match (pickaxe)
-    if use_regex {
-        cmd.arg(format!("-G{}", search_text));
-        if case_insensitive {
-            cmd.arg("-i");
+        // Use -G for regex (grep in diff), -S for exact string match (pickaxe)
+        if use_regex {
+            cmd.arg(format!("-G{}", search_text));
+            if case_insensitive {
+                cmd.arg("-i");
+            }
+        } else {
+            cmd.arg(format!("-S{}", search_text));
+            if case_insensitive {
+                cmd.arg("-i");
+            }
         }
-    } else {
-        cmd.arg(format!("-S{}", search_text));
-        if case_insensitive {
-            cmd.arg("-i");
+
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git log failed: {}",
+                stderr
+            )));
         }
-    }
 
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut results: Vec<SearchCommit> = Vec::new();
+        let mut current_commit: Option<SearchCommit> = None;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git log failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results: Vec<SearchCommit> = Vec::new();
-    let mut current_commit: Option<SearchCommit> = None;
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            // Empty line can appear between the header and the file list,
-            // or after the file list. Only finalize if the commit has matches
-            // (to avoid finalizing before file names are parsed).
-            if let Some(ref commit) = current_commit {
-                if !commit.matches.is_empty() {
-                    results.push(current_commit.take().unwrap());
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                // Empty line can appear between the header and the file list,
+                // or after the file list. Only finalize if the commit has matches
+                // (to avoid finalizing before file names are parsed).
+                if let Some(ref commit) = current_commit {
+                    if !commit.matches.is_empty() {
+                        results.push(current_commit.take().unwrap());
+                    }
                 }
-            }
-            continue;
-        }
-
-        // Header lines contain NUL field separators; file names never do.
-        if line.contains('\0') {
-            // Save previous commit if exists
-            if let Some(commit) = current_commit.take() {
-                results.push(commit);
+                continue;
             }
 
-            let parts: Vec<&str> = line.splitn(5, '\0').collect();
-            if parts.len() == 5 {
-                current_commit = Some(SearchCommit {
-                    oid: parts[0].to_string(),
-                    short_oid: parts[1].to_string(),
-                    message: parts[2].to_string(),
-                    author_name: parts[3].to_string(),
-                    author_date: parts[4].parse().unwrap_or(0),
-                    matches: Vec::new(),
+            // Header lines contain NUL field separators; file names never do.
+            if line.contains('\0') {
+                // Save previous commit if exists
+                if let Some(commit) = current_commit.take() {
+                    results.push(commit);
+                }
+
+                let parts: Vec<&str> = line.splitn(5, '\0').collect();
+                if parts.len() == 5 {
+                    current_commit = Some(SearchCommit {
+                        oid: parts[0].to_string(),
+                        short_oid: parts[1].to_string(),
+                        message: parts[2].to_string(),
+                        author_name: parts[3].to_string(),
+                        author_date: parts[4].parse().unwrap_or(0),
+                        matches: Vec::new(),
+                    });
+                }
+            } else if let Some(ref mut commit) = current_commit {
+                // This is a file name
+                commit.matches.push(SearchMatch {
+                    file_path: line.to_string(),
+                    line_number: None,
+                    line_content: None,
                 });
             }
-        } else if let Some(ref mut commit) = current_commit {
-            // This is a file name
-            commit.matches.push(SearchMatch {
-                file_path: line.to_string(),
-                line_number: None,
-                line_content: None,
-            });
         }
-    }
 
-    // Don't forget the last commit
-    if let Some(commit) = current_commit {
-        results.push(commit);
-    }
+        // Don't forget the last commit
+        if let Some(commit) = current_commit {
+            results.push(commit);
+        }
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 /// Search for commits that touched files matching a pattern (git log -- <pattern>)
@@ -603,84 +621,87 @@ pub async fn search_commits_by_file(
     file_pattern: String,
     max_count: Option<u32>,
 ) -> Result<Vec<SearchCommit>> {
-    let max_count = max_count.unwrap_or(100);
+    crate::utils::blocking_git(move || {
+        let max_count = max_count.unwrap_or(100);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        // NUL-separated fields so a '|' in the subject/author cannot corrupt
-        // field parsing (see search_commits_by_content for details).
-        .arg("--format=%H%x00%h%x00%s%x00%an%x00%at")
-        .arg("--name-only")
-        .arg(format!("-{}", max_count))
-        .arg("--")
-        .arg(&file_pattern);
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            // NUL-separated fields so a '|' in the subject/author cannot corrupt
+            // field parsing (see search_commits_by_content for details).
+            .arg("--format=%H%x00%h%x00%s%x00%an%x00%at")
+            .arg("--name-only")
+            .arg(format!("-{}", max_count))
+            .arg("--")
+            .arg(&file_pattern);
 
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e)))?;
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git log: {}", e))
+        })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git log failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results: Vec<SearchCommit> = Vec::new();
-    let mut current_commit: Option<SearchCommit> = None;
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            // Empty line can appear between the header and the file list,
-            // or after the file list. Only finalize if the commit has matches
-            // (to avoid finalizing before file names are parsed).
-            if let Some(ref commit) = current_commit {
-                if !commit.matches.is_empty() {
-                    results.push(current_commit.take().unwrap());
-                }
-            }
-            continue;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git log failed: {}",
+                stderr
+            )));
         }
 
-        // Header lines contain NUL field separators; file names never do.
-        if line.contains('\0') {
-            // Save previous commit if exists
-            if let Some(commit) = current_commit.take() {
-                results.push(commit);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut results: Vec<SearchCommit> = Vec::new();
+        let mut current_commit: Option<SearchCommit> = None;
+
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                // Empty line can appear between the header and the file list,
+                // or after the file list. Only finalize if the commit has matches
+                // (to avoid finalizing before file names are parsed).
+                if let Some(ref commit) = current_commit {
+                    if !commit.matches.is_empty() {
+                        results.push(current_commit.take().unwrap());
+                    }
+                }
+                continue;
             }
 
-            let parts: Vec<&str> = line.splitn(5, '\0').collect();
-            if parts.len() == 5 {
-                current_commit = Some(SearchCommit {
-                    oid: parts[0].to_string(),
-                    short_oid: parts[1].to_string(),
-                    message: parts[2].to_string(),
-                    author_name: parts[3].to_string(),
-                    author_date: parts[4].parse().unwrap_or(0),
-                    matches: Vec::new(),
+            // Header lines contain NUL field separators; file names never do.
+            if line.contains('\0') {
+                // Save previous commit if exists
+                if let Some(commit) = current_commit.take() {
+                    results.push(commit);
+                }
+
+                let parts: Vec<&str> = line.splitn(5, '\0').collect();
+                if parts.len() == 5 {
+                    current_commit = Some(SearchCommit {
+                        oid: parts[0].to_string(),
+                        short_oid: parts[1].to_string(),
+                        message: parts[2].to_string(),
+                        author_name: parts[3].to_string(),
+                        author_date: parts[4].parse().unwrap_or(0),
+                        matches: Vec::new(),
+                    });
+                }
+            } else if let Some(ref mut commit) = current_commit {
+                // This is a file name
+                commit.matches.push(SearchMatch {
+                    file_path: line.to_string(),
+                    line_number: None,
+                    line_content: None,
                 });
             }
-        } else if let Some(ref mut commit) = current_commit {
-            // This is a file name
-            commit.matches.push(SearchMatch {
-                file_path: line.to_string(),
-                line_number: None,
-                line_content: None,
-            });
         }
-    }
 
-    // Don't forget the last commit
-    if let Some(commit) = current_commit {
-        results.push(commit);
-    }
+        // Don't forget the last commit
+        if let Some(commit) = current_commit {
+            results.push(commit);
+        }
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 #[cfg(test)]

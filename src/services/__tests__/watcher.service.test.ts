@@ -4,10 +4,12 @@
  * Tests for file watcher service using invokeCommand wrapper.
  */
 
-import { expect } from '@open-wc/testing';
+import { expect, waitUntil } from '@open-wc/testing';
 
 const invokeCallArgs: Array<{ command: string; args: Record<string, unknown> }> = [];
 let shouldFail = false;
+// Per-command failures, so a test can fail `start_watching` alone
+let failCommands: Record<string, string> = {};
 
 let callbackId = 0;
 
@@ -16,6 +18,10 @@ const mockInvoke = (command: string, args?: Record<string, unknown>): Promise<un
 
   if (shouldFail) {
     return Promise.reject('Backend error');
+  }
+
+  if (failCommands[command]) {
+    return Promise.reject(failCommands[command]);
   }
 
   switch (command) {
@@ -37,11 +43,13 @@ const mockInvoke = (command: string, args?: Record<string, unknown>): Promise<un
 };
 
 import { startWatching, stopWatching, onFileChange, cleanup } from '../watcher.service.ts';
+import { uiStore } from '../../stores/index.ts';
 
 describe('watcher.service', () => {
   beforeEach(() => {
     invokeCallArgs.length = 0;
     shouldFail = false;
+    failCommands = {};
   });
 
   afterEach(async () => {
@@ -103,6 +111,108 @@ describe('watcher.service', () => {
         // invokeCommand wraps the rejection message
         expect((e as Error).message).to.be.a('string');
       }
+    });
+  });
+
+  // A watch that cannot be registered (an exhausted inotify budget is the
+  // usual cause on Linux) used to be logged and nothing else, leaving the user
+  // with an app that silently stopped noticing outside changes.
+  describe('watch failure feedback', () => {
+    const LIMIT_ERROR =
+      'the system file-watch limit was reached while watching /repos/huge-monorepo. ' +
+      'Raise the inotify limit to restore it, e.g. `sudo sysctl fs.inotify.max_user_watches=524288`.';
+
+    function warnings(): Array<{ message: string }> {
+      return uiStore.getState().toasts.filter((t) => t.type === 'warning');
+    }
+
+    beforeEach(() => {
+      uiStore.setState({ toasts: [] });
+    });
+
+    afterEach(() => {
+      uiStore.setState({ toasts: [] });
+    });
+
+    it('warns the user, naming the repository and the actionable cause', async () => {
+      failCommands['start_watching'] = LIMIT_ERROR;
+
+      await startWatching('/repos/huge-monorepo').catch(() => undefined);
+
+      const warning = warnings()[0];
+      expect(warning, 'a warning toast is surfaced to the user').to.exist;
+      expect(warning.message).to.contain('Auto-refresh is unavailable for "huge-monorepo"');
+      expect(warning.message).to.contain('fs.inotify.max_user_watches');
+      expect(warning.message).to.contain('refresh manually');
+    });
+
+    it('still rejects so callers can log the failure', async () => {
+      failCommands['start_watching'] = LIMIT_ERROR;
+
+      let rejected = false;
+      await startWatching('/repos/rejects').catch(() => {
+        rejected = true;
+      });
+
+      expect(rejected).to.be.true;
+    });
+
+    it('warns only once per repository, however often watching is retried', async () => {
+      failCommands['start_watching'] = LIMIT_ERROR;
+
+      await startWatching('/repos/once-only').catch(() => undefined);
+      await startWatching('/repos/once-only').catch(() => undefined);
+      await startWatching('/repos/once-only').catch(() => undefined);
+
+      expect(warnings()).to.have.lengthOf(1);
+    });
+
+    it('warns separately for each repository that cannot be watched', async () => {
+      failCommands['start_watching'] = LIMIT_ERROR;
+
+      await startWatching('/repos/one').catch(() => undefined);
+      await startWatching('/repos/two').catch(() => undefined);
+
+      expect(warnings()).to.have.lengthOf(2);
+    });
+
+    it('offers a Retry that watches again and stays quiet when it works', async () => {
+      failCommands['start_watching'] = LIMIT_ERROR;
+      await startWatching('/repos/retryable').catch(() => undefined);
+
+      const toast = uiStore.getState().toasts.find((t) => t.type === 'warning');
+      expect(toast?.action?.label).to.equal('Retry');
+
+      failCommands = {};
+      invokeCallArgs.length = 0;
+      toast!.action!.callback();
+      await waitUntil(
+        () => invokeCallArgs.some((c) => c.command === 'start_watching'),
+        'the retry to reach the backend',
+      );
+
+      const retry = invokeCallArgs.find((c) => c.command === 'start_watching');
+      expect(retry, 'Retry re-attempts the watch').to.not.be.undefined;
+      expect(retry!.args.path).to.equal('/repos/retryable');
+      // The retry succeeded, so no NEW warning was raised
+      expect(warnings()).to.have.lengthOf(1);
+    });
+
+    it('warns again after the repository is closed and reopened', async () => {
+      failCommands['start_watching'] = LIMIT_ERROR;
+      await startWatching('/repos/reopened').catch(() => undefined);
+      expect(warnings()).to.have.lengthOf(1);
+
+      await stopWatching('/repos/reopened');
+      await startWatching('/repos/reopened').catch(() => undefined);
+
+      expect(warnings()).to.have.lengthOf(2);
+    });
+
+    it('does not warn when watching succeeds', async () => {
+      await startWatching('/repos/fine');
+
+      expect(warnings()).to.have.lengthOf(0);
     });
   });
 

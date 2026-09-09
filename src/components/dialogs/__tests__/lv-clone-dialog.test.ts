@@ -29,6 +29,7 @@ import { expect, fixture, html } from '@open-wc/testing';
 import '../lv-clone-dialog.ts';
 import type { LvCloneDialog } from '../lv-clone-dialog.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
+import { unifiedProfileStore } from '../../../stores/unified-profile.store.ts';
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 describe('lv-clone-dialog', () => {
@@ -507,6 +508,366 @@ describe('lv-clone-dialog', () => {
 
       const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & { open: boolean };
       expect(modal.open, 'dialog reopens after a successful clone').to.be.true;
+    });
+  });
+
+  // ── Cloning from a connected account ───────────────────────────────────
+  describe('account source', () => {
+    const pickedRepository = {
+      id: '1',
+      name: 'my-repo',
+      owner: 'octocat',
+      fullName: 'octocat/my-repo',
+      description: null,
+      isPrivate: true,
+      cloneUrl: 'https://github.com/octocat/my-repo.git',
+      webUrl: 'https://github.com/octocat/my-repo',
+      defaultBranch: 'main',
+      lastPushedAt: null,
+    };
+
+    function selectSource(source: 'url' | 'account'): void {
+      const tab = el.shadowRoot!.querySelector(
+        `#source-${source}`,
+      ) as HTMLButtonElement;
+      tab.click();
+    }
+
+    function picker(): HTMLElement | null {
+      return el.shadowRoot!.querySelector('lv-account-repo-picker');
+    }
+
+    it('offers both sources and starts on the URL one', async () => {
+      expect(el.shadowRoot!.querySelector('#source-url')!.getAttribute('aria-pressed')).to.equal(
+        'true',
+      );
+      expect(
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-pressed'),
+      ).to.equal('false');
+      // The picker is not even mounted, so opening the dialog cannot call a
+      // provider API.
+      expect(picker()).to.equal(null);
+    });
+
+    it('keeps the source switcher operable from the keyboard', async () => {
+      // It used to declare the ARIA tab pattern (role="tablist"/"tab" +
+      // aria-selected) and implement none of it: no aria-controls, no
+      // tabpanel, no arrow-key handler, no roving tabindex. A screen reader
+      // announced "tab, 1 of 2" and Left/Right did nothing. These are plain
+      // toggle buttons — the pattern the picker's own repository rows use —
+      // so Tab reaches them and Enter/Space activate them natively.
+      const group = el.shadowRoot!.querySelector('.source-tabs')!;
+      expect(group.getAttribute('role')).to.equal('group');
+      expect(group.getAttribute('aria-label')).to.equal('Repository source');
+
+      const controls = Array.from(
+        el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.source-tab'),
+      );
+      expect(controls.length).to.equal(2);
+      for (const control of controls) {
+        expect(control.tagName).to.equal('BUTTON');
+        expect(control.type).to.equal('button');
+        expect(control.disabled).to.be.false;
+        expect(control.hasAttribute('tabindex'), 'no roving tabindex to trap Tab').to.be.false;
+        // Half a tab pattern is worse than none: nothing may claim tab roles
+        // without the keyboard behaviour that goes with them.
+        expect(control.getAttribute('role')).to.equal(null);
+        // Default tab order: no roving tabindex to take one of them out of it.
+        expect(control.tabIndex).to.equal(0);
+      }
+
+      // And each states its own on/off, so the switch is announced.
+      expect(controls.map((c) => c.getAttribute('aria-pressed'))).to.deep.equal([
+        'true',
+        'false',
+      ]);
+    });
+
+    it('shows the account picker once the account source is chosen', async () => {
+      selectSource('account');
+      await el.updateComplete;
+
+      expect(picker()).to.exist;
+      expect(
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-pressed'),
+      ).to.equal('true');
+    });
+
+    it('fills the URL and destination from the selected repository', async () => {
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      selectSource('account');
+      await el.updateComplete;
+
+      picker()!.dispatchEvent(
+        new CustomEvent('repository-selected', {
+          detail: { repository: pickedRepository },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      await el.updateComplete;
+
+      const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+      const destInput = el.shadowRoot!.querySelector('#destination') as HTMLInputElement;
+      expect(urlInput.value).to.equal('https://github.com/octocat/my-repo.git');
+      expect(destInput.value).to.equal('/home/user/projects');
+
+      const previews = Array.from(
+        el.shadowRoot!.querySelectorAll('.repo-name-preview'),
+      ).map((n) => n.textContent);
+      expect(previews.join(' ')).to.contain('octocat/my-repo');
+      expect(previews.join(' ')).to.contain('/home/user/projects/my-repo');
+
+      const cloneBtn = el.shadowRoot!.querySelector('.btn-primary') as HTMLButtonElement;
+      expect(cloneBtn.disabled, 'Clone is ready once a repository is picked').to.be.false;
+    });
+
+    it('hands the picked repository to the unchanged clone flow', async () => {
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      const calls: { command: string; args?: unknown }[] = [];
+      mockInvoke = (command: string, args?: unknown) => {
+        calls.push({ command, args });
+        if (command === 'clone_repository') {
+          return Promise.resolve({ path: '/home/user/projects/my-repo', name: 'my-repo' });
+        }
+        return Promise.resolve(null);
+      };
+
+      selectSource('account');
+      await el.updateComplete;
+      picker()!.dispatchEvent(
+        new CustomEvent('repository-selected', {
+          detail: { repository: pickedRepository },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      await el.updateComplete;
+
+      await (el as unknown as { handleClone: () => Promise<void> }).handleClone();
+      await el.updateComplete;
+
+      const clone = calls.find((c) => c.command === 'clone_repository');
+      expect(clone, 'the existing clone command runs').to.exist;
+      const args = clone!.args as { url: string; path: string };
+      expect(args.url).to.equal('https://github.com/octocat/my-repo.git');
+      expect(args.path).to.equal('/home/user/projects/my-repo');
+    });
+
+    it('drops the selected-repository label once the URL is edited by hand', async () => {
+      selectSource('account');
+      await el.updateComplete;
+      picker()!.dispatchEvent(
+        new CustomEvent('repository-selected', {
+          detail: { repository: pickedRepository },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      await el.updateComplete;
+
+      const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+      urlInput.value = 'https://example.test/other.git';
+      urlInput.dispatchEvent(new Event('input'));
+      await el.updateComplete;
+
+      const previews = Array.from(
+        el.shadowRoot!.querySelectorAll('.repo-name-preview'),
+      ).map((n) => n.textContent);
+      expect(previews.join(' ')).to.not.contain('octocat/my-repo');
+    });
+
+    /** Drive the picker's "Connect an account" request and return the event
+     *  the host actually received. */
+    async function requestAccountsManager(): Promise<CustomEvent[]> {
+      const seen: CustomEvent[] = [];
+      const listener = (e: Event): void => {
+        seen.push(e as CustomEvent);
+      };
+      el.addEventListener('manage-accounts', listener);
+      picker()!.dispatchEvent(
+        new CustomEvent('manage-accounts', {
+          detail: { integrationType: 'github' },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      await el.updateComplete;
+      el.removeEventListener('manage-accounts', listener);
+      return seen;
+    }
+
+    it('closes so the accounts manager is not stacked under this dialog', async () => {
+      selectSource('account');
+      await el.updateComplete;
+
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+
+      const seen = await requestAccountsManager();
+
+      expect(modal.open, 'the clone dialog closes').to.be.false;
+      expect(seen.length, 'the host still hears the request').to.equal(1);
+    });
+
+    it('asks for the manager without a provider, so the host records no return target', async () => {
+      selectSource('account');
+      await el.updateComplete;
+
+      const seen = await requestAccountsManager();
+
+      // The picker names the provider it was listing; the host reads that as
+      // "reopen THAT provider's integration dialog when the manager closes".
+      // The user came from Clone and has never seen that dialog, so the
+      // request that leaves this component must carry no provider at all.
+      expect(seen.length).to.equal(1);
+      expect(
+        (seen[0].detail as { integrationType?: string } | null)?.integrationType,
+        'no provider travels to the host',
+      ).to.equal(undefined);
+    });
+
+    it('comes back when the accounts manager closes, with the clone intact', async () => {
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      selectSource('account');
+      await el.updateComplete;
+
+      const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+      urlInput.value = 'https://github.com/octocat/my-repo.git';
+      urlInput.dispatchEvent(new Event('input'));
+      await el.updateComplete;
+
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+
+      await requestAccountsManager();
+      expect(modal.open, 'stepped aside for the manager').to.be.false;
+
+      window.dispatchEvent(new CustomEvent('profile-manager-closed'));
+      await el.updateComplete;
+
+      expect(modal.open, 'the user is returned to the clone they started').to.be.true;
+      expect(
+        el.shadowRoot!.querySelector('#source-account')!.getAttribute('aria-pressed'),
+        'still on the account source',
+      ).to.equal('true');
+      expect(picker(), 'the picker is mounted again').to.exist;
+      expect(
+        (el.shadowRoot!.querySelector('#url') as HTMLInputElement).value,
+        'what the user had typed survives',
+      ).to.equal('https://github.com/octocat/my-repo.git');
+    });
+
+    it('does not reopen on a later manager close it never asked for', async () => {
+      selectSource('account');
+      await el.updateComplete;
+
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+
+      await requestAccountsManager();
+      window.dispatchEvent(new CustomEvent('profile-manager-closed'));
+      await el.updateComplete;
+      expect(modal.open).to.be.true;
+
+      // The user dismisses the clone dialog (Escape / × / overlay all route
+      // through the modal's own close). A manager closed later for some
+      // unrelated reason must not pop this dialog back up.
+      (modal as unknown as { close: () => void }).close();
+      await el.updateComplete;
+      expect(modal.open, 'dismissed').to.be.false;
+      window.dispatchEvent(new CustomEvent('profile-manager-closed'));
+      await el.updateComplete;
+
+      expect(modal.open, 'stays closed').to.be.false;
+    });
+
+    it('locks the source tabs while a clone is running', async () => {
+      const internal = el as unknown as { isCloning: boolean };
+      internal.isCloning = true;
+      await el.updateComplete;
+
+      const tabs = el.shadowRoot!.querySelectorAll('.source-tab');
+      expect(Array.from(tabs).every((t) => (t as HTMLButtonElement).disabled)).to.be.true;
+    });
+
+    it('refuses a manage-accounts request mid-clone instead of letting it reach the host', async () => {
+      selectSource('account');
+      await el.updateComplete;
+      const modal = el.shadowRoot!.querySelector('lv-modal') as HTMLElement & {
+        open: boolean;
+      };
+      modal.open = true;
+      const internal = el as unknown as { isCloning: boolean; returnAfterAccounts: boolean };
+      internal.isCloning = true;
+      await el.updateComplete;
+
+      // The request the picker forwards from its account selector, provider
+      // and all. Merely returning early would let it carry on to the host,
+      // which would open the manager stacked on the cloning dialog and record
+      // that provider as the place to return to.
+      const seen = await requestAccountsManager();
+
+      expect(seen.length, 'nothing escapes to the host').to.equal(0);
+      expect(modal.open, 'the cloning dialog stays where it is').to.be.true;
+      expect(internal.returnAfterAccounts, 'no return trip is armed').to.be.false;
+    });
+
+    it('locks the account selector inside the picker while a clone is running', async () => {
+      // The picker mounts its selector only once an account exists.
+      unifiedProfileStore.getState().setAccounts([
+        {
+          id: 'gh-1',
+          name: 'Work GitHub',
+          integrationType: 'github',
+          urlPatterns: [],
+          isDefault: true,
+          color: null,
+          config: { type: 'github' },
+          cachedUser: null,
+        },
+      ]);
+      try {
+        selectSource('account');
+        await el.updateComplete;
+        const internal = el as unknown as { isCloning: boolean };
+        internal.isCloning = true;
+        await el.updateComplete;
+
+        const pickerEl = picker() as HTMLElement & {
+          disabled: boolean;
+          updateComplete: Promise<unknown>;
+        };
+        expect(pickerEl.disabled, 'the picker is disabled').to.be.true;
+        await pickerEl.updateComplete;
+        const selector = pickerEl.shadowRoot!.querySelector('lv-account-selector') as
+          | (HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> })
+          | null;
+        expect(selector, 'the selector is mounted').to.exist;
+        expect(selector!.disabled, 'the selector inherits the lock').to.be.true;
+        await selector!.updateComplete;
+        const trigger = selector!.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement;
+        expect(trigger.disabled, 'its dropdown cannot be opened').to.be.true;
+      } finally {
+        unifiedProfileStore.getState().reset();
+      }
+    });
+
+    it('returns to the URL source on reset', async () => {
+      selectSource('account');
+      await el.updateComplete;
+      expect(picker()).to.exist;
+
+      (el as unknown as { reset: () => void }).reset();
+      await el.updateComplete;
+
+      expect(picker()).to.equal(null);
     });
   });
 

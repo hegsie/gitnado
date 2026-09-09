@@ -218,6 +218,10 @@ describe('lv-diff-view', () => {
     confirmAnswer = 'Ok';
     // Word wrap is a shared setting now — start every test from a known off.
     settingsStore.getState().setWordWrap(false);
+    // Whitespace mode and context lines are shared settings too — start every
+    // test from the shipped defaults.
+    settingsStore.getState().setDiffIgnoreWhitespace('none');
+    settingsStore.getState().setDiffContextLines(3);
     localStorage.removeItem('gitnado-diff-word-wrap');
   });
 
@@ -1974,6 +1978,254 @@ describe('lv-diff-view', () => {
 
       expect((el as unknown as { wordWrap: boolean }).wordWrap, 'the subscription is torn down').to
         .be.false;
+    });
+  });
+
+  // ── Whitespace mode / context lines ───────────────────────────────────
+  describe('diff render options', () => {
+    function whitespaceSelect(el: LvDiffView): HTMLSelectElement {
+      const select = el.shadowRoot!.querySelector<HTMLSelectElement>('#diff-ignore-whitespace');
+      expect(select, 'the whitespace toolbar control exists').to.not.be.null;
+      return select!;
+    }
+
+    function contextInput(el: LvDiffView): HTMLInputElement {
+      const input = el.shadowRoot!.querySelector<HTMLInputElement>('#diff-context-lines');
+      expect(input, 'the context-lines toolbar control exists').to.not.be.null;
+      return input!;
+    }
+
+    function lastArgs(command: string): Record<string, unknown> {
+      const calls = findCommands(command);
+      expect(calls.length, `${command} was invoked`).to.be.greaterThan(0);
+      return calls[calls.length - 1].args as Record<string, unknown>;
+    }
+
+    it('sends both options on the unstaged working diff', async () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('change');
+      settingsStore.getState().setDiffContextLines(7);
+
+      const el = await renderDiffView({ file: makeStatusEntry({ isStaged: false }) });
+      await settleAsyncUpdates(el);
+
+      const args = lastArgs('get_file_diff');
+      expect(args.staged).to.be.false;
+      expect(args.ignoreWhitespace).to.equal('change');
+      expect(args.contextLines).to.equal(7);
+    });
+
+    it('sends both options on the staged working diff', async () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('eol');
+      settingsStore.getState().setDiffContextLines(1);
+
+      const el = await renderDiffView({ file: makeStatusEntry({ isStaged: true }) });
+      await settleAsyncUpdates(el);
+
+      const args = lastArgs('get_file_diff');
+      expect(args.staged).to.be.true;
+      expect(args.ignoreWhitespace).to.equal('eol');
+      expect(args.contextLines).to.equal(1);
+    });
+
+    it('sends both options on the commit-file diff', async () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('all');
+      settingsStore.getState().setDiffContextLines(0);
+
+      const el = await renderDiffView({
+        file: null,
+        commitFile: { commitOid: 'abc123', filePath: 'src/main.ts' },
+      });
+      await settleAsyncUpdates(el);
+
+      const args = lastArgs('get_commit_file_diff');
+      expect(args.commitOid).to.equal('abc123');
+      expect(args.ignoreWhitespace).to.equal('all');
+      expect(args.contextLines).to.equal(0);
+    });
+
+    it('sends no snake_case keys for the new options', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+
+      const args = lastArgs('get_file_diff');
+      expect(Object.keys(args)).to.include('ignoreWhitespace');
+      expect(Object.keys(args)).to.include('contextLines');
+      expect(Object.keys(args)).to.not.include('ignore_whitespace');
+      expect(Object.keys(args)).to.not.include('context_lines');
+    });
+
+    it('persists the whitespace choice and re-fetches with it', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+      clearHistory();
+
+      const select = whitespaceSelect(el);
+      select.value = 'all';
+      select.dispatchEvent(new Event('change'));
+      await settleAsyncUpdates(el);
+
+      expect(settingsStore.getState().diffIgnoreWhitespace, 'written to the shared setting').to.equal(
+        'all'
+      );
+      expect(lastArgs('get_file_diff').ignoreWhitespace).to.equal('all');
+    });
+
+    it('persists the context-line choice and re-fetches with it', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+      clearHistory();
+
+      const input = contextInput(el);
+      input.value = '9';
+      input.dispatchEvent(new Event('change'));
+      await settleAsyncUpdates(el);
+
+      expect(settingsStore.getState().diffContextLines).to.equal(9);
+      expect(lastArgs('get_file_diff').contextLines).to.equal(9);
+    });
+
+    it('clamps an out-of-range context-line entry and shows the clamped value', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+      clearHistory();
+
+      const input = contextInput(el);
+      input.value = '500';
+      input.dispatchEvent(new Event('change'));
+      await settleAsyncUpdates(el);
+
+      expect(settingsStore.getState().diffContextLines).to.equal(20);
+      expect(input.value, 'the field never shows a value the diff was not rendered with').to.equal(
+        '20'
+      );
+      expect(lastArgs('get_file_diff').contextLines).to.equal(20);
+
+      input.value = '-3';
+      input.dispatchEvent(new Event('change'));
+      await settleAsyncUpdates(el);
+
+      expect(settingsStore.getState().diffContextLines).to.equal(0);
+      expect(input.value).to.equal('0');
+      expect(lastArgs('get_file_diff').contextLines).to.equal(0);
+    });
+
+    it('follows the Settings dialog changing either option while a diff is open', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+      clearHistory();
+
+      settingsStore.getState().setDiffIgnoreWhitespace('all');
+      await settleAsyncUpdates(el);
+      expect(lastArgs('get_file_diff').ignoreWhitespace).to.equal('all');
+      expect(whitespaceSelect(el).value, 'the toolbar control reflects it').to.equal('all');
+
+      clearHistory();
+      settingsStore.getState().setDiffContextLines(12);
+      await settleAsyncUpdates(el);
+      expect(lastArgs('get_file_diff').contextLines).to.equal(12);
+      expect(contextInput(el).value).to.equal('12');
+    });
+
+    it('does not re-fetch when an unrelated setting changes', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+      clearHistory();
+
+      settingsStore.getState().setWordWrap(true);
+      await settleAsyncUpdates(el);
+
+      expect(findCommands('get_file_diff').length, 'word wrap needs no new diff').to.equal(0);
+    });
+
+    it('shows the loading state while the re-fetch is in flight', async () => {
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+
+      const pending = deferred<DiffFile>();
+      mockInvoke = async (command: string) => {
+        if (command === 'get_file_diff') return pending.promise;
+        if (command === 'get_diff_tool') return { tool: null };
+        return null;
+      };
+
+      const select = whitespaceSelect(el);
+      select.value = 'all';
+      select.dispatchEvent(new Event('change'));
+      await flushAsyncUpdates(el);
+
+      expect(el.shadowRoot!.querySelector('.loading'), 'the pane reports the re-fetch').to.not.be
+        .null;
+
+      pending.resolve(makeDiffFile());
+      await settleAsyncUpdates(el);
+      expect(el.shadowRoot!.querySelector('.loading')).to.be.null;
+    });
+
+    it('explains an empty diff caused by the whitespace mode', async () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('all');
+      setupDefaultMocks({
+        diff: makeDiffFile({ hunks: [], additions: 0, deletions: 0 }),
+      });
+
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+
+      const empty = el.shadowRoot!.querySelector('.empty');
+      expect(empty, 'an empty diff is not a blank pane').to.not.be.null;
+      expect(empty!.textContent).to.contain('Ignore all whitespace');
+    });
+
+    it('explains an empty diff in split view too', async () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('all');
+      setupDefaultMocks({
+        diff: makeDiffFile({ hunks: [], additions: 0, deletions: 0 }),
+      });
+
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+
+      const splitBtn = Array.from(el.shadowRoot!.querySelectorAll('.view-btn')).find(
+        (btn) => btn.getAttribute('title') === 'Split view'
+      );
+      (splitBtn as HTMLElement).click();
+      await el.updateComplete;
+
+      const empty = el.shadowRoot!.querySelector('.empty');
+      expect(empty, 'split view must not show two blank panes').to.not.be.null;
+      expect(empty!.textContent).to.contain('Ignore all whitespace');
+    });
+
+    it('keeps the plain empty message when no whitespace mode is active', async () => {
+      setupDefaultMocks({
+        diff: makeDiffFile({ hunks: [], additions: 0, deletions: 0 }),
+      });
+
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+
+      expect(el.shadowRoot!.querySelector('.empty')!.textContent).to.contain(
+        'No changes in this file'
+      );
+    });
+
+    it('labels both controls for assistive technology', async () => {
+      const el = await renderDiffView();
+
+      expect(whitespaceSelect(el).getAttribute('aria-label')).to.equal('Whitespace handling');
+      expect(contextInput(el).getAttribute('aria-label')).to.equal(
+        'Lines of context around each change'
+      );
+      expect(contextInput(el).getAttribute('min')).to.equal('0');
+      expect(contextInput(el).getAttribute('max')).to.equal('20');
+    });
+
+    it('shows the persisted whitespace mode on first render', async () => {
+      settingsStore.getState().setDiffIgnoreWhitespace('change');
+
+      const el = await renderDiffView();
+      await settleAsyncUpdates(el);
+
+      expect(whitespaceSelect(el).value, 'a restart keeps the choice visible').to.equal('change');
     });
   });
 

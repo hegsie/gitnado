@@ -329,6 +329,80 @@ describe('lv-account-selector', () => {
     expect((eventDetail as { integrationType: string }).integrationType).to.equal('github');
   });
 
+  describe('disabled', () => {
+    async function mountDisabled(): Promise<LvAccountSelector> {
+      const el = await fixture<LvAccountSelector>(html`
+        <lv-account-selector
+          integrationType="github"
+          .selectedAccountId=${'acc-1'}
+          disabled
+        ></lv-account-selector>
+      `);
+      await el.updateComplete;
+      return el;
+    }
+
+    it('cannot be opened', async () => {
+      const el = await mountDisabled();
+      const selectorBtn = el.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement;
+      expect(selectorBtn.disabled, 'the trigger is disabled').to.be.true;
+
+      // Belt and braces: a synthetic click on a disabled button still runs the
+      // handler in some engines, so the handler itself must refuse too.
+      selectorBtn.dispatchEvent(new Event('click', { bubbles: true }));
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.dropdown')).to.equal(null);
+    });
+
+    it('does not dispatch add-account or manage-accounts', async () => {
+      const el = await mountDisabled();
+      const dispatched: string[] = [];
+      for (const name of ['add-account', 'manage-accounts']) {
+        el.addEventListener(name, () => dispatched.push(name));
+      }
+
+      const internal = el as unknown as {
+        handleAddAccount: () => void;
+        handleManageAccounts: () => void;
+      };
+      internal.handleAddAccount();
+      internal.handleManageAccounts();
+      await el.updateComplete;
+
+      expect(dispatched, 'no navigation request leaves a disabled selector').to.deep.equal([]);
+    });
+
+    it('folds an open dropdown away and disables its actions when disabled mid-way', async () => {
+      const el = await fixture<LvAccountSelector>(html`
+        <lv-account-selector
+          integrationType="github"
+          .selectedAccountId=${'acc-1'}
+        ></lv-account-selector>
+      `);
+      await el.updateComplete;
+      (el.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement).click();
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.dropdown'), 'open before').to.not.equal(null);
+
+      el.disabled = true;
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.dropdown'), 'closed once disabled').to.equal(null);
+      expect(
+        (el.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement).disabled,
+      ).to.be.true;
+
+      // And the actions are inert even if the dropdown were forced open.
+      (el as unknown as { isOpen: boolean }).isOpen = true;
+      await el.updateComplete;
+      const actions = Array.from(
+        el.shadowRoot!.querySelectorAll('.dropdown-action'),
+      ) as HTMLButtonElement[];
+      expect(actions.length, 'both actions rendered').to.equal(2);
+      expect(actions.every((b) => b.disabled), 'both actions disabled').to.be.true;
+    });
+  });
+
   // D7: clicking add/manage must give immediate inline feedback (not be silent).
   it('shows a busy "Opening…" label and disables actions after clicking Add Account', async () => {
     const el = await fixture<LvAccountSelector>(html`

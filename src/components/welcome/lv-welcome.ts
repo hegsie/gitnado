@@ -4,14 +4,15 @@
  */
 
 import { LitElement, html, css } from 'lit';
-import { customElement, state, query } from 'lit/decorators.js';
+import { customElement, property, state, query } from 'lit/decorators.js';
+import { localized, msg, str } from '@lit/localize';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import { repositoryStore, type RecentRepository } from '../../stores/index.ts';
 import { workspaceStore } from '../../stores/workspace.store.ts';
 import { openRepository } from '../../services/git.service.ts';
-import { openRepositoryDialog } from '../../services/dialog.service.ts';
+import { openRepositoryDialog, openDialog } from '../../services/dialog.service.ts';
+import { openRepositoryPath } from '../../services/repository-open.service.ts';
 import { showToast } from '../../services/notification.service.ts';
-import { searchIndexService } from '../../services/search-index.service.ts';
 import * as workspaceService from '../../services/workspace.service.ts';
 import type { Workspace } from '../../types/git.types.ts';
 import { loggers } from '../../utils/logger.ts';
@@ -24,6 +25,7 @@ import type { LvInitDialog } from '../dialogs/lv-init-dialog.ts';
 import mascotImage from '../../assets/mascot/gitnado-400.png';
 
 @customElement('lv-welcome')
+@localized()
 export class LvWelcome extends LitElement {
   static styles = [
     sharedStyles,
@@ -33,6 +35,8 @@ export class LvWelcome extends LitElement {
         flex-direction: column;
         align-items: center;
         height: 100%;
+        /* Anchors the absolutely positioned drop overlay to the screen. */
+        position: relative;
         padding: var(--spacing-xl);
         background: var(--color-bg-primary);
         overflow: auto;
@@ -316,8 +320,51 @@ export class LvWelcome extends LitElement {
         font-size: var(--font-size-xs);
         color: var(--color-text-muted);
       }
+
+      /* Drop affordance: shown while a folder is dragged over the window so
+         the user can see the drop will be accepted before letting go. */
+      .drop-overlay {
+        position: absolute;
+        inset: var(--spacing-md);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--spacing-sm);
+        border: 2px dashed var(--color-primary);
+        border-radius: var(--radius-lg);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        z-index: 10;
+        /* The OS owns the drag; the overlay must never swallow a pointer. */
+        pointer-events: none;
+      }
+
+      .drop-overlay svg {
+        width: 48px;
+        height: 48px;
+        color: var(--color-primary);
+      }
+
+      .drop-overlay-title {
+        font-size: var(--font-size-lg);
+        font-weight: var(--font-weight-medium);
+      }
+
+      .drop-overlay-hint {
+        font-size: var(--font-size-sm);
+        color: var(--color-text-secondary);
+        max-width: 380px;
+        text-align: center;
+      }
     `,
   ];
+
+  /**
+   * True while an OS drag is over the window. Owned by the shell, which is the
+   * one place listening for the webview's drag events.
+   */
+  @property({ type: Boolean }) dragActive = false;
 
   @state() private recentRepositories: RecentRepository[] = [];
   @state() private workspaces: Workspace[] = [];
@@ -367,33 +414,61 @@ export class LvWelcome extends LitElement {
       await this.openRepoByPath(path);
     } catch (error) {
       log.error('Error in handleOpen:', error);
-      showToast(error instanceof Error ? error.message : 'Failed to open repository', 'error');
+      showToast(
+        error instanceof Error ? error.message : msg('Failed to open repository'),
+        'error',
+      );
     }
   }
 
   private async openRepoByPath(path: string): Promise<void> {
-    const store = repositoryStore.getState();
-    store.setLoading(true);
-
-    try {
-      const result = await openRepository({ path });
-      if (result.success && result.data) {
-        store.addRepository(result.data);
-        // Build search index in background (non-blocking)
-        searchIndexService.buildIndex(path);
-      } else {
-        const message = result.error?.message ?? 'Failed to open repository';
-        store.setError(message);
-        // repositoryStore.error has no render sink, so surface it directly.
-        showToast(message, 'error');
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      store.setError(message);
-      showToast(message, 'error');
-    } finally {
-      store.setLoading(false);
+    // Shared with the window drop handler and the scan results, so tabs, the
+    // recent list and persistence behave identically however the repository
+    // arrived — and an already-open repository focuses its tab.
+    const outcome = await openRepositoryPath(path);
+    if (outcome.status === 'error') {
+      // repositoryStore.error has no render sink, so surface it directly.
+      showToast(outcome.message ?? msg('Failed to open repository'), 'error');
     }
+  }
+
+  /**
+   * Pick a folder and hand it to the scan dialog. The shell owns that dialog
+   * so a folder dropped while a repository is open reaches the same surface.
+   */
+  private async handleScan(): Promise<void> {
+    try {
+      const result = await openDialog({
+        title: msg('Scan Folder for Repositories'),
+        directory: true,
+        multiple: false,
+      });
+      const path = Array.isArray(result) ? result[0] : result;
+      // A cancelled picker is not a failure and needs no feedback.
+      if (!path) return;
+      this.dispatchEvent(
+        new CustomEvent<{ path: string; mode: 'scan' }>('open-repository-scan', {
+          detail: { path, mode: 'scan' },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    } catch (error) {
+      log.error('Error choosing a folder to scan:', error);
+      showToast(
+        error instanceof Error ? error.message : msg('Failed to choose a folder to scan'),
+        'error',
+      );
+    }
+  }
+
+  /**
+   * Open the init dialog, optionally pre-filled. Called by the shell when a
+   * dropped folder is not a repository and the user chooses to initialize it —
+   * while no repository is open this component owns the only init dialog.
+   */
+  public openInitDialog(path?: string): void {
+    this.initDialog.open(path);
   }
 
   private handleClone(): void {
@@ -467,14 +542,19 @@ export class LvWelcome extends LitElement {
     // A repo that failed to open (moved, deleted) must not hide behind a
     // green success toast
     if (failedCount === 0) {
-      showToast(`Opened workspace: ${workspace.name}`, 'success');
+      showToast(msg(str`Opened workspace: ${workspace.name}`), 'success');
     } else if (lastOpenedPath) {
       showToast(
-        `Opened workspace: ${workspace.name} (${failedCount} of ${workspace.repositories.length} repositories failed to open)`,
+        msg(
+          str`Opened workspace: ${workspace.name} (${failedCount} of ${workspace.repositories.length} repositories failed to open)`,
+        ),
         'warning',
       );
     } else {
-      showToast(`Could not open workspace: ${workspace.name} — no repository could be opened`, 'error');
+      showToast(
+        msg(str`Could not open workspace: ${workspace.name} — no repository could be opened`),
+        'error',
+      );
     }
   }
 
@@ -497,10 +577,26 @@ export class LvWelcome extends LitElement {
       <lv-clone-dialog></lv-clone-dialog>
       <lv-init-dialog></lv-init-dialog>
 
+      ${this.dragActive
+        ? html`
+            <div class="drop-overlay" role="status">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <div class="drop-overlay-title">${msg('Drop a folder to open it')}</div>
+              <div class="drop-overlay-hint">
+                ${msg(
+                  'Git repositories open straight away; any other folder can be scanned or initialized.'
+                )}
+              </div>
+            </div>
+          `
+        : ''}
+
       <div class="welcome-content">
-        <img class="mascot" src="${mascotImage}" alt="Gitnado - a tornado of git branches" />
+        <img class="mascot" src="${mascotImage}" alt=${msg('Gitnado - a tornado of git branches')} />
         <div class="logo">Gitnado</div>
-        <p class="tagline">A powerful, open-source Git client</p>
+        <p class="tagline">${msg('A powerful, open-source Git client')}</p>
 
         <div class="actions">
           <button
@@ -511,7 +607,7 @@ export class LvWelcome extends LitElement {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
-            <span>Open</span>
+            <span>${msg('Open')}</span>
           </button>
 
           <button
@@ -524,7 +620,7 @@ export class LvWelcome extends LitElement {
               <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
               <polyline points="10 9 13 12 10 15"></polyline>
             </svg>
-            <span>Clone</span>
+            <span>${msg('Clone')}</span>
           </button>
 
           <button
@@ -536,7 +632,19 @@ export class LvWelcome extends LitElement {
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
-            <span>Init</span>
+            <span>${msg('Init')}</span>
+          </button>
+
+          <button
+            class="action-btn"
+            @click=${this.handleScan}
+            ?disabled=${this.isLoading}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="7"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <span>${msg('Scan')}</span>
           </button>
 
           <button
@@ -548,7 +656,7 @@ export class LvWelcome extends LitElement {
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
               <circle cx="12" cy="7" r="4"></circle>
             </svg>
-            <span>Profiles &amp; Accounts</span>
+            <span>${msg('Profiles & Accounts')}</span>
           </button>
         </div>
 
@@ -556,9 +664,9 @@ export class LvWelcome extends LitElement {
           ? html`
               <div class="workspace-section">
                 <div class="workspace-header">
-                  <span class="workspace-title">Workspaces</span>
+                  <span class="workspace-title">${msg('Workspaces')}</span>
                   <button class="manage-btn" @click=${this.handleManageWorkspaces}>
-                    Manage
+                    ${msg('Manage')}
                   </button>
                 </div>
                 <div class="workspace-list">
@@ -575,7 +683,9 @@ export class LvWelcome extends LitElement {
                         ></span>
                         <div class="workspace-info">
                           <div class="workspace-name">${ws.name}</div>
-                          <div class="workspace-repo-count">${ws.repositories.length} ${ws.repositories.length === 1 ? 'repository' : 'repositories'}</div>
+                          <div class="workspace-repo-count">${ws.repositories.length === 1
+                            ? msg('1 repository')
+                            : msg(str`${ws.repositories.length} repositories`)}</div>
                         </div>
                       </button>
                     `,
@@ -589,9 +699,9 @@ export class LvWelcome extends LitElement {
           ? html`
               <div class="recent-section">
                 <div class="recent-header">
-                  <span class="recent-title">Recent Repositories</span>
+                  <span class="recent-title">${msg('Recent Repositories')}</span>
                   <button class="clear-btn" @click=${this.handleClearRecent}>
-                    Clear
+                    ${msg('Clear')}
                   </button>
                 </div>
                 <div class="recent-list">
@@ -601,7 +711,7 @@ export class LvWelcome extends LitElement {
                         class="recent-item"
                         role="button"
                         tabindex="0"
-                        aria-label="Open ${repo.name}"
+                        aria-label=${msg(str`Open ${repo.name}`)}
                         @click=${() => this.handleRecentClick(repo.path)}
                         @keydown=${(e: KeyboardEvent) => this.handleRecentKeydown(e, repo.path)}
                       >
@@ -614,8 +724,8 @@ export class LvWelcome extends LitElement {
                         </div>
                         <button
                           class="recent-remove"
-                          title="Remove from recent repositories"
-                          aria-label="Remove ${repo.name} from recent repositories"
+                          title=${msg('Remove from recent repositories')}
+                          aria-label=${msg(str`Remove ${repo.name} from recent repositories`)}
                           @click=${(e: Event) => this.handleRecentRemove(e, repo.path)}
                           @keydown=${(e: KeyboardEvent) => this.handleRecentRemoveKeydown(e, repo.path)}
                         >
@@ -633,10 +743,10 @@ export class LvWelcome extends LitElement {
           : html`
               <div class="recent-section">
                 <div class="recent-header">
-                  <span class="recent-title">Recent Repositories</span>
+                  <span class="recent-title">${msg('Recent Repositories')}</span>
                 </div>
                 <div class="empty-recent">
-                  No recent repositories
+                  ${msg('No recent repositories')}
                 </div>
               </div>
             `}

@@ -131,17 +131,40 @@ pub fn generate_jwt(app_id: u64, private_key_pem: &str) -> Result<String, String
     encode(&header, &claims, &key).map_err(|e| format!("Failed to generate JWT: {}", e))
 }
 
+/// The GitHub API host these calls reach. Must stay in step with
+/// `GITHUB_API_BASE` in `commands/github.rs`, which the frontend gate also
+/// matches the allowlist against (`providerApiHost` in git.service.ts).
+const GITHUB_API_BASE: &str = "https://api.github.com";
+
+/// The HTTP client every outbound call in this module goes through.
+///
+/// The same one-constructor rule `commands/github.rs` uses: these two
+/// functions used to build their own `reqwest::Client`, which meant
+/// `configure_github_app` minted a token over the network BEFORE its command's
+/// guard ran, `list_github_app_installations` never met a guard at all, and
+/// `check_github_connection` reached GitHub through the App fallback with
+/// offline mode on. Routing both through here makes all three inherit the gate
+/// (see services/security.rs).
+fn api_client() -> crate::error::Result<reqwest::Client> {
+    crate::services::security::guard_url(GITHUB_API_BASE)?;
+    Ok(reqwest::Client::new())
+}
+
 /// Get an installation access token from GitHub.
 ///
 /// Uses the JWT to authenticate and request a short-lived installation token.
+///
+/// Returns a [`crate::error::GitnadoError`] rather than a `String` so a
+/// refusal from the network gate keeps its `NetworkBlocked` identity all the
+/// way to the frontend, where it reads as `BLOCKED` like every other refusal.
 pub async fn get_installation_token(
     jwt: &str,
     installation_id: u64,
-) -> Result<InstallationToken, String> {
-    let client = reqwest::Client::new();
+) -> crate::error::Result<InstallationToken> {
+    let client = api_client()?;
     let url = format!(
-        "https://api.github.com/app/installations/{}/access_tokens",
-        installation_id
+        "{}/app/installations/{}/access_tokens",
+        GITHUB_API_BASE, installation_id
     );
 
     let response = client
@@ -152,7 +175,12 @@ pub async fn get_installation_token(
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| format!("Failed to request installation token: {}", e))?;
+        .map_err(|e| {
+            crate::error::GitnadoError::OperationFailed(format!(
+                "Failed to request installation token: {}",
+                e
+            ))
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -160,7 +188,10 @@ pub async fn get_installation_token(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("GitHub API error ({}): {}", status, body));
+        return Err(crate::error::GitnadoError::OperationFailed(format!(
+            "GitHub API error ({}): {}",
+            status, body
+        )));
     }
 
     #[derive(Deserialize)]
@@ -169,10 +200,12 @@ pub async fn get_installation_token(
         expires_at: String,
     }
 
-    let token_response: TokenResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+    let token_response: TokenResponse = response.json().await.map_err(|e| {
+        crate::error::GitnadoError::OperationFailed(format!(
+            "Failed to parse token response: {}",
+            e
+        ))
+    })?;
 
     Ok(InstallationToken {
         token: token_response.token,
@@ -181,18 +214,26 @@ pub async fn get_installation_token(
 }
 
 /// List all installations for a GitHub App.
-pub async fn list_installations(jwt: &str) -> Result<Vec<AppInstallation>, String> {
-    let client = reqwest::Client::new();
+///
+/// See [`get_installation_token`] for why this returns a
+/// [`crate::error::GitnadoError`].
+pub async fn list_installations(jwt: &str) -> crate::error::Result<Vec<AppInstallation>> {
+    let client = api_client()?;
 
     let response = client
-        .get("https://api.github.com/app/installations")
+        .get(format!("{}/app/installations", GITHUB_API_BASE))
         .header("Authorization", format!("Bearer {}", jwt))
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "Gitnado-Git-Client")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| format!("Failed to list installations: {}", e))?;
+        .map_err(|e| {
+            crate::error::GitnadoError::OperationFailed(format!(
+                "Failed to list installations: {}",
+                e
+            ))
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -200,20 +241,22 @@ pub async fn list_installations(jwt: &str) -> Result<Vec<AppInstallation>, Strin
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("GitHub API error ({}): {}", status, body));
+        return Err(crate::error::GitnadoError::OperationFailed(format!(
+            "GitHub API error ({}): {}",
+            status, body
+        )));
     }
 
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse installations: {}", e))
+    response.json().await.map_err(|e| {
+        crate::error::GitnadoError::OperationFailed(format!("Failed to parse installations: {}", e))
+    })
 }
 
 /// Get or refresh an installation token, using cache when possible.
 pub async fn get_or_refresh_token(
     state: &SharedGitHubAppState,
     config: &GitHubAppConfig,
-) -> Result<String, String> {
+) -> crate::error::Result<String> {
     // Check cache first
     {
         let guard = state.read().await;
@@ -223,7 +266,8 @@ pub async fn get_or_refresh_token(
     }
 
     // Generate new token
-    let jwt = generate_jwt(config.app_id, &config.private_key_pem)?;
+    let jwt = generate_jwt(config.app_id, &config.private_key_pem)
+        .map_err(crate::error::GitnadoError::OperationFailed)?;
     let token = get_installation_token(&jwt, config.installation_id).await?;
     let token_str = token.token.clone();
 

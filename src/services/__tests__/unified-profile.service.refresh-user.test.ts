@@ -61,15 +61,19 @@ const githubConnectionResponse = {
   scopes: ['repo'],
 };
 
+// A REAL `GitLabConnectionStatus`: the backend's `GitLabUser`
+// (`src-tauri/src/commands/gitlab.rs:102`) carries no email, so one here would
+// pin a field the frontend can never receive.
 const gitlabConnectionResponse = {
   connected: true,
   user: {
+    id: 7,
     username: 'gluser',
     name: 'GL User',
     avatarUrl: null,
-    email: 'gl@test.com',
+    webUrl: 'https://gitlab.com/gluser',
   },
-  scopes: [],
+  instanceUrl: 'https://gitlab.com',
 };
 
 const adoConnectionResponse = {
@@ -207,7 +211,9 @@ describe('unified-profile.service - refreshAccountCachedUser', () => {
     expect(result).to.not.be.null;
     expect(result!.username).to.equal('gluser');
     expect(result!.displayName).to.equal('GL User');
-    expect(result!.email).to.equal('gl@test.com');
+    // GitLab's connection check does not report an email; the account keeps
+    // none rather than an `undefined` read off a field that never arrives.
+    expect(result!.email).to.equal(null);
   });
 
   it('returns CachedUser with mapped fields for an Azure DevOps account', async () => {

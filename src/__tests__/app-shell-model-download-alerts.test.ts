@@ -54,6 +54,7 @@ function emit(event: string, payload: unknown): void {
 import { expect, fixture, html } from '@open-wc/testing';
 import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
+import { dialogs } from '../stores/dialog.store.ts';
 import { uiStore } from '../stores/index.ts';
 
 async function shell(): Promise<AppShell> {
@@ -80,6 +81,14 @@ function errorToasts() {
   return uiStore.getState().toasts.filter((t) => t.type === 'error');
 }
 
+// Which dialogs are open is module state, and several tests here drive a shell
+// that is never connected to the document (so its connectedCallback reset never
+// runs). Clear it per test to keep the isolation each instance used to get for
+// free from its own `@state()` flags.
+beforeEach(() => {
+  dialogs.reset();
+});
+
 describe('app-shell model download alerts', () => {
   beforeEach(() => {
     uiStore.setState({ toasts: [] });
@@ -93,9 +102,9 @@ describe('app-shell model download alerts', () => {
   });
 
   it('surfaces a background download failure while Settings is closed', async () => {
-    const el = await shell();
+    await shell();
     expect(
-      (el as unknown as { showSettings: boolean }).showSettings,
+      dialogs.isOpen('settings'),
       'Settings must be closed for this to be the reported bug'
     ).to.be.false;
 

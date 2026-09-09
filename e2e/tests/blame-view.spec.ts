@@ -3,14 +3,15 @@ import { setupOpenRepository } from '../fixtures/tauri-mock';
 import {
   startCommandCaptureWithMocks,
   injectCommandError,
+  openAppDialog,
 } from '../fixtures/test-helpers';
 
 /**
  * E2E tests for Blame View
  * Tests blame display, context menus, line groups, and keyboard interactions.
  *
- * The blame view is conditionally rendered by app-shell when showBlame is true.
- * We open it by setting app-shell state and mocking the get_file_blame command
+ * The blame view is conditionally rendered by app-shell when the `blame` dialog
+ * is open. We open it through the dialog store and mock the get_file_blame command
  * to return deterministic blame data.
  */
 
@@ -75,19 +76,20 @@ async function openBlameView(page: import('@playwright/test').Page): Promise<voi
     get_file_blame: BLAME_MOCK_DATA,
   });
 
-  // Set app-shell properties to show the blame view
+  // Show the blame view. blameFile/blameCommitOid are still app-shell fields
+  // (they are re-derived per refresh, not open-time context); the open flag
+  // lives in the dialog store.
   await page.evaluate(() => {
     const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
-      showBlame: boolean;
       blameFile: string | null;
       blameCommitOid: string | null;
     };
     if (appShell) {
       appShell.blameFile = 'src/main.ts';
       appShell.blameCommitOid = null;
-      appShell.showBlame = true;
     }
   });
+  await openAppDialog(page, 'blame');
 
   // Wait for the blame view to become visible
   await page.locator('lv-blame-view').waitFor({ state: 'visible', timeout: 5000 });
@@ -210,19 +212,18 @@ test.describe('Blame View - Error Scenarios', () => {
     // Now inject the error so the next call to get_file_blame will fail
     await injectCommandError(page, 'get_file_blame', 'Failed to get blame');
 
-    // Set app-shell properties to show the blame view (triggers get_file_blame)
+    // Show the blame view (triggers get_file_blame)
     await page.evaluate(() => {
       const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
-        showBlame: boolean;
         blameFile: string | null;
         blameCommitOid: string | null;
       };
       if (appShell) {
         appShell.blameFile = 'src/main.ts';
         appShell.blameCommitOid = null;
-        appShell.showBlame = true;
       }
     });
+    await openAppDialog(page, 'blame');
 
     // Wait for the blame view to appear in the DOM
     await page.locator('lv-blame-view').waitFor({ state: 'attached', timeout: 5000 });
@@ -239,19 +240,18 @@ test.describe('Blame View - Error Scenarios', () => {
       get_file_blame: { path: 'src/main.ts', lines: [], totalLines: 0 },
     });
 
-    // Set app-shell properties to show the blame view
+    // Show the blame view
     await page.evaluate(() => {
       const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
-        showBlame: boolean;
         blameFile: string | null;
         blameCommitOid: string | null;
       };
       if (appShell) {
         appShell.blameFile = 'src/main.ts';
         appShell.blameCommitOid = null;
-        appShell.showBlame = true;
       }
     });
+    await openAppDialog(page, 'blame');
 
     // Wait for the blame view to appear
     await page.locator('lv-blame-view').waitFor({ state: 'attached', timeout: 5000 });

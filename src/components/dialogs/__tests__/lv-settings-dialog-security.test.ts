@@ -140,6 +140,59 @@ describe('lv-settings-dialog Security section', () => {
     expect(fired).to.equal(3);
   });
 
+  it('offline mode and the allowlist also dispatch ai-settings-changed', () => {
+    // Both decide whether a cloud AI provider may be reached, so the surfaces
+    // that cache "is AI available" — the commit panel, the merge editor — have
+    // to re-ask rather than keep offering a button the gate will now refuse.
+    let fired = 0;
+    const onChange = (): void => { fired++; };
+    window.addEventListener('ai-settings-changed', onChange);
+    try {
+      (el as any).handleToggle('offlineMode', true);
+      expect(fired, 'the offline toggle invalidates AI availability').to.equal(1);
+
+      (el as any).handleRemoteAllowlistChange(textEvent('github.com'));
+      expect(fired, 'the allowlist invalidates AI availability').to.equal(2);
+
+      (el as any).handleToggle('confirmNetworkOps', true);
+      expect(fired, 'the confirm prompt has no say over AI').to.equal(2);
+    } finally {
+      window.removeEventListener('ai-settings-changed', onChange);
+    }
+  });
+
+  it('says offline mode covers cloud AI providers and spares local ones', () => {
+    const descriptions = Array.from(el.shadowRoot!.querySelectorAll('.setting-description')).map(
+      (n) => n.textContent ?? '',
+    );
+    const offline = descriptions.find((d) => d.includes('Block every operation'));
+    expect(offline, 'the offline-mode description must be findable').to.not.be.undefined;
+    // The setting now blocks them, so the description has to say so.
+    expect(offline!).to.contain('cloud AI');
+    expect(offline!, 'local AI keeps working and users need to know').to.contain('Ollama');
+  });
+
+  it('Test provider reports the security setting that refused it', async () => {
+    // "Check your API key" sent the user to fix a key that was never the
+    // problem when it was offline mode blocking the call.
+    settingsStore.setState({ offlineMode: true });
+
+    await (el as any).handleTestProvider('open_ai');
+    await el.updateComplete;
+
+    expect((el as any).testingProvider, 'the Test button must not stay spinning').to.equal(null);
+    expect((el as any).providerTestStatus.open_ai).to.equal('failed');
+    expect((el as any).aiError).to.contain('Offline mode');
+    expect((el as any).aiError).to.not.contain('API key');
+  });
+
+  it('Test provider still blames the API key when nothing is blocking', async () => {
+    await (el as any).handleTestProvider('open_ai');
+    await el.updateComplete;
+
+    expect((el as any).aiError).to.contain('API key');
+  });
+
   it('loads the persisted values so the toggles reflect reality when reopened', async () => {
     settingsStore.setState({
       offlineMode: true,

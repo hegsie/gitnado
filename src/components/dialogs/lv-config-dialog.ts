@@ -469,6 +469,11 @@ export class LvConfigDialog extends LitElement {
   private async handleSaveIdentity(): Promise<void> {
     this.saving = true;
     this.error = null;
+    // What is being written, captured before loadData() below rewrites the
+    // edit fields from the reloaded config.
+    const savedName = this.editName;
+    const savedEmail = this.editEmail;
+    const savedScope = this.saveScope;
 
     try {
       const result = await gitService.setUserIdentity(
@@ -481,6 +486,19 @@ export class LvConfigDialog extends LitElement {
       if (result.success) {
         showToast('Identity saved', 'success');
         await this.loadData();
+        // Announce the new identity so the rest of the app stops acting on the
+        // old one. Without this, a user who opened this dialog FROM the commit
+        // panel's "No git identity configured" hint went back to the same
+        // disabled Sign off control they came to fix. Composed + bubbling so it
+        // reaches both the host (which refreshes the repository) and the commit
+        // panel's window listener.
+        this.dispatchEvent(
+          new CustomEvent('git-identity-changed', {
+            detail: { name: savedName, email: savedEmail, scope: savedScope },
+            bubbles: true,
+            composed: true,
+          }),
+        );
       } else {
         this.error = result.error?.message || 'Failed to save identity';
       }

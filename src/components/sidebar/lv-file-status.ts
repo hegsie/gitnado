@@ -1113,8 +1113,10 @@ export class LvFileStatus extends LitElement {
     this.unsubscribeWatcher = watcherService.onFileChange(this.handleWatcherEvent);
 
     // Listen for global stage-all, unstage-all, and refresh events
-    this.boundHandleStageAllEvent = () => this.handleStageAll();
-    this.boundHandleUnstageAllEvent = () => this.handleUnstageAll();
+    // Both go through the same "shown" pair the section header buttons use:
+    // see handleStageAllShown for why every surface must agree.
+    this.boundHandleStageAllEvent = () => this.handleStageAllShown();
+    this.boundHandleUnstageAllEvent = () => this.handleUnstageAllShown();
     this.boundHandleRefreshEvent = () => this.refresh();
     this.boundMarkStatusDirty = () => {
       this.statusDirtySeq++;
@@ -1454,6 +1456,8 @@ export class LvFileStatus extends LitElement {
       try {
         await watcherService.startWatching(this.repositoryPath);
       } catch (err) {
+        // watcher.service already warns the user that auto-refresh is
+        // unavailable (with the actionable cause); don't toast twice
         console.warn("Failed to start file watcher:", err);
       }
       await this.loadStatus();
@@ -1889,33 +1893,87 @@ export class LvFileStatus extends LitElement {
   }
 
   /**
-   * The `stage-all` / `unstage-all` window events — the command palette's
-   * "Stage all changes" and the global s/u shortcuts. Those are invoked from
-   * outside this panel and their labels say ALL, so they deliberately ignore
-   * the path filter. The in-panel section buttons are the filter-aware pair
-   * below: they sit next to the list and act only on what that list shows.
+   * "Stage/unstage everything the list is showing" — for EVERY surface.
+   *
+   * Three of them reach this pair: the section header buttons, the global
+   * s / u shortcuts, and the palette's "Stage all changes" / "Unstage all
+   * changes" (both of which arrive as the `stage-all` / `unstage-all` window
+   * events). They used to disagree — the buttons honoured the path filter and
+   * the other two ignored it — so in the same repo at the same moment "stage
+   * all" staged 1 file from the button and 4 from the keyboard, with nothing
+   * on screen to say which one had happened.
+   *
+   * The filtered set wins because it is the only one the user can see, and
+   * because the alternative silently stages files the filter is hiding. The
+   * two surfaces whose labels still say ALL are invoked from outside this
+   * panel and cannot know a filter is on, so `reportFilteredScope` says what
+   * "all" meant this time.
    */
-  private async handleStageAll(): Promise<void> {
-    await this.stageFileSet(this.unstagedFiles);
-  }
-
-  private async handleUnstageAll(): Promise<void> {
-    await this.unstageFileSet(this.stagedFiles);
-  }
-
-  /** Section header button: only ever the rows the filter is showing. */
   private handleStageAllShown = (): Promise<void> =>
     this.stageFileSet(this.filteredUnstagedFiles);
 
   private handleUnstageAllShown = (): Promise<void> =>
     this.unstageFileSet(this.filteredStagedFiles);
 
+  /**
+   * Report a bulk stage/unstage the filter narrowed.
+   *
+   * Silent when no filter is active, and silent when the filter happens to
+   * show everything: there is then nothing surprising to explain.
+   *
+   * The gate is what the FILTER withheld (`visible` vs `total`), not what was
+   * acted on (`acted`): the staging path also drops conflicted files, and
+   * those already have their own warning. Gating on the acted count made this
+   * toast blame the filter for a conflict it never hid — two toasts at once,
+   * one of them false. `acted` still supplies the number in the message so it
+   * keeps agreeing with that warning.
+   */
+  private reportFilteredScope(
+    verb: 'Staged' | 'Unstaged',
+    acted: number,
+    visible: number,
+    total: number,
+  ): void {
+    if (!this.isFiltering || visible >= total) return;
+    showToast(
+      `${verb} ${acted} of ${total} file${total === 1 ? '' : 's'} — the filter "${this.filterQuery.trim()}" is hiding the rest`,
+      'info',
+    );
+  }
+
+  /**
+   * The same honesty for the empty case: with a filter that matches nothing,
+   * the shortcut and the palette entry would otherwise do nothing at all and
+   * say nothing at all. An unfiltered panel with no files stays silent — there
+   * is no hidden state to explain there.
+   */
+  private reportEmptyFilteredScope(verb: 'stage' | 'unstage', total: number): void {
+    if (!this.isFiltering || total === 0) return;
+    showToast(
+      `Nothing to ${verb} — no file matches the filter "${this.filterQuery.trim()}"`,
+      'info',
+    );
+  }
+
   private async stageFileSet(files: StatusEntry[]): Promise<void> {
+    const total = this.unstagedFiles.length;
     const paths = this.stageablePaths(files);
-    if (paths.length === 0) return;
+    if (paths.length === 0) {
+      // Only when the FILTER emptied the set: stageablePaths has already
+      // spoken when conflicts are what is left.
+      if (files.length === 0) this.reportEmptyFilteredScope('stage', total);
+      return;
+    }
 
     const result = await gitService.stageFiles(this.repositoryPath, { paths });
     if (result.success) {
+      // Before loadStatus, which rewrites unstagedFiles out from under `total`.
+      // `paths` — not `files` — is what was actually staged: stageablePaths has
+      // already dropped conflicted entries, and counting them here would have
+      // the toast claim files the separate "conflicted file skipped" warning
+      // says were left alone. `files` is what the filter left visible, which is
+      // the only thing that can decide whether the filter hid anything at all.
+      this.reportFilteredScope('Staged', paths.length, files.length, total);
       await this.loadStatus();
     } else {
       showToast(result.error?.message ?? 'Failed to stage files', 'error');
@@ -1923,13 +1981,21 @@ export class LvFileStatus extends LitElement {
   }
 
   private async unstageFileSet(files: StatusEntry[]): Promise<void> {
+    const total = this.stagedFiles.length;
     const paths = files.map((f) => f.path);
-    if (paths.length === 0) return;
+    if (paths.length === 0) {
+      this.reportEmptyFilteredScope('unstage', total);
+      return;
+    }
 
     const result = await gitService.unstageFiles(this.repositoryPath, {
       paths,
     });
     if (result.success) {
+      // `paths` is the set actually sent AND the whole visible set — nothing
+      // is dropped on this path — so neither count can drift from what was
+      // unstaged (as they did for the staging path above).
+      this.reportFilteredScope('Unstaged', paths.length, files.length, total);
       await this.loadStatus();
     } else {
       showToast(result.error?.message ?? 'Failed to unstage files', 'error');
