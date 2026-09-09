@@ -1,49 +1,50 @@
 # Icons
 
-Two masters, because macOS lays icons out differently from everyone else.
-
-| Master                  | Shape                          | Drives                                                     |
-| ----------------------- | ------------------------------ | ---------------------------------------------------------- |
-| `icon-source.png`       | full-bleed 1024×1024 tile      | `icon.ico`, `icon.png`, the Linux PNGs, `Square*Logo.png`, `android/`, `ios/`, and the website assets in `site/assets/` |
-| `icon-source-macos.png` | the same art on Apple's grid   | `icon.icns` only                                            |
-
-## Why macOS needs its own master
-
-macOS draws no frame around an app icon — the icon *is* the frame. Apple's
-icon grid reserves a transparent margin for that: on a 1024×1024 canvas the
-rounded-square body is 824×824, centred, leaving 100px (9.77%) of empty canvas
-on every side. The Dock, Launchpad, the Finder and the app switcher all lay
-icons out on that grid.
-
-A full-bleed tile in `icon.icns` renders about a fifth larger than every
-neighbour, overflows the Dock's tile, and has its corners shaved by the
-system's own rounding — the icon looks cut off.
-
-Windows, Linux and the website composite their own shape (or want a square
-hero image), so those keep the full-bleed master. `scripts/icon-safe-area.mjs`
-and its test hold both halves of that split in place; they run as part of
-`npm test`.
-
-## Regenerating
-
-`tauri icon` rewrites the whole directory from whichever master you hand it,
-so generate into a scratch directory and copy back only what that master owns.
+One art master, one build. `icon-source.png` is the full-bleed 1024×1024
+tile; everything else in this directory (and the website's icons in
+`site/assets/`) is written from it by
 
 ```bash
-# Windows / Linux / mobile / website — everything except icon.icns
-npx tauri icon src-tauri/icons/icon-source.png -o /tmp/icons-full
-cp /tmp/icons-full/{icon.ico,icon.png,32x32.png,64x64.png,128x128.png,128x128@2x.png} src-tauri/icons/
-cp /tmp/icons-full/{Square*Logo.png,StoreLogo.png} src-tauri/icons/
-cp -r /tmp/icons-full/{android,ios} src-tauri/icons/
-
-# macOS
-npx tauri icon src-tauri/icons/icon-source-macos.png -o /tmp/icons-macos
-cp /tmp/icons-macos/icon.icns src-tauri/icons/
-
-npm run test:contract   # verifies both margins
+npm run icons:build      # node scripts/build-icons.mjs
+npm run test:contract    # rebuilds and checks the committed files match
 ```
 
-`icon-source-macos.png` is `icon-source.png` scaled to 824×824 and centred on
-a transparent 1024×1024 canvas — nothing else changes, and the tile's corner
-radius (22.1% of its own width) already matches Apple's rounding closely
-enough that no reshaping is needed.
+Do not run `tauri icon` over this directory: it resizes and nothing more,
+and the contract test will fail on every file it touches. The `android/` and
+`ios/` sets are the exception — Gitnado ships no mobile build, they are left
+as `tauri icon` made them, and the build does not touch them.
+
+## What the build does that a plain resize does not
+
+- **macOS gets Apple's safe area.** macOS draws no frame around an app icon;
+  the icon *is* the frame, and Apple's grid reserves a transparent margin for
+  it — an 824×824 body centred on a 1024×1024 canvas, 100px (9.77%) per
+  side — with a soft shadow beneath. The Dock, Launchpad, the Finder and the
+  app switcher all lay icons out on that grid. A full-bleed tile in
+  `icon.icns` renders about a fifth larger than every neighbour and overflows
+  its Dock slot: the icon looks cut off. Only `icon.icns` gets the margin;
+  Windows, Linux and the website composite their own shape (and the site
+  wants a square hero) and would draw a padded tile undersized.
+- **Premultiplied resampling.** The tile's transparent corners are black, so
+  a straight resize drags black into the corner anti-aliasing — a dark
+  fringe on light desktops.
+- **Sharpening at 64px and below.** Windows taskbar and Explorer (16–48px),
+  Linux trays and Finder list view are where the tornado's thin strokes turn
+  to mush without it.
+- **A touch more saturation and contrast, and a light rim** in the tornado's
+  own cyan along the tile edge, so the dark tile has an outline against dark
+  docks and taskbars. Parameters live at the top of `scripts/build-icons.mjs`.
+- **Every size Windows asks for** in `icon.ico` (16, 20, 24, 32, 40, 48, 64,
+  256), so the shell scales nothing it does not have to.
+
+## Who reads what
+
+| File(s)                                        | Read by                                                             |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
+| `icon.icns`                                    | macOS: Dock, Finder, app switcher, DMG, About                       |
+| `32x32.png`                                    | macOS menu-bar tray icon (`default_window_icon`); Linux             |
+| `128x128.png`, `128x128@2x.png`, `icon.png`    | Linux desktop entries and AppImage/deb/rpm                          |
+| `icon.ico`                                     | Windows: taskbar, Explorer, installer                               |
+| `Square*Logo.png`, `StoreLogo.png`             | Windows MSIX tiles                                                  |
+| `site/assets/{favicon-64,icon-256,icon-512}`   | the website                                                         |
+| `src/assets/mascot/gitnado-400.png`            | the in-app welcome screen — hand-made, not part of the build        |

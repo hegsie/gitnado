@@ -1,79 +1,31 @@
 /**
- * macOS app-icon safe-area contract.
+ * Icon contract: what the shipped icon files must look like.
  *
- * macOS does not draw the app icon inside a frame of its own — the icon IS
- * the frame. Apple's icon grid therefore reserves a transparent margin: on a
- * 1024x1024 canvas the rounded-square body is 824x824, centred, leaving
- * 100px (9.77%) of empty canvas on every side. The Dock, Launchpad, the
- * Finder and the app switcher all lay icons out on that grid.
- *
- * Ship a full-bleed tile instead — artwork edge to edge, no margin — and the
- * icon renders roughly a fifth larger than every neighbour, overflows the
- * Dock's tile, and has its corners shaved by the system's own rounding. That
- * is what "the icon is cut off" looks like, and it is what `icon.icns` did
- * before this contract existed: `icon-source.png` is a full-bleed 1024 tile,
- * and `tauri icon` resizes without ever adding a margin.
- *
- * So there are two masters, on purpose:
- *   - `icon-source.png`        full-bleed, drives Windows, Linux and the
- *                              website assets, which are composited by the
- *                              host and want every pixel;
- *   - `icon-source-macos.png`  the same art scaled to Apple's 824/1024 body
- *                              on a transparent canvas, drives `icon.icns`
- *                              alone.
- *
- * This module measures what a PNG actually occupies on its canvas, straight
- * from the file, so both halves of that split are checked rather than
- * remembered. Regenerating the icons from the wrong master — the easy
- * mistake, since `tauri icon <source>` rewrites the whole directory — moves
- * a margin in one direction or the other and is caught here.
- *
- * Scope, stated rather than hidden: only 8-bit, non-interlaced, truecolour+
- * alpha PNGs (colour type 6) are decoded, which is what `tauri icon` emits;
- * anything else throws instead of being silently measured wrong. `icon.ico`
- * and the mobile icon sets are not measured — Windows and Android composite
- * their own shape, so the margin carries no meaning there.
+ * `build-icons.mjs` produces every icon from the art master; this module
+ * reads the produced files back — PNGs, the ICO and the ICNS containers —
+ * and measures what each actually occupies on its canvas, so the test can
+ * hold two things in place without trusting anyone's memory:
+ *   - the macOS entries sit on Apple's 824/1024 grid (the Dock fix — see
+ *     `src-tauri/icons/README.md` for why), shadow included but inside the
+ *     canvas;
+ *   - everything else is full-bleed, because Windows, Linux and the website
+ *     composite their own shape and would render a padded tile undersized.
  */
 
-import { inflateSync } from 'node:zlib';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { alphaOf, decodePng, isPng } from './png.mjs';
+
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const ICONS_DIR = join(REPO_ROOT, 'src-tauri/icons');
-
-/** Apple's icon grid: an 824x824 body centred on a 1024x1024 canvas. */
-export const APPLE_CANVAS = 1024;
-export const APPLE_BODY = 824;
-export const APPLE_MARGIN = (APPLE_CANVAS - APPLE_BODY) / 2;
 
 /**
- * Alpha at or below this counts as empty canvas. Downscaling bleeds a pixel
- * or two of near-zero alpha past the body's edge — at 32x32 the outermost
- * column reads alpha 1 — and treating that as content would report a margin
- * of 0 for an icon that plainly has one.
+ * Alpha at or below this counts as empty canvas when measuring a body.
+ * Two things live below it: resampling bleed (a pixel or two of near-zero
+ * alpha past an edge — at 32x32 the outermost column reads alpha 1), and
+ * the macOS shadow, which peaks at 30% (alpha 77). Anything above is tile.
  */
-export const ALPHA_THRESHOLD = 8;
-
-/**
- * The margin the .icns entries must leave, as a fraction of their own width.
- * Apple's grid is 9.77%; the smallest entries land at 9.38% because their
- * margin has to be a whole number of pixels (3px of 32). The upper bound is
- * as much the point as the lower one: over-padding makes the icon read as
- * undersized next to its neighbours.
- */
-export const MIN_SAFE_AREA = 0.08;
-export const MAX_SAFE_AREA = 0.12;
-
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-
-/** ICNS entry types whose payload is a PNG, in the set `tauri icon` writes. */
-export const ICNS_PNG_TYPES = ['ic07', 'ic08', 'ic09', 'ic10', 'ic11', 'ic12', 'ic13', 'ic14'];
-
-/** True when `buffer` starts with the PNG signature. */
-export function isPng(buffer) {
-  return buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_SIGNATURE);
-}
+export const BODY_ALPHA_THRESHOLD = 100;
 
 /**
  * Split an ICNS container into its entries. The header is `icns` plus a
@@ -81,7 +33,7 @@ export function isPng(buffer) {
  * length that COUNTS those eight header bytes, then the payload.
  */
 export function readIcnsEntries(buffer) {
-  if (buffer.subarray(0, 4).toString('latin1') !== 'icns') {
+  if (buffer.length < 8 || buffer.subarray(0, 4).toString('latin1') !== 'icns') {
     throw new Error('not an ICNS container');
   }
   const declared = buffer.readUInt32BE(4);
@@ -102,122 +54,61 @@ export function readIcnsEntries(buffer) {
   return entries;
 }
 
-/** The PNG-carrying entries of an ICNS container, in file order. */
-export function readIcnsPngEntries(buffer) {
-  return readIcnsEntries(buffer).filter((entry) => isPng(entry.payload));
-}
-
-/** Undo a single PNG scanline filter in place. `bpp` is bytes per pixel. */
-function unfilterScanline(filter, line, previous, bpp) {
-  switch (filter) {
-    case 0:
-      break;
-    case 1: // Sub
-      for (let i = bpp; i < line.length; i += 1) line[i] = (line[i] + line[i - bpp]) & 0xff;
-      break;
-    case 2: // Up
-      for (let i = 0; i < line.length; i += 1) line[i] = (line[i] + previous[i]) & 0xff;
-      break;
-    case 3: // Average
-      for (let i = 0; i < line.length; i += 1) {
-        const left = i >= bpp ? line[i - bpp] : 0;
-        line[i] = (line[i] + ((left + previous[i]) >> 1)) & 0xff;
-      }
-      break;
-    case 4: // Paeth
-      for (let i = 0; i < line.length; i += 1) {
-        const a = i >= bpp ? line[i - bpp] : 0;
-        const b = previous[i];
-        const c = i >= bpp ? previous[i - bpp] : 0;
-        const p = a + b - c;
-        const pa = Math.abs(p - a);
-        const pb = Math.abs(p - b);
-        const pc = Math.abs(p - c);
-        const predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-        line[i] = (line[i] + predictor) & 0xff;
-      }
-      break;
-    default:
-      throw new Error(`unknown PNG scanline filter ${filter}`);
-  }
-}
-
 /**
- * Decode the alpha channel of an 8-bit truecolour+alpha PNG.
- * Returns `{ width, height, alpha }`, alpha in row-major order.
+ * Split an ICO into `[{ size, payload }]`. Only PNG-compressed entries are
+ * accepted — that is what the build writes; a BMP entry throws.
  */
-export function decodePngAlpha(buffer) {
-  if (!isPng(buffer)) throw new Error('not a PNG');
-  const width = buffer.readUInt32BE(16);
-  const height = buffer.readUInt32BE(20);
-  const bitDepth = buffer[24];
-  const colourType = buffer[25];
-  const interlace = buffer[28];
-  if (bitDepth !== 8 || colourType !== 6 || interlace !== 0) {
-    throw new Error(
-      `unsupported PNG (bit depth ${bitDepth}, colour type ${colourType}, interlace ${interlace}); ` +
-        'this reader handles 8-bit RGBA, non-interlaced only',
-    );
+export function readIcoEntries(buffer) {
+  if (buffer.length < 6 || buffer.readUInt16LE(0) !== 0 || buffer.readUInt16LE(2) !== 1) {
+    throw new Error('not an ICO file');
   }
-
-  const idat = [];
-  let offset = 8;
-  while (offset + 8 <= buffer.length) {
-    const length = buffer.readUInt32BE(offset);
-    const type = buffer.subarray(offset + 4, offset + 8).toString('latin1');
-    if (type === 'IDAT') idat.push(buffer.subarray(offset + 8, offset + 8 + length));
-    if (type === 'IEND') break;
-    offset += 12 + length; // length + type + data + CRC
+  const count = buffer.readUInt16LE(4);
+  const entries = [];
+  for (let i = 0; i < count; i += 1) {
+    const at = 6 + 16 * i;
+    if (at + 16 > buffer.length) throw new Error(`ICO directory entry ${i} is past the end of the file`);
+    const size = buffer[at] === 0 ? 256 : buffer[at];
+    const length = buffer.readUInt32LE(at + 8);
+    const offset = buffer.readUInt32LE(at + 12);
+    if (offset + length > buffer.length) throw new Error(`ICO entry ${i} has an out-of-range payload`);
+    const payload = buffer.subarray(offset, offset + length);
+    if (!isPng(payload)) throw new Error(`ICO entry ${i} (${size}px) is not PNG-compressed`);
+    entries.push({ size, payload });
   }
-  if (idat.length === 0) throw new Error('PNG has no IDAT chunk');
+  return entries;
+}
 
-  const raw = inflateSync(Buffer.concat(idat));
-  const bpp = 4;
-  const stride = width * bpp;
-  if (raw.length < height * (stride + 1)) throw new Error('PNG pixel data is truncated');
+/** An `{ width, height, alpha }` view of a PNG buffer. */
+export function pngAlpha(buffer) {
+  const image = decodePng(buffer);
+  return { width: image.width, height: image.height, alpha: alphaOf(image) };
+}
 
-  const alpha = new Uint8Array(width * height);
-  let previous = Buffer.alloc(stride);
-  for (let y = 0; y < height; y += 1) {
-    const start = y * (stride + 1);
-    const line = Buffer.from(raw.subarray(start + 1, start + 1 + stride));
-    unfilterScanline(raw[start], line, previous, bpp);
-    for (let x = 0; x < width; x += 1) alpha[y * width + x] = line[x * bpp + 3];
-    previous = line;
+/** An `{ width, height, alpha }` view of a raw 8-bit ICNS mask (s8mk, l8mk). */
+export function maskAlpha(payload, size) {
+  if (payload.length !== size * size) {
+    throw new Error(`mask is ${payload.length} bytes, expected ${size * size} for ${size}x${size}`);
   }
-  return { width, height, alpha };
+  return { width: size, height: size, alpha: Uint8Array.from(payload) };
 }
 
 /**
  * The empty canvas around the visible artwork, in pixels per edge. A fully
  * transparent image reports the full width and height on every edge.
  */
-export function measureMargins({ width, height, alpha }, threshold = ALPHA_THRESHOLD) {
+export function measureMargins({ width, height, alpha }, threshold = BODY_ALPHA_THRESHOLD) {
   let left = width;
-  let right = width;
   let top = height;
+  let right = width;
   let bottom = height;
-  let seen = false;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       if (alpha[y * width + x] <= threshold) continue;
-      seen = true;
       if (x < left) left = x;
       if (width - 1 - x < right) right = width - 1 - x;
       if (y < top) top = y;
       if (height - 1 - y < bottom) bottom = height - 1 - y;
     }
   }
-  return seen ? { left, top, right, bottom } : { left: width, top: height, right: width, bottom: height };
-}
-
-/** `measureMargins` as a fraction of the canvas — the form the grid states. */
-export function safeAreaRatios(image, threshold = ALPHA_THRESHOLD) {
-  const { left, top, right, bottom } = measureMargins(image, threshold);
-  return {
-    left: left / image.width,
-    right: right / image.width,
-    top: top / image.height,
-    bottom: bottom / image.height,
-  };
+  return { left, top, right, bottom };
 }
