@@ -16,8 +16,12 @@ on:
         type: boolean
         default: false
 
+# Builds of the same ref supersede each other, but a release — a tag push,
+# or a manual dispatch with the release input — must not be cancelled by a
+# later push to main (that is what happened to the first v0.9.1 build), so
+# a release run gets its own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)) && '-release' || '' }}
   cancel-in-progress: true
 
 permissions:
