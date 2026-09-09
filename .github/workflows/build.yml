@@ -48,8 +48,11 @@ jobs:
       - name: Install Playwright browsers
         # --with-deps runs its own apt-get update; strip the same third-party
         # sources the Linux dependency steps strip, or a broken mirror kills it.
+        # Third-party apt sources on the runner image (Microsoft, Google Chrome)
+        # break apt-get update whenever their mirror is inconsistent, and none
+        # is used here. Match by host: the file names differ between images.
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/google-chrome.list
+          sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
           npx playwright install --with-deps chromium
 
       - name: Run E2E tests
@@ -121,7 +124,7 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/google-chrome.list
+          sudo grep -rlE 'packages\.microsoft\.com|dl\.google\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
