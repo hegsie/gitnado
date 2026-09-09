@@ -189,17 +189,6 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: TEMP diagnose abort (nocapture, parallel)
-        working-directory: src-tauri
-        continue-on-error: true
-        run: cargo test --lib -- --nocapture 2>&1 | tail -n 120
-
-      - name: TEMP diagnose abort (single threaded, names the test)
-        working-directory: src-tauri
-        continue-on-error: true
-        timeout-minutes: 45
-        run: cargo test --lib -- --nocapture --test-threads=1 2>&1 | tail -n 40
-
       - name: Run tests
         working-directory: src-tauri
         run: cargo test
@@ -239,51 +228,17 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: TEMP diagnose STATUS_ENTRYPOINT_NOT_FOUND
+      # TEMPORARY. The harness now loads (the manifest fix worked) but the
+      # suite does not finish: `cargo test` ran for 34 minutes on a suite that
+      # takes two on macOS, so one test blocks forever on Windows and nothing
+      # in the log says which. Running single-threaded prints each test's name
+      # BEFORE it runs, so the last line of this step is the test that hangs.
+      # The step is capped so the job ends instead of burning the six-hour
+      # default, and it replaces `cargo test` for this run only.
+      - name: TEMP name the test that hangs on Windows
         working-directory: src-tauri
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --no-run 2>&1 | Select-Object -Last 3
-          $exe = Get-ChildItem target/debug/deps/gitnado_lib-*.exe |
-                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Write-Host "== exe $($exe.FullName) size=$($exe.Length)"
-          & $exe.FullName --list 2>&1 | Select-Object -First 3
-          Write-Host "== direct run exit code: $LASTEXITCODE"
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vs = & $vswhere -latest -products * -property installationPath
-          $dumpbin = Get-ChildItem -Path (Join-Path $vs 'VC\Tools\MSVC') -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
-                     Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
-          Write-Host "== dumpbin $($dumpbin.FullName)"
-          Add-Type -Namespace Ldr -Name Api -MemberDefinition @'
-          [System.Runtime.InteropServices.DllImport("kernel32", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Ansi)]
-          public static extern System.IntPtr LoadLibraryA(string name);
-          [System.Runtime.InteropServices.DllImport("kernel32", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Ansi)]
-          public static extern System.IntPtr GetProcAddress(System.IntPtr module, string name);
-          '@
-          $imports = & $dumpbin.FullName /nologo /imports $exe.FullName
-          $dll = $null
-          $missing = 0
-          foreach ($line in $imports) {
-            if ($line -match '(?i)^\s{4}(\S+\.dll)\s*$') { $dll = $matches[1]; continue }
-            if (-not $dll) { continue }
-            if ($line -match '^\s+[0-9A-Fa-f]+\s+(\S+)\s*$') {
-              $fn = $matches[1]
-              $h = [Ldr.Api]::LoadLibraryA($dll)
-              if ($h -eq [System.IntPtr]::Zero) { Write-Host "MISSING DLL: $dll"; $dll = $null; $missing++; continue }
-              if ([Ldr.Api]::GetProcAddress($h, $fn) -eq [System.IntPtr]::Zero) {
-                Write-Host "MISSING EXPORT: $dll -> $fn"
-                $missing++
-              }
-            }
-          }
-          Write-Host "== import scan done, $missing unresolved"
-
-      - name: Run tests
-        working-directory: src-tauri
-        run: cargo test
+        timeout-minutes: 30
+        run: cargo test --lib -- --test-threads=1 --nocapture --report-time
 
   test-frontend:
     name: Test Frontend
