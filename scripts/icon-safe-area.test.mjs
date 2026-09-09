@@ -48,10 +48,16 @@ import {
   readIcnsEntries,
   readIcoEntries,
 } from './icon-safe-area.mjs';
-import { REPO_ROOT, alphaOf, crc32, decodePng, encodePng } from './png.mjs';
+import { REPO_ROOT, alphaOf, channelOf, crc32, decodePng, encodePng } from './png.mjs';
 
-const readRepoFile = (path) => readFileSync(join(REPO_ROOT, path));
-const SOURCE_PNG = readRepoFile(SOURCE);
+/** Read a repo file, failing with the build hint rather than a bare ENOENT when it is missing. */
+function readRepoFile(path) {
+  const file = join(REPO_ROOT, path);
+  assert.ok(existsSync(file), `${path} is missing — run node scripts/build-icons.mjs`);
+  return readFileSync(file);
+}
+let sourcePng;
+const SOURCE_PNG = () => (sourcePng ??= readRepoFile(SOURCE));
 
 /**
  * The fresh render and the committed files, made once, on first use — so a
@@ -62,15 +68,9 @@ const SOURCE_PNG = readRepoFile(SOURCE);
 let cache;
 function built() {
   if (!cache) {
-    const RENDERED = renderIcons(SOURCE_PNG);
+    const RENDERED = renderIcons(SOURCE_PNG());
     const paths = [...RENDERED.pngs.keys(), ICO_PATH, ICNS_PATH];
-    const COMMITTED = new Map(
-      paths.map((path) => {
-        const file = join(REPO_ROOT, path);
-        assert.ok(existsSync(file), `${path} is missing — run node scripts/build-icons.mjs`);
-        return [path, readFileSync(file)];
-      }),
-    );
+    const COMMITTED = new Map(paths.map((path) => [path, readRepoFile(path)]));
     cache = { RENDERED, COMMITTED };
   }
   return cache;
@@ -112,9 +112,6 @@ function assertSamePixels(committedPng, image, label) {
   assert.ok(maxDifference(c.data, image.data) <= 1, `${label}: pixels ${REBUILD}`);
 }
 
-/** One colour plane of a straight-8 image. */
-const planeOf = (image, channel) => Uint8Array.from({ length: image.width * image.height }, (_, i) => image.data[i * 4 + channel]);
-
 test('every committed icon is what build-icons.mjs produces from the master', () => {
   const { RENDERED, COMMITTED } = built();
   for (const [path, image] of RENDERED.pngs) assertSamePixels(COMMITTED.get(path), image, path);
@@ -131,8 +128,8 @@ test('every committed icon is what build-icons.mjs produces from the master', ()
   const fresh = new Map([
     ...RENDERED.icns.png.map(({ type, image }) => [type, { image }]),
     ...RENDERED.icns.legacy.flatMap(({ type, mask, image }) => [
-      [type, { rgb: Buffer.concat([0, 1, 2].map((c) => planeOf(image, c))) }],
-      [mask, { alpha: planeOf(image, 3) }],
+      [type, { rgb: Buffer.concat([0, 1, 2].map((c) => channelOf(image, c))) }],
+      [mask, { alpha: channelOf(image, 3) }],
     ]),
   ]);
   assert.deepEqual(
@@ -237,7 +234,7 @@ test('icon.ico carries every size Windows asks for, 32 first, each full-bleed', 
 });
 
 test('the master is 1024x1024 and the build refuses any other size', () => {
-  const master = decodePng(SOURCE_PNG);
+  const master = decodePng(SOURCE_PNG());
   assert.equal(master.width, APPLE_CANVAS);
   assert.equal(master.height, APPLE_CANVAS);
   const small = encodePng({ width: 2, height: 2, data: new Uint8Array(16).fill(255) });

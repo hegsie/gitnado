@@ -125,12 +125,15 @@ export function decodePng(buffer) {
   return { width, height, data };
 }
 
-/** The alpha plane of a decoded image, one byte per pixel. */
-export function alphaOf({ width, height, data }) {
-  const alpha = new Uint8Array(width * height);
-  for (let i = 0; i < alpha.length; i += 1) alpha[i] = data[i * BYTES_PER_PIXEL + 3];
-  return alpha;
+/** One channel (0 R, 1 G, 2 B, 3 A) of an image as its own plane, one byte per pixel. */
+export function channelOf({ width, height, data }, channel) {
+  const plane = new Uint8Array(width * height);
+  for (let i = 0; i < plane.length; i += 1) plane[i] = data[i * BYTES_PER_PIXEL + channel];
+  return plane;
 }
+
+/** The alpha plane of a decoded image, one byte per pixel. */
+export const alphaOf = (image) => channelOf(image, 3);
 
 function chunk(type, payload) {
   const header = Buffer.alloc(8);

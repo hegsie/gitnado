@@ -36,7 +36,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { REPO_ROOT, decodePng, encodePng } from './png.mjs';
+import { REPO_ROOT, channelOf, decodePng, encodePng } from './png.mjs';
 export const ICONS_DIR = 'src-tauri/icons';
 export const SITE_ASSETS_DIR = 'site/assets';
 export const SOURCE = `${ICONS_DIR}/icon-source.png`;
@@ -372,9 +372,8 @@ function blank(size) {
   return { width: size, height: size, data: new Float32Array(size * size * 4) };
 }
 
-/** Source-over composite of `layer` onto `base` at (x, y), premultiplied. */
-function composite(base, layer, x0, y0) {
-  const out = { width: base.width, height: base.height, data: Float32Array.from(base.data) };
+/** Source-over composite of `layer` onto `base` at (x, y), premultiplied, in place. */
+function compositeInto(base, layer, x0, y0) {
   for (let y = 0; y < layer.height; y += 1) {
     const by = y + y0;
     if (by < 0 || by >= base.height) continue;
@@ -385,11 +384,11 @@ function composite(base, layer, x0, y0) {
       const bi = (by * base.width + bx) * 4;
       const la = layer.data[li + 3];
       for (let c = 0; c < 4; c += 1) {
-        out.data[bi + c] = layer.data[li + c] + out.data[bi + c] * (1 - la);
+        base.data[bi + c] = layer.data[li + c] + base.data[bi + c] * (1 - la);
       }
     }
   }
-  return out;
+  return base;
 }
 
 /**
@@ -418,7 +417,7 @@ export function macCanvas(body1024, size) {
   const blurred = blurPlane(shadowPlane, size, size, SHADOW.sigma * scale);
   const canvas = blank(size);
   for (let i = 0; i < blurred.length; i += 1) canvas.data[i * 4 + 3] = blurred[i]; // black, premultiplied
-  return composite(canvas, body, margin, margin);
+  return compositeInto(canvas, body, margin, margin);
 }
 
 /** A full-bleed entry at `size`, sharpened when small. */
@@ -500,16 +499,8 @@ export function encodeIcns(pngEntries, legacy) {
   const parts = [];
   for (const { type, png } of pngEntries) parts.push(icnsEntry(type, png));
   for (const { type, mask, image } of legacy) {
-    const n = image.width * image.height;
-    const channel = (c) => {
-      const bytes = new Uint8Array(n);
-      for (let i = 0; i < n; i += 1) bytes[i] = image.data[i * 4 + c];
-      return icnsRle(bytes);
-    };
-    parts.push(icnsEntry(type, Buffer.concat([channel(0), channel(1), channel(2)])));
-    const alpha = Buffer.alloc(n);
-    for (let i = 0; i < n; i += 1) alpha[i] = image.data[i * 4 + 3];
-    parts.push(icnsEntry(mask, alpha));
+    parts.push(icnsEntry(type, Buffer.concat([0, 1, 2].map((c) => icnsRle(channelOf(image, c))))));
+    parts.push(icnsEntry(mask, Buffer.from(channelOf(image, 3))));
   }
   const body = Buffer.concat(parts);
   const header = Buffer.alloc(8);
