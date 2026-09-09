@@ -1305,10 +1305,19 @@ mod tests {
     /// level, so their object stores sit under `.git/modules` and a later
     /// `git submodule update --init` reconnects them WITHOUT a transport —
     /// git only clones when the gitdir is absent. The urls are `file://<host>/
-    /// <path>`: git ignores the host part of a file url, the gate does not,
+    /// <path>`: git on unix ignores the host part of a file url, the gate does not,
     /// so the tree exercises the allowlist with no network and no
     /// `protocol.file.allow` in the children's config (which the sandboxed
     /// git of `create_command` does not have).
+    // Not Windows. The fixture below depends on git IGNORING the host part of a
+    // `file://` url, which is a unix behaviour: Git for Windows reads
+    // `file://dep.test/C:/…` as the UNC path `\\dep.test\C:\…` and reports
+    // "does not appear to be a git repository". There is no url form that both
+    // clones from a temp directory and carries a recognisable host on Windows,
+    // so the tree these tests need cannot be built there. The policy they cover
+    // is platform-independent and stays covered on Linux and macOS, both of
+    // which run this suite.
+    #[cfg(unix)]
     fn nested_submodule_tree() -> (TestRepo, TestRepo, TestRepo) {
         let leaf = TestRepo::with_initial_commit();
         let mid = TestRepo::with_initial_commit();
@@ -1348,6 +1357,7 @@ mod tests {
         (superproject, mid, leaf)
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_nested_submodule_off_the_allowlist_is_refused_at_its_own_depth() {
         let (superproject, _mid, _leaf) = nested_submodule_tree();
@@ -1385,6 +1395,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_fully_allowlisted_nested_tree_is_updated_completely() {
         let (superproject, _mid, _leaf) = nested_submodule_tree();
@@ -1420,6 +1431,7 @@ mod tests {
     /// `git submodule update` that failed showed the user error text and no
     /// invocation to go with it — and only under an allowlist, because with no
     /// policy in force git's own `--recursive` runs from the superproject.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_nested_update_is_reported_against_the_superproject() {
         crate::utils::test_sink::install();
@@ -1462,6 +1474,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_nested_tree_narrowed_to_a_path_only_recurses_into_that_path() {
         let (superproject, _mid, _leaf) = nested_submodule_tree();
@@ -1488,6 +1501,7 @@ mod tests {
             .exists());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn without_a_policy_recursion_is_left_to_git() {
         let (superproject, _mid, _leaf) = nested_submodule_tree();
@@ -1513,6 +1527,7 @@ mod tests {
             .exists());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn without_init_the_recursion_skips_an_uninitialised_submodule() {
         // git's `--recursive` does not descend into a submodule the update
@@ -1801,6 +1816,7 @@ mod tests {
 
     /// A superproject with `vendor/dep` cloned from `dep.test`, and the clone's
     /// own origin then pointed at `origin_host`.
+    #[cfg(unix)]
     fn superproject_with_initialised_submodule(origin_host: &str) -> (TestRepo, TestRepo) {
         let dep = TestRepo::with_initial_commit();
         let superproject = TestRepo::with_initial_commit();
@@ -1818,6 +1834,7 @@ mod tests {
         (superproject, dep)
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn an_initialised_submodule_is_judged_on_its_own_origin_too() {
         let (superproject, _dep) = superproject_with_initialised_submodule("moved.test");
@@ -1844,6 +1861,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn an_initialised_submodule_whose_origin_is_allowlisted_is_updated() {
         let (superproject, _dep) = superproject_with_initialised_submodule("dep.test");
