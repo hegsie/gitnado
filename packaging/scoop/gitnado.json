@@ -1,14 +1,14 @@
 {
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Fast, privacy-first Git GUI client",
   "homepage": "https://gitnado.dev",
   "license": "MIT",
   "notes": "Gitnado needs the Microsoft Edge WebView2 runtime, which is preinstalled on Windows 11 and most Windows 10 systems. If the app does not start, install it from https://developer.microsoft.com/microsoft-edge/webview2/",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/hegsie/gitnado/releases/download/v0.9.0/Gitnado_0.9.0_x64_en-US.msi",
+      "url": "https://github.com/hegsie/gitnado/releases/download/v0.9.1/Gitnado_0.9.1_x64_en-US.msi",
       "extract_dir": "PFiles/Gitnado",
-      "hash": "c22697677c52cd5362ea8a987d0a8752669859d7d8b80baab4f97922f82b59d2"
+      "hash": "f55072ba95639235e3d63cb75e4614115c3d159c2e5e5c389d12aa81af8d9c6d"
     }
   },
   "shortcuts": [
