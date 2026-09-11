@@ -994,6 +994,30 @@ pub(crate) fn build_security_add_args<'a>(service: &'a str, key: &'a str) -> Vec
     }
 }
 
+/// Build the stdin payload for `security add-generic-password ... -w`.
+///
+/// `-w` with no inline value does not simply read the secret from stdin: it
+/// prompts TWICE — "password data for new item:", then "retype password for
+/// new item:". Feeding the token once leaves the confirmation at EOF, so
+/// `security` reports "passwords don't match", re-prompts, reads EOF for both
+/// prompts, matches empty against empty, stores an EMPTY entry and still exits
+/// 0. That is why connecting an account on macOS stored a token that every
+/// later read found blank. Answering both prompts is what makes the write
+/// land; the value stays off argv, where `ps -E` would expose it.
+///
+/// A value containing a line break cannot survive these line-oriented prompts
+/// (`security` would keep only its first line), so reject it rather than
+/// silently store a truncated token.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn build_security_add_stdin(value: &str) -> Result<String> {
+    if value.contains('\n') || value.contains('\r') {
+        return Err(GitnadoError::OperationFailed(
+            "Cannot store a token containing a line break in the macOS keychain.".to_string(),
+        ));
+    }
+    Ok(format!("{value}\n{value}\n"))
+}
+
 /// Write `value` under `key` for `service`.
 ///
 /// On macOS, uses the `security` CLI. In debug builds `-A` is added so that
@@ -1003,14 +1027,19 @@ pub(crate) fn build_security_add_args<'a>(service: &'a str, key: &'a str) -> Vec
 fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        // Built before the delete below: a value we cannot write must not cost
+        // the caller the entry they already had.
+        let stdin_payload = build_security_add_stdin(value)?;
+
         // Delete existing entry first (add-generic-password fails if it exists)
         let _ = std::process::Command::new("security")
             .args(["delete-generic-password", "-s", service, "-a", key])
             .output();
 
-        // `-w` last with no value => password read from stdin. This avoids
-        // exposing the token via argv (`ps -E` is readable by any process
-        // running under the same user).
+        // `-w` last with no value => password read from the prompts on stdin
+        // (see `build_security_add_stdin` for why the value is sent twice).
+        // This avoids exposing the token via argv (`ps -E` is readable by any
+        // process running under the same user).
         use std::io::Write as _;
         let security_args = build_security_add_args(service, key);
         let mut child = std::process::Command::new("security")
@@ -1021,7 +1050,7 @@ fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
             .spawn()
             .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(value.as_bytes()).map_err(|e| {
+            stdin.write_all(stdin_payload.as_bytes()).map_err(|e| {
                 GitnadoError::OperationFailed(format!("Failed to write token: {e}"))
             })?;
         }
@@ -2518,6 +2547,90 @@ mod tests {
         .to_string();
         assert!(failed.contains("could not be read back"), "{failed}");
         assert!(failed.contains("locked"), "{failed}");
+    }
+
+    // ── build_security_add_stdin ────────────────────────────────────────
+    //
+    // `security add-generic-password -w` prompts for the password AND for a
+    // retype. Sending the token once left the retype at EOF; `security` then
+    // re-prompted, read EOF for both, stored an empty entry and exited 0 — so
+    // every macOS account connect wrote a token that read back blank.
+
+    #[test]
+    fn security_add_stdin_answers_both_of_securitys_prompts() {
+        // One line per prompt: the password, then the retype. Anything less
+        // and `security` stores an empty entry while reporting success.
+        assert_eq!(
+            build_security_add_stdin("ghp_tok").unwrap(),
+            "ghp_tok\nghp_tok\n"
+        );
+        assert_eq!(
+            build_security_add_stdin("ghp_tok").unwrap().lines().count(),
+            2
+        );
+    }
+
+    #[test]
+    fn security_add_stdin_keeps_the_value_off_the_argument_list() {
+        // The payload exists so the token travels on stdin; the args must
+        // still carry `-w` with no inline value beside it.
+        #[cfg(target_os = "macos")]
+        {
+            let args = build_security_add_args("svc", "key");
+            assert_eq!(
+                args.last(),
+                Some(&"-w"),
+                "-w must be last so no value follows it on argv: {args:?}"
+            );
+            assert!(
+                !args.contains(&"ghp_tok"),
+                "the token must never reach argv: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_add_stdin_rejects_a_line_break_instead_of_truncating() {
+        // These prompts are line-oriented, so a value with a newline would be
+        // stored as its first line only — a silently corrupted token.
+        for value in ["gh\np_tok", "gh\rp_tok", "ghp_tok\n"] {
+            let err = build_security_add_stdin(value).unwrap_err().to_string();
+            assert!(err.contains("line break"), "{value:?} -> {err}");
+            assert!(
+                !err.contains("ghp_tok") && !err.contains("p_tok"),
+                "never echoes the secret: {err}"
+            );
+        }
+    }
+
+    /// End-to-end against the real keychain: the pure-argument test above
+    /// passed all along while `security` stored nothing, so pin the round
+    /// trip that actually broke. Skips when `security` cannot be run at all.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_write_round_trips_through_security() {
+        let service = "gitnado-test-keychain-roundtrip";
+        let key = &format!("roundtrip-{}", std::process::id());
+        let token = "ghp_round_trip_value";
+
+        if std::process::Command::new("security")
+            .arg("help")
+            .output()
+            .is_err()
+        {
+            return; // no `security` on this box — nothing to assert
+        }
+
+        let written = write_keyring_token(service, key, token);
+        let read_back = read_keyring_token(service, key);
+        let _ = remove_keyring_token(service, key);
+
+        written.expect("writing a token must succeed and verify");
+        assert_eq!(
+            read_back.expect("reading the token back must succeed"),
+            Some(token.to_string()),
+            "the value must survive the write, not land as an empty entry"
+        );
     }
 
     // ========================================================================
