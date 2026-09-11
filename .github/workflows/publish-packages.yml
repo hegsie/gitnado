@@ -147,6 +147,11 @@ jobs:
             --release-date "$release_date" \
             --out winget | tail -n 1)
           cat "${manifests}"/*.yaml
+          # Komac creates the PR branch on the fork from upstream's latest
+          # commit; if the fork has fallen behind, GitHub refuses with a
+          # misleading "permissions to execute CreateRef" error (Komac #1142),
+          # so bring the fork's default branch up to date first.
+          komac sync
           komac submit --yes "${manifests}"
 
   homebrew:

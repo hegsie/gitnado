@@ -371,6 +371,12 @@ test("publish-packages.yml renders the manifests with this script and submits th
   assert.match(WORKFLOW, /node \.github\/scripts\/winget-manifests\.mjs/);
   assert.match(WORKFLOW, /komac analyze setup\.msi/);
   assert.match(WORKFLOW, /komac submit --yes/);
+  // The fork must be synced before the branch is created (Komac #1142).
+  assert.ok(
+    WORKFLOW.indexOf("komac sync") > 0 &&
+      WORKFLOW.indexOf("komac sync") < WORKFLOW.indexOf("komac submit --yes"),
+    "komac sync must run before komac submit",
+  );
   // A comment may mention it; a run step must never invoke it.
   assert.doesNotMatch(
     WORKFLOW,

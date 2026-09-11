@@ -38,9 +38,12 @@ One-time setup:
    manifests from the templates in [`packaging/winget/`](../packaging/winget/)
    with [`.github/scripts/winget-manifests.mjs`](../.github/scripts/winget-manifests.mjs)
    (installer hashes from the downloaded assets, the MSI `ProductCode` from
-   `komac analyze`, the release date from the GitHub release) and submits the
-   directory with [Komac](https://github.com/russellbanks/Komac)
-   `submit --yes`, which opens the "New package" PR. `komac new` is not used
+   `komac analyze`, the release date from the GitHub release), syncs the
+   winget-pkgs fork (Komac creates the PR branch from upstream's latest
+   commit, and an out-of-date fork makes GitHub refuse with a misleading
+   "permissions to execute CreateRef" error), and submits the directory with
+   [Komac](https://github.com/russellbanks/Komac) `submit --yes`, which opens
+   the "New package" PR. `komac new` is not used
    because it always prompts for install modes and cannot run unattended.
    Once that PR is merged, every later release takes the update path via
    winget-releaser.
@@ -113,6 +116,16 @@ bootstrap never executes; the manifest's `notes` tell users where to get
 WebView2 in the unlikely case it is missing. The manifest also carries
 `checkver`/`autoupdate` metadata so it could be adopted into a community
 bucket (e.g. Extras) unchanged.
+
+## Assets must not change after publishing
+
+Every channel records the SHA-256 of the assets at the moment the release is
+published, so the assets must never be replaced afterwards. `build.yml`
+therefore builds a release only from the manual dispatch that creates the
+draft; publishing the draft creates the tag, and a tag push does not start
+another build. (The v0.9.0 assets were rebuilt by a tag-push build minutes
+after publishing, which left the winget submission with stale hashes.) If a
+release ever needs different binaries, cut a new version instead.
 
 ## Release asset naming
 
