@@ -10,6 +10,13 @@ InstallModes:
 - silent
 - silentWithProgress
 UpgradeBehavior: install
+# gitnado.exe imports MSVCP140.dll, which only ships with the VC++ 2015+
+# redistributable; WebView2 is the embedded browser. winget installs both
+# first, so the app starts on a clean Windows (winget-pkgs#431940 review).
+Dependencies:
+  PackageDependencies:
+  - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+  - PackageIdentifier: Microsoft.EdgeWebView2Runtime
 ReleaseDate: {{RELEASE_DATE}}
 Installers:
 - Architecture: x64
