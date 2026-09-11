@@ -58,9 +58,24 @@ async function keyringStore(key: string, value: string): Promise<void> {
   log.debug(`Stored credential: ${key}`);
 }
 
+/**
+ * Read `key` from the keyring: null when the entry is absent, an Error when
+ * the keyring could not be read.
+ *
+ * A failed command used to come back as null too, so a locked or refusing
+ * keychain was indistinguishable from "never connected": every reader told
+ * the user the account had no stored credential and to reconnect it, which
+ * cannot fix a keychain that refuses reads — and a freshly re-added account
+ * failed the very same way. The failure is thrown with the backend's own
+ * message (it names the key, the exit status and the keychain's error), the
+ * same way `keyringStore` already reports a failed write.
+ */
 async function keyringGet(key: string): Promise<string | null> {
   const result = await invokeCommand<string | null>('get_keyring_token', { key });
-  if (result.success && result.data) {
+  if (!result.success) {
+    throw new Error(result.error?.message ?? `Failed to read credential: ${key}`);
+  }
+  if (result.data) {
     log.debug(`Retrieved credential: ${key}`);
     return result.data;
   }

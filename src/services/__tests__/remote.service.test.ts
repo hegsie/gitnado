@@ -862,6 +862,32 @@ describe('git.service - Remote operations', () => {
       expect(args.tokens, "the default account's token must not stand in").to.deep.equal({});
     });
 
+    it('still prunes, unauthenticated, when the keyring cannot be read', async () => {
+      // A keyring read failure now throws instead of reading as "no token".
+      // The branch-cleanup dialog calls this while holding the repository's
+      // ref-op lock and reads the outcome off the result, so a throw here left
+      // that lock held for the life of the app. The lookup failure is logged
+      // and the prune goes ahead without a token, as fetch and clone do.
+      const gh = account('github', 'gh-1');
+      unifiedProfileStore.getState().setAccounts([gh]);
+      preferredAccount = gh;
+      mockRepo([{ name: 'origin', url: 'https://github.com/acme/repo.git' }]);
+      const readable = mockInvoke;
+      mockInvoke = async (command, args) => {
+        if (command === 'get_keyring_token') {
+          throw { code: 'OPERATION_FAILED', message: 'Keychain read failed: locked' };
+        }
+        return readable(command, args);
+      };
+
+      await pruneRemoteTrackingBranches('/test/repo');
+
+      expect(lastInvokedCommand).to.equal('prune_remote_tracking_branches');
+      const args = lastInvokedArgs as { remotes: string[]; tokens: Record<string, string> };
+      expect(args.remotes).to.deep.equal(['origin']);
+      expect(args.tokens).to.deep.equal({});
+    });
+
     it("ignores a preferred Azure DevOps account from a DIFFERENT organization", async () => {
       // Every ADO account is scoped to one organization, and a
       // `{org}.visualstudio.com` host is per organization — so the resolver's

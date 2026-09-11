@@ -8917,47 +8917,56 @@ export async function pruneRemoteTrackingBranches(
         target,
         remoteUrl,
       );
-      if (account) {
-        const { AccountCredentials, getFreshAccountToken } = await import(
-          './credential.service.ts'
-        );
-        if (integrationType === 'azure-devops') {
-          // Every ADO account is scoped to exactly one organization, and a
-          // `{org}.visualstudio.com` host varies per organization just as a
-          // GitLab instance host varies per account — so the same hazard as
-          // the gitlab arm below applies. The resolver's last tier is the
-          // GLOBAL default, reported as a match like any other; trusting it
-          // would scope one org's PAT to another org's host and still fail to
-          // authenticate there. Only the account for THIS organization may
-          // answer; otherwise leave the token unset and let `getCloneToken`
-          // below pick by organization.
-          const accountOrg =
-            account.config.type === 'azure-devops' ? account.config.organization : undefined;
-          if (accountOrg && adoOrg && accountOrg.toLowerCase() === adoOrg.toLowerCase()) {
-            token =
-              await getFreshAccountToken('azure-devops', account.id, 'azure') ?? undefined;
+      // A keyring that cannot be read must not fail the prune: the same
+      // posture as `getCloneToken` and `resolveRepoToken`, which proceed
+      // unauthenticated and log. This loop's callers read the outcome off the
+      // result and one of them holds the repository's ref-op lock across the
+      // call, so a throw here left that lock held for the life of the app.
+      try {
+        if (account) {
+          const { AccountCredentials, getFreshAccountToken } = await import(
+            './credential.service.ts'
+          );
+          if (integrationType === 'azure-devops') {
+            // Every ADO account is scoped to exactly one organization, and a
+            // `{org}.visualstudio.com` host varies per organization just as a
+            // GitLab instance host varies per account — so the same hazard as
+            // the gitlab arm below applies. The resolver's last tier is the
+            // GLOBAL default, reported as a match like any other; trusting it
+            // would scope one org's PAT to another org's host and still fail to
+            // authenticate there. Only the account for THIS organization may
+            // answer; otherwise leave the token unset and let `getCloneToken`
+            // below pick by organization.
+            const accountOrg =
+              account.config.type === 'azure-devops' ? account.config.organization : undefined;
+            if (accountOrg && adoOrg && accountOrg.toLowerCase() === adoOrg.toLowerCase()) {
+              token =
+                await getFreshAccountToken('azure-devops', account.id, 'azure') ?? undefined;
+            } else {
+              wrongInstance = true;
+            }
+          } else if (integrationType === 'gitlab') {
+            // GitLab is the one provider whose host varies per account, and the
+            // resolver's last tier is the GLOBAL default — reported as a match
+            // like any other. Trusting it here would hand, say, a gitlab.com PAT
+            // to an unrelated self-hosted server that has never seen it, and the
+            // prune would still fail to authenticate there. Only the account that
+            // serves THIS host may answer; otherwise leave the token unset and
+            // let `getCloneToken` below pick by host.
+            const instanceUrl =
+              account.config.type === 'gitlab' ? account.config.instanceUrl : undefined;
+            if (instanceUrl && cloneUrlHost(instanceUrl) === host) {
+              token =
+                await getFreshAccountToken('gitlab', account.id, 'gitlab', instanceUrl) ?? undefined;
+            } else {
+              wrongInstance = true;
+            }
           } else {
-            wrongInstance = true;
+            token = await AccountCredentials.getToken('github', account.id) ?? undefined;
           }
-        } else if (integrationType === 'gitlab') {
-          // GitLab is the one provider whose host varies per account, and the
-          // resolver's last tier is the GLOBAL default — reported as a match
-          // like any other. Trusting it here would hand, say, a gitlab.com PAT
-          // to an unrelated self-hosted server that has never seen it, and the
-          // prune would still fail to authenticate there. Only the account that
-          // serves THIS host may answer; otherwise leave the token unset and
-          // let `getCloneToken` below pick by host.
-          const instanceUrl =
-            account.config.type === 'gitlab' ? account.config.instanceUrl : undefined;
-          if (instanceUrl && cloneUrlHost(instanceUrl) === host) {
-            token =
-              await getFreshAccountToken('gitlab', account.id, 'gitlab', instanceUrl) ?? undefined;
-          } else {
-            wrongInstance = true;
-          }
-        } else {
-          token = await AccountCredentials.getToken('github', account.id) ?? undefined;
         }
+      } catch (err) {
+        console.error(`Failed to read the stored token for remote '${target}':`, err);
       }
       if (!token && (!repoSpecific || wrongInstance)) {
         token = await getCloneToken(remoteUrl);

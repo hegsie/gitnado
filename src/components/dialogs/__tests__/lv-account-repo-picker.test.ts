@@ -515,6 +515,34 @@ describe('lv-account-repo-picker', () => {
       expect(el.shadowRoot!.querySelector('.repo-item')!.textContent).to.contain('infra');
     });
 
+    it('shows the keychain error when the stored token cannot be read', async () => {
+      // A keychain that refuses to be read is not "no credential": saying so
+      // sent the user to reconnect an account whose token was sitting right
+      // there, and a re-added account failed the same way. The keychain's own
+      // message is shown, with Retry.
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      mockInvoke = (command) => {
+        if (command === 'get_keyring_token') {
+          return Promise.reject({
+            code: 'OPERATION_FAILED',
+            message: 'Keychain read failed for github_token_gh-1 (security exited with 36): User interaction is not allowed.',
+          });
+        }
+        return Promise.resolve(null);
+      };
+
+      const el = await mount();
+      const state = await waitForState(el, 'error');
+
+      expect(state.textContent).to.contain('User interaction is not allowed');
+      expect(stateEl(el, 'no-credential'), 'not reported as a missing credential').to.equal(null);
+      expect(state.querySelector('.link-btn')!.textContent!.trim()).to.equal('Retry');
+      expect(
+        invoked.some((i) => i.command === 'list_github_repositories'),
+        'no listing call is made without a token to make it with',
+      ).to.be.false;
+    });
+
     it('offers to reconnect when the token is rejected', async () => {
       unifiedProfileStore.getState().setAccounts([githubAccount]);
       withStoredToken((command) => {

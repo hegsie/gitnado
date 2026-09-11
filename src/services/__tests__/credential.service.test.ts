@@ -10,6 +10,8 @@ import { expect } from '@open-wc/testing';
 const credentialStorage = new Map<string, string>();
 const invokeCallArgs: Array<{ command: string; args: Record<string, unknown> }> = [];
 let storeFailure = false;
+/** Set to make `get_keyring_token` fail with this message (a keychain error, not an absent key). */
+let getFailure: string | null = null;
 
 const mockInvoke = async (command: string, args?: unknown): Promise<unknown> => {
   const params = args as Record<string, unknown> | undefined;
@@ -24,6 +26,7 @@ const mockInvoke = async (command: string, args?: unknown): Promise<unknown> => 
   }
 
   if (command === 'get_keyring_token') {
+    if (getFailure) return Promise.reject({ code: 'OPERATION_FAILED', message: getFailure });
     const key = params?.key as string;
     return credentialStorage.get(key) ?? null;
   }
@@ -115,6 +118,26 @@ describe('credential.service - Keyring Operations via invokeCommand', () => {
 
       const result = await getCredential(CredentialKeys.GITHUB_TOKEN);
       expect(result).to.equal('stored-token');
+    });
+
+    it('throws with the keychain error when the read itself fails', async () => {
+      // A failed read used to come back as null, indistinguishable from "never
+      // stored" — so a locked or refusing keychain told the user to reconnect
+      // an account whose token was sitting right there.
+      getFailure = 'Keychain read failed for github_token (security exited with 36): User interaction is not allowed.';
+      try {
+        let thrown: unknown = null;
+        try {
+          await getCredential(CredentialKeys.GITHUB_TOKEN);
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown, 'the failure is thrown, not swallowed').to.be.instanceOf(Error);
+        expect((thrown as Error).message).to.contain('User interaction is not allowed');
+        expect((thrown as Error).message).to.contain('github_token');
+      } finally {
+        getFailure = null;
+      }
     });
 
     it('should return null for missing credential', async () => {
