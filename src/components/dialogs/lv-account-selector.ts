@@ -308,6 +308,19 @@ export class LvAccountSelector extends LitElement {
   };
 
   willUpdate(changed: Map<PropertyKey, unknown>): void {
+    // The accounts are read for the integration type the selector was
+    // connected with, and the store subscription re-reads them for whatever
+    // type is CURRENT — but nothing re-read them when the type itself changed
+    // with no store update. The clone dialog's account picker swaps its
+    // provider on one selector, so after switching GitHub → GitLab it kept
+    // listing the GitHub accounts, showed the GitLab account as "No account
+    // selected", and handed back a GitHub account when one was picked.
+    if (changed.has('integrationType')) {
+      this.accounts = getAccountsByType(this.integrationType);
+      // The dropdown that is open belongs to the previous provider.
+      this.isOpen = false;
+      this.clearPendingAction();
+    }
     // Disabled while the dropdown is up: fold it away, so the actions inside
     // it are not left on screen for a host that has locked everything else.
     if (changed.has('disabled') && this.disabled && this.isOpen) {

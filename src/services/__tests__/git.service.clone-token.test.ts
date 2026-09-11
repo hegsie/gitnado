@@ -57,8 +57,10 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
   },
 };
 
+type TokenProvider = 'github' | 'gitlab' | 'azure-devops' | 'bitbucket';
+
 function account(
-  integrationType: 'github' | 'gitlab' | 'azure-devops',
+  integrationType: TokenProvider,
   id: string,
   instanceOrOrg?: string,
   isDefault = true,
@@ -73,7 +75,7 @@ function account(
 
 /** Seed a per-account keyring token, plus the OAuth bundle ADO refreshes from. */
 function seedAccountToken(
-  integrationType: 'github' | 'gitlab' | 'azure-devops',
+  integrationType: TokenProvider,
   accountId: string,
   token: string,
   withOAuthBundle = false,
@@ -91,8 +93,12 @@ function seedAccountToken(
   }
 }
 
-async function cloneAndReadArgs(url: string, extra: Record<string, unknown> = {}) {
-  const result = await cloneRepository({ url, path: '/dest/repo', ...extra });
+async function cloneAndReadArgs(
+  url: string,
+  extra: Record<string, unknown> = {},
+  options?: Parameters<typeof cloneRepository>[1],
+) {
+  const result = await cloneRepository({ url, path: '/dest/repo', ...extra }, options);
   expect(result.success, 'clone resolved').to.be.true;
   return (cloneArgs ?? {}) as { token?: string };
 }
@@ -292,6 +298,155 @@ describe('git.service - cloneRepository token lookup', () => {
 
     expect(result.success).to.be.true;
     expect(invokedCommands).to.include('clone_repository');
+  });
+
+  // ── The account the URL was picked from (clone dialog's account picker) ──
+
+  it("uses the picked account's token ahead of the host's default account", async () => {
+    // Two GitHub accounts: the host lookup lands on the default (work) one,
+    // which is the wrong identity for a repository picked from the personal
+    // account — a private clone under it fails as "not found".
+    const work = account('github', 'gh-work');
+    const personal = account('github', 'gh-personal', undefined, false);
+    unifiedProfileStore.getState().setAccounts([work, personal]);
+    seedAccountToken('github', 'gh-work', 'work-tok');
+    seedAccountToken('github', 'gh-personal', 'personal-tok');
+
+    const args = await cloneAndReadArgs('https://github.com/me/private.git', {}, {
+      account: personal,
+    });
+
+    expect(args.token).to.equal('personal-tok');
+  });
+
+  it('falls back to the host lookup when the picked account has no stored token', async () => {
+    const work = account('github', 'gh-work');
+    const personal = account('github', 'gh-personal', undefined, false);
+    unifiedProfileStore.getState().setAccounts([work, personal]);
+    seedAccountToken('github', 'gh-work', 'work-tok');
+
+    const args = await cloneAndReadArgs('https://github.com/me/private.git', {}, {
+      account: personal,
+    });
+
+    expect(args.token, 'another account for the host can still work').to.equal('work-tok');
+  });
+
+  it("refreshes the picked account's expiring OAuth token", async () => {
+    const gl = account('gitlab', 'gl-1', 'https://gitlab.com');
+    unifiedProfileStore.getState().setAccounts([gl]);
+    keyring.set('gitlab_token_gl-1', 'old-tok');
+    keyring.set(
+      'gitlab_token_gl-1_oauth',
+      JSON.stringify({ accessToken: 'old-tok', refreshToken: 'r', expiresAt: Date.now() - 1 }),
+    );
+    refreshedAccessToken = 'fresh-tok';
+
+    const args = await cloneAndReadArgs('https://gitlab.com/g/p.git', {}, { account: gl });
+
+    expect(args.token).to.equal('fresh-tok');
+  });
+
+  it("uses the picked self-hosted GitLab account's token", async () => {
+    const hosted = account('gitlab', 'gl-acme', 'https://git.acme.dev', false);
+    unifiedProfileStore.getState().setAccounts([
+      account('gitlab', 'gl-com', 'https://gitlab.com'),
+      hosted,
+    ]);
+    seedAccountToken('gitlab', 'gl-com', 'com-tok');
+    seedAccountToken('gitlab', 'gl-acme', 'acme-tok');
+
+    const args = await cloneAndReadArgs('https://git.acme.dev/g/p.git', {}, { account: hosted });
+
+    expect(args.token).to.equal('acme-tok');
+  });
+
+  it("uses the picked Azure DevOps account's token", async () => {
+    const ado = account('azure-devops', 'ado-1', 'contoso');
+    unifiedProfileStore.getState().setAccounts([ado]);
+    seedAccountToken('azure-devops', 'ado-1', 'ado-tok');
+
+    const args = await cloneAndReadArgs(
+      'https://dev.azure.com/contoso/proj/_git/repo',
+      {},
+      { account: ado },
+    );
+
+    expect(args.token).to.equal('ado-tok');
+  });
+
+  it("uses the picked Bitbucket account's credential", async () => {
+    // Bitbucket had no clone-token resolution at all, so a private repository
+    // picked from a Bitbucket account cloned unauthenticated and failed. The
+    // one token slot carries either an OAuth access token or the prefixed
+    // app-password credential; the backend tells them apart.
+    const bb = account('bitbucket', 'bb-1', 'team');
+    unifiedProfileStore.getState().setAccounts([bb]);
+    seedAccountToken('bitbucket', 'bb-1', 'bbapp:alice:app-pass');
+
+    const args = await cloneAndReadArgs('https://alice@bitbucket.org/team/repo.git', {}, {
+      account: bb,
+    });
+
+    expect(args.token).to.equal('bbapp:alice:app-pass');
+  });
+
+  it('does not attach the picked account token to a plaintext clone URL', async () => {
+    const personal = account('github', 'gh-personal');
+    unifiedProfileStore.getState().setAccounts([personal]);
+    seedAccountToken('github', 'gh-personal', 'personal-tok');
+
+    const args = await cloneAndReadArgs('http://github.com/me/private.git', {}, {
+      account: personal,
+    });
+
+    expect(args.token, 'a token must not go over http in clear').to.equal(undefined);
+  });
+
+  it('ignores the picked account when the caller supplied a token', async () => {
+    const personal = account('github', 'gh-personal');
+    unifiedProfileStore.getState().setAccounts([personal]);
+    seedAccountToken('github', 'gh-personal', 'personal-tok');
+
+    const args = await cloneAndReadArgs(
+      'https://github.com/me/private.git',
+      { token: 'explicit' },
+      { account: personal },
+    );
+
+    expect(args.token).to.equal('explicit');
+    expect(invokedCommands).to.not.include('get_keyring_token');
+  });
+
+  // ── Bitbucket by host ────────────────────────────────────────────────────
+
+  it("attaches the default Bitbucket account's credential for a bitbucket.org clone", async () => {
+    unifiedProfileStore.getState().setAccounts([account('bitbucket', 'bb-1', 'team')]);
+    seedAccountToken('bitbucket', 'bb-1', 'bb-oauth-tok');
+
+    const args = await cloneAndReadArgs('https://bitbucket.org/team/repo.git');
+
+    expect(args.token).to.equal('bb-oauth-tok');
+  });
+
+  it('falls back to the legacy Bitbucket username and app password', async () => {
+    keyring.set('bitbucket_username', 'alice');
+    keyring.set('bitbucket_password', 'app-pass');
+
+    const args = await cloneAndReadArgs('https://bitbucket.org/team/repo.git');
+
+    expect(args.token, 'carried in the prefixed form the backend splits').to.equal(
+      'bbapp:alice:app-pass',
+    );
+  });
+
+  it('attaches no Bitbucket credential to a look-alike host', async () => {
+    unifiedProfileStore.getState().setAccounts([account('bitbucket', 'bb-1', 'team')]);
+    seedAccountToken('bitbucket', 'bb-1', 'bb-oauth-tok');
+
+    const args = await cloneAndReadArgs('https://bitbucket.org.evil.test/team/repo.git');
+
+    expect(args.token).to.equal(undefined);
   });
 
   it('clones without a token when the credential lookup fails', async () => {

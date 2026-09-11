@@ -251,8 +251,9 @@ impl CredentialsHelper {
                 if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) && !tried_token {
                     tried_token = true;
                     tracing::debug!("Using provided token for authentication");
-                    let username = username_from_url.unwrap_or("git");
-                    return Cred::userpass_plaintext(username, token_value);
+                    let (username, password) =
+                        token_credential_for(url, username_from_url, token_value);
+                    return Cred::userpass_plaintext(&username, &password);
                 }
             }
 
@@ -501,6 +502,54 @@ pub fn delete_credentials(url: &str) -> Result<(), String> {
 /// host is missed, and it is re-prompted for once.
 fn extract_host(url: &str) -> Option<String> {
     crate::services::security::url_host(url)
+}
+
+/// Sentinel prefix of a Bitbucket app-password credential stored in a token
+/// slot: `bbapp:<username>:<app password>`. Must stay in sync with
+/// `APP_PASSWORD_PREFIX` in `commands/bitbucket.rs` and
+/// `BITBUCKET_APP_PASSWORD_PREFIX` in `src/services/credential.service.ts`.
+const BITBUCKET_APP_PASSWORD_PREFIX: &str = "bbapp:";
+
+/// The username Bitbucket expects alongside an OAuth access token over git
+/// HTTPS. Any other username is refused with the token as the password.
+const BITBUCKET_TOKEN_USERNAME: &str = "x-token-auth";
+
+/// The `(username, password)` pair a stored token authenticates a git HTTPS
+/// transfer to `url` with.
+///
+/// Every provider but Bitbucket takes the token as the password and ignores
+/// the username, so `git` (or the one the URL names) does. Bitbucket is the
+/// exception twice over: an app password is a real username/password pair,
+/// carried in the one token slot behind the `bbapp:` prefix and split back
+/// apart here; and an OAuth access token authenticates only as `x-token-auth`
+/// — the account's own username, which Bitbucket's clone URLs embed
+/// (`https://<user>@bitbucket.org/...`), is refused with a token as the
+/// password. Without this the clone dialog's "From account" flow listed a
+/// Bitbucket account's repositories and then could not clone one of them.
+pub fn token_credential_for(
+    url: &str,
+    username_from_url: Option<&str>,
+    token: &str,
+) -> (String, String) {
+    if let Some(rest) = token.strip_prefix(BITBUCKET_APP_PASSWORD_PREFIX) {
+        // Split on the FIRST colon only: usernames never contain a colon, and
+        // an app password may.
+        if let Some((username, password)) = rest.split_once(':') {
+            if !username.is_empty() && !password.is_empty() {
+                return (username.to_string(), password.to_string());
+            }
+        }
+    }
+
+    let host = extract_host(url).unwrap_or_default();
+    if host == "bitbucket.org" || host.ends_with(".bitbucket.org") {
+        return (BITBUCKET_TOKEN_USERNAME.to_string(), token.to_string());
+    }
+
+    (
+        username_from_url.unwrap_or("git").to_string(),
+        token.to_string(),
+    )
 }
 
 /// Why a transfer callback aborted the transfer.
@@ -775,6 +824,67 @@ mod tests {
         if let Ok(mut cache) = CREDENTIAL_CACHE.lock() {
             *cache = None;
         }
+    }
+
+    // ── token_credential_for ────────────────────────────────────────────
+
+    #[test]
+    fn token_credential_uses_git_as_the_username_for_a_plain_token() {
+        assert_eq!(
+            token_credential_for("https://github.com/o/r.git", None, "ghp_tok"),
+            ("git".to_string(), "ghp_tok".to_string())
+        );
+    }
+
+    #[test]
+    fn token_credential_keeps_the_username_the_url_names() {
+        // Azure DevOps clone URLs carry the organization as userinfo; a PAT
+        // works with any username, so the URL's own is kept as before.
+        assert_eq!(
+            token_credential_for(
+                "https://org@dev.azure.com/org/proj/_git/repo",
+                Some("org"),
+                "pat"
+            ),
+            ("org".to_string(), "pat".to_string())
+        );
+    }
+
+    #[test]
+    fn token_credential_splits_a_bitbucket_app_password_credential() {
+        assert_eq!(
+            token_credential_for(
+                "https://bitbucket.org/ws/repo.git",
+                None,
+                "bbapp:alice:s3cr:et"
+            ),
+            ("alice".to_string(), "s3cr:et".to_string()),
+            "everything after the first colon is the app password"
+        );
+    }
+
+    #[test]
+    fn token_credential_sends_a_bitbucket_access_token_as_x_token_auth() {
+        // The account's own username, as Bitbucket's clone links embed it,
+        // must NOT be used: Bitbucket refuses a token under it.
+        assert_eq!(
+            token_credential_for(
+                "https://alice@bitbucket.org/ws/repo.git",
+                Some("alice"),
+                "oauth-access-token"
+            ),
+            ("x-token-auth".to_string(), "oauth-access-token".to_string())
+        );
+    }
+
+    #[test]
+    fn token_credential_treats_a_malformed_app_password_prefix_as_a_token() {
+        // No colon after the prefix: nothing to split, so it goes through as
+        // whatever the host takes a bare token as.
+        assert_eq!(
+            token_credential_for("https://github.com/o/r.git", None, "bbapp:nocolon"),
+            ("git".to_string(), "bbapp:nocolon".to_string())
+        );
     }
 
     #[test]

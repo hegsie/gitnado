@@ -190,7 +190,10 @@ export const AzureDevOpsCredentials = {
 // Multi-Account Credential Support
 // =============================================================================
 
-import type { IntegrationType } from '../types/integration-accounts.types.ts';
+import type {
+  IntegrationAccount,
+  IntegrationType,
+} from '../types/integration-accounts.types.ts';
 import type { OAuthProvider } from '../types/oauth.types.ts';
 import type { GitHubConnectionStatus } from './git.service.ts';
 
@@ -511,6 +514,37 @@ export async function getFreshAccountToken(
 
 /** In-flight OAuth refreshes keyed by `${integrationType}:${accountId}` (single-flight). */
 const inFlightTokenRefreshes = new Map<string, Promise<string | null>>();
+
+/**
+ * `getFreshAccountToken` for an account object: picks the OAuth provider and
+ * the GitLab instance URL the refresh needs from the account itself, so every
+ * caller that holds an `IntegrationAccount` (the clone dialog's account picker,
+ * the clone that follows it) resolves the credential the same way and none of
+ * them can pair an account with the wrong provider by hand.
+ *
+ * Returns null for an account type that has no git-hosting token (OIDC).
+ */
+export async function getFreshTokenForAccount(
+  account: IntegrationAccount
+): Promise<string | null> {
+  switch (account.integrationType) {
+    case 'github':
+      return getFreshAccountToken('github', account.id, 'github');
+    case 'gitlab':
+      return getFreshAccountToken(
+        'gitlab',
+        account.id,
+        'gitlab',
+        account.config.type === 'gitlab' ? account.config.instanceUrl : undefined
+      );
+    case 'bitbucket':
+      return getFreshAccountToken('bitbucket', account.id, 'bitbucket');
+    case 'azure-devops':
+      return getFreshAccountToken('azure-devops', account.id, 'azure');
+    default:
+      return null;
+  }
+}
 
 // ========================================================================
 // GitHub App Installation

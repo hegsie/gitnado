@@ -13,7 +13,6 @@ import {
   cancelClone,
   getSubmodules,
   updateSubmodules,
-  type ProviderRepository,
 } from '../../services/git.service.ts';
 import { openCloneDestinationDialog } from '../../services/dialog.service.ts';
 import { showToast } from '../../services/notification.service.ts';
@@ -22,7 +21,9 @@ import { settingsStore } from '../../stores/settings.store.ts';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import './lv-modal.ts';
 import './lv-account-repo-picker.ts';
+import type { RepositorySelectedDetail } from './lv-account-repo-picker.ts';
 import type { LvModal } from './lv-modal.ts';
+import type { IntegrationAccount } from '../../types/unified-profile.types.ts';
 
 /** Where the repository to clone comes from. */
 type CloneSource = 'url' | 'account';
@@ -238,6 +239,15 @@ export class LvCloneDialog extends LitElement {
   @state() private source: CloneSource = 'url';
   /** "owner/name" of the repository picked from an account, for confirmation. */
   @state() private selectedRepoLabel = '';
+  /**
+   * The account the URL was picked from. The clone authenticates as THIS
+   * account: resolving a token from the URL's host alone picks the host's
+   * default account, which is the wrong identity as soon as a second account
+   * for the same provider is connected, and a private clone under the wrong
+   * identity fails as "not found". Cleared whenever the URL is typed over,
+   * because the typed URL may belong to someone else entirely.
+   */
+  private selectedAccount: IntegrationAccount | null = null;
   @state() private url = '';
   @state() private destination = '';
   @state() private repoName = '';
@@ -335,6 +345,7 @@ export class LvCloneDialog extends LitElement {
   private reset(): void {
     this.source = 'url';
     this.selectedRepoLabel = '';
+    this.selectedAccount = null;
     this.url = '';
     this.destination = '';
     this.repoName = '';
@@ -362,8 +373,11 @@ export class LvCloneDialog extends LitElement {
     this.repoName = this.extractRepoName(this.url);
     this.error = '';
     // Typing over the URL means the picked repository is no longer what will
-    // be cloned, so its confirmation line must not keep claiming otherwise.
+    // be cloned, so its confirmation line must not keep claiming otherwise —
+    // and the picked account's token must not be sent to whatever host the
+    // typed URL names.
     this.selectedRepoLabel = '';
+    this.selectedAccount = null;
   }
 
   /** Switch between pasting a URL and picking from a connected account. */
@@ -378,9 +392,7 @@ export class LvCloneDialog extends LitElement {
    * destination exactly as typing them would, so the clone below (progress,
    * cancellation, token resolution) runs completely unchanged.
    */
-  private handleRepositorySelected(
-    e: CustomEvent<{ repository: ProviderRepository }>,
-  ): void {
+  private handleRepositorySelected(e: CustomEvent<RepositorySelectedDetail>): void {
     const repo = e.detail?.repository;
     if (!repo) return;
     this.url = repo.cloneUrl;
@@ -388,6 +400,7 @@ export class LvCloneDialog extends LitElement {
     // project's path segment and its display name can differ.
     this.repoName = this.extractRepoName(repo.cloneUrl) || repo.name;
     this.selectedRepoLabel = repo.fullName;
+    this.selectedAccount = e.detail.account ?? null;
     if (!this.destination) {
       this.destination = settingsStore.getState().defaultClonePath;
     }
@@ -560,12 +573,16 @@ export class LvCloneDialog extends LitElement {
           ...(this.filter ? { filter: this.filter } : {}),
           ...(this.singleBranch ? { singleBranch: true } : {}),
         },
-        // The footer already offers "Cancel Clone" while the service is still
-        // awaiting the network gate and the token lookup. A cancel pressed
-        // before the command is sent would otherwise be reset by the backend
-        // when the clone starts, and this dialog would wait on "Cancelling…"
-        // for a cancellation that never comes.
-        { isCancelled: () => this.isCancelling },
+        {
+          // The footer already offers "Cancel Clone" while the service is
+          // still awaiting the network gate and the token lookup. A cancel
+          // pressed before the command is sent would otherwise be reset by the
+          // backend when the clone starts, and this dialog would wait on
+          // "Cancelling…" for a cancellation that never comes.
+          isCancelled: () => this.isCancelling,
+          // Clone as the account the repository was picked from, when it was.
+          account: this.selectedAccount,
+        },
       );
 
       if (result.success && result.data) {

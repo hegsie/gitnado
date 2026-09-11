@@ -206,7 +206,13 @@ fn build_clone_command(
     // same way, so an ssh:// or git:// clone keeps using the user's own
     // credentials exactly as before.
     if let (Some(token_value), true) = (token, url.starts_with("https://")) {
-        cmd.env("GITNADO_CLONE_TOKEN", token_value);
+        // The same username rules as the git2 path: `git` for every provider
+        // that ignores the username, and Bitbucket's app-password split or
+        // `x-token-auth` where it does not.
+        let (username, password) =
+            crate::services::credentials_service::token_credential_for(url, None, token_value);
+        cmd.env("GITNADO_CLONE_USERNAME", username);
+        cmd.env("GITNADO_CLONE_TOKEN", password);
         // Two entries: the empty helper resets the list, so the token the
         // caller gave us wins outright the way in-URL credentials did. Without
         // the reset, a system helper holding a stale credential for the same
@@ -217,12 +223,12 @@ fn build_clone_command(
         cmd.env("GIT_CONFIG_KEY_0", "credential.helper");
         cmd.env("GIT_CONFIG_VALUE_0", "");
         cmd.env("GIT_CONFIG_KEY_1", "credential.helper");
-        // `git` as the username matches the git2 path's fallback; every
-        // provider we support authenticates a token as the password and
-        // ignores the username.
+        // Both halves come from the environment, never from argv: a
+        // username can be a real account name (Bitbucket app passwords) and
+        // is as private as the password beside it.
         cmd.env(
             "GIT_CONFIG_VALUE_1",
-            "!f() { echo username=git; echo \"password=$GITNADO_CLONE_TOKEN\"; }; f",
+            "!f() { echo \"username=$GITNADO_CLONE_USERNAME\"; echo \"password=$GITNADO_CLONE_TOKEN\"; }; f",
         );
     }
 
@@ -1940,9 +1946,71 @@ mod tests {
             helper
         );
         assert!(
-            helper.contains("username=git"),
-            "helper must supply a username: {}",
+            helper.contains("username=$GITNADO_CLONE_USERNAME"),
+            "helper must read the username from the environment: {}",
             helper
+        );
+        assert_eq!(
+            env_of(&cmd, "GITNADO_CLONE_USERNAME"),
+            Some("git".to_string()),
+            "a plain token authenticates as `git`"
+        );
+    }
+
+    /// A Bitbucket app password is a username/password pair carried in the
+    /// one token slot: the clone must hand git BOTH halves, not `git` and the
+    /// prefixed blob.
+    #[test]
+    fn test_build_clone_command_splits_a_bitbucket_app_password() {
+        let cmd = build_clone_command(
+            "https://bitbucket.org/ws/repo.git",
+            Path::new("/tmp/x"),
+            false,
+            None,
+            Some(1),
+            None,
+            false,
+            Some("bbapp:alice:app-pass"),
+        );
+
+        assert_eq!(
+            env_of(&cmd, "GITNADO_CLONE_USERNAME"),
+            Some("alice".to_string())
+        );
+        assert_eq!(
+            env_of(&cmd, "GITNADO_CLONE_TOKEN"),
+            Some("app-pass".to_string())
+        );
+        let args = args_of(&cmd);
+        assert!(
+            args.iter()
+                .all(|a| !a.contains("alice") && !a.contains("app-pass")),
+            "neither half may reach argv: {:?}",
+            args
+        );
+    }
+
+    /// A Bitbucket OAuth access token authenticates only as `x-token-auth`.
+    #[test]
+    fn test_build_clone_command_sends_a_bitbucket_token_as_x_token_auth() {
+        let cmd = build_clone_command(
+            "https://alice@bitbucket.org/ws/repo.git",
+            Path::new("/tmp/x"),
+            false,
+            None,
+            Some(1),
+            None,
+            false,
+            Some("oauth-tok"),
+        );
+
+        assert_eq!(
+            env_of(&cmd, "GITNADO_CLONE_USERNAME"),
+            Some("x-token-auth".to_string())
+        );
+        assert_eq!(
+            env_of(&cmd, "GITNADO_CLONE_TOKEN"),
+            Some("oauth-tok".to_string())
         );
     }
 
@@ -1995,6 +2063,7 @@ mod tests {
         // credential.helper override, and that must still be absent.
         for key in [
             "GITNADO_CLONE_TOKEN",
+            "GITNADO_CLONE_USERNAME",
             "GIT_CONFIG_COUNT",
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
@@ -2022,6 +2091,7 @@ mod tests {
             Some("ghp_s3cret"),
         );
         assert_eq!(env_of(&ssh, "GITNADO_CLONE_TOKEN"), None);
+        assert_eq!(env_of(&ssh, "GITNADO_CLONE_USERNAME"), None);
         assert_eq!(env_of(&ssh, "GIT_CONFIG_COUNT"), None);
         assert!(args_of(&ssh).contains(&"ssh://git@host/o/r.git".to_string()));
     }

@@ -444,6 +444,55 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(repoItems(page)).toHaveCount(2);
     });
 
+    test('switching provider shows that provider\'s account, not the previous one\'s', async ({
+      page,
+    }) => {
+      // The account selector used to keep the accounts of the provider it was
+      // mounted with: after GitHub → GitLab it showed the GitLab account as
+      // "No account selected" and its dropdown still offered the GitHub one.
+      const gitlabAccount: MockIntegrationAccount = {
+        id: 'gl-acc-1',
+        name: 'Work GitLab',
+        integrationType: 'gitlab',
+        config: { type: 'gitlab', instanceUrl: 'https://gitlab.com' },
+        color: '#fc6d26',
+        cachedUser: { username: 'gl-user', displayName: 'GitLab User', avatarUrl: null },
+        urlPatterns: [],
+        isDefault: true,
+      };
+      await initializeUnifiedProfileStore(page, {
+        profiles: [defaultProfile],
+        accounts: [githubAccount, gitlabAccount],
+        connectedAccounts: ['gh-acc-1', 'gl-acc-1'],
+      });
+      await injectCommandMock(page, {
+        list_gitlab_projects: {
+          repositories: [
+            repository('gl-project', {
+              owner: 'gl-user',
+              fullName: 'gl-user/gl-project',
+              cloneUrl: 'https://gitlab.com/gl-user/gl-project.git',
+            }),
+          ],
+          nextPage: null,
+        },
+      });
+      await openAccountSource(page, dialogs);
+      await expect(repoItems(page)).toHaveCount(2);
+
+      await page.locator('lv-clone-dialog #repo-provider').selectOption('gitlab');
+      await expect(repoItems(page)).toHaveCount(1);
+      await expect(repoItems(page).first()).toContainText('gl-project');
+
+      const selector = page.locator('lv-clone-dialog lv-account-selector');
+      await expect(selector.locator('.account-name')).toHaveText('Work GitLab');
+      await expect(selector.locator('.no-account')).toHaveCount(0);
+
+      await selector.locator('.selector-btn').click();
+      await expect(selector.locator('.dropdown-item')).toHaveCount(1);
+      await expect(selector.locator('.dropdown-item')).toContainText('Work GitLab');
+    });
+
     test('does not list anything until the account source is chosen', async ({ page }) => {
       await startCommandCapture(page);
       await new AppPage(page).cloneButton.click();
@@ -451,6 +500,136 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(dialogs.clone.urlInput).toBeVisible();
 
       expect(await findCommand(page, 'list_github_repositories')).toHaveLength(0);
+    });
+  });
+
+  test.describe('with two GitHub accounts', () => {
+    const personalAccount: MockIntegrationAccount = {
+      id: 'gh-acc-2',
+      name: 'Personal GitHub',
+      integrationType: 'github',
+      config: { type: 'github' },
+      color: '#6e40c9',
+      cachedUser: { username: 'octodev', displayName: 'Octo Dev', avatarUrl: null },
+      urlPatterns: [],
+      isDefault: false,
+    };
+
+    test.beforeEach(async ({ page }) => {
+      await initializeUnifiedProfileStore(page, {
+        profiles: [defaultProfile],
+        accounts: [githubAccount, personalAccount],
+        connectedAccounts: ['gh-acc-1', 'gh-acc-2'],
+      });
+      // A token per account, and a listing that depends on which token asked,
+      // so both the listing's and the clone's choice of identity is visible.
+      await page.evaluate(() => {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+          }
+        ).__TAURI_INTERNALS__;
+        const original = internals.invoke;
+        const tokens: Record<string, string> = {
+          'github_token_gh-acc-1': 'work-tok',
+          'github_token_gh-acc-2': 'personal-tok',
+        };
+        const entry = (name: string, owner: string) => ({
+          id: name,
+          name,
+          owner,
+          fullName: `${owner}/${name}`,
+          description: null,
+          isPrivate: true,
+          cloneUrl: `https://github.com/${owner}/${name}.git`,
+          webUrl: null,
+          defaultBranch: 'main',
+          lastPushedAt: null,
+        });
+        internals.invoke = async (command: string, args?: unknown) => {
+          if (command === 'get_keyring_token') {
+            return tokens[(args as { key?: string }).key ?? ''] ?? null;
+          }
+          if (command === 'list_github_repositories') {
+            const token = (args as { token?: string }).token;
+            return {
+              repositories: [
+                token === 'personal-tok'
+                  ? entry('side-project', 'octodev')
+                  : entry('work-service', 'octocat'),
+              ],
+              nextPage: null,
+            };
+          }
+          if (command === 'clone_repository') {
+            return {
+              path: '/home/user/projects/side-project',
+              name: 'side-project',
+              headRef: null,
+              isBare: false,
+            };
+          }
+          return original(command, args);
+        };
+      });
+    });
+
+    test('clones a repository picked from the second account with that account\'s token', async ({
+      page,
+    }) => {
+      // The URL-host lookup lands on the DEFAULT GitHub account, so a private
+      // repository picked from the personal account cloned with the work
+      // token and failed as "not found".
+      await openAccountSource(page, dialogs);
+      await expect(repoItems(page)).toHaveCount(1);
+      await expect(repoItems(page).first()).toContainText('work-service');
+
+      const selector = page.locator('lv-clone-dialog lv-account-selector');
+      await selector.locator('.selector-btn').click();
+      await selector.locator('.dropdown-item', { hasText: 'Personal GitHub' }).click();
+      await expect(selector.locator('.account-name')).toHaveText('Personal GitHub');
+      await expect(repoItems(page).first()).toContainText('side-project');
+
+      await repoItems(page).first().click();
+      await expect(dialogs.clone.urlInput).toHaveValue(
+        'https://github.com/octodev/side-project.git',
+      );
+      await dialogs.clone.fillPath('/home/user/projects');
+
+      await startCommandCapture(page);
+      await dialogs.clone.clone();
+      await waitForCommand(page, 'clone_repository');
+
+      const args = (await findCommand(page, 'clone_repository'))[0].args as {
+        url?: string;
+        token?: string;
+      };
+      expect(args.url).toBe('https://github.com/octodev/side-project.git');
+      expect(args.token).toBe('personal-tok');
+    });
+
+    test('a URL typed over the picked one clones with the host default account again', async ({
+      page,
+    }) => {
+      await openAccountSource(page, dialogs);
+      const selector = page.locator('lv-clone-dialog lv-account-selector');
+      await selector.locator('.selector-btn').click();
+      await selector.locator('.dropdown-item', { hasText: 'Personal GitHub' }).click();
+      await expect(repoItems(page).first()).toContainText('side-project');
+      await repoItems(page).first().click();
+      await dialogs.clone.fillPath('/home/user/projects');
+
+      // The typed URL may belong to anyone: the personal token must not
+      // follow it, and the confirmation line must stop naming the pick.
+      await dialogs.clone.urlInput.fill('https://github.com/octocat/other.git');
+      await expect(page.getByText('Selected: octodev/side-project')).toHaveCount(0);
+
+      await startCommandCapture(page);
+      await dialogs.clone.clone();
+      await waitForCommand(page, 'clone_repository');
+
+      const args = (await findCommand(page, 'clone_repository'))[0].args as { token?: string };
+      expect(args.token).toBe('work-tok');
     });
   });
 
