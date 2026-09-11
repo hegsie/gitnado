@@ -48,9 +48,14 @@ One-time setup:
 Users install with `winget install hegsie.Gitnado`.
 
 New-package PRs go through winget-pkgs moderation and typically take a few
-days; the automated executable check may flag a
-`Validation-Executable-Error` because the app needs the WebView2 runtime and
-a desktop session — a short comment on the PR saying so helps the moderator.
+days. The installer manifest declares `Microsoft.VCRedist.2015+.x64` and
+`Microsoft.EdgeWebView2Runtime` as package dependencies: `gitnado.exe`
+imports `MSVCP140.dll`, which only ships with the VC++ redistributable, so
+without it the app exits with `STATUS_DLL_NOT_FOUND` on a clean Windows
+install (this is what the winget validation sandbox hit on the first
+submission). If the executable check still flags a
+`Validation-Executable-Error`, a short comment on the PR explaining that the
+app needs a desktop session helps the moderator.
 If the Komac step ever fails, render the manifests locally with the same
 script and submit them by hand: `node .github/scripts/winget-manifests.mjs
 --version <v> --exe <exe> --msi <msi> --msi-analysis <komac analyze output>

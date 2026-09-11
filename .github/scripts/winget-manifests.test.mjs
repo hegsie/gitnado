@@ -174,6 +174,12 @@ test("renderManifests produces the three winget manifests with no placeholders l
     installer,
     /InstallModes:\n- interactive\n- silent\n- silentWithProgress/,
   );
+  // The app imports MSVCP140.dll (VC++ 2015+ redistributable) and needs WebView2;
+  // declaring both lets winget install them first on a clean machine.
+  assert.match(
+    installer,
+    /Dependencies:\n {2}PackageDependencies:\n {2}- PackageIdentifier: Microsoft\.VCRedist\.2015\+\.x64\n {2}- PackageIdentifier: Microsoft\.EdgeWebView2Runtime\n/,
+  );
 
   const locale = manifests["hegsie.Gitnado.locale.en-US.yaml"];
   assert.equal(topLevel(locale, "ManifestType"), "defaultLocale");
