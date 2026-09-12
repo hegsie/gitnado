@@ -63,7 +63,7 @@ jobs:
           cargo audit > /dev/null 2>&1 && echo "clean=true" >> "$GITHUB_OUTPUT" || echo "clean=false" >> "$GITHUB_OUTPUT"
 
       - name: Open or update the advisory issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           NPM_CLEAN: ${{ steps.npm_audit.outputs.clean }}
           NPM_REPORT: ${{ steps.npm_audit.outputs.report }}
