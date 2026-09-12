@@ -433,6 +433,53 @@ describe('lv-azure-devops-dialog', () => {
       expect((el as any).createPrTitle, 'retained draft title').to.equal('');
     });
 
+    it('reports a keychain read failure when switching account instead of going blank', async () => {
+      // A keyring read failure now throws (it is not "no token"). This click
+      // handler had no catch, so the rejection escaped: no error text, the
+      // previous account's stored-token state left standing, and nothing
+      // reloaded for the account just picked.
+      const other = createTestAccount({
+        id: 'ado-acc-2',
+        name: 'Other ADO',
+        integrationType: 'azure-devops',
+        config: { type: 'azure-devops', organization: 'otherorg' },
+        isDefault: false,
+      });
+      unifiedProfileStore.getState().setAccounts([mockAccount, other]);
+
+      const el = await fixture<LvAzureDevOpsDialog>(html`
+        <lv-azure-devops-dialog .open=${true}></lv-azure-devops-dialog>
+      `);
+      await waitForLoad(el);
+
+      const readable = mockInvoke;
+      mockInvoke = (command, args) => {
+        if (command === 'get_keyring_token') {
+          return Promise.reject({
+            code: 'OPERATION_FAILED',
+            message: 'Keychain read failed for azure-devops_token_ado-acc-2 (security exited with 36): User interaction is not allowed.',
+          });
+        }
+        return readable(command, args);
+      };
+
+      const selector = el.shadowRoot!.querySelector('lv-account-selector')!;
+      selector.dispatchEvent(
+        new CustomEvent('account-change', {
+          detail: { account: other },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 0));
+      await el.updateComplete;
+
+      const errorBanner = el.shadowRoot!.querySelector('.error');
+      expect(errorBanner, 'the keychain error is shown').to.not.be.null;
+      expect(errorBanner!.textContent).to.include('User interaction is not allowed');
+    });
+
     it('shows account selector when accounts exist', async () => {
       unifiedProfileStore.getState().setAccounts([mockAccount]);
 

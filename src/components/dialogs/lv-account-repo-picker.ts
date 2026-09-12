@@ -28,7 +28,7 @@ import {
 import type { CommandResult } from '../../types/api.types.ts';
 import { unifiedProfileStore, getAccountsByType } from '../../stores/unified-profile.store.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
-import { getFreshAccountToken } from '../../services/credential.service.ts';
+import { getFreshTokenForAccount } from '../../services/credential.service.ts';
 import type { IntegrationAccount } from '../../types/unified-profile.types.ts';
 import { INTEGRATION_TYPE_NAMES } from '../../types/unified-profile.types.ts';
 import './lv-account-selector.ts';
@@ -50,6 +50,13 @@ export const REPO_PICKER_PROVIDERS: RepoPickerProvider[] = [
  * command modules, so the number the hint quotes is the number requested.
  */
 export const REPO_PICKER_PAGE_SIZE = 30;
+
+/** Payload of the `repository-selected` event. */
+export interface RepositorySelectedDetail {
+  repository: ProviderRepository;
+  /** The account the repository was listed under; the clone authenticates as it. */
+  account: IntegrationAccount | null;
+}
 
 /** What stopped the listing, so the UI can say what to do about it. */
 type PickerErrorKind =
@@ -455,26 +462,12 @@ export class LvAccountRepoPicker extends LitElement {
   /**
    * The account's stored token, refreshing an expiring OAuth one first — the
    * same resolution the provider dialogs use, so a picker load never fails for
-   * a credential the rest of the app would have renewed.
+   * a credential the rest of the app would have renewed. Shared with the clone
+   * that follows a selection, so the repository is listed and cloned with one
+   * and the same credential.
    */
-  private async resolveToken(account: IntegrationAccount): Promise<string | null> {
-    switch (account.integrationType) {
-      case 'github':
-        return getFreshAccountToken('github', account.id, 'github');
-      case 'gitlab':
-        return getFreshAccountToken(
-          'gitlab',
-          account.id,
-          'gitlab',
-          account.config.type === 'gitlab' ? account.config.instanceUrl : undefined,
-        );
-      case 'bitbucket':
-        return getFreshAccountToken('bitbucket', account.id, 'bitbucket');
-      case 'azure-devops':
-        return getFreshAccountToken('azure-devops', account.id, 'azure');
-      default:
-        return null;
-    }
+  private resolveToken(account: IntegrationAccount): Promise<string | null> {
+    return getFreshTokenForAccount(account);
   }
 
   /**
@@ -570,11 +563,20 @@ export class LvAccountRepoPicker extends LitElement {
     this.filter = (e.target as HTMLInputElement).value;
   }
 
+  /**
+   * Hand the repository to the host WITH the account it was listed under. The
+   * clone that follows must authenticate as that account: resolving the token
+   * from the URL's host alone lands on the host's default account, which is
+   * the wrong identity as soon as a second GitHub account is connected — and
+   * for Bitbucket there was no host-based lookup at all, so a private
+   * repository picked from a Bitbucket account cloned unauthenticated and
+   * failed.
+   */
   private handleSelectRepository(repo: ProviderRepository): void {
     this.selectedRepoId = repo.id;
     this.dispatchEvent(
-      new CustomEvent('repository-selected', {
-        detail: { repository: repo },
+      new CustomEvent<RepositorySelectedDetail>('repository-selected', {
+        detail: { repository: repo, account: this.selectedAccount },
         bubbles: true,
         composed: true,
       }),

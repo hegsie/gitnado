@@ -994,6 +994,30 @@ pub(crate) fn build_security_add_args<'a>(service: &'a str, key: &'a str) -> Vec
     }
 }
 
+/// Build the stdin payload for `security add-generic-password ... -w`.
+///
+/// `-w` with no inline value does not simply read the secret from stdin: it
+/// prompts TWICE — "password data for new item:", then "retype password for
+/// new item:". Feeding the token once leaves the confirmation at EOF, so
+/// `security` reports "passwords don't match", re-prompts, reads EOF for both
+/// prompts, matches empty against empty, stores an EMPTY entry and still exits
+/// 0. That is why connecting an account on macOS stored a token that every
+/// later read found blank. Answering both prompts is what makes the write
+/// land; the value stays off argv, where `ps -E` would expose it.
+///
+/// A value containing a line break cannot survive these line-oriented prompts
+/// (`security` would keep only its first line), so reject it rather than
+/// silently store a truncated token.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn build_security_add_stdin(value: &str) -> Result<String> {
+    if value.contains('\n') || value.contains('\r') {
+        return Err(GitnadoError::OperationFailed(
+            "Cannot store a token containing a line break in the macOS keychain.".to_string(),
+        ));
+    }
+    Ok(format!("{value}\n{value}\n"))
+}
+
 /// Write `value` under `key` for `service`.
 ///
 /// On macOS, uses the `security` CLI. In debug builds `-A` is added so that
@@ -1003,14 +1027,19 @@ pub(crate) fn build_security_add_args<'a>(service: &'a str, key: &'a str) -> Vec
 fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        // Built before the delete below: a value we cannot write must not cost
+        // the caller the entry they already had.
+        let stdin_payload = build_security_add_stdin(value)?;
+
         // Delete existing entry first (add-generic-password fails if it exists)
         let _ = std::process::Command::new("security")
             .args(["delete-generic-password", "-s", service, "-a", key])
             .output();
 
-        // `-w` last with no value => password read from stdin. This avoids
-        // exposing the token via argv (`ps -E` is readable by any process
-        // running under the same user).
+        // `-w` last with no value => password read from the prompts on stdin
+        // (see `build_security_add_stdin` for why the value is sent twice).
+        // This avoids exposing the token via argv (`ps -E` is readable by any
+        // process running under the same user).
         use std::io::Write as _;
         let security_args = build_security_add_args(service, key);
         let mut child = std::process::Command::new("security")
@@ -1021,7 +1050,7 @@ fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
             .spawn()
             .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(value.as_bytes()).map_err(|e| {
+            stdin.write_all(stdin_payload.as_bytes()).map_err(|e| {
                 GitnadoError::OperationFailed(format!("Failed to write token: {e}"))
             })?;
         }
@@ -1035,6 +1064,15 @@ fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
                 "Failed to store token: {stderr}"
             )));
         }
+
+        // `security` exiting 0 is not proof the value landed: the password is
+        // handed over on stdin (kept out of argv on purpose) and a `security`
+        // that reads that prompt differently stores an empty item and still
+        // exits 0. That left a connected account whose token could never be
+        // read back — the sign-in reported success and every later read said
+        // "no stored credential". Read it back before reporting success, so
+        // the failure is seen at connect time, where reconnecting can fix it.
+        verify_keychain_write(key, value, read_keyring_token(service, key))?;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1048,7 +1086,86 @@ fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Read `key` from `service`; `Ok(None)` when absent.
+/// `security` exit status for errSecItemNotFound: the one failure that means
+/// "no such entry" rather than "the keychain could not be read".
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const SEC_ITEM_NOT_FOUND: i32 = 44;
+
+/// Turn a `security find-generic-password -w` result into the entry's value.
+///
+/// Only errSecItemNotFound is "absent". Everything else `security` can fail
+/// with — a locked keychain, "User interaction is not allowed", an access
+/// prompt the user declined, a keychain the item's ACL refuses this caller —
+/// used to be reported as `Ok(None)` too, so every one of them reached the UI
+/// as "this account has no stored credential, reconnect it". Reconnecting
+/// cannot fix a keychain that refuses reads, and the message sent the user
+/// round in circles. An entry that exists but is empty is an error for the
+/// same reason: it is a failed write, not a missing credential.
+///
+/// Pure over the process output so it is unit-tested on every platform.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn interpret_keychain_read(
+    key: &str,
+    success: bool,
+    status_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<Option<String>> {
+    if success {
+        let password = String::from_utf8_lossy(stdout).trim().to_string();
+        if password.is_empty() {
+            return Err(GitnadoError::OperationFailed(format!(
+                "Keychain entry for {key} exists but holds no value. Reconnect the account to store its token again."
+            )));
+        }
+        return Ok(Some(password));
+    }
+
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if status_code == Some(SEC_ITEM_NOT_FOUND) || stderr.contains("could not be found") {
+        return Ok(None);
+    }
+
+    let status = status_code
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "a signal".to_string());
+    Err(GitnadoError::OperationFailed(format!(
+        "Keychain read failed for {key} (security exited with {status}): {}",
+        if stderr.is_empty() {
+            "no error output".to_string()
+        } else {
+            stderr
+        }
+    )))
+}
+
+/// Confirm a value just written under `key` reads back as itself.
+///
+/// Pure over the read-back result so it is unit-tested on every platform.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn verify_keychain_write(
+    key: &str,
+    expected: &str,
+    read_back: Result<Option<String>>,
+) -> Result<()> {
+    match read_back {
+        Ok(Some(actual)) if actual == expected => Ok(()),
+        Ok(Some(actual)) => Err(GitnadoError::OperationFailed(format!(
+            "Keychain entry for {key} was stored but reads back differently ({} bytes written, {} read).",
+            expected.len(),
+            actual.len()
+        ))),
+        Ok(None) => Err(GitnadoError::OperationFailed(format!(
+            "Keychain entry for {key} was stored but could not be found when read back."
+        ))),
+        Err(e) => Err(GitnadoError::OperationFailed(format!(
+            "Keychain entry for {key} was stored but could not be read back: {e}"
+        ))),
+    }
+}
+
+/// Read `key` from `service`; `Ok(None)` when absent, `Err` when the keychain
+/// could not be read (see `interpret_keychain_read`).
 fn read_keyring_token(service: &str, key: &str) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     {
@@ -1057,17 +1174,13 @@ fn read_keyring_token(service: &str, key: &str) -> Result<Option<String>> {
             .output()
             .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
 
-        if output.status.success() {
-            let password = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if password.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(password))
-            }
-        } else {
-            // Item not found
-            Ok(None)
-        }
+        interpret_keychain_read(
+            key,
+            output.status.success(),
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+        )
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -2334,6 +2447,190 @@ mod tests {
         assert!(args.contains(&"key"));
         assert!(args.contains(&"-U"));
         assert!(args.contains(&"-w"));
+    }
+
+    // ── interpret_keychain_read / verify_keychain_write ─────────────────
+    //
+    // The macOS reader used to report EVERY `security` failure as "not
+    // found", so a keychain that refused to be read surfaced as "this account
+    // has no stored credential — reconnect it", which reconnecting could not
+    // fix. These pin the one status that means absent apart from the rest.
+
+    #[test]
+    fn keychain_read_returns_the_value_on_success() {
+        let value = interpret_keychain_read("k", true, Some(0), b"ghp_tok\n", b"").unwrap();
+        assert_eq!(value, Some("ghp_tok".to_string()));
+    }
+
+    #[test]
+    fn keychain_read_treats_item_not_found_as_absent() {
+        let stderr = b"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.";
+        assert_eq!(
+            interpret_keychain_read("k", false, Some(SEC_ITEM_NOT_FOUND), b"", stderr).unwrap(),
+            None
+        );
+        // Belt and braces: the message alone identifies it too.
+        assert_eq!(
+            interpret_keychain_read("k", false, Some(1), b"", stderr).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn keychain_read_reports_any_other_failure_with_its_output() {
+        let err = interpret_keychain_read(
+            "github_token_acc",
+            false,
+            Some(36),
+            b"",
+            b"security: SecKeychainSearchCopyNext: User interaction is not allowed.",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("github_token_acc"), "names the key: {err}");
+        assert!(err.contains("36"), "carries the exit status: {err}");
+        assert!(
+            err.contains("User interaction is not allowed"),
+            "carries security's own message: {err}"
+        );
+    }
+
+    #[test]
+    fn keychain_read_reports_a_failure_with_no_output_or_status() {
+        let err = interpret_keychain_read("k", false, None, b"", b"")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a signal"), "{err}");
+        assert!(err.contains("no error output"), "{err}");
+    }
+
+    #[test]
+    fn keychain_read_reports_an_empty_entry_instead_of_calling_it_absent() {
+        // An entry that exists but holds nothing is a failed write; reporting
+        // it as "no credential" hid that from the connect flow.
+        let err = interpret_keychain_read("k", true, Some(0), b"\n", b"")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("holds no value"), "{err}");
+    }
+
+    #[test]
+    fn keychain_write_verification_accepts_the_same_value_back() {
+        assert!(verify_keychain_write("k", "tok", Ok(Some("tok".to_string()))).is_ok());
+    }
+
+    #[test]
+    fn keychain_write_verification_rejects_a_missing_or_different_value() {
+        let missing = verify_keychain_write("k", "tok", Ok(None))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            missing.contains("could not be found when read back"),
+            "{missing}"
+        );
+
+        let different = verify_keychain_write("k", "tok", Ok(Some("other".to_string())))
+            .unwrap_err()
+            .to_string();
+        assert!(different.contains("reads back differently"), "{different}");
+        assert!(
+            !different.contains("tok") && !different.contains("other"),
+            "never echoes a secret: {different}"
+        );
+
+        let failed = verify_keychain_write(
+            "k",
+            "tok",
+            Err(GitnadoError::OperationFailed("locked".to_string())),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(failed.contains("could not be read back"), "{failed}");
+        assert!(failed.contains("locked"), "{failed}");
+    }
+
+    // ── build_security_add_stdin ────────────────────────────────────────
+    //
+    // `security add-generic-password -w` prompts for the password AND for a
+    // retype. Sending the token once left the retype at EOF; `security` then
+    // re-prompted, read EOF for both, stored an empty entry and exited 0 — so
+    // every macOS account connect wrote a token that read back blank.
+
+    #[test]
+    fn security_add_stdin_answers_both_of_securitys_prompts() {
+        // One line per prompt: the password, then the retype. Anything less
+        // and `security` stores an empty entry while reporting success.
+        assert_eq!(
+            build_security_add_stdin("ghp_tok").unwrap(),
+            "ghp_tok\nghp_tok\n"
+        );
+        assert_eq!(
+            build_security_add_stdin("ghp_tok").unwrap().lines().count(),
+            2
+        );
+    }
+
+    #[test]
+    fn security_add_stdin_keeps_the_value_off_the_argument_list() {
+        // The payload exists so the token travels on stdin; the args must
+        // still carry `-w` with no inline value beside it.
+        #[cfg(target_os = "macos")]
+        {
+            let args = build_security_add_args("svc", "key");
+            assert_eq!(
+                args.last(),
+                Some(&"-w"),
+                "-w must be last so no value follows it on argv: {args:?}"
+            );
+            assert!(
+                !args.contains(&"ghp_tok"),
+                "the token must never reach argv: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_add_stdin_rejects_a_line_break_instead_of_truncating() {
+        // These prompts are line-oriented, so a value with a newline would be
+        // stored as its first line only — a silently corrupted token.
+        for value in ["gh\np_tok", "gh\rp_tok", "ghp_tok\n"] {
+            let err = build_security_add_stdin(value).unwrap_err().to_string();
+            assert!(err.contains("line break"), "{value:?} -> {err}");
+            assert!(
+                !err.contains("ghp_tok") && !err.contains("p_tok"),
+                "never echoes the secret: {err}"
+            );
+        }
+    }
+
+    /// End-to-end against the real keychain: the pure-argument test above
+    /// passed all along while `security` stored nothing, so pin the round
+    /// trip that actually broke. Skips when `security` cannot be run at all.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_write_round_trips_through_security() {
+        let service = "gitnado-test-keychain-roundtrip";
+        let key = &format!("roundtrip-{}", std::process::id());
+        let token = "ghp_round_trip_value";
+
+        if std::process::Command::new("security")
+            .arg("help")
+            .output()
+            .is_err()
+        {
+            return; // no `security` on this box — nothing to assert
+        }
+
+        let written = write_keyring_token(service, key, token);
+        let read_back = read_keyring_token(service, key);
+        let _ = remove_keyring_token(service, key);
+
+        written.expect("writing a token must succeed and verify");
+        assert_eq!(
+            read_back.expect("reading the token back must succeed"),
+            Some(token.to_string()),
+            "the value must survive the write, not land as an empty entry"
+        );
     }
 
     // ========================================================================

@@ -515,6 +515,34 @@ describe('lv-account-repo-picker', () => {
       expect(el.shadowRoot!.querySelector('.repo-item')!.textContent).to.contain('infra');
     });
 
+    it('shows the keychain error when the stored token cannot be read', async () => {
+      // A keychain that refuses to be read is not "no credential": saying so
+      // sent the user to reconnect an account whose token was sitting right
+      // there, and a re-added account failed the same way. The keychain's own
+      // message is shown, with Retry.
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      mockInvoke = (command) => {
+        if (command === 'get_keyring_token') {
+          return Promise.reject({
+            code: 'OPERATION_FAILED',
+            message: 'Keychain read failed for github_token_gh-1 (security exited with 36): User interaction is not allowed.',
+          });
+        }
+        return Promise.resolve(null);
+      };
+
+      const el = await mount();
+      const state = await waitForState(el, 'error');
+
+      expect(state.textContent).to.contain('User interaction is not allowed');
+      expect(stateEl(el, 'no-credential'), 'not reported as a missing credential').to.equal(null);
+      expect(state.querySelector('.link-btn')!.textContent!.trim()).to.equal('Retry');
+      expect(
+        invoked.some((i) => i.command === 'list_github_repositories'),
+        'no listing call is made without a token to make it with',
+      ).to.be.false;
+    });
+
     it('offers to reconnect when the token is rejected', async () => {
       unifiedProfileStore.getState().setAccounts([githubAccount]);
       withStoredToken((command) => {
@@ -605,9 +633,45 @@ describe('lv-account-repo-picker', () => {
       expect(event.detail.repository.cloneUrl).to.equal(
         'https://github.com/octocat/alpha.git',
       );
+      // The account the repository was listed under travels with it: the
+      // clone must authenticate as that account, not as the host's default.
+      expect(event.detail.account?.id).to.equal('gh-1');
 
       await el.updateComplete;
       expect(el.shadowRoot!.querySelector('.repo-item.selected')).to.exist;
+    });
+
+    it('hands over the account the repository was listed under, not the default one', async () => {
+      const personal: IntegrationAccount = {
+        ...githubAccount,
+        id: 'gh-2',
+        name: 'Personal GitHub',
+        isDefault: false,
+      };
+      unifiedProfileStore.getState().setAccounts([githubAccount, personal]);
+      withStoredToken((command) =>
+        command === 'list_github_repositories'
+          ? { repositories: [repo('alpha')], nextPage: null }
+          : null,
+      );
+
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+
+      const selector = el.shadowRoot!.querySelector('lv-account-selector')!;
+      selector.dispatchEvent(
+        new CustomEvent('account-change', {
+          detail: { account: personal },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      await waitForRepoItems(el, 1);
+
+      const row = el.shadowRoot!.querySelector('.repo-item') as HTMLButtonElement;
+      setTimeout(() => row.click());
+      const event = (await oneEvent(el, 'repository-selected')) as CustomEvent;
+      expect(event.detail.account?.id).to.equal('gh-2');
     });
   });
 
@@ -880,6 +944,54 @@ describe('lv-account-repo-picker', () => {
       expect((call!.args as { instanceUrl?: string }).instanceUrl).to.equal(
         'https://gitlab.com',
       );
+    });
+
+    it('shows the newly chosen provider account in its selector', async () => {
+      // The selector used to keep the accounts of the provider it was mounted
+      // with, so after switching it showed the GitLab account as "No account
+      // selected" and its dropdown still offered the GitHub accounts.
+      unifiedProfileStore.getState().setAccounts([githubAccount, gitlabAccount]);
+      withStoredToken((command) => {
+        if (command === 'list_github_repositories') {
+          return { repositories: [repo('alpha')], nextPage: null };
+        }
+        if (command === 'list_gitlab_projects') {
+          return { repositories: [repo('gl-project')], nextPage: null };
+        }
+        return null;
+      });
+
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+
+      const select = el.shadowRoot!.querySelector('#repo-provider') as HTMLSelectElement;
+      select.value = 'gitlab';
+      select.dispatchEvent(new Event('change'));
+      await waitUntil(
+        async () => {
+          await el.updateComplete;
+          const row = el.shadowRoot!.querySelector('.repo-item');
+          return !!row && row.textContent!.includes('gl-project');
+        },
+        'the GitLab account listing replaces the GitHub one',
+        { timeout: 2000 },
+      );
+
+      const selector = el.shadowRoot!.querySelector('lv-account-selector') as HTMLElement & {
+        updateComplete: Promise<unknown>;
+      };
+      await selector.updateComplete;
+      expect(selector.shadowRoot!.querySelector('.no-account')).to.equal(null);
+      expect(selector.shadowRoot!.querySelector('.account-name')!.textContent).to.include(
+        'GitLab',
+      );
+
+      (selector.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement).click();
+      await selector.updateComplete;
+      const items = Array.from(selector.shadowRoot!.querySelectorAll('.dropdown-item'));
+      expect(items.length, 'only the GitLab account is offered').to.equal(1);
+      expect(items[0].textContent).to.include('GitLab');
+      expect(items[0].textContent).to.not.include('Work GitHub');
     });
   });
 });

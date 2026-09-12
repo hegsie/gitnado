@@ -654,6 +654,138 @@ describe('lv-clone-dialog', () => {
       expect(args.path).to.equal('/home/user/projects/my-repo');
     });
 
+    /** Two connected GitHub accounts, each with its own stored token. */
+    const workAccount = {
+      id: 'gh-work',
+      name: 'Work GitHub',
+      integrationType: 'github' as const,
+      urlPatterns: [],
+      isDefault: true,
+      color: null,
+      config: { type: 'github' as const },
+      cachedUser: null,
+    };
+    const personalAccount = { ...workAccount, id: 'gh-personal', name: 'Personal', isDefault: false };
+
+    function mockTwoAccountKeyring(calls: { command: string; args?: unknown }[]): void {
+      mockInvoke = (command: string, args?: unknown) => {
+        calls.push({ command, args });
+        if (command === 'get_keyring_token') {
+          const key = (args as { key?: string })?.key ?? '';
+          if (key.endsWith('_oauth')) return Promise.resolve(null);
+          if (key === 'github_token_gh-work') return Promise.resolve('work-tok');
+          if (key === 'github_token_gh-personal') return Promise.resolve('personal-tok');
+          return Promise.resolve(null);
+        }
+        if (command === 'clone_repository') {
+          return Promise.resolve({ path: '/home/user/projects/my-repo', name: 'my-repo' });
+        }
+        return Promise.resolve(null);
+      };
+    }
+
+    it('clones as the account the repository was picked from, not the host default', async () => {
+      // The URL-host lookup lands on the DEFAULT GitHub account. A private
+      // repository picked from the personal account then cloned with the work
+      // token and failed as "not found".
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      unifiedProfileStore.getState().setAccounts([workAccount, personalAccount]);
+      const calls: { command: string; args?: unknown }[] = [];
+      mockTwoAccountKeyring(calls);
+      try {
+        selectSource('account');
+        await el.updateComplete;
+        picker()!.dispatchEvent(
+          new CustomEvent('repository-selected', {
+            detail: { repository: pickedRepository, account: personalAccount },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        await el.updateComplete;
+
+        await (el as unknown as { handleClone: () => Promise<void> }).handleClone();
+
+        const clone = calls.find((c) => c.command === 'clone_repository');
+        expect(clone, 'the clone command runs').to.exist;
+        expect((clone!.args as { token?: string }).token).to.equal('personal-tok');
+      } finally {
+        unifiedProfileStore.getState().reset();
+      }
+    });
+
+    it('stops cloning as the picked account once the URL is typed over', async () => {
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      unifiedProfileStore.getState().setAccounts([workAccount, personalAccount]);
+      const calls: { command: string; args?: unknown }[] = [];
+      mockTwoAccountKeyring(calls);
+      try {
+        selectSource('account');
+        await el.updateComplete;
+        picker()!.dispatchEvent(
+          new CustomEvent('repository-selected', {
+            detail: { repository: pickedRepository, account: personalAccount },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        await el.updateComplete;
+
+        // The typed URL may belong to anyone; the picked account's token must
+        // not follow it. The host lookup (default account) applies again.
+        const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+        urlInput.value = 'https://github.com/someone/else.git';
+        urlInput.dispatchEvent(new Event('input'));
+        await el.updateComplete;
+
+        await (el as unknown as { handleClone: () => Promise<void> }).handleClone();
+
+        const clone = calls.find((c) => c.command === 'clone_repository');
+        expect(clone, 'the clone command runs').to.exist;
+        expect((clone!.args as { token?: string }).token).to.equal('work-tok');
+      } finally {
+        unifiedProfileStore.getState().reset();
+      }
+    });
+
+    it('forgets the picked account on reset', async () => {
+      settingsStore.getState().setDefaultClonePath('/home/user/projects');
+      unifiedProfileStore.getState().setAccounts([workAccount, personalAccount]);
+      const calls: { command: string; args?: unknown }[] = [];
+      mockTwoAccountKeyring(calls);
+      try {
+        selectSource('account');
+        await el.updateComplete;
+        picker()!.dispatchEvent(
+          new CustomEvent('repository-selected', {
+            detail: { repository: pickedRepository, account: personalAccount },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        await el.updateComplete;
+
+        (el as unknown as { reset: () => void }).reset();
+        await el.updateComplete;
+        // A fresh session that pastes a URL by hand.
+        const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+        urlInput.value = 'https://github.com/octocat/my-repo.git';
+        urlInput.dispatchEvent(new Event('input'));
+        const destInput = el.shadowRoot!.querySelector('#destination') as HTMLInputElement;
+        destInput.value = '/home/user/projects';
+        destInput.dispatchEvent(new Event('input'));
+        await el.updateComplete;
+
+        await (el as unknown as { handleClone: () => Promise<void> }).handleClone();
+
+        const clone = calls.find((c) => c.command === 'clone_repository');
+        expect(clone, 'the clone command runs').to.exist;
+        expect((clone!.args as { token?: string }).token).to.equal('work-tok');
+      } finally {
+        unifiedProfileStore.getState().reset();
+      }
+    });
+
     it('drops the selected-repository label once the URL is edited by hand', async () => {
       selectSource('account');
       await el.updateComplete;

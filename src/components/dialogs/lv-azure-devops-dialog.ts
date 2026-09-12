@@ -1038,8 +1038,16 @@ export class LvAzureDevOpsDialog extends LitElement {
       this.organizationInput = account.config.organization;
     }
 
-    // Check if this account has a stored token
-    await this.checkStoredToken();
+    // Check if this account has a stored token. A keyring that cannot be read
+    // throws (it is not "no token"): say so here rather than leave the panel
+    // blank with the previous account's state, which is what an unhandled
+    // rejection out of this click handler did.
+    try {
+      await this.checkStoredToken();
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to read the stored token';
+      return;
+    }
 
     // Re-check connection with new account
     await this.loadInitialData();

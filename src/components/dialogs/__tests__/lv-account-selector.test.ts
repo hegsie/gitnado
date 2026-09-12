@@ -125,6 +125,53 @@ describe('lv-account-selector', () => {
     expect(items.length).to.equal(2);
   });
 
+  it('re-reads its accounts when the integration type changes', async () => {
+    // The clone dialog's account picker swaps the provider on ONE selector.
+    // The accounts used to be read only when the element connected (and on
+    // store updates), so after GitHub → GitLab it still listed the GitHub
+    // accounts and showed the GitLab account as "No account selected".
+    const el = await fixture<LvAccountSelector>(html`
+      <lv-account-selector
+        integrationType="github"
+        .selectedAccountId=${'acc-1'}
+      ></lv-account-selector>
+    `);
+    await el.updateComplete;
+
+    el.integrationType = 'gitlab';
+    el.selectedAccountId = 'acc-3';
+    await el.updateComplete;
+
+    expect(el.shadowRoot!.querySelector('.no-account')).to.equal(null);
+    expect(el.shadowRoot!.querySelector('.account-name')!.textContent).to.include('My GitLab');
+
+    (el.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement).click();
+    await el.updateComplete;
+    const items = Array.from(el.shadowRoot!.querySelectorAll('.dropdown-item'));
+    expect(items.length, 'only the GitLab account is listed').to.equal(1);
+    expect(items[0].textContent).to.include('My GitLab');
+  });
+
+  it('folds an open dropdown away when the integration type changes', async () => {
+    const el = await fixture<LvAccountSelector>(html`
+      <lv-account-selector
+        integrationType="github"
+        .selectedAccountId=${'acc-1'}
+      ></lv-account-selector>
+    `);
+    await el.updateComplete;
+    (el.shadowRoot!.querySelector('.selector-btn') as HTMLButtonElement).click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.dropdown')).to.exist;
+
+    // The open dropdown lists the previous provider's accounts; it must not
+    // stay on screen offering them under the new provider's label.
+    el.integrationType = 'gitlab';
+    await el.updateComplete;
+
+    expect(el.shadowRoot!.querySelector('.dropdown')).to.equal(null);
+  });
+
   it('shows "No account selected" when selectedAccountId is null', async () => {
     const el = await fixture<LvAccountSelector>(html`
       <lv-account-selector
