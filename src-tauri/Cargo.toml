@@ -40,7 +40,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 notify = "8"
 notify-debouncer-full = "0.7"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "query", "form", "http2", "stream"] }
-dirs = "6"
+dirs = "7"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 base64 = "0.23.1"
