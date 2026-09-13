@@ -19,6 +19,13 @@ updates:
       tauri:
         patterns:
           - "@tauri-apps/*"
+    ignore:
+      # typescript-eslint (8.70.0 at time of writing) pins its TypeScript peer
+      # dependency to <6.1.0, so a TypeScript 7 bump fails `npm ci` with
+      # ERESOLVE. Drop this once a typescript-eslint release supports TS 7 and
+      # bump both together.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "deps(npm):"
 
