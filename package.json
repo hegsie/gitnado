@@ -46,7 +46,7 @@
   "devDependencies": {
     "@lit/localize-tools": "^0.8.2",
     "@open-wc/testing": "^5.0.0",
-    "@playwright/test": "1.62.1",
+    "@playwright/test": "1.63.0",
     "@tauri-apps/cli": "^2.11.4",
     "@types/mocha": "^10.0.10",
     "@web/dev-server-esbuild": "^2.0.0",
