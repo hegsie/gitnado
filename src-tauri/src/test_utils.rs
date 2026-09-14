@@ -54,7 +54,7 @@ fn isolate_git_config() {
 /// milliseconds after "running 2959 tests", no message, no test named, on
 /// roughly two runs in five. A constructor runs before `main`, so the mutation
 /// is over before there is a second thread to race with.
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn isolate_git_config_before_any_test_thread() {
     isolate_git_config();
 }
