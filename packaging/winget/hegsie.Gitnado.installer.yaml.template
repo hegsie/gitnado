@@ -25,10 +25,11 @@ Installers:
   InstallerUrl: https://github.com/hegsie/gitnado/releases/download/v{{VERSION}}/Gitnado_{{VERSION}}_x64-setup.exe
   InstallerSha256: {{EXE_SHA256}}
   ProductCode: Gitnado
+  # No DisplayVersion: winget moderators reject a DisplayVersion that equals
+  # PackageVersion (winget-pkgs#433064 review); winget falls back to it.
   AppsAndFeaturesEntries:
   - DisplayName: Gitnado
     Publisher: Gitnado Contributors
-    DisplayVersion: {{VERSION}}
     ProductCode: Gitnado
   InstallationMetadata:
     DefaultInstallLocation: '%LocalAppData%\Gitnado'
@@ -41,7 +42,6 @@ Installers:
   AppsAndFeaturesEntries:
   - DisplayName: Gitnado
     Publisher: Gitnado Contributors
-    DisplayVersion: {{VERSION}}
     ProductCode: '{{MSI_PRODUCT_CODE}}'
     UpgradeCode: '{84C95AFF-09D5-5959-BE4D-927B1CC7FC1B}'
   InstallationMetadata:
