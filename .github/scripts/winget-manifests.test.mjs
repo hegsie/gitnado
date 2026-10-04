@@ -181,6 +181,11 @@ test("renderManifests produces the three winget manifests with no placeholders l
     /Dependencies:\n {2}PackageDependencies:\n {2}- PackageIdentifier: Microsoft\.VCRedist\.2015\+\.x64\n {2}- PackageIdentifier: Microsoft\.EdgeWebView2Runtime\n/,
   );
 
+  // Moderators reject a DisplayVersion equal to PackageVersion
+  // (winget-pkgs#433064); winget uses PackageVersion when it is absent.
+  assert.doesNotMatch(installer, /^\s*DisplayVersion:/m);
+  assert.equal(installer.match(/AppsAndFeaturesEntries:/g).length, 2);
+
   const locale = manifests["hegsie.Gitnado.locale.en-US.yaml"];
   assert.equal(topLevel(locale, "ManifestType"), "defaultLocale");
   assert.equal(topLevel(locale, "PackageLocale"), "en-US");

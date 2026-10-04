@@ -58,7 +58,10 @@ without it the app exits with `STATUS_DLL_NOT_FOUND` on a clean Windows
 install (this is what the winget validation sandbox hit on the first
 submission). If the executable check still flags a
 `Validation-Executable-Error`, a short comment on the PR explaining that the
-app needs a desktop session helps the moderator.
+app needs a desktop session helps the moderator. The `AppsAndFeaturesEntries`
+deliberately omit `DisplayVersion`: moderators reject a value equal to
+`PackageVersion` (the 0.9.1 review, microsoft/winget-pkgs#433064), and winget
+uses `PackageVersion` when it is absent.
 If the Komac step ever fails, render the manifests locally with the same
 script and submit them by hand: `node .github/scripts/winget-manifests.mjs
 --version <v> --exe <exe> --msi <msi> --msi-analysis <komac analyze output>
