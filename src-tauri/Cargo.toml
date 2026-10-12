@@ -99,7 +99,7 @@ tempfile = "3"
 # no thread-safety, needing external synchronisation against every other use of
 # the library; a lazy OnceLock in the first TestRepo cannot provide that, and on
 # macOS it corrupted the harness outright. See test_utils::isolate_git_config.
-ctor = "0.8"
+ctor = "1.0"
 # Generates a throwaway RSA keypair so the GitHub App JWT signing path can be
 # tested without committing a private key to the repo. Both crates are already
 # in the tree via jsonwebtoken, so this adds no new dependencies.
