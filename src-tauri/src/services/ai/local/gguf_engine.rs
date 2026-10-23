@@ -14,7 +14,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
 
 use crate::services::ai::local::SystemCapabilities;
@@ -153,10 +153,10 @@ pub fn generate_tokens_with_callback(
     max_tokens: u32,
     mut on_token: Option<&mut dyn FnMut(&str)>,
 ) -> Result<String, String> {
+    let vocab = model.vocab();
+
     // Tokenize prompt first so we know how much context we need
-    let mut prompt_tokens = model
-        .str_to_token(prompt, AddBos::Always)
-        .map_err(|e| format!("Tokenization failed: {e}"))?;
+    let mut prompt_tokens = vocab.tokenize(prompt.as_bytes(), true, true);
 
     if prompt_tokens.is_empty() {
         return Err("Empty prompt after tokenization".to_string());
@@ -213,20 +213,26 @@ pub fn generate_tokens_with_callback(
     let mut output = String::new();
     let mut n_cur = prompt_tokens.len() as i32;
     let mut decoder = encoding_rs::UTF_8.new_decoder();
+    let mut piece_bytes = Vec::new();
+    let mut piece = String::new();
 
     #[allow(clippy::explicit_counter_loop)]
     for _ in 0..max_tokens {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
         // Check for end of generation
-        if model.is_eog_token(token) {
+        if vocab.is_eog(token) {
             break;
         }
 
         // Decode token to text
-        let piece = model
-            .token_to_piece(token, &mut decoder, false, None)
-            .map_err(|e| format!("Token decode failed: {e}"))?;
+        piece_bytes.clear();
+        piece.clear();
+        vocab.token_to_piece_into(token, &mut piece_bytes, false, None);
+        if let Some(max_len) = decoder.max_utf8_buffer_length(piece_bytes.len()) {
+            piece.reserve(max_len);
+            let _ = decoder.decode_to_string(&piece_bytes, &mut piece, false);
+        }
         push_decoded_piece(&mut output, &piece, &mut on_token);
 
         // Prepare next token
