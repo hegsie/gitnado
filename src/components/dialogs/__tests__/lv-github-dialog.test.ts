@@ -152,6 +152,27 @@ const mockLabels = [
   { id: 2, name: 'enhancement', color: 'a2eeef', description: 'New feature' },
 ];
 
+const mockPrComments = [
+  {
+    id: '101',
+    author: 'octocat',
+    avatarUrl: 'https://example.com/avatar.png',
+    body: 'General review note',
+    createdAt: '2025-01-15T11:00:00Z',
+    filePath: null,
+    line: null,
+  },
+  {
+    id: '102',
+    author: 'reviewer2',
+    avatarUrl: null,
+    body: 'Please handle null here',
+    createdAt: '2025-01-15T11:05:00Z',
+    filePath: 'src/auth.ts',
+    line: 27,
+  },
+];
+
 function createTestAccount(
   overrides: Partial<IntegrationAccount> & { id: string }
 ): IntegrationAccount {
@@ -311,6 +332,18 @@ function setupMockInvoke(): void {
     if (command === 'create_pull_request') return mockPullRequests[0];
     if (command === 'create_issue' || command === 'create_github_issue') return mockIssues[0];
     if (command === 'create_release' || command === 'create_github_release') return mockReleases[0];
+    if (command === 'get_github_pr_comments') return mockPrComments;
+    if (command === 'add_github_pr_comment') {
+      return {
+        id: '103',
+        author: 'octocat',
+        avatarUrl: 'https://example.com/avatar.png',
+        body: (params as Record<string, string>)?.body ?? '',
+        createdAt: '2025-01-15T12:00:00Z',
+        filePath: (params as Record<string, string | null>)?.path ?? null,
+        line: (params as Record<string, number | null>)?.line ?? null,
+      };
+    }
 
     // OAuth
     if (command === 'get_oauth_client_id') return null;
@@ -2277,6 +2310,128 @@ describe('lv-github-dialog', () => {
       // Surfaced via the shared error banner (not a toast), so batched load
       // failures collapse to a single message rather than stacking.
       expect(dialog.error, 'a failed issues load is surfaced').to.contain('rate limit exceeded');
+    });
+  });
+
+  describe('PR review comments drawer', () => {
+    async function openPullRequestsTab(): Promise<LvGitHubDialog> {
+      unifiedProfileStore.getState().setAccounts([mockAccount]);
+      connectionResponse = mockConnectedStatus;
+      detectedRepoResponse = mockDetectedRepo;
+
+      const el = await fixture<LvGitHubDialog>(html`
+        <lv-github-dialog .open=${true} .repositoryPath=${'/mock/repo'}></lv-github-dialog>
+      `);
+      await waitForLoad(el);
+
+      const tabs = el.shadowRoot!.querySelectorAll('.tab');
+      const prTab = Array.from(tabs).find((t) => t.textContent?.trim() === 'Pull Requests') as HTMLButtonElement;
+      prTab.click();
+      await waitForLoad(el);
+      return el;
+    }
+
+    it('loads and renders general and inline PR comments when the comments drawer is toggled', async () => {
+      const el = await openPullRequestsTab();
+
+      const toggleBtn = el.shadowRoot!.querySelector('[data-testid="pr-comments-toggle-42"]') as HTMLButtonElement;
+      expect(toggleBtn).to.not.be.null;
+
+      toggleBtn.click();
+      await waitForLoad(el);
+
+      const getCall = invokeHistory.find((h) => h.command === 'get_github_pr_comments');
+      expect(getCall).to.not.be.undefined;
+      expect(getCall!.args).to.deep.include({
+        owner: 'test-owner',
+        repo: 'test-repo',
+        pullNumber: 42,
+      });
+
+      const drawer = el.shadowRoot!.querySelector('[data-testid="pr-comments-drawer-42"]');
+      expect(drawer).to.not.be.null;
+      expect(drawer!.textContent).to.contain('General review note');
+      expect(drawer!.textContent).to.contain('Please handle null here');
+      expect(drawer!.textContent).to.contain('src/auth.ts:27');
+      expect(toggleBtn.textContent).to.contain('Comments (2)');
+    });
+
+    it('posts an inline PR review comment with file path, line, and headSha and refreshes comments', async () => {
+      const el = await openPullRequestsTab();
+
+      const toggleBtn = el.shadowRoot!.querySelector('[data-testid="pr-comments-toggle-42"]') as HTMLButtonElement;
+      toggleBtn.click();
+      await waitForLoad(el);
+
+      const drawer = el.shadowRoot!.querySelector('[data-testid="pr-comments-drawer-42"]')!;
+      const fileInput = drawer.querySelector('.pr-comment-file-input') as HTMLInputElement;
+      const lineInput = drawer.querySelector('.pr-comment-line-input') as HTMLInputElement;
+      const bodyInput = drawer.querySelector('.pr-comment-body-input') as HTMLTextAreaElement;
+      const submitBtn = drawer.querySelector('[data-testid="pr-comment-submit-42"]') as HTMLButtonElement;
+
+      fileInput.value = 'src/main.ts';
+      fileInput.dispatchEvent(new Event('input'));
+      lineInput.value = '18';
+      lineInput.dispatchEvent(new Event('input'));
+      bodyInput.value = 'Looks good on line 18';
+      bodyInput.dispatchEvent(new Event('input'));
+      await el.updateComplete;
+
+      uiStore.getState().toasts.length = 0;
+      invokeHistory.length = 0;
+
+      submitBtn.click();
+      await waitForLoad(el);
+
+      const addCall = invokeHistory.find((h) => h.command === 'add_github_pr_comment');
+      expect(addCall).to.not.be.undefined;
+      expect(addCall!.args).to.deep.include({
+        owner: 'test-owner',
+        repo: 'test-repo',
+        pullNumber: 42,
+        body: 'Looks good on line 18',
+        path: 'src/main.ts',
+        line: 18,
+        commitId: 'abc1234',
+      });
+
+      const refreshCall = invokeHistory.find((h) => h.command === 'get_github_pr_comments');
+      expect(refreshCall, 'refreshes comment list after posting').to.not.be.undefined;
+      expect(
+        uiStore.getState().toasts.some((t) => t.type === 'success' && /Comment posted/.test(t.message))
+      ).to.be.true;
+    });
+
+    it('surfaces an error toast and banner when posting a PR comment fails', async () => {
+      const el = await openPullRequestsTab();
+
+      const toggleBtn = el.shadowRoot!.querySelector('[data-testid="pr-comments-toggle-42"]') as HTMLButtonElement;
+      toggleBtn.click();
+      await waitForLoad(el);
+
+      const previous = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'add_github_pr_comment') {
+          throw new Error('Validation Failed: line is not part of diff');
+        }
+        return previous(command, args);
+      };
+
+      const drawer = el.shadowRoot!.querySelector('[data-testid="pr-comments-drawer-42"]')!;
+      const bodyInput = drawer.querySelector('.pr-comment-body-input') as HTMLTextAreaElement;
+      const submitBtn = drawer.querySelector('[data-testid="pr-comment-submit-42"]') as HTMLButtonElement;
+
+      bodyInput.value = 'Will fail';
+      bodyInput.dispatchEvent(new Event('input'));
+      await el.updateComplete;
+
+      uiStore.getState().toasts.length = 0;
+      submitBtn.click();
+      await waitForLoad(el);
+
+      expect(
+        uiStore.getState().toasts.some((t) => t.type === 'error' && /Validation Failed/.test(t.message))
+      ).to.be.true;
     });
   });
 });

@@ -7,6 +7,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
+import { invokeCommand } from '../../services/tauri-api.ts';
 import { loggers, openExternalUrl, handleExternalLink } from '../../utils/index.ts';
 import type {
   GitHubConnectionStatus,
@@ -45,6 +46,16 @@ const RELEASE_PAGE_SIZE = 20;
 const WORKFLOW_PAGE_SIZE = 20;
 
 type TabType = 'connection' | 'pull-requests' | 'issues' | 'releases' | 'actions' | 'create-pr' | 'create-issue' | 'create-release';
+
+export interface PrReviewComment {
+  id: string;
+  author: string;
+  avatarUrl?: string | null;
+  body: string;
+  createdAt: string;
+  filePath?: string | null;
+  line?: number | null;
+}
 
 @customElement('lv-github-dialog')
 export class LvGitHubDialog extends LitElement {
@@ -315,6 +326,130 @@ export class LvGitHubDialog extends LitElement {
 
       .pr-item:hover {
         background: var(--color-bg-hover);
+      }
+
+      .pr-card-wrapper {
+        display: flex;
+        flex-direction: column;
+        background: var(--color-bg-tertiary);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+      }
+
+      .pr-card-wrapper .pr-item {
+        border-radius: 0;
+      }
+
+      .pr-comments-drawer {
+        border-top: 1px solid var(--color-border);
+        padding: var(--spacing-md);
+        background: var(--color-bg-secondary);
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-sm);
+      }
+
+      .pr-comments-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-sm);
+        max-height: 240px;
+        overflow-y: auto;
+      }
+
+      .pr-comment-item {
+        padding: var(--spacing-sm);
+        background: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--color-border);
+      }
+
+      .pr-comment-header {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-xs);
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+      }
+
+      .pr-comment-author {
+        font-weight: var(--font-weight-semibold);
+        color: var(--color-text-primary);
+      }
+
+      .pr-comment-location {
+        font-family: var(--font-family-mono);
+        background: var(--color-bg-hover);
+        color: var(--color-primary);
+        padding: 1px 6px;
+        border-radius: var(--radius-sm);
+      }
+
+      .pr-comment-body {
+        font-size: var(--font-size-sm);
+        color: var(--color-text-primary);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .pr-comments-empty {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+        padding: var(--spacing-xs) 0;
+      }
+
+      .pr-comment-form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-xs);
+        margin-top: var(--spacing-xs);
+      }
+
+      .pr-comment-inline-fields {
+        display: flex;
+        gap: var(--spacing-xs);
+      }
+
+      .pr-comment-file-input {
+        flex: 1;
+        padding: 6px var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-xs);
+        font-family: var(--font-family-mono);
+      }
+
+      .pr-comment-line-input {
+        width: 90px;
+        padding: 6px var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-xs);
+        font-family: var(--font-family-mono);
+      }
+
+      .pr-comment-input-row {
+        display: flex;
+        gap: var(--spacing-xs);
+        align-items: flex-end;
+      }
+
+      .pr-comment-body-input {
+        flex: 1;
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-sm);
+        font-family: inherit;
+        resize: vertical;
+        min-height: 48px;
       }
 
       .pr-number {
@@ -860,6 +995,15 @@ export class LvGitHubDialog extends LitElement {
   @state() private createReleaseDraft = false;
   @state() private createReleaseGenerateNotes = true;
 
+  // PR Review Comments drawer
+  @state() private expandedPrNumber: number | null = null;
+  @state() private prComments: Record<number, PrReviewComment[]> = {};
+  @state() private loadingCommentsForPr: number | null = null;
+  @state() private postingCommentForPr: number | null = null;
+  @state() private commentBodyInput = '';
+  @state() private commentFilePathInput = '';
+  @state() private commentLineInput = '';
+
   async connectedCallback(): Promise<void> {
     super.connectedCallback();
 
@@ -981,6 +1125,13 @@ export class LvGitHubDialog extends LitElement {
     this.createReleasePrerelease = false;
     this.createReleaseDraft = false;
     this.createReleaseGenerateNotes = true;
+    this.expandedPrNumber = null;
+    this.prComments = {};
+    this.loadingCommentsForPr = null;
+    this.postingCommentForPr = null;
+    this.commentBodyInput = '';
+    this.commentFilePathInput = '';
+    this.commentLineInput = '';
     if (this.activeTab.startsWith('create-')) {
       this.activeTab = 'connection';
     }
@@ -1231,6 +1382,94 @@ export class LvGitHubDialog extends LitElement {
           this.isLoading = false;
         }
       }
+    }
+  }
+
+  private async togglePrComments(prNumber: number): Promise<void> {
+    if (this.expandedPrNumber === prNumber) {
+      this.expandedPrNumber = null;
+      return;
+    }
+    this.expandedPrNumber = prNumber;
+    this.commentBodyInput = '';
+    this.commentFilePathInput = '';
+    this.commentLineInput = '';
+    await this.loadPrComments(prNumber);
+  }
+
+  private async loadPrComments(prNumber: number): Promise<void> {
+    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (await gitService.checkOutboundHostAllowed('api.github.com', false)) return;
+
+    this.loadingCommentsForPr = prNumber;
+    this.error = null;
+
+    try {
+      const token = await this.getSelectedAccountToken();
+      const result = await invokeCommand<PrReviewComment[]>('get_github_pr_comments', {
+        owner: this.detectedRepo.owner,
+        repo: this.detectedRepo.repo,
+        pullNumber: prNumber,
+        token,
+      });
+
+      if (result.success && result.data) {
+        this.prComments = {
+          ...this.prComments,
+          [prNumber]: result.data,
+        };
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        this.error = result.error?.message ?? 'Failed to load PR comments';
+        showToast(this.error, 'error');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load PR comments';
+      showToast(this.error, 'error');
+    } finally {
+      this.loadingCommentsForPr = null;
+    }
+  }
+
+  private async handleAddPrComment(prNumber: number, commitId?: string): Promise<void> {
+    const body = this.commentBodyInput.trim();
+    if (!body || !this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (await gitService.checkOutboundHostAllowed('api.github.com', false)) return;
+
+    const path = this.commentFilePathInput.trim() || undefined;
+    const parsedLine = parseInt(this.commentLineInput.trim(), 10);
+    const line = !Number.isNaN(parsedLine) && parsedLine > 0 ? parsedLine : undefined;
+
+    this.postingCommentForPr = prNumber;
+    this.error = null;
+
+    try {
+      const token = await this.getSelectedAccountToken();
+      const result = await invokeCommand<PrReviewComment>('add_github_pr_comment', {
+        owner: this.detectedRepo.owner,
+        repo: this.detectedRepo.repo,
+        pullNumber: prNumber,
+        body,
+        path,
+        line,
+        commitId,
+        token,
+      });
+
+      if (result.success) {
+        this.commentBodyInput = '';
+        this.commentFilePathInput = '';
+        this.commentLineInput = '';
+        showToast('Comment posted', 'success');
+        await this.loadPrComments(prNumber);
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        this.error = result.error?.message ?? 'Failed to post PR comment';
+        showToast(this.error, 'error');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to post PR comment';
+      showToast(this.error, 'error');
+    } finally {
+      this.postingCommentForPr = null;
     }
   }
 
@@ -2417,23 +2656,36 @@ export class LvGitHubDialog extends LitElement {
 
       <div class="pr-list">
         ${this.pullRequests.map(pr => html`
-          <div class="pr-item" @click=${() => this.openInBrowser(pr.htmlUrl)}>
-            <span class="pr-number">#${pr.number}</span>
-            <div class="pr-info">
-              <div class="pr-title">${pr.title}</div>
-              <div class="pr-meta">
-                <span class="pr-state ${this.getPrState(pr)}">${this.getPrState(pr)}</span>
-                <span class="pr-branch">${pr.headRef} → ${pr.baseRef}</span>
-                <span>by ${pr.user.login}</span>
-                <span>${this.formatDate(pr.createdAt)}</span>
+          <div class="pr-card-wrapper">
+            <div class="pr-item" @click=${() => this.openInBrowser(pr.htmlUrl)}>
+              <span class="pr-number">#${pr.number}</span>
+              <div class="pr-info">
+                <div class="pr-title">${pr.title}</div>
+                <div class="pr-meta">
+                  <span class="pr-state ${this.getPrState(pr)}">${this.getPrState(pr)}</span>
+                  <span class="pr-branch">${pr.headRef} → ${pr.baseRef}</span>
+                  <span>by ${pr.user.login}</span>
+                  <span>${this.formatDate(pr.createdAt)}</span>
+                </div>
+              </div>
+              ${pr.additions != null && pr.deletions != null ? html`
+                <div class="pr-stats">
+                  <span class="stat-additions">+${pr.additions}</span>
+                  <span class="stat-deletions">-${pr.deletions}</span>
+                </div>
+              ` : ''}
+              <div class="pr-actions" @click=${(e: Event) => e.stopPropagation()}>
+                <button
+                  class="btn pr-comments-toggle"
+                  data-testid="pr-comments-toggle-${pr.number}"
+                  title="Review comments"
+                  @click=${() => this.togglePrComments(pr.number)}
+                >
+                  Comments${this.prComments[pr.number] ? ` (${this.prComments[pr.number].length})` : ''}
+                </button>
               </div>
             </div>
-            ${pr.additions != null && pr.deletions != null ? html`
-              <div class="pr-stats">
-                <span class="stat-additions">+${pr.additions}</span>
-                <span class="stat-deletions">-${pr.deletions}</span>
-              </div>
-            ` : ''}
+            ${this.expandedPrNumber === pr.number ? this.renderPrCommentsDrawer(pr.number, pr.headSha) : nothing}
           </div>
         `)}
       </div>
@@ -2441,6 +2693,79 @@ export class LvGitHubDialog extends LitElement {
       ${this.hasMorePrs
         ? this.renderLoadMore(() => this.loadPullRequests(undefined, true), this.isLoadingMorePrs)
         : ''}
+    `;
+  }
+
+  private renderPrCommentsDrawer(prNumber: number, commitId?: string) {
+    const comments = this.prComments[prNumber] ?? [];
+    const isLoadingComments = this.loadingCommentsForPr === prNumber;
+    const isPosting = this.postingCommentForPr === prNumber;
+
+    return html`
+      <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${prNumber}" @click=${(e: Event) => e.stopPropagation()}>
+        ${isLoadingComments ? html`
+          <div class="pr-comments-empty">Loading comments...</div>
+        ` : comments.length === 0 ? html`
+          <div class="pr-comments-empty">No comments yet</div>
+        ` : html`
+          <div class="pr-comments-list">
+            ${comments.map(c => html`
+              <div class="pr-comment-item" data-testid="pr-comment-item-${c.id}">
+                <div class="pr-comment-header">
+                  <span class="pr-comment-author">${c.author}</span>
+                  ${c.filePath ? html`
+                    <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
+                  ` : nothing}
+                  <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
+                </div>
+                <div class="pr-comment-body">${c.body}</div>
+              </div>
+            `)}
+          </div>
+        `}
+        <div class="pr-comment-form">
+          <div class="pr-comment-inline-fields">
+            <input
+              type="text"
+              class="pr-comment-file-input"
+              placeholder="File path (optional, for inline comment)"
+              .value=${this.commentFilePathInput}
+              @input=${(e: Event) => {
+                this.commentFilePathInput = (e.target as HTMLInputElement).value;
+              }}
+            />
+            <input
+              type="number"
+              min="1"
+              class="pr-comment-line-input"
+              placeholder="Line #"
+              .value=${this.commentLineInput}
+              @input=${(e: Event) => {
+                this.commentLineInput = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </div>
+          <div class="pr-comment-input-row">
+            <textarea
+              class="pr-comment-body-input"
+              rows="2"
+              placeholder="Write a review comment..."
+              .value=${this.commentBodyInput}
+              @input=${(e: Event) => {
+                this.commentBodyInput = (e.target as HTMLTextAreaElement).value;
+              }}
+            ></textarea>
+            <button
+              class="btn btn-primary pr-comment-submit"
+              data-testid="pr-comment-submit-${prNumber}"
+              ?disabled=${!this.commentBodyInput.trim() || isPosting}
+              @click=${() => this.handleAddPrComment(prNumber, commitId)}
+            >
+              ${isPosting ? 'Posting...' : 'Post Comment'}
+            </button>
+          </div>
+        </div>
+      </div>
     `;
   }
 

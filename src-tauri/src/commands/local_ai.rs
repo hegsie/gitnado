@@ -175,6 +175,41 @@ pub async fn get_loaded_model_name(ai_state: State<'_, AiState>) -> Result<Optio
     Ok(service.get_loaded_model_name().await)
 }
 
+/// Resolve `(display_name, LoadedModelMeta)` for a model ID from registry or downloaded metadata.
+fn resolve_model_meta_for_load(
+    local: &LocalAiState,
+    model_id: &str,
+) -> Result<(String, LoadedModelMeta)> {
+    if let Some(entry) = local.registry.get_by_id(model_id) {
+        return Ok((
+            entry.display_name.clone(),
+            LoadedModelMeta {
+                tier: entry.tier,
+                architecture: entry.architecture.clone(),
+                context_length: entry.context_length,
+            },
+        ));
+    }
+
+    if let Some((display_name, architecture, context_length)) =
+        local.model_manager.get_downloaded_meta(model_id)
+    {
+        return Ok((
+            display_name,
+            LoadedModelMeta {
+                tier: crate::services::ai::local::ModelTier::Standard,
+                architecture,
+                context_length,
+            },
+        ));
+    }
+
+    Err(GitnadoError::OperationFailed(format!(
+        "Model '{}' not found in registry",
+        model_id
+    )))
+}
+
 /// Load a downloaded model into the inference engine, making it ready for use.
 #[command]
 pub async fn load_model(
@@ -193,27 +228,15 @@ pub async fn load_model(
         )));
     }
 
-    let entry = local
-        .registry
-        .get_by_id(&model_id)
-        .ok_or_else(|| {
-            GitnadoError::OperationFailed(format!("Model '{}' not found in registry", model_id))
-        })?
-        .clone();
-
+    let (display_name, meta) = resolve_model_meta_for_load(&local, &model_id)?;
     let model_path = local.model_manager.get_model_path(&model_id);
-    let meta = Some(LoadedModelMeta {
-        tier: entry.tier,
-        architecture: entry.architecture.clone(),
-        context_length: entry.context_length,
-    });
     drop(local);
 
     // Load the model engine (read lock is sufficient — engine uses interior mutability)
     {
         let service = ai_state.read().await;
         service
-            .load_local_model(&model_path, entry.display_name, meta)
+            .load_local_model(&model_path, display_name, Some(meta))
             .await
             .map_err(GitnadoError::OperationFailed)?;
     }
@@ -236,6 +259,31 @@ pub async fn load_model(
     Ok(())
 }
 
+/// Import a custom `.gguf` model file from disk into the local model store.
+#[command]
+pub async fn import_custom_model(
+    state: State<'_, SharedLocalAiState>,
+    path: String,
+    display_name: Option<String>,
+    architecture: Option<String>,
+) -> Result<crate::services::ai::local::model_manager::DownloadedModel> {
+    let local = state.read().await;
+    let manager = local.model_manager.clone();
+    drop(local);
+
+    tokio::task::spawn_blocking(move || {
+        manager.import_custom_model(
+            std::path::Path::new(&path),
+            display_name,
+            architecture,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| GitnadoError::OperationFailed(format!("Import task failed: {e}")))?
+    .map_err(GitnadoError::OperationFailed)
+}
+
 /// Unload the current local model from memory.
 #[command]
 pub async fn unload_model(ai_state: State<'_, AiState>) -> Result<()> {
@@ -256,11 +304,38 @@ pub async fn get_recommended_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_create_local_ai_state() {
         let state = create_local_ai_state(std::path::PathBuf::from("/tmp/test-models"));
         // Verify it creates without panicking
         assert!(Arc::strong_count(&state) == 1);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_model_meta_fallback_for_custom_imported_model() {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = TempDir::new().unwrap();
+        let gguf_file = src_dir.path().join("custom-coder.gguf");
+        std::fs::write(&gguf_file, b"GGUF test").unwrap();
+
+        let state = create_local_ai_state(tmp.path().to_path_buf());
+        let local = state.read().await;
+        let imported = local
+            .model_manager
+            .import_custom_model(
+                &gguf_file,
+                Some("Custom Coder".to_string()),
+                Some("qwen2".to_string()),
+                Some(16384),
+            )
+            .unwrap();
+
+        let (display_name, meta) = resolve_model_meta_for_load(&local, &imported.id).unwrap();
+        assert_eq!(display_name, "Custom Coder");
+        assert_eq!(meta.tier, crate::services::ai::local::ModelTier::Standard);
+        assert_eq!(meta.architecture, "qwen2");
+        assert_eq!(meta.context_length, 16384);
     }
 }

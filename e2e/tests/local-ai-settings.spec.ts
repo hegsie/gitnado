@@ -20,12 +20,23 @@ const mockSystemCapabilities = {
   gpuInfo: {
     name: 'Apple M1',
     vendor: 'apple',
-    vramBytes: null,
+    vramBytes: 12_000_000_000,
     metalSupported: true,
     cudaSupported: false,
+    rocmSupported: false,
+    vulkanSupported: false,
+    unifiedMemory: true,
   },
   recommendedTier: 'standard',
   gpuAccelerationAvailable: true,
+  activeBackend: 'metal',
+  supportedBackends: ['metal', 'cpu'],
+  npuInfo: {
+    name: 'Apple Neural Engine (ANE)',
+    vendor: 'apple_neural_engine',
+    available: true,
+  },
+  unifiedMemory: true,
 };
 
 const mockAvailableModels = [
@@ -471,6 +482,64 @@ test.describe('Settings Dialog — Local AI', () => {
     });
 
     await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+  });
+
+  test('renders Pro tier status pill and custom downloaded GGUF models', async ({ page }) => {
+    const customModel = {
+      id: 'custom-qwen-coder-7b',
+      displayName: 'Custom Qwen Coder 7B',
+      sizeBytes: 4_680_000_000,
+      path: '/models/custom-qwen-coder-7b/model.gguf',
+      status: 'downloaded',
+    };
+    await injectCommandMock(page, localAiMocks({
+      get_system_capabilities: {
+        ...mockSystemCapabilities,
+        totalRamBytes: 34_359_738_368,
+        recommendedTier: 'pro',
+      },
+      get_downloaded_models: [customModel],
+    }));
+    await openSettings(page);
+
+    const systemRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Pro (32GB+ RAM)' });
+    await expect(systemRow).toBeVisible();
+
+    const customRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Custom Qwen Coder 7B' });
+    await expect(customRow).toBeVisible();
+    await expect(customRow).toContainText('Custom GGUF');
+    await expect(customRow.getByRole('button', { name: 'Load' })).toBeVisible();
+    await expect(customRow.getByRole('button', { name: 'Delete' })).toBeVisible();
+  });
+
+  test('Import .gguf… button invokes import_custom_model and shows success toast', async ({ page }) => {
+    const importedModel = {
+      id: 'custom-deepseek-coder',
+      displayName: 'DeepSeek Coder 6.7B',
+      sizeBytes: 4_100_000_000,
+      path: '/models/custom-deepseek-coder/model.gguf',
+      status: 'downloaded',
+    };
+    await startCommandCaptureWithMocks(page, {
+      ...localAiMocks(),
+      'plugin:dialog|open': '/Users/dev/models/DeepSeek-Coder-6.7B.gguf',
+      import_custom_model: importedModel,
+    });
+    await openSettings(page);
+
+    const importBtn = page.locator('lv-settings-dialog button', { hasText: 'Import .gguf…' });
+    await expect(importBtn).toBeVisible();
+    await importBtn.click();
+
+    const cmds = await findCommand(page, 'import_custom_model');
+    expect(cmds.length).toBeGreaterThan(0);
+    expect(cmds[0].args).toEqual(
+      expect.objectContaining({ path: '/Users/dev/models/DeepSeek-Coder-6.7B.gguf' }),
+    );
+
+    const toastMessage = page.locator('lv-toast-container .toast.success .toast-message');
+    await expect(toastMessage).toBeVisible();
+    await expect(toastMessage).toContainText('DeepSeek Coder 6.7B');
   });
 });
 

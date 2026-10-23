@@ -17,7 +17,7 @@ import type { DiffWhitespaceMode } from '../../types/api.types.ts';
 import { supportedLocales, resolveLocale, type Locale } from '../../i18n/index.ts';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import { getAppVersion, checkForUpdate } from '../../services/update.service.ts';
-import { openCloneDestinationDialog, showConfirm } from '../../services/dialog.service.ts';
+import { openCloneDestinationDialog, openDialog, showConfirm } from '../../services/dialog.service.ts';
 import * as aiService from '../../services/ai.service.ts';
 import * as localAiService from '../../services/local-ai.service.ts';
 import * as mcpService from '../../services/mcp.service.ts';
@@ -1363,6 +1363,32 @@ export class LvSettingsDialog extends LitElement {
     }
   }
 
+  private async handleImportCustomModel(customPath?: string): Promise<void> {
+    this.aiError = null;
+    let selectedPath = customPath;
+    if (!selectedPath) {
+      const picked = await openDialog({
+        title: msg('Import Custom GGUF Model'),
+        multiple: false,
+        filters: [{ name: 'GGUF Model', extensions: ['gguf'] }],
+      });
+      if (!picked) return;
+      selectedPath = Array.isArray(picked) ? picked[0] : picked;
+      if (!selectedPath) return;
+    }
+
+    const result = await localAiService.importCustomModel(selectedPath);
+    if (result.success && result.data) {
+      await Promise.all([this.loadLocalAiData(), this.loadAiProviders()]);
+      window.dispatchEvent(new CustomEvent('ai-settings-changed'));
+      showToast(msg(str`Imported model ${result.data.displayName}`), 'success');
+    } else {
+      const errMsg = result.error?.message ?? msg('Failed to import model');
+      this.aiError = errMsg;
+      showToast(errMsg, 'error');
+    }
+  }
+
   private isModelDownloaded(modelId: string): boolean {
     return this.downloadedModels.some(m => m.id === modelId);
   }
@@ -2232,11 +2258,14 @@ export class LvSettingsDialog extends LitElement {
               <div class="setting-label">
                 <span class="setting-name">${msg('System')}</span>
                 <span class="setting-description">
-                  ${msg(str`RAM: ${localAiService.formatBytes(this.systemCapabilities.totalRamBytes)}`)}
+                  ${msg(str`RAM: ${localAiService.formatBytes(this.systemCapabilities.totalRamBytes)}`)}${this.systemCapabilities.unifiedMemory ? ` (${msg('Unified')})` : nothing}
                   ${this.systemCapabilities.gpuInfo
                     ? msg(str` | GPU: ${this.systemCapabilities.gpuInfo.name}`)
                     : msg(' | No dedicated GPU detected')}
-                  | ${this.systemCapabilities.gpuAccelerationAvailable ? msg('GPU Accelerated') : msg('CPU Only')}
+                  ${this.systemCapabilities.npuInfo?.available
+                    ? msg(str` | NPU: ${this.systemCapabilities.npuInfo.name}`)
+                    : nothing}
+                  | ${localAiService.getBackendDisplayName(this.systemCapabilities)}
                 </span>
               </div>
               <span class="status-indicator ${this.systemCapabilities.recommendedTier !== 'none' ? 'configured' : 'not-configured'}">
@@ -2339,6 +2368,48 @@ export class LvSettingsDialog extends LitElement {
               </div>
             `;
           })}
+
+          ${this.downloadedModels
+            .filter(dm => !this.availableModels.some(am => am.id === dm.id))
+            .map(model => html`
+              <div class="setting-row" style="flex-direction: column; align-items: stretch; gap: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div class="setting-label">
+                    <span class="setting-name">${model.displayName}</span>
+                    <span class="setting-description">
+                      ${localAiService.formatBytes(model.sizeBytes)} | ${msg('Custom GGUF')}
+                    </span>
+                  </div>
+                  <div style="display: flex; gap: 4px;">
+                    ${this.localModelStatus === 'ready' && this.loadedModelName === model.displayName ? html`
+                      <span class="status-indicator configured">${msg('Loaded')}</span>
+                      <button @click=${() => this.handleUnloadModel()}>${msg('Unload')}</button>
+                    ` : this.loadingModelId === model.id ? html`
+                      <span class="status-indicator">${msg('Loading...')}</span>
+                    ` : html`
+                      <span class="status-indicator">${msg('Downloaded')}</span>
+                      <button
+                        @click=${() => this.handleLoadModel(model.id)}
+                        ?disabled=${this.localModelStatus === 'loading'}
+                      >${msg('Load')}</button>
+                    `}
+                    <button class="danger" @click=${() => this.handleDeleteModel(model.id)}>${msg('Delete')}</button>
+                  </div>
+                </div>
+              </div>
+            `)}
+
+          <div class="setting-row">
+            <div class="setting-label">
+              <span class="setting-name">${msg('Custom Model')}</span>
+              <span class="setting-description">
+                ${msg('Import a local .gguf model file from disk')}
+              </span>
+            </div>
+            <button @click=${() => this.handleImportCustomModel()}>
+              ${msg('Import .gguf…')}
+            </button>
+          </div>
         </div>
 
         <div class="settings-section">

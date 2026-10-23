@@ -28,9 +28,33 @@ const MODEL_DOWNLOAD_HOST = 'https://huggingface.co';
 export type GpuVendor = 'apple' | 'nvidia' | 'amd' | 'intel' | 'unknown';
 
 /**
+ * Compute backend types
+ */
+export type ComputeBackend = 'metal' | 'cuda' | 'rocm' | 'vulkan' | 'cpu';
+
+/**
+ * Neural Processing Unit (NPU) vendor types
+ */
+export type NpuVendor =
+  | 'apple_neural_engine'
+  | 'amd_xdna'
+  | 'intel_npu'
+  | 'qualcomm_hexagon'
+  | 'unknown';
+
+/**
+ * Neural Processing Unit (NPU) information
+ */
+export interface NpuInfo {
+  name: string;
+  vendor: NpuVendor;
+  available: boolean;
+}
+
+/**
  * Model tier based on system capabilities
  */
-export type ModelTier = 'ultra_light' | 'standard' | 'none';
+export type ModelTier = 'ultra_light' | 'standard' | 'pro' | 'none';
 
 /**
  * GPU information
@@ -41,6 +65,9 @@ export interface GpuInfo {
   vramBytes: number | null;
   metalSupported: boolean;
   cudaSupported: boolean;
+  rocmSupported?: boolean;
+  vulkanSupported?: boolean;
+  unifiedMemory?: boolean;
 }
 
 /**
@@ -52,6 +79,10 @@ export interface SystemCapabilities {
   gpuInfo: GpuInfo | null;
   recommendedTier: ModelTier;
   gpuAccelerationAvailable: boolean;
+  activeBackend?: ComputeBackend;
+  supportedBackends?: ComputeBackend[];
+  npuInfo?: NpuInfo | null;
+  unifiedMemory?: boolean;
 }
 
 /**
@@ -160,6 +191,21 @@ export async function cancelModelDownload(modelId: string): Promise<CommandResul
  */
 export async function deleteModel(modelId: string): Promise<CommandResult<void>> {
   return invokeCommand<void>('delete_model', { modelId });
+}
+
+/**
+ * Import a custom .gguf model file from disk into the local model store
+ */
+export async function importCustomModel(
+  path: string,
+  displayName?: string,
+  architecture?: string
+): Promise<CommandResult<DownloadedModel>> {
+  return invokeCommand<DownloadedModel>('import_custom_model', {
+    path,
+    displayName,
+    architecture,
+  });
 }
 
 /**
@@ -279,7 +325,29 @@ export function getTierDisplayName(tier: ModelTier): string {
       return msg('Ultra-Light (8GB+ RAM)');
     case 'standard':
       return msg('Standard (16GB+ RAM)');
+    case 'pro':
+      return msg('Pro (32GB+ RAM)');
     case 'none':
       return msg('Not Supported');
+  }
+}
+
+/**
+ * Get human-readable display name for the active compute backend
+ */
+export function getBackendDisplayName(caps: SystemCapabilities): string {
+  switch (caps.activeBackend) {
+    case 'metal':
+      return msg('Metal (Apple Silicon)');
+    case 'cuda':
+      return msg('NVIDIA CUDA');
+    case 'rocm':
+      return msg('AMD ROCm');
+    case 'vulkan':
+      return msg('Vulkan GPU');
+    case 'cpu':
+      return msg('CPU Only');
+    default:
+      return caps.gpuAccelerationAvailable ? msg('GPU Accelerated') : msg('CPU Only');
   }
 }

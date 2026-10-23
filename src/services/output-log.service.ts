@@ -548,6 +548,7 @@ const SKIP_COMMANDS = new Set([
   // add a bare `cancel_operation` row to EVERY repository's panel per click.
   'cancel_operation',
   'cancel_clone',
+  'clear_hook_execution_logs',
 ]);
 
 /**

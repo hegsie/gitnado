@@ -147,6 +147,19 @@ pub struct PullRequestComment {
     pub html_url: String,
 }
 
+/// Inline or general pull request comment normalized across providers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPrComment {
+    pub id: String,
+    pub author: String,
+    pub avatar_url: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub file_path: Option<String>,
+    pub line: Option<u32>,
+}
+
 /// GitHub Actions workflow run
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1087,6 +1100,292 @@ pub async fn get_pull_request_reviews(
             html_url: r.html_url,
         })
         .collect())
+}
+
+#[derive(Deserialize)]
+struct ApiGitHubPrCommentUser {
+    login: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ApiGitHubPrCommentItem {
+    id: u64,
+    user: ApiGitHubPrCommentUser,
+    body: Option<String>,
+    created_at: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
+    original_line: Option<u32>,
+}
+
+fn map_api_github_pr_comment(item: ApiGitHubPrCommentItem) -> GitHubPrComment {
+    GitHubPrComment {
+        id: item.id.to_string(),
+        author: item.user.login,
+        avatar_url: item.user.avatar_url.filter(|s| !s.is_empty()),
+        body: item.body.unwrap_or_default(),
+        created_at: item.created_at,
+        file_path: item.path.filter(|s| !s.is_empty()),
+        line: item.line.or(item.original_line),
+    }
+}
+
+fn parse_github_pr_comment_item(json: &str) -> Result<GitHubPrComment> {
+    let item: ApiGitHubPrCommentItem = serde_json::from_str(json).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse GitHub PR comment: {}", e))
+    })?;
+    Ok(map_api_github_pr_comment(item))
+}
+
+fn parse_github_pr_comments(
+    issue_comments_json: &str,
+    review_comments_json: &str,
+) -> Result<Vec<GitHubPrComment>> {
+    let issue_items: Vec<ApiGitHubPrCommentItem> = serde_json::from_str(issue_comments_json)
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to parse PR issue comments: {}", e))
+        })?;
+    let review_items: Vec<ApiGitHubPrCommentItem> = serde_json::from_str(review_comments_json)
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to parse PR review comments: {}", e))
+        })?;
+
+    let mut comments: Vec<GitHubPrComment> = issue_items
+        .into_iter()
+        .chain(review_items)
+        .map(map_api_github_pr_comment)
+        .collect();
+
+    comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(comments)
+}
+
+fn build_github_pr_comment_payload(
+    body: &str,
+    path: Option<&str>,
+    line: Option<u32>,
+    commit_id: Option<&str>,
+) -> serde_json::Value {
+    let clean_path = path.map(str::trim).filter(|p| !p.is_empty());
+    if let (Some(file_path), Some(line_num)) = (clean_path, line) {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "body".to_string(),
+            serde_json::Value::String(body.to_string()),
+        );
+        map.insert(
+            "path".to_string(),
+            serde_json::Value::String(file_path.to_string()),
+        );
+        map.insert(
+            "line".to_string(),
+            serde_json::Value::Number(line_num.into()),
+        );
+        if let Some(sha) = commit_id.map(str::trim).filter(|s| !s.is_empty()) {
+            map.insert(
+                "commit_id".to_string(),
+                serde_json::Value::String(sha.to_string()),
+            );
+        }
+        serde_json::Value::Object(map)
+    } else {
+        serde_json::json!({ "body": body })
+    }
+}
+
+/// Get pull request comments (both issue comments and inline review comments)
+#[command]
+pub async fn get_github_pr_comments(
+    owner: String,
+    repo: String,
+    pull_number: u32,
+    token: Option<String>,
+) -> Result<Vec<GitHubPrComment>> {
+    let client = api_client()?;
+    let token = resolve_github_token(token).await?;
+
+    let auth_header = format!("{} {}", "Bearer", token);
+
+    let issue_response = client
+        .get(format!(
+            "{}/repos/{}/{}/issues/{}/comments",
+            GITHUB_API_BASE, owner, repo, pull_number
+        ))
+        .query(&[("per_page", "100")])
+        .header("Authorization", &auth_header)
+        .header("User-Agent", "Gitnado-Git-Client")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to fetch PR comments: {}", e))
+        })?;
+
+    if !issue_response.status().is_success() {
+        let status = issue_response.status();
+        let body = issue_response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitHub API error {}: {}",
+            status, body
+        )));
+    }
+
+    let issue_json = issue_response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read PR issue comments: {}", e))
+    })?;
+
+    let review_response = client
+        .get(format!(
+            "{}/repos/{}/{}/pulls/{}/comments",
+            GITHUB_API_BASE, owner, repo, pull_number
+        ))
+        .query(&[("per_page", "100")])
+        .header("Authorization", &auth_header)
+        .header("User-Agent", "Gitnado-Git-Client")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to fetch PR review comments: {}", e))
+        })?;
+
+    if !review_response.status().is_success() {
+        let status = review_response.status();
+        let body = review_response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitHub API error {}: {}",
+            status, body
+        )));
+    }
+
+    let review_json = review_response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read PR review comments: {}", e))
+    })?;
+
+    parse_github_pr_comments(&issue_json, &review_json)
+}
+
+/// Add a pull request comment (general issue comment or inline review comment)
+#[allow(clippy::too_many_arguments)]
+#[command]
+pub async fn add_github_pr_comment(
+    owner: String,
+    repo: String,
+    pull_number: u32,
+    body: String,
+    path: Option<String>,
+    line: Option<u32>,
+    commit_id: Option<String>,
+    token: Option<String>,
+) -> Result<GitHubPrComment> {
+    let client = api_client()?;
+    let token = resolve_github_token(token).await?;
+
+    let auth_header = format!("{} {}", "Bearer", token);
+    let clean_path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let is_inline = clean_path.is_some() && line.is_some();
+
+    let resolved_commit_id = if is_inline {
+        let provided = commit_id
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty());
+        if provided.is_some() {
+            provided
+        } else {
+            let pr_resp = client
+                .get(format!(
+                    "{}/repos/{}/{}/pulls/{}",
+                    GITHUB_API_BASE, owner, repo, pull_number
+                ))
+                .header("Authorization", &auth_header)
+                .header("User-Agent", "Gitnado-Git-Client")
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await
+                .map_err(|e| {
+                    GitnadoError::OperationFailed(format!(
+                        "Failed to fetch PR head SHA for inline comment: {}",
+                        e
+                    ))
+                })?;
+
+            if !pr_resp.status().is_success() {
+                let status = pr_resp.status();
+                let err_body = pr_resp.text().await.unwrap_or_default();
+                return Err(GitnadoError::OperationFailed(format!(
+                    "GitHub API error {}: {}",
+                    status, err_body
+                )));
+            }
+
+            #[derive(Deserialize)]
+            struct PrHeadRef {
+                sha: String,
+            }
+            #[derive(Deserialize)]
+            struct PrHeadResponse {
+                head: PrHeadRef,
+            }
+            let pr_head: PrHeadResponse = pr_resp.json().await.map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to parse PR head SHA: {}", e))
+            })?;
+            Some(pr_head.head.sha)
+        }
+    } else {
+        None
+    };
+
+    let endpoint = if is_inline {
+        format!(
+            "{}/repos/{}/{}/pulls/{}/comments",
+            GITHUB_API_BASE, owner, repo, pull_number
+        )
+    } else {
+        format!(
+            "{}/repos/{}/{}/issues/{}/comments",
+            GITHUB_API_BASE, owner, repo, pull_number
+        )
+    };
+
+    let payload = build_github_pr_comment_payload(
+        &body,
+        clean_path.as_deref(),
+        line,
+        resolved_commit_id.as_deref(),
+    );
+
+    let response = client
+        .post(endpoint)
+        .header("Authorization", &auth_header)
+        .header("User-Agent", "Gitnado-Git-Client")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to post PR comment: {}", e)))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let err_body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitHub API error {}: {}",
+            status, err_body
+        )));
+    }
+
+    let response_json = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read PR comment response: {}", e))
+    })?;
+
+    parse_github_pr_comment_item(&response_json)
 }
 
 // ============================================================================
@@ -3076,6 +3375,119 @@ mod tests {
                 ch
             );
         }
+    }
+
+    // ========================================================================
+    // PR Comment Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_github_pr_comments_merges_and_sorts() {
+        let issue_json = r#"[
+            {
+                "id": 102,
+                "user": { "login": "bob", "avatar_url": "https://avatars.example.com/bob.png" },
+                "body": "General PR comment",
+                "created_at": "2024-06-01T12:05:00Z"
+            }
+        ]"#;
+        let review_json = r#"[
+            {
+                "id": 101,
+                "user": { "login": "alice", "avatar_url": "https://avatars.example.com/alice.png" },
+                "body": "Nit: check error handling here",
+                "created_at": "2024-06-01T12:00:00Z",
+                "path": "src/main.rs",
+                "line": 42
+            }
+        ]"#;
+
+        let comments =
+            parse_github_pr_comments(issue_json, review_json).expect("comments should parse");
+        assert_eq!(comments.len(), 2);
+
+        assert_eq!(comments[0].id, "101");
+        assert_eq!(comments[0].author, "alice");
+        assert_eq!(
+            comments[0].avatar_url.as_deref(),
+            Some("https://avatars.example.com/alice.png")
+        );
+        assert_eq!(comments[0].body, "Nit: check error handling here");
+        assert_eq!(comments[0].file_path.as_deref(), Some("src/main.rs"));
+        assert_eq!(comments[0].line, Some(42));
+
+        assert_eq!(comments[1].id, "102");
+        assert_eq!(comments[1].author, "bob");
+        assert_eq!(comments[1].file_path, None);
+        assert_eq!(comments[1].line, None);
+    }
+
+    #[test]
+    fn test_build_github_pr_comment_payload_general_and_inline() {
+        let general = build_github_pr_comment_payload("Looks good!", None, None, None);
+        assert_eq!(general["body"], "Looks good!");
+        assert!(general.get("path").is_none());
+        assert!(general.get("line").is_none());
+
+        let inline = build_github_pr_comment_payload(
+            "Inline note",
+            Some("src/lib.rs"),
+            Some(18),
+            Some("abc123def"),
+        );
+        assert_eq!(inline["body"], "Inline note");
+        assert_eq!(inline["path"], "src/lib.rs");
+        assert_eq!(inline["line"], 18);
+        assert_eq!(inline["commit_id"], "abc123def");
+    }
+
+    #[test]
+    fn test_github_pr_comment_serializes_camel_case() {
+        let comment = GitHubPrComment {
+            id: "1".to_string(),
+            author: "octocat".to_string(),
+            avatar_url: Some("https://avatars.example.com/1".to_string()),
+            body: "Test".to_string(),
+            created_at: "2024-06-01T00:00:00Z".to_string(),
+            file_path: Some("src/app.ts".to_string()),
+            line: Some(10),
+        };
+        let json = serde_json::to_string(&comment).expect("serialize failed");
+        assert!(json.contains("\"avatarUrl\""));
+        assert!(json.contains("\"createdAt\""));
+        assert!(json.contains("\"filePath\""));
+        assert!(!json.contains("avatar_url"));
+        assert!(!json.contains("created_at"));
+        assert!(!json.contains("file_path"));
+    }
+
+    #[tokio::test]
+    async fn test_github_pr_comments_refused_in_offline_mode() {
+        let _guard = crate::services::security::test_support::offline();
+
+        let get_err = get_github_pr_comments(
+            "octocat".to_string(),
+            "hello-world".to_string(),
+            1,
+            Some("ghp_test".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block get_github_pr_comments");
+        assert!(matches!(get_err, GitnadoError::NetworkBlocked(_)));
+
+        let post_err = add_github_pr_comment(
+            "octocat".to_string(),
+            "hello-world".to_string(),
+            1,
+            "Test comment".to_string(),
+            None,
+            None,
+            None,
+            Some("ghp_test".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block add_github_pr_comment");
+        assert!(matches!(post_err, GitnadoError::NetworkBlocked(_)));
     }
 }
 

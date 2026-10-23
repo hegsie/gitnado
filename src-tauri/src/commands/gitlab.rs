@@ -153,6 +153,19 @@ pub struct CreateMergeRequestInput {
     pub draft: Option<bool>,
 }
 
+/// GitLab Merge Request Comment / Note
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLabMrComment {
+    pub id: String,
+    pub author: String,
+    pub avatar_url: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub file_path: Option<String>,
+    pub line: Option<u32>,
+}
+
 /// Issue summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -664,6 +677,151 @@ pub async fn create_gitlab_merge_request(
         web_url: mr.web_url,
         merge_status: mr.merge_status,
     })
+}
+
+#[derive(Deserialize)]
+struct GitLabNotePosition {
+    #[serde(default)]
+    new_path: Option<String>,
+    #[serde(default)]
+    old_path: Option<String>,
+    #[serde(default)]
+    new_line: Option<u32>,
+    #[serde(default)]
+    old_line: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct GitLabNoteAuthor {
+    username: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitLabNoteResponse {
+    id: u64,
+    body: String,
+    author: GitLabNoteAuthor,
+    created_at: String,
+    #[serde(default)]
+    position: Option<GitLabNotePosition>,
+}
+
+fn map_gitlab_note(note: GitLabNoteResponse) -> GitLabMrComment {
+    let file_path = note
+        .position
+        .as_ref()
+        .and_then(|p| p.new_path.clone().or_else(|| p.old_path.clone()))
+        .filter(|s| !s.is_empty());
+    let line = note
+        .position
+        .as_ref()
+        .and_then(|p| p.new_line.or(p.old_line));
+
+    GitLabMrComment {
+        id: note.id.to_string(),
+        author: note.author.username,
+        avatar_url: note.author.avatar_url.filter(|s| !s.is_empty()),
+        body: note.body,
+        created_at: note.created_at,
+        file_path,
+        line,
+    }
+}
+
+fn parse_gitlab_mr_comments(json: &str) -> Result<Vec<GitLabMrComment>> {
+    let notes: Vec<GitLabNoteResponse> = serde_json::from_str(json)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse MR notes: {}", e)))?;
+    Ok(notes.into_iter().map(map_gitlab_note).collect())
+}
+
+fn parse_gitlab_mr_comment_item(json: &str) -> Result<GitLabMrComment> {
+    let note: GitLabNoteResponse = serde_json::from_str(json)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse MR note: {}", e)))?;
+    Ok(map_gitlab_note(note))
+}
+
+fn build_gitlab_mr_comment_payload(body: &str) -> serde_json::Value {
+    serde_json::json!({ "body": body })
+}
+
+/// Get merge request comments / notes
+#[command]
+pub async fn get_gitlab_mr_comments(
+    instance_url: String,
+    project_path: String,
+    mr_iid: u64,
+    token: Option<String>,
+) -> Result<Vec<GitLabMrComment>> {
+    let url = build_api_url(
+        &instance_url,
+        &format!(
+            "projects/{}/merge_requests/{}/notes?per_page=100&sort=asc",
+            url_encode(&project_path),
+            mr_iid
+        ),
+    );
+    api_client(&url)?;
+    let token = resolve_token(token)?;
+
+    let response = gitlab_get(&url, &token).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitLab API error {}: {}",
+            status, body
+        )));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read MR notes: {}", e)))?;
+
+    parse_gitlab_mr_comments(&body)
+}
+
+/// Add a merge request comment / note
+#[command]
+pub async fn add_gitlab_mr_comment(
+    instance_url: String,
+    project_path: String,
+    mr_iid: u64,
+    body: String,
+    token: Option<String>,
+) -> Result<GitLabMrComment> {
+    let url = build_api_url(
+        &instance_url,
+        &format!(
+            "projects/{}/merge_requests/{}/notes",
+            url_encode(&project_path),
+            mr_iid
+        ),
+    );
+    api_client(&url)?;
+    let token = resolve_token(token)?;
+
+    let payload = build_gitlab_mr_comment_payload(&body);
+    let response = gitlab_post(&url, &token, &payload).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitLab API error {}: {}",
+            status, body
+        )));
+    }
+
+    let resp_body = response
+        .text()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read MR note: {}", e)))?;
+
+    parse_gitlab_mr_comment_item(&resp_body)
 }
 
 // ============================================================================
@@ -1640,5 +1798,108 @@ mod tests {
         assert_eq!(pipeline.iid, 50);
         assert_eq!(pipeline.status, "success");
         assert_eq!(pipeline.r#ref, "main");
+    }
+
+    #[test]
+    fn test_parse_gitlab_mr_comments_and_inline_position() {
+        let json = r#"[
+            {
+                "id": 301,
+                "body": "General MR note",
+                "created_at": "2024-06-01T10:00:00Z",
+                "author": {
+                    "id": 1,
+                    "username": "alice",
+                    "name": "Alice",
+                    "avatar_url": "https://gitlab.com/uploads/alice.png",
+                    "web_url": "https://gitlab.com/alice"
+                }
+            },
+            {
+                "id": 302,
+                "body": "Diff note on line 25",
+                "created_at": "2024-06-01T10:05:00Z",
+                "author": {
+                    "id": 2,
+                    "username": "bob",
+                    "name": "Bob",
+                    "avatar_url": null,
+                    "web_url": "https://gitlab.com/bob"
+                },
+                "position": {
+                    "new_path": "src/service.rs",
+                    "new_line": 25
+                }
+            }
+        ]"#;
+
+        let comments = parse_gitlab_mr_comments(json).expect("notes should parse");
+        assert_eq!(comments.len(), 2);
+
+        assert_eq!(comments[0].id, "301");
+        assert_eq!(comments[0].author, "alice");
+        assert_eq!(
+            comments[0].avatar_url.as_deref(),
+            Some("https://gitlab.com/uploads/alice.png")
+        );
+        assert_eq!(comments[0].body, "General MR note");
+        assert_eq!(comments[0].file_path, None);
+        assert_eq!(comments[0].line, None);
+
+        assert_eq!(comments[1].id, "302");
+        assert_eq!(comments[1].author, "bob");
+        assert_eq!(comments[1].avatar_url, None);
+        assert_eq!(comments[1].file_path.as_deref(), Some("src/service.rs"));
+        assert_eq!(comments[1].line, Some(25));
+    }
+
+    #[test]
+    fn test_gitlab_mr_comment_payload_and_serialization() {
+        let payload = build_gitlab_mr_comment_payload("LGTM!");
+        assert_eq!(payload["body"], "LGTM!");
+
+        let single_json = r#"{
+            "id": 999,
+            "body": "LGTM!",
+            "created_at": "2024-06-01T10:10:00Z",
+            "author": {
+                "id": 1,
+                "username": "alice",
+                "name": "Alice",
+                "avatar_url": null,
+                "web_url": "https://gitlab.com/alice"
+            }
+        }"#;
+        let parsed = parse_gitlab_mr_comment_item(single_json).expect("note item should parse");
+        let serialized = serde_json::to_string(&parsed).expect("serialize should succeed");
+        assert!(serialized.contains("\"createdAt\""));
+        assert!(serialized.contains("\"filePath\""));
+        assert!(!serialized.contains("created_at"));
+    }
+
+    #[tokio::test]
+    async fn test_gitlab_mr_comments_refused_in_offline_mode() {
+        let _guard = crate::services::security::test_support::offline();
+
+        let get_err = get_gitlab_mr_comments(
+            "https://gitlab.com".to_string(),
+            "group/project".to_string(),
+            42,
+            Some("glpat-test".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block get_gitlab_mr_comments");
+        assert!(matches!(get_err, GitnadoError::NetworkBlocked(_)));
+
+        let post_err = add_gitlab_mr_comment(
+            "https://gitlab.com".to_string(),
+            "group/project".to_string(),
+            42,
+            "Blocked note".to_string(),
+            Some("glpat-test".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block add_gitlab_mr_comment");
+        assert!(matches!(post_err, GitnadoError::NetworkBlocked(_)));
     }
 }

@@ -41,6 +41,7 @@ export interface CloneRepositoryCommand {
   depth?: number;
   filter?: string;
   singleBranch?: boolean;
+  recurseSubmodules?: boolean;
   timeoutSecs?: number;
 }
 

@@ -14,6 +14,8 @@ pub enum ModelTier {
     UltraLight,
     /// Medium models (~3-4B params) for systems with >= 16GB RAM and capable GPU
     Standard,
+    /// Large coding/reasoning models (~7-8B params) for systems with >= 32GB RAM and >= 8GB VRAM / Unified Memory
+    Pro,
     /// System does not meet minimum requirements
     None,
 }
@@ -97,6 +99,18 @@ impl Default for ModelRegistry {
                     architecture: "gemma3".to_string(),
                     context_length: 8192,
                 },
+                ModelEntry {
+                    id: "qwen-2.5-coder-7b-q4km".to_string(),
+                    display_name: "Qwen 2.5 Coder 7B (Q4_K_M)".to_string(),
+                    hf_repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF".to_string(),
+                    hf_filename: "qwen2.5-coder-7b-instruct-q4_k_m.gguf".to_string(),
+                    sha256: String::new(),
+                    size_bytes: 4_680 * 1_048_576,
+                    min_ram_bytes: 32 * GB,
+                    tier: ModelTier::Pro,
+                    architecture: "qwen2".to_string(),
+                    context_length: 8192,
+                },
             ],
         }
     }
@@ -121,15 +135,17 @@ impl ModelRegistry {
     /// Get the recommended model for the given system capabilities.
     ///
     /// Returns the first model matching the recommended tier, preferring
-    /// Gemma models as the default choice. Returns `None` if the system
+    /// Gemma or Qwen2 models as the default choice. Returns `None` if the system
     /// doesn't meet minimum requirements.
     ///
     /// If GPU acceleration is not available, caps at UltraLight (1B models)
     /// since larger models are impractically slow on CPU.
     pub fn get_recommended(&self, capabilities: &SystemCapabilities) -> Option<&ModelEntry> {
         let tier = if !capabilities.gpu_acceleration_available
-            && capabilities.recommended_tier == ModelTier::Standard
-        {
+            && matches!(
+                capabilities.recommended_tier,
+                ModelTier::Standard | ModelTier::Pro
+            ) {
             ModelTier::UltraLight
         } else {
             capabilities.recommended_tier
@@ -141,10 +157,10 @@ impl ModelRegistry {
 
         let tier_models = self.get_for_tier(tier);
 
-        // Prefer Gemma as default recommendation
+        // Prefer Gemma or Qwen2 as default recommendation
         tier_models
             .iter()
-            .find(|m| m.architecture == "gemma3")
+            .find(|m| m.architecture == "gemma3" || m.architecture == "qwen2")
             .or(tier_models.first())
             .copied()
     }
@@ -153,6 +169,7 @@ impl ModelRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::ai::local::ComputeBackend;
 
     fn registry() -> ModelRegistry {
         ModelRegistry::default()
@@ -162,7 +179,7 @@ mod tests {
     fn test_get_all_returns_known_models() {
         let reg = registry();
         let all = reg.get_all();
-        assert_eq!(all.len(), 4);
+        assert_eq!(all.len(), 5);
     }
 
     #[test]
@@ -200,10 +217,40 @@ mod tests {
     }
 
     #[test]
+    fn test_get_for_tier_pro() {
+        let reg = registry();
+        let models = reg.get_for_tier(ModelTier::Pro);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "qwen-2.5-coder-7b-q4km");
+        assert_eq!(models[0].tier, ModelTier::Pro);
+    }
+
+    #[test]
     fn test_get_for_tier_none_empty() {
         let reg = registry();
         let models = reg.get_for_tier(ModelTier::None);
         assert!(models.is_empty());
+    }
+
+    #[test]
+    fn test_get_recommended_pro() {
+        let reg = registry();
+        let caps = SystemCapabilities {
+            total_ram_bytes: 32 * GB,
+            available_ram_bytes: 16 * GB,
+            gpu_info: None,
+            recommended_tier: ModelTier::Pro,
+            gpu_acceleration_available: true,
+            active_backend: ComputeBackend::Metal,
+            supported_backends: vec![ComputeBackend::Metal, ComputeBackend::Cpu],
+            npu_info: None,
+            unified_memory: true,
+        };
+        let recommended = reg.get_recommended(&caps);
+        assert!(recommended.is_some());
+        let model = recommended.unwrap();
+        assert_eq!(model.tier, ModelTier::Pro);
+        assert_eq!(model.id, "qwen-2.5-coder-7b-q4km");
     }
 
     #[test]
@@ -215,6 +262,10 @@ mod tests {
             gpu_info: None,
             recommended_tier: ModelTier::Standard,
             gpu_acceleration_available: true,
+            active_backend: ComputeBackend::Metal,
+            supported_backends: vec![ComputeBackend::Metal, ComputeBackend::Cpu],
+            npu_info: None,
+            unified_memory: true,
         };
         let recommended = reg.get_recommended(&caps);
         assert!(recommended.is_some());
@@ -233,6 +284,10 @@ mod tests {
             gpu_info: None,
             recommended_tier: ModelTier::UltraLight,
             gpu_acceleration_available: false,
+            active_backend: ComputeBackend::Cpu,
+            supported_backends: vec![ComputeBackend::Cpu],
+            npu_info: None,
+            unified_memory: false,
         };
         let recommended = reg.get_recommended(&caps);
         assert!(recommended.is_some());
@@ -250,6 +305,10 @@ mod tests {
             gpu_info: None,
             recommended_tier: ModelTier::None,
             gpu_acceleration_available: false,
+            active_backend: ComputeBackend::Cpu,
+            supported_backends: vec![ComputeBackend::Cpu],
+            npu_info: None,
+            unified_memory: false,
         };
         assert!(reg.get_recommended(&caps).is_none());
     }
@@ -264,11 +323,23 @@ mod tests {
             gpu_info: None,
             recommended_tier: ModelTier::Standard,
             gpu_acceleration_available: false,
+            active_backend: ComputeBackend::Cpu,
+            supported_backends: vec![ComputeBackend::Cpu],
+            npu_info: None,
+            unified_memory: false,
         };
         let recommended = reg.get_recommended(&caps);
         assert!(recommended.is_some());
         let model = recommended.unwrap();
         assert_eq!(model.tier, ModelTier::UltraLight);
+
+        // Pro tier on CPU-only should also cap at UltraLight
+        let pro_cpu_caps = SystemCapabilities {
+            recommended_tier: ModelTier::Pro,
+            ..caps
+        };
+        let pro_recommended = reg.get_recommended(&pro_cpu_caps).unwrap();
+        assert_eq!(pro_recommended.tier, ModelTier::UltraLight);
     }
 
     #[test]
@@ -289,6 +360,9 @@ mod tests {
 
         let json = serde_json::to_string(&ModelTier::Standard).unwrap();
         assert_eq!(json, "\"standard\"");
+
+        let json = serde_json::to_string(&ModelTier::Pro).unwrap();
+        assert_eq!(json, "\"pro\"");
 
         let json = serde_json::to_string(&ModelTier::None).unwrap();
         assert_eq!(json, "\"none\"");

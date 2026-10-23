@@ -7,9 +7,11 @@ import type {
 import {
   formatBytes,
   getTierDisplayName,
+  getBackendDisplayName,
   getSystemCapabilities,
   getAvailableModels,
   downloadModel,
+  importCustomModel,
   getModelStatus,
   getLoadedModelName,
   loadModel,
@@ -29,12 +31,23 @@ const mockResults: Record<string, unknown> = {
     gpuInfo: {
       name: 'Apple M1',
       vendor: 'apple',
-      vramBytes: null,
+      vramBytes: 12884901888,
       metalSupported: true,
       cudaSupported: false,
+      rocmSupported: false,
+      vulkanSupported: false,
+      unifiedMemory: true,
     },
     recommendedTier: 'standard',
     gpuAccelerationAvailable: true,
+    activeBackend: 'metal',
+    supportedBackends: ['metal', 'cpu'],
+    npuInfo: {
+      name: 'Apple Neural Engine (ANE)',
+      vendor: 'apple_neural_engine',
+      available: true,
+    },
+    unifiedMemory: true,
   } as SystemCapabilities,
   get_available_models: [
     {
@@ -51,6 +64,13 @@ const mockResults: Record<string, unknown> = {
     },
   ] as ModelEntry[],
   download_model: null,
+  import_custom_model: {
+    id: 'custom-my-model',
+    displayName: 'My Custom Model',
+    sizeBytes: 4200000000,
+    path: '/models/custom-my-model/model.gguf',
+    status: 'downloaded',
+  },
   get_model_status: 'ready' as LocalModelStatus,
   get_loaded_model_name: 'Test Model' as string | null,
 };
@@ -101,8 +121,59 @@ describe('Local AI Service - getTierDisplayName', () => {
     expect(getTierDisplayName('standard')).to.equal('Standard (16GB+ RAM)');
   });
 
+  it('should return correct name for pro', () => {
+    expect(getTierDisplayName('pro')).to.equal('Pro (32GB+ RAM)');
+  });
+
   it('should return correct name for none', () => {
     expect(getTierDisplayName('none')).to.equal('Not Supported');
+  });
+});
+
+describe('Local AI Service - getBackendDisplayName', () => {
+  const baseCaps: SystemCapabilities = {
+    totalRamBytes: 17179869184,
+    availableRamBytes: 8589934592,
+    gpuInfo: null,
+    recommendedTier: 'standard',
+    gpuAccelerationAvailable: true,
+  };
+
+  it('should return Metal display name', () => {
+    expect(getBackendDisplayName({ ...baseCaps, activeBackend: 'metal' })).to.equal(
+      'Metal (Apple Silicon)'
+    );
+  });
+
+  it('should return CUDA display name', () => {
+    expect(getBackendDisplayName({ ...baseCaps, activeBackend: 'cuda' })).to.equal(
+      'NVIDIA CUDA'
+    );
+  });
+
+  it('should return ROCm display name', () => {
+    expect(getBackendDisplayName({ ...baseCaps, activeBackend: 'rocm' })).to.equal(
+      'AMD ROCm'
+    );
+  });
+
+  it('should return Vulkan display name', () => {
+    expect(getBackendDisplayName({ ...baseCaps, activeBackend: 'vulkan' })).to.equal(
+      'Vulkan GPU'
+    );
+  });
+
+  it('should return CPU Only when activeBackend is cpu or acceleration unavailable', () => {
+    expect(
+      getBackendDisplayName({ ...baseCaps, activeBackend: 'cpu', gpuAccelerationAvailable: false })
+    ).to.equal('CPU Only');
+    expect(getBackendDisplayName({ ...baseCaps, gpuAccelerationAvailable: false })).to.equal(
+      'CPU Only'
+    );
+  });
+
+  it('should fall back to GPU Accelerated when activeBackend is omitted', () => {
+    expect(getBackendDisplayName(baseCaps)).to.equal('GPU Accelerated');
   });
 });
 
@@ -192,5 +263,14 @@ describe('Local AI Service - unloadModel', () => {
     aiSettingsChangedEvents = 0;
     await unloadModel();
     expect(aiSettingsChangedEvents).to.equal(1);
+  });
+});
+
+describe('Local AI Service - importCustomModel', () => {
+  it('should invoke import_custom_model command and return downloaded model info', async () => {
+    const result = await importCustomModel('/path/to/my-model.gguf', 'My Custom Model', 'qwen2');
+    expect(result.success).to.be.true;
+    expect(result.data?.id).to.equal('custom-my-model');
+    expect(result.data?.displayName).to.equal('My Custom Model');
   });
 });

@@ -700,6 +700,66 @@
   <source>(Not checked)</source>
   <target>(Non vérifié)</target>
 </trans-unit>
+<trans-unit id="s139461118d0c6b34">
+  <source> | NPU: <x id="0" equiv-text="${this.systemCapabilities.npuInfo.name}"/></source>
+  <target> | NPU : <x id="0" equiv-text="${this.systemCapabilities.npuInfo.name}"/></target>
+</trans-unit>
+<trans-unit id="s14f9c26b88565a40">
+  <source>Metal (Apple Silicon)</source>
+  <target>Metal (Apple Silicon)</target>
+</trans-unit>
+<trans-unit id="s475cc31ab33fe1a4">
+  <source>AMD ROCm</source>
+  <target>AMD ROCm</target>
+</trans-unit>
+<trans-unit id="s5c4fecca1aa2e36d">
+  <source>Unified</source>
+  <target>Unifiée</target>
+</trans-unit>
+<trans-unit id="sab70d4fefdcc30b1">
+  <source>NVIDIA CUDA</source>
+  <target>NVIDIA CUDA</target>
+</trans-unit>
+<trans-unit id="sd7382f471da4c774">
+  <source>Vulkan GPU</source>
+  <target>GPU Vulkan</target>
+</trans-unit>
+<trans-unit id="sa233299e616554be">
+  <source>Clone submodules recursively (--recurse-submodules)</source>
+  <target>Cloner les sous-modules récursivement (--recurse-submodules)</target>
+</trans-unit>
+<trans-unit id="s4dc0ce10224bfda9">
+  <source>Import a local .gguf model file from disk</source>
+  <target>Importer un fichier de modèle .gguf local depuis le disque</target>
+</trans-unit>
+<trans-unit id="s62efba5773343917">
+  <source>Failed to import model</source>
+  <target>Échec de l'importation du modèle</target>
+</trans-unit>
+<trans-unit id="s7d8395311eddd4b3">
+  <source>Import .gguf…</source>
+  <target>Importer .gguf…</target>
+</trans-unit>
+<trans-unit id="sa3b0f17af482539e">
+  <source>Imported model <x id="0" equiv-text="${result.data.displayName}"/></source>
+  <target>Modèle <x id="0" equiv-text="${result.data.displayName}"/> importé</target>
+</trans-unit>
+<trans-unit id="sa55fee06cb583091">
+  <source>Import Custom GGUF Model</source>
+  <target>Importer un modèle GGUF personnalisé</target>
+</trans-unit>
+<trans-unit id="sb2b78fd9376183c7">
+  <source>Custom Model</source>
+  <target>Modèle personnalisé</target>
+</trans-unit>
+<trans-unit id="scdc531a4c0b234d8">
+  <source>Pro (32GB+ RAM)</source>
+  <target>Pro (32 Go+ de RAM)</target>
+</trans-unit>
+<trans-unit id="sd29e1b38e37050fb">
+  <source>Custom GGUF</source>
+  <target>GGUF personnalisé</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

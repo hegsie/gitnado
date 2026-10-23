@@ -37,6 +37,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
   - Commit message templates with variables
   - Auto-populate from .gitmessage
   - Conventional commits support
+  - Signed-off-by and Co-authored-by commit trailers (`src/components/sidebar/lv-commit-panel.ts`)
   - Quick amend/reword/fixup/squash from history
 
 - ✅ **Auto-stashing**
@@ -78,8 +79,8 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
   - Compact/comfortable/spacious density settings
 
 - ✅ **Responsiveness & feedback**
-  - Clear progress indicators for clone, with live byte/object counts; fetch/pull/push show an indeterminate spinner with no counts — no backend command emits the `operation-progress` event they listen for (planned: real progress data for fetch/pull/push)
-  - Cancellation support for clone only — fetch/pull/push accept an operation ID but never register it with the cancellation registry, and no call site marks them cancellable, so their Cancel button never renders (planned)
+  - Live transfer progress (`TransferMonitor` emitting `operation-progress` events with byte/object counts and transfer speed) across clone, fetch, pull, and push (`src-tauri/src/commands/remote.rs`, `src-tauri/src/services/transfer_monitor.rs`)
+  - Full cancellation support via `CancellationRegistry` for clone, fetch, pull, and push operations
   - Better error messages with suggested fixes
   - Toast notifications for background operations
 
@@ -160,7 +161,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
   - Visual hook configuration (pre-commit, commit-msg, pre-push)
   - Hook templates (lint, format, test)
   - Enable/disable hooks per repository
-  - Hook execution logs and debugging (planned)
+  - Hook execution logs and debugging (`lv-hooks-dialog.ts` Execution Log tab & `lv-output-panel.ts` with search filter and terminal launcher)
 
 ---
 
@@ -177,11 +178,11 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 - ✅ Focus indicators — global `:focus-visible` styles in shared stylesheet, keyboard-only outlines via `:focus:not(:focus-visible)` suppression
 - ✅ Skip link — "Skip to main content" link appears on Tab, jumps past toolbar
 - ✅ Focus trap in modals — Tab cycles within dialog, focus restored on close
-- ✅ Accessibility audit *(partial)* — addressed WCAG 2.4.7 (Focus Visible), 4.1.3 (Status Messages), 2.4.3 (Focus Order). Not yet covered: `prefers-reduced-motion` (zero rules anywhere in `src/`), `focus-visible` styling beyond the shared global rule and a handful of components, `forced-colors`/high-contrast support for the canvas-rendered commit graph, and accessible names for the hand-rolled toggle switches (no `aria-label`/`aria-labelledby` linking their visible setting text to the checkbox)
+- ✅ Accessibility audit — addressed WCAG 2.4.7 (Focus Visible), 4.1.3 (Status Messages), 2.4.3 (Focus Order), `prefers-reduced-motion`, high-contrast/`forced-colors` support (including commit graph contrast), and `lv-toggle` accessible switch semantics (`role="switch"`, `aria-checked`, `aria-label`/`aria-labelledby`), verified by `src/styles/__tests__/a11y-styles.test.ts` and `src/components/dialogs/__tests__/lv-settings-dialog-contrast.test.ts`
 
 #### Security Hardening
 
-- ✅ **Paranoid mode** *(partial — frontend only)* — offline mode toggle blocks fetch/push/pull/clone, confirmation prompts before network operations, and a remote domain allowlist, all enforced in the frontend git service layer before a Tauri command is invoked. There is no matching Rust-side check: a call that reaches a command directly is not blocked. Two open PRs close the known AI-provider and avatar-fetch leaks around this gate; backend enforcement in `src-tauri` itself remains open work.
+- ✅ **Paranoid mode** — enforced across both the frontend git service layer and the Rust backend (`src-tauri/src/services/security.rs` `guard_url` across git remote operations, AI provider API clients, avatar fetches, and model/embedding downloads), with offline mode blocking network operations, confirmation prompts before network calls, and remote domain allowlisting.
 - ✅ **Supply chain transparency** — build info command exposes app version, Rust version, build target, and profile. Settings stored in Zustand with localStorage persistence.
 
 ---
@@ -194,6 +195,11 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 - ✅ **Image diff** — side-by-side, onion skin, swipe slider, difference highlighting (PNG, JPG, GIF, WebP)
 - ✅ **Notifications & background operations** — push/pull notifications, conflict alerts, system tray, per-repo preferences
 - ✅ **Auto-fetch** — configurable intervals, fetch on focus, remote change indicators, rate limiting, pause/resume
+- ✅ **Native application menu bar** — full native OS menu bar (File, Edit, View, Repository, Branch, Tools, Window, Help) wired between Rust (`src-tauri/src/menu.rs`) and the frontend (`src/services/app-menu.service.ts`)
+- ✅ **Localisation (i18n)** — `@lit/localize` runtime localization with English and French locales (`src/i18n/`)
+- ✅ **Jira integration UI** — full Jira dialog (`src/components/dialogs/lv-jira-dialog.ts`, `src-tauri/src/commands/jira.rs`) with connection setup & testing, JQL issue filtering, status transitions, and one-click branch creation from Jira issues
+- ✅ **Inline PR/MR review comments** — view and post general and file/line-scoped review comments directly inside the GitHub, GitLab, Azure DevOps, and Bitbucket integration dialogs (`get_*_pr_comments`, `add_*_pr_comment`)
+- ✅ **Git Output panel & terminal launcher** — searchable/filterable Git command & hook output panel (`src/components/panels/lv-output-panel.ts`) with one-click external terminal launcher
 
 ---
 
@@ -205,10 +211,11 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 - ✅ **Sparse checkout** — initialize, add/remove paths, cone mode, disable
 - ✅ **Bundle operations** — create/verify/list/unbundle for offline transfer and air-gapped environments
 
-- ✅ **Shallow & partial clones**
+- ✅ **Shallow, partial & recursive submodule clones**
   - Shallow clone with configurable `--depth` (clone dialog)
   - Partial clone with `--filter` (blob:none, tree:0) via clone dialog dropdown
   - Single-branch clone option
+  - Recursive submodule clone (`--recurse-submodules`) option in `lv-clone-dialog.ts` and `clone_repository`
   - Deepen shallow clones incrementally (`git fetch --deepen`)
   - Convert shallow to full clone (`git fetch --unshallow`)
   - Repository metadata: `isShallow`, `isPartialClone`, `cloneFilter` exposed in Repository struct
@@ -256,13 +263,14 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 - ✅ **Adaptive Model Switching** — Gitnado detects system VRAM/GPU and selects the optimal model:
   - **Ultra-light (8GB RAM):** Uses **Gemma 3 1B** (distilled) or **Llama 3.2 1B**
   - **Standard (16GB+ RAM):** Uses **Gemma 3 4B** or **Phi-4-mini** (3.8B)
-  - System capability detection (RAM, GPU vendor, VRAM) with tier-based recommendations
+  - **Pro (32GB+ RAM):** Uses **Qwen 2.5 Coder 14B** (Q4_K_M)
+  - System capability detection across RAM, GPU vendor/architecture (Metal + Accelerate on macOS, NVIDIA CUDA, AMD ROCm & Vulkan), VRAM, unified memory detection (Apple Silicon & AMD Ryzen AI APUs), and NPU detection (Apple Neural Engine & AMD XDNA) with tier-based recommendations
 
-- ✅ **GPU-Accelerated Local Inference** — Rust-native GGUF inference via `llama-cpp-2` with hardware acceleration: Metal on macOS ARM64, CUDA on Linux/Windows, CPU fallback. Supports llama, gemma, phi, mistral, and qwen architectures.
+- ✅ **GPU-Accelerated Local Inference & Token Streaming** — Rust-native GGUF inference via `llama-cpp-2` with hardware acceleration: Metal + Accelerate on macOS, NVIDIA CUDA, AMD ROCm & Vulkan on Linux/Windows, unified memory & NPU awareness, dynamic VRAM layer offloading, CPU fallback, and real-time token-by-token streaming (`ai-stream-token` events) for commit message generation. Supports llama, gemma, phi, mistral, and qwen architectures.
 
 - ✅ **The "Context Proxy" (MCP)** — Local-first implementation of the **Model Context Protocol**. Gitnado serves as an MCP host with HTTP/JSON-RPC server, exposing 7 Git tools (`get_commit_history`, `get_branches`, `get_status`, `get_diff`, `get_file_blame`, `search_commits`, `get_open_repositories`) for external tools to query.
 
-- ✅ **Local Model Management** — Download models from HuggingFace with SHA-256 verification, progress tracking, cancellation support. Load/unload/delete models. Settings UI with system capabilities display and model browser.
+- ✅ **Local Model Management & Custom GGUF Import** — Download models from HuggingFace with SHA-256 verification, progress tracking, cancellation support, or import arbitrary local `.gguf` files from disk (`import_custom_model`). Load/unload/delete models. Settings UI with system capabilities display and model browser.
 
 - ✅ **7 Cloud AI Providers** — Ollama, LM Studio, OpenAI, Anthropic Claude, GitHub Copilot, Google Gemini, and embedded local inference. API key management, provider testing, per-provider model selection.
 
@@ -270,7 +278,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 *Moving from keyword search to "Meaning Search."*
 
-- ✅ **Semantic Search Infrastructure** — Per-repository SQLite vector storage with sqlite-vec for cosine similarity search. Candle-based (pure Rust) BERT embedding engine using all-MiniLM-L6-v2 (384-dim vectors). Incremental indexing with background builds and progress events.
+- ✅ **Semantic Search Infrastructure** — Per-repository SQLite vector storage with sqlite-vec for cosine similarity search. Candle-based (pure Rust) BERT embedding engine using all-MiniLM-L6-v2 (384-dim vectors) that auto-accelerates on Metal and CUDA with CPU fallback. Incremental indexing with background builds and progress events.
 
 - ✅ **Natural Language History Search** — Semantic search mode toggle in the search bar. Embeds queries and finds semantically similar commits via vector similarity. Integrated into the commit graph with highlighting.
 
@@ -336,23 +344,19 @@ By Q2 2027, Gitnado's primary advantage is that **it costs $0 in API credits** a
 
 ## Open Work
 
-Items with no checkmark above, or marked *(partial)*, still have real gaps. Found during a truth
-pass against the current code (2026-09-04) and not yet tracked elsewhere in this document:
+Recently shipped milestones (as of 2026-10-23):
 
-- **Native application menu bar** — only the system tray menu is built (`MenuBuilder` +
-  `TrayIconBuilder::menu`, `src-tauri/src/lib.rs:203-222`). No `set_menu` call attaches a menu to
-  the main window, so there is no native File/Edit/View menu bar.
-- **Signed-off-by / Co-authored-by commit trailers** — the commit UI and backend have no option to
-  append these trailers automatically.
-- **Embedded terminal** — `open_terminal` (`src-tauri/src/commands/terminal.rs:26`) shells out to
-  the OS's own terminal application (Terminal.app, cmd.exe, or the first available Linux emulator).
-  There is no in-app terminal panel or pty.
-- **Recursive submodule clone** — submodule add/init/update/sync/remove all exist
-  (`src-tauri/src/commands/submodule.rs`), but the clone command has no `--recurse-submodules`
-  equivalent; a freshly cloned repo with submodules needs a manual init/update afterward.
-- **Localisation** — no i18n framework is wired in; every UI string in `src/` is hard-coded English.
-- **Inline PR review comments** — the GitHub/GitLab/Azure DevOps/Bitbucket dialogs generate PR/MR
-  descriptions but cannot post or view line-level review comments on a pull request.
+- ✅ **Jira integration UI** — `lv-jira-dialog.ts` wired into the toolbar and command palette with connection management, JQL issue search, status transitions, and branch creation from Jira issues.
+- ✅ **Inline PR/MR review comments** — GitHub, GitLab, Azure DevOps, and Bitbucket dialogs support viewing and posting general and line-level diff review comments.
+- ✅ **Recursive submodule clone (`--recurse-submodules`)** — `clone_repository` and `lv-clone-dialog.ts` support cloning submodules recursively (enabled by default).
+- ✅ **Hook execution logs & Output panel filter/terminal launcher** — `lv-hooks-dialog.ts` records and displays historical hook execution logs, and `lv-output-panel.ts` provides output search/filtering and a quick external terminal launcher.
+- ✅ **Local AI `Pro` tier, custom `.gguf` import & token streaming** — `Pro` (32GB+ RAM / 12GB+ VRAM) model tier (Qwen 2.5 Coder 14B), local `.gguf` model import from disk (`import_custom_model`), and real-time `ai-stream-token` streaming during commit message generation.
+
+Remaining future work:
+
+- **In-app PTY terminal emulator** — `open_terminal` launches the external OS terminal from the toolbar or Output panel; a full embedded PTY terminal panel remains a future enhancement.
+- **Dedicated Vulkan/CUDA release binary variants in CI** — `.github/workflows/build.yml` builds default release artifacts; separate prebuilt CUDA/Vulkan installer matrix targets remain planned.
+
 Apple Silicon only on macOS is a deliberate choice, not a gap: Apple is winding down Intel
 support across macOS, so `.github/workflows/build.yml` targets `aarch64-apple-darwin` alone and
 there are no plans for an `x86_64-apple-darwin` or universal build.
@@ -372,4 +376,4 @@ Remember: Gitnado's core value proposition is **privacy-first, offline-capable, 
 
 ---
 
-Last updated: 2026-09-04
+Last updated: 2026-10-23

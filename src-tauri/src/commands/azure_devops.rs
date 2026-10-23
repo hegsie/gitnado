@@ -83,6 +83,19 @@ pub struct CreateAdoPullRequestInput {
     pub is_draft: Option<bool>,
 }
 
+/// Azure DevOps Pull Request Comment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoPrComment {
+    pub id: String,
+    pub author: String,
+    pub avatar_url: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub file_path: Option<String>,
+    pub line: Option<u32>,
+}
+
 /// Work item summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -776,6 +789,254 @@ pub async fn create_ado_pull_request(
         ),
         repository_id: pr.repository.id,
     })
+}
+
+#[derive(Deserialize)]
+struct AdoThreadPosition {
+    line: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdoThreadContext {
+    #[serde(default)]
+    file_path: Option<String>,
+    #[serde(default)]
+    right_file_start: Option<AdoThreadPosition>,
+    #[serde(default)]
+    left_file_start: Option<AdoThreadPosition>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdoCommentAuthor {
+    display_name: String,
+    #[serde(default)]
+    image_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdoThreadComment {
+    id: u64,
+    author: AdoCommentAuthor,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    published_date: Option<String>,
+    #[serde(default)]
+    is_deleted: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdoPrThread {
+    id: u64,
+    #[serde(default)]
+    comments: Vec<AdoThreadComment>,
+    #[serde(default)]
+    thread_context: Option<AdoThreadContext>,
+}
+
+#[derive(Deserialize)]
+struct AdoPrThreadsResponse {
+    value: Vec<AdoPrThread>,
+}
+
+fn map_ado_thread_comments(thread: AdoPrThread) -> Vec<AdoPrComment> {
+    let file_path = thread
+        .thread_context
+        .as_ref()
+        .and_then(|tc| tc.file_path.clone())
+        .filter(|s| !s.is_empty());
+    let line = thread
+        .thread_context
+        .as_ref()
+        .and_then(|tc| tc.right_file_start.as_ref().or(tc.left_file_start.as_ref()))
+        .map(|pos| pos.line);
+    let thread_id = thread.id;
+
+    thread
+        .comments
+        .into_iter()
+        .filter(|c| !c.is_deleted.unwrap_or(false))
+        .filter_map(|c| {
+            let body = c.content.unwrap_or_default();
+            if body.trim().is_empty() {
+                return None;
+            }
+            Some(AdoPrComment {
+                id: format!("{}-{}", thread_id, c.id),
+                author: c.author.display_name,
+                avatar_url: c.author.image_url.filter(|s| !s.is_empty()),
+                body,
+                created_at: c.published_date.unwrap_or_default(),
+                file_path: file_path.clone(),
+                line,
+            })
+        })
+        .collect()
+}
+
+fn parse_ado_pr_threads(json: &str) -> Result<Vec<AdoPrComment>> {
+    let parsed: AdoPrThreadsResponse = serde_json::from_str(json).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse ADO PR threads: {}", e))
+    })?;
+    Ok(parsed
+        .value
+        .into_iter()
+        .flat_map(map_ado_thread_comments)
+        .collect())
+}
+
+fn parse_ado_created_thread(json: &str) -> Result<AdoPrComment> {
+    let thread: AdoPrThread = serde_json::from_str(json).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse created ADO PR thread: {}", e))
+    })?;
+    map_ado_thread_comments(thread)
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            GitnadoError::OperationFailed("Created ADO PR thread contained no comment".to_string())
+        })
+}
+
+fn build_ado_pr_comment_payload(
+    content: &str,
+    file_path: Option<&str>,
+    line: Option<u32>,
+) -> serde_json::Value {
+    let clean_path = file_path.map(str::trim).filter(|p| !p.is_empty());
+    let mut payload = serde_json::json!({
+        "comments": [
+            {
+                "parentCommentId": 0,
+                "content": content,
+                "commentType": 1
+            }
+        ],
+        "status": 1
+    });
+
+    if let Some(path) = clean_path {
+        let normalized_path = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
+        };
+        let mut tc = serde_json::json!({
+            "filePath": normalized_path
+        });
+        if let Some(line_num) = line {
+            tc["rightFileStart"] = serde_json::json!({ "line": line_num, "offset": 1 });
+            tc["rightFileEnd"] = serde_json::json!({ "line": line_num, "offset": 1 });
+        }
+        payload["threadContext"] = tc;
+    }
+
+    payload
+}
+
+/// Get comments from all pull request threads
+#[command]
+pub async fn get_ado_pr_comments(
+    organization: String,
+    project: String,
+    repository: String,
+    pull_request_id: u32,
+    token: Option<String>,
+) -> Result<Vec<AdoPrComment>> {
+    let client = api_client()?;
+    let token = resolve_ado_token(token)?;
+
+    // `parse_ado_url` retains percent-encoded segments, so follow the exact URL
+    // construction pattern used by `list_ado_pull_requests` / `get_ado_pull_request`.
+    let url = build_api_url(
+        &organization,
+        &project,
+        &format!(
+            "git/repositories/{}/pullRequests/{}/threads",
+            repository, pull_request_id
+        ),
+    );
+
+    let response = client
+        .get(&url)
+        .header("Authorization", get_auth_header(&token))
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to fetch ADO PR comments: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "Failed to fetch ADO PR comments ({}): {}",
+            status, body
+        )));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read ADO PR comments: {}", e))
+    })?;
+
+    parse_ado_pr_threads(&body)
+}
+
+/// Add a pull request comment thread (general or inline)
+#[allow(clippy::too_many_arguments)]
+#[command]
+pub async fn add_ado_pr_comment(
+    organization: String,
+    project: String,
+    repository: String,
+    pull_request_id: u32,
+    content: String,
+    file_path: Option<String>,
+    line: Option<u32>,
+    token: Option<String>,
+) -> Result<AdoPrComment> {
+    let client = api_client()?;
+    let token = resolve_ado_token(token)?;
+
+    let url = build_api_url(
+        &organization,
+        &project,
+        &format!(
+            "git/repositories/{}/pullRequests/{}/threads",
+            repository, pull_request_id
+        ),
+    );
+
+    let payload = build_ado_pr_comment_payload(&content, file_path.as_deref(), line);
+
+    let response = client
+        .post(&url)
+        .header("Authorization", get_auth_header(&token))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to post ADO PR comment: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "Failed to post ADO PR comment ({}): {}",
+            status, body
+        )));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read ADO PR comment response: {}", e))
+    })?;
+
+    parse_ado_created_thread(&body)
 }
 
 // ============================================================================
@@ -2338,5 +2599,110 @@ mod tests {
         assert_eq!(orgs[0].name, "orgOne");
         assert_eq!(orgs[0].url, "https://dev.azure.com/orgOne");
         assert_eq!(orgs[1].id, "id-2");
+    }
+
+    #[test]
+    fn test_parse_ado_pr_threads_and_inline_context() {
+        let json = r#"{
+            "value": [
+                {
+                    "id": 10,
+                    "comments": [
+                        {
+                            "id": 1,
+                            "author": {
+                                "displayName": "Alice Dev",
+                                "imageUrl": "https://dev.azure.com/avatar/alice.png"
+                            },
+                            "content": "Overall looks great",
+                            "publishedDate": "2024-06-01T09:00:00Z",
+                            "isDeleted": false
+                        }
+                    ]
+                },
+                {
+                    "id": 11,
+                    "threadContext": {
+                        "filePath": "/src/commands/azure_devops.rs",
+                        "rightFileStart": { "line": 88, "offset": 1 }
+                    },
+                    "comments": [
+                        {
+                            "id": 2,
+                            "author": {
+                                "displayName": "Bob Reviewer",
+                                "imageUrl": null
+                            },
+                            "content": "Preserve percent-encoded segments here",
+                            "publishedDate": "2024-06-01T09:05:00Z",
+                            "isDeleted": false
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let comments = parse_ado_pr_threads(json).expect("ADO threads should parse");
+        assert_eq!(comments.len(), 2);
+
+        assert_eq!(comments[0].id, "10-1");
+        assert_eq!(comments[0].author, "Alice Dev");
+        assert_eq!(
+            comments[0].avatar_url.as_deref(),
+            Some("https://dev.azure.com/avatar/alice.png")
+        );
+        assert_eq!(comments[0].body, "Overall looks great");
+        assert_eq!(comments[0].file_path, None);
+        assert_eq!(comments[0].line, None);
+
+        assert_eq!(comments[1].id, "11-2");
+        assert_eq!(comments[1].author, "Bob Reviewer");
+        assert_eq!(
+            comments[1].file_path.as_deref(),
+            Some("/src/commands/azure_devops.rs")
+        );
+        assert_eq!(comments[1].line, Some(88));
+    }
+
+    #[test]
+    fn test_build_ado_pr_comment_payload_general_and_inline() {
+        let general = build_ado_pr_comment_payload("Ship it", None, None);
+        assert_eq!(general["comments"][0]["content"], "Ship it");
+        assert!(general.get("threadContext").is_none());
+
+        let inline = build_ado_pr_comment_payload("Inline note", Some("src/main.rs"), Some(15));
+        assert_eq!(inline["comments"][0]["content"], "Inline note");
+        assert_eq!(inline["threadContext"]["filePath"], "/src/main.rs");
+        assert_eq!(inline["threadContext"]["rightFileStart"]["line"], 15);
+    }
+
+    #[tokio::test]
+    async fn test_ado_pr_comments_refused_in_offline_mode() {
+        let _guard = crate::services::security::test_support::offline();
+
+        let get_err = get_ado_pr_comments(
+            "my-org".to_string(),
+            "My%20Project".to_string(),
+            "my-repo".to_string(),
+            7,
+            Some("ado-pat".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block get_ado_pr_comments");
+        assert!(matches!(get_err, GitnadoError::NetworkBlocked(_)));
+
+        let post_err = add_ado_pr_comment(
+            "my-org".to_string(),
+            "My%20Project".to_string(),
+            "my-repo".to_string(),
+            7,
+            "Blocked comment".to_string(),
+            None,
+            None,
+            Some("ado-pat".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block add_ado_pr_comment");
+        assert!(matches!(post_err, GitnadoError::NetworkBlocked(_)));
     }
 }

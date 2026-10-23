@@ -12,6 +12,8 @@ import {
   clearLogEntries,
   subscribeOutputLog,
 } from '../../services/output-log.service.ts';
+import * as gitService from '../../services/git.service.ts';
+import { showToast } from '../../services/notification.service.ts';
 
 // The log store lives in output-log.service.ts (populated by the IPC layer);
 // re-export the store API here for existing consumers of this module.
@@ -77,9 +79,21 @@ export class LvOutputPanel extends LitElement {
 
       .header-actions {
         display: flex;
+        align-items: center;
         gap: var(--spacing-xs);
       }
 
+      .filter-input {
+        font-size: var(--font-size-xs);
+        padding: 2px 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--color-border);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        width: 160px;
+      }
+
+      .terminal-btn,
       .clear-btn {
         font-size: var(--font-size-xs);
         padding: 2px 8px;
@@ -87,6 +101,7 @@ export class LvOutputPanel extends LitElement {
         color: var(--color-text-muted);
       }
 
+      .terminal-btn:hover,
       .clear-btn:hover {
         background: var(--color-bg-hover);
         color: var(--color-text-primary);
@@ -264,11 +279,24 @@ export class LvOutputPanel extends LitElement {
 
   @state() private entries: ReadonlyArray<OutputLogEntry> = [];
   @state() private expandedEntries = new Set<number>();
+  @state() private filterText = '';
 
-  private get visibleEntries(): OutputLogEntry[] {
+  private get repoEntries(): OutputLogEntry[] {
     if (!this.repositoryPath) return [...this.entries];
     return this.entries.filter(
       (e) => !e.repoPath || e.repoPath === this.repositoryPath,
+    );
+  }
+
+  private get visibleEntries(): OutputLogEntry[] {
+    const base = this.repoEntries;
+    const q = this.filterText.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      (e) =>
+        e.command.toLowerCase().includes(q) ||
+        (e.gitCommand && e.gitCommand.toLowerCase().includes(q)) ||
+        (e.output && e.output.toLowerCase().includes(q)),
     );
   }
 
@@ -305,6 +333,14 @@ export class LvOutputPanel extends LitElement {
     // doesn't wipe repo B's history. When unset (showing all), clears globally.
     clearLogEntries(this.repositoryPath || undefined);
     this.expandedEntries = new Set();
+  }
+
+  private async handleOpenTerminal(): Promise<void> {
+    if (!this.repositoryPath) return;
+    const result = await gitService.openTerminal(this.repositoryPath);
+    if (!result.success) {
+      showToast(result.error?.message ?? 'Failed to open terminal', 'error');
+    }
   }
 
   private toggleEntry(id: number): void {
@@ -385,7 +421,28 @@ export class LvOutputPanel extends LitElement {
             : nothing}
         </span>
         <div class="header-actions">
-          ${visible.length > 0
+          <input
+            class="filter-input"
+            type="text"
+            placeholder="Filter output..."
+            aria-label="Filter output"
+            .value=${this.filterText}
+            @input=${(e: Event) => {
+              this.filterText = (e.target as HTMLInputElement).value;
+            }}
+          />
+          ${this.repositoryPath
+            ? html`
+                <button
+                  class="terminal-btn open-terminal-btn"
+                  title="Open in Terminal"
+                  @click=${() => void this.handleOpenTerminal()}
+                >
+                  Open in Terminal
+                </button>
+              `
+            : nothing}
+          ${this.repoEntries.length > 0
             ? html`
                 <button class="clear-btn" @click=${this.handleClear}>
                   Clear

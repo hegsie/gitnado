@@ -133,6 +133,19 @@ pub struct CreateBitbucketPullRequestInput {
     pub close_source_branch: Option<bool>,
 }
 
+/// Bitbucket Pull Request Comment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketPrComment {
+    pub id: String,
+    pub author: String,
+    pub avatar_url: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub file_path: Option<String>,
+    pub line: Option<u32>,
+}
+
 /// Create issue input
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -672,6 +685,235 @@ pub async fn get_bitbucket_pull_request(
         destination_branch: pr.destination.branch.name,
         url: pr.links.html.href,
     })
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentContent {
+    #[serde(default)]
+    raw: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentInline {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    to: Option<u32>,
+    #[serde(default)]
+    from: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentAvatarLink {
+    href: String,
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentUserLinks {
+    #[serde(default)]
+    avatar: Option<BitbucketCommentAvatarLink>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentUser {
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    nickname: Option<String>,
+    display_name: String,
+    #[serde(default)]
+    links: Option<BitbucketCommentUserLinks>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentItem {
+    id: u64,
+    #[serde(default)]
+    content: Option<BitbucketCommentContent>,
+    #[serde(default)]
+    user: Option<BitbucketCommentUser>,
+    created_on: String,
+    #[serde(default)]
+    inline: Option<BitbucketCommentInline>,
+    #[serde(default)]
+    deleted: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketCommentsListResponse {
+    values: Vec<BitbucketCommentItem>,
+}
+
+fn map_bitbucket_comment(item: BitbucketCommentItem) -> BitbucketPrComment {
+    let author = item
+        .user
+        .as_ref()
+        .and_then(|u| {
+            u.nickname
+                .clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| u.username.clone().filter(|s| !s.is_empty()))
+                .or_else(|| Some(u.display_name.clone()))
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let avatar_url = item
+        .user
+        .and_then(|u| u.links)
+        .and_then(|l| l.avatar)
+        .map(|a| a.href)
+        .filter(|s| !s.is_empty());
+    let file_path = item
+        .inline
+        .as_ref()
+        .and_then(|i| i.path.clone())
+        .filter(|s| !s.is_empty());
+    let line = item.inline.as_ref().and_then(|i| i.to.or(i.from));
+
+    BitbucketPrComment {
+        id: item.id.to_string(),
+        author,
+        avatar_url,
+        body: item.content.and_then(|c| c.raw).unwrap_or_default(),
+        created_at: item.created_on,
+        file_path,
+        line,
+    }
+}
+
+fn parse_bitbucket_pr_comments(json: &str) -> Result<Vec<BitbucketPrComment>> {
+    let list: BitbucketCommentsListResponse = serde_json::from_str(json).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse Bitbucket PR comments: {}", e))
+    })?;
+    Ok(list
+        .values
+        .into_iter()
+        .filter(|c| !c.deleted.unwrap_or(false))
+        .map(map_bitbucket_comment)
+        .collect())
+}
+
+fn parse_bitbucket_pr_comment_item(json: &str) -> Result<BitbucketPrComment> {
+    let item: BitbucketCommentItem = serde_json::from_str(json).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse Bitbucket PR comment: {}", e))
+    })?;
+    Ok(map_bitbucket_comment(item))
+}
+
+fn build_bitbucket_pr_comment_payload(
+    content: &str,
+    file_path: Option<&str>,
+    line: Option<u32>,
+) -> serde_json::Value {
+    let clean_path = file_path.map(str::trim).filter(|p| !p.is_empty());
+    let mut payload = serde_json::json!({
+        "content": {
+            "raw": content
+        }
+    });
+
+    if let Some(path) = clean_path {
+        let mut inline_obj = serde_json::json!({
+            "path": path
+        });
+        if let Some(line_num) = line {
+            inline_obj["to"] = serde_json::Value::Number(line_num.into());
+        }
+        payload["inline"] = inline_obj;
+    }
+
+    payload
+}
+
+/// Get comments on a Bitbucket pull request
+#[command]
+pub async fn get_bitbucket_pr_comments(
+    workspace: String,
+    repo_slug: String,
+    pr_id: u64,
+    token: Option<String>,
+) -> Result<Vec<BitbucketPrComment>> {
+    let client = api_client()?;
+    let auth_header = get_auth_header_with_token(token.as_deref(), None, None)?;
+
+    let url = format!(
+        "{}/repositories/{}/{}/pullrequests/{}/comments?pagelen=100",
+        BITBUCKET_API_BASE, workspace, repo_slug, pr_id
+    );
+
+    let response = client
+        .get(&url)
+        .header("Authorization", auth_header)
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to fetch Bitbucket PR comments: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "Failed to fetch Bitbucket PR comments ({}): {}",
+            status, body
+        )));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read Bitbucket PR comments: {}", e))
+    })?;
+
+    parse_bitbucket_pr_comments(&body)
+}
+
+/// Add a comment to a Bitbucket pull request (general or inline)
+#[command]
+pub async fn add_bitbucket_pr_comment(
+    workspace: String,
+    repo_slug: String,
+    pr_id: u64,
+    content: String,
+    file_path: Option<String>,
+    line: Option<u32>,
+    token: Option<String>,
+) -> Result<BitbucketPrComment> {
+    let client = api_client()?;
+    let auth_header = get_auth_header_with_token(token.as_deref(), None, None)?;
+
+    let url = format!(
+        "{}/repositories/{}/{}/pullrequests/{}/comments",
+        BITBUCKET_API_BASE, workspace, repo_slug, pr_id
+    );
+
+    let payload = build_bitbucket_pr_comment_payload(&content, file_path.as_deref(), line);
+
+    let response = client
+        .post(&url)
+        .header("Authorization", auth_header)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to post Bitbucket PR comment: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "Failed to post Bitbucket PR comment ({}): {}",
+            status, body
+        )));
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!(
+            "Failed to read Bitbucket PR comment response: {}",
+            e
+        ))
+    })?;
+
+    parse_bitbucket_pr_comment_item(&body)
 }
 
 /// Create a pull request
@@ -2142,5 +2384,100 @@ mod tests {
     async fn test_delete_credentials_stub() {
         let result = delete_bitbucket_credentials().await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_bitbucket_pr_comments_general_and_inline() {
+        let json = r#"{
+            "values": [
+                {
+                    "id": 501,
+                    "content": { "raw": "General Bitbucket PR comment" },
+                    "created_on": "2024-06-01T11:00:00Z",
+                    "user": {
+                        "uuid": "{1}",
+                        "display_name": "Alice BB",
+                        "nickname": "alice_bb",
+                        "links": {
+                            "avatar": { "href": "https://bitbucket.org/avatar/alice.png" }
+                        }
+                    }
+                },
+                {
+                    "id": 502,
+                    "content": { "raw": "Inline Bitbucket comment" },
+                    "created_on": "2024-06-01T11:05:00Z",
+                    "user": {
+                        "uuid": "{2}",
+                        "display_name": "Bob BB",
+                        "nickname": null,
+                        "links": null
+                    },
+                    "inline": {
+                        "path": "src/bitbucket.rs",
+                        "to": 77
+                    }
+                }
+            ]
+        }"#;
+
+        let comments = parse_bitbucket_pr_comments(json).expect("Bitbucket comments should parse");
+        assert_eq!(comments.len(), 2);
+
+        assert_eq!(comments[0].id, "501");
+        assert_eq!(comments[0].author, "alice_bb");
+        assert_eq!(
+            comments[0].avatar_url.as_deref(),
+            Some("https://bitbucket.org/avatar/alice.png")
+        );
+        assert_eq!(comments[0].body, "General Bitbucket PR comment");
+        assert_eq!(comments[0].file_path, None);
+        assert_eq!(comments[0].line, None);
+
+        assert_eq!(comments[1].id, "502");
+        assert_eq!(comments[1].author, "Bob BB");
+        assert_eq!(comments[1].file_path.as_deref(), Some("src/bitbucket.rs"));
+        assert_eq!(comments[1].line, Some(77));
+    }
+
+    #[test]
+    fn test_build_bitbucket_pr_comment_payload_general_and_inline() {
+        let general = build_bitbucket_pr_comment_payload("Looks good", None, None);
+        assert_eq!(general["content"]["raw"], "Looks good");
+        assert!(general.get("inline").is_none());
+
+        let inline =
+            build_bitbucket_pr_comment_payload("Check this line", Some("src/lib.rs"), Some(33));
+        assert_eq!(inline["content"]["raw"], "Check this line");
+        assert_eq!(inline["inline"]["path"], "src/lib.rs");
+        assert_eq!(inline["inline"]["to"], 33);
+    }
+
+    #[tokio::test]
+    async fn test_bitbucket_pr_comments_refused_in_offline_mode() {
+        let _guard = crate::services::security::test_support::offline();
+
+        let get_err = get_bitbucket_pr_comments(
+            "my-workspace".to_string(),
+            "my-repo".to_string(),
+            12,
+            Some("bb-token".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block get_bitbucket_pr_comments");
+        assert!(matches!(get_err, GitnadoError::NetworkBlocked(_)));
+
+        let post_err = add_bitbucket_pr_comment(
+            "my-workspace".to_string(),
+            "my-repo".to_string(),
+            12,
+            "Blocked comment".to_string(),
+            None,
+            None,
+            Some("bb-token".to_string()),
+        )
+        .await
+        .expect_err("offline mode should block add_bitbucket_pr_comment");
+        assert!(matches!(post_err, GitnadoError::NetworkBlocked(_)));
     }
 }

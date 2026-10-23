@@ -40,9 +40,48 @@ const mockInvoke: MockInvoke = async (command: string) => {
     case 'get_settings':
       return {};
     case 'get_system_capabilities':
-      return { hasGpu: false, gpuName: null, totalRam: 8 };
+      return {
+        totalRamBytes: 17179869184,
+        availableRamBytes: 8589934592,
+        gpuInfo: {
+          name: 'Apple M4 Max',
+          vendor: 'apple',
+          vramBytes: 12884901888,
+          metalSupported: true,
+          cudaSupported: false,
+          rocmSupported: false,
+          vulkanSupported: false,
+          unifiedMemory: true,
+        },
+        recommendedTier: 'standard',
+        gpuAccelerationAvailable: true,
+        activeBackend: 'metal',
+        supportedBackends: ['metal', 'cpu'],
+        npuInfo: {
+          name: 'Apple Neural Engine (ANE)',
+          vendor: 'apple_neural_engine',
+          available: true,
+        },
+        unifiedMemory: true,
+      };
     case 'get_downloaded_models':
-      return [];
+      return [
+        {
+          id: 'custom-qwen-coder',
+          displayName: 'Custom Qwen Coder',
+          sizeBytes: 4500000000,
+          path: '/models/custom-qwen-coder/model.gguf',
+          status: 'downloaded',
+        },
+      ];
+    case 'import_custom_model':
+      return {
+        id: 'custom-imported',
+        displayName: 'Imported GGUF',
+        sizeBytes: 2100000000,
+        path: '/models/custom-imported/model.gguf',
+        status: 'downloaded',
+      };
     case 'get_local_model_status':
       return { loaded: false, modelId: null };
     case 'get_available_models':
@@ -120,6 +159,50 @@ describe('lv-settings-dialog AI events', () => {
     } finally {
       window.removeEventListener('ai-settings-changed', listener);
     }
+
+    expect(eventFired).to.be.true;
+  });
+
+  it('renders hardware acceleration backend, unified memory, and NPU in the Local AI System row', async () => {
+    const el = await fixture<LvSettingsDialog>(
+      html`<lv-settings-dialog></lv-settings-dialog>`,
+    );
+
+    await waitUntil(
+      () => {
+        const text = el.shadowRoot?.textContent ?? '';
+        return text.includes('Metal (Apple Silicon)');
+      },
+      'System row did not render hardware acceleration details',
+    );
+
+    const text = el.shadowRoot?.textContent ?? '';
+    expect(text).to.contain('(Unified)');
+    expect(text).to.contain('GPU: Apple M4 Max');
+    expect(text).to.contain('NPU: Apple Neural Engine (ANE)');
+    expect(text).to.contain('Metal (Apple Silicon)');
+  });
+
+  it('renders custom downloaded GGUF models and dispatches ai-settings-changed on import', async () => {
+    const el = await fixture<LvSettingsDialog>(
+      html`<lv-settings-dialog></lv-settings-dialog>`,
+    );
+
+    await waitUntil(
+      () => {
+        const text = el.shadowRoot?.textContent ?? '';
+        return text.includes('Custom Qwen Coder');
+      },
+      'Custom downloaded GGUF model row did not render',
+    );
+
+    expect(el.shadowRoot?.textContent ?? '').to.contain('Custom GGUF');
+
+    let eventFired = false;
+    window.addEventListener('ai-settings-changed', () => { eventFired = true; }, { once: true });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (el as any).handleImportCustomModel('/path/to/imported.gguf');
 
     expect(eventFired).to.be.true;
   });

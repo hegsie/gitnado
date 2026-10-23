@@ -7,6 +7,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
+import { invokeCommand } from '../../services/tauri-api.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
@@ -31,6 +32,16 @@ import './lv-modal.ts';
 import './lv-account-selector.ts';
 
 type TabType = 'connection' | 'pull-requests' | 'issues' | 'pipelines' | 'create-pr' | 'create-issue';
+
+export interface PrReviewComment {
+  id: string;
+  author: string;
+  avatarUrl?: string | null;
+  body: string;
+  createdAt: string;
+  filePath?: string | null;
+  line?: number | null;
+}
 
 /**
  * Page sizes this dialog asks for when listing pull requests, issues and
@@ -205,6 +216,136 @@ export class LvBitbucketDialog extends LitElement {
 
       .pr-item:hover, .issue-item:hover {
         background: var(--color-bg-hover);
+      }
+
+      .pr-card-wrapper {
+        display: flex;
+        flex-direction: column;
+        background: var(--color-bg-tertiary);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+      }
+
+      .pr-card-wrapper .pr-item {
+        border-radius: 0;
+      }
+
+      .pr-actions {
+        display: flex;
+        gap: var(--spacing-xs);
+        align-items: center;
+      }
+
+      .pr-comments-drawer {
+        border-top: 1px solid var(--color-border);
+        padding: var(--spacing-md);
+        background: var(--color-bg-secondary);
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-sm);
+      }
+
+      .pr-comments-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-sm);
+        max-height: 240px;
+        overflow-y: auto;
+      }
+
+      .pr-comment-item {
+        padding: var(--spacing-sm);
+        background: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--color-border);
+      }
+
+      .pr-comment-header {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-xs);
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+      }
+
+      .pr-comment-author {
+        font-weight: var(--font-weight-semibold);
+        color: var(--color-text-primary);
+      }
+
+      .pr-comment-location {
+        font-family: var(--font-family-mono);
+        background: var(--color-bg-hover);
+        color: var(--color-primary);
+        padding: 1px 6px;
+        border-radius: var(--radius-sm);
+      }
+
+      .pr-comment-body {
+        font-size: var(--font-size-sm);
+        color: var(--color-text-primary);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .pr-comments-empty {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+        padding: var(--spacing-xs) 0;
+      }
+
+      .pr-comment-form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-xs);
+        margin-top: var(--spacing-xs);
+      }
+
+      .pr-comment-inline-fields {
+        display: flex;
+        gap: var(--spacing-xs);
+      }
+
+      .pr-comment-file-input {
+        flex: 1;
+        padding: 6px var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-xs);
+        font-family: var(--font-family-mono);
+      }
+
+      .pr-comment-line-input {
+        width: 90px;
+        padding: 6px var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-xs);
+        font-family: var(--font-family-mono);
+      }
+
+      .pr-comment-input-row {
+        display: flex;
+        gap: var(--spacing-xs);
+        align-items: flex-end;
+      }
+
+      .pr-comment-body-input {
+        flex: 1;
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-primary);
+        font-size: var(--font-size-sm);
+        font-family: inherit;
+        resize: vertical;
+        min-height: 48px;
       }
 
       .pr-number, .issue-number {
@@ -645,6 +786,15 @@ export class LvBitbucketDialog extends LitElement {
   @state() private createIssueTitle = '';
   @state() private createIssueContent = '';
 
+  // PR Review Comments drawer
+  @state() private expandedPrNumber: number | null = null;
+  @state() private prComments: Record<number, PrReviewComment[]> = {};
+  @state() private loadingCommentsForPr: number | null = null;
+  @state() private postingCommentForPr: number | null = null;
+  @state() private commentBodyInput = '';
+  @state() private commentFilePathInput = '';
+  @state() private commentLineInput = '';
+
   connectedCallback(): void {
     super.connectedCallback();
 
@@ -780,6 +930,13 @@ export class LvBitbucketDialog extends LitElement {
     this.createPrCloseSource = false;
     this.createIssueTitle = '';
     this.createIssueContent = '';
+    this.expandedPrNumber = null;
+    this.prComments = {};
+    this.loadingCommentsForPr = null;
+    this.postingCommentForPr = null;
+    this.commentBodyInput = '';
+    this.commentFilePathInput = '';
+    this.commentLineInput = '';
     if (this.activeTab.startsWith('create-')) {
       this.activeTab = 'connection';
     }
@@ -1080,6 +1237,93 @@ export class LvBitbucketDialog extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to load pull requests';
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  private async togglePrComments(prId: number): Promise<void> {
+    if (this.expandedPrNumber === prId) {
+      this.expandedPrNumber = null;
+      return;
+    }
+    this.expandedPrNumber = prId;
+    this.commentBodyInput = '';
+    this.commentFilePathInput = '';
+    this.commentLineInput = '';
+    await this.loadPrComments(prId);
+  }
+
+  private async loadPrComments(prId: number): Promise<void> {
+    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (await gitService.checkOutboundHostAllowed('api.bitbucket.org', false)) return;
+
+    this.loadingCommentsForPr = prId;
+    this.error = null;
+
+    try {
+      const token = await this.getActiveToken();
+      const result = await invokeCommand<PrReviewComment[]>('get_bitbucket_pr_comments', {
+        workspace: this.detectedRepo.workspace,
+        repoSlug: this.detectedRepo.repoSlug,
+        prId,
+        token,
+      });
+
+      if (result.success && result.data) {
+        this.prComments = {
+          ...this.prComments,
+          [prId]: result.data,
+        };
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        this.error = result.error?.message ?? 'Failed to load PR comments';
+        showToast(this.error, 'error');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to load PR comments';
+      showToast(this.error, 'error');
+    } finally {
+      this.loadingCommentsForPr = null;
+    }
+  }
+
+  private async handleAddPrComment(prId: number): Promise<void> {
+    const content = this.commentBodyInput.trim();
+    if (!content || !this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (await gitService.checkOutboundHostAllowed('api.bitbucket.org', false)) return;
+
+    const filePath = this.commentFilePathInput.trim() || undefined;
+    const parsedLine = parseInt(this.commentLineInput.trim(), 10);
+    const line = !Number.isNaN(parsedLine) && parsedLine > 0 ? parsedLine : undefined;
+
+    this.postingCommentForPr = prId;
+    this.error = null;
+
+    try {
+      const token = await this.getActiveToken();
+      const result = await invokeCommand<PrReviewComment>('add_bitbucket_pr_comment', {
+        workspace: this.detectedRepo.workspace,
+        repoSlug: this.detectedRepo.repoSlug,
+        prId,
+        content,
+        filePath,
+        line,
+        token,
+      });
+
+      if (result.success) {
+        this.commentBodyInput = '';
+        this.commentFilePathInput = '';
+        this.commentLineInput = '';
+        showToast('Comment posted', 'success');
+        await this.loadPrComments(prId);
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        this.error = result.error?.message ?? 'Failed to post PR comment';
+        showToast(this.error, 'error');
+      }
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Failed to post PR comment';
+      showToast(this.error, 'error');
+    } finally {
+      this.postingCommentForPr = null;
     }
   }
 
@@ -1815,17 +2059,30 @@ export class LvBitbucketDialog extends LitElement {
 
       <div class="pr-list">
         ${this.pullRequests.map(pr => html`
-          <div class="pr-item" @click=${() => this.openInBrowser(pr.url)}>
-            <span class="pr-number">#${pr.id}</span>
-            <div class="pr-info">
-              <div class="pr-title">${pr.title}</div>
-              <div class="pr-meta">
-                <span class="pr-state ${pr.state}">${pr.state}</span>
-                <span class="pr-branch">${pr.sourceBranch} → ${pr.destinationBranch}</span>
-                <span>by ${pr.author.displayName}</span>
-                <span>${this.formatDate(pr.createdOn)}</span>
+          <div class="pr-card-wrapper">
+            <div class="pr-item" @click=${() => this.openInBrowser(pr.url)}>
+              <span class="pr-number">#${pr.id}</span>
+              <div class="pr-info">
+                <div class="pr-title">${pr.title}</div>
+                <div class="pr-meta">
+                  <span class="pr-state ${pr.state}">${pr.state}</span>
+                  <span class="pr-branch">${pr.sourceBranch} → ${pr.destinationBranch}</span>
+                  <span>by ${pr.author.displayName}</span>
+                  <span>${this.formatDate(pr.createdOn)}</span>
+                </div>
+              </div>
+              <div class="pr-actions" @click=${(e: Event) => e.stopPropagation()}>
+                <button
+                  class="btn pr-comments-toggle"
+                  data-testid="pr-comments-toggle-${pr.id}"
+                  title="Review comments"
+                  @click=${() => this.togglePrComments(pr.id)}
+                >
+                  Comments${this.prComments[pr.id] ? ` (${this.prComments[pr.id].length})` : ''}
+                </button>
               </div>
             </div>
+            ${this.expandedPrNumber === pr.id ? this.renderPrCommentsDrawer(pr.id) : nothing}
           </div>
         `)}
       </div>
@@ -1836,6 +2093,79 @@ export class LvBitbucketDialog extends LitElement {
         'pull-requests',
         this.prFilter,
       )}
+    `;
+  }
+
+  private renderPrCommentsDrawer(prId: number) {
+    const comments = this.prComments[prId] ?? [];
+    const isLoadingComments = this.loadingCommentsForPr === prId;
+    const isPosting = this.postingCommentForPr === prId;
+
+    return html`
+      <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${prId}" @click=${(e: Event) => e.stopPropagation()}>
+        ${isLoadingComments ? html`
+          <div class="pr-comments-empty">Loading comments...</div>
+        ` : comments.length === 0 ? html`
+          <div class="pr-comments-empty">No comments yet</div>
+        ` : html`
+          <div class="pr-comments-list">
+            ${comments.map(c => html`
+              <div class="pr-comment-item" data-testid="pr-comment-item-${c.id}">
+                <div class="pr-comment-header">
+                  <span class="pr-comment-author">${c.author}</span>
+                  ${c.filePath ? html`
+                    <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
+                  ` : nothing}
+                  <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
+                </div>
+                <div class="pr-comment-body">${c.body}</div>
+              </div>
+            `)}
+          </div>
+        `}
+        <div class="pr-comment-form">
+          <div class="pr-comment-inline-fields">
+            <input
+              type="text"
+              class="pr-comment-file-input"
+              placeholder="File path (optional, for inline comment)"
+              .value=${this.commentFilePathInput}
+              @input=${(e: Event) => {
+                this.commentFilePathInput = (e.target as HTMLInputElement).value;
+              }}
+            />
+            <input
+              type="number"
+              min="1"
+              class="pr-comment-line-input"
+              placeholder="Line #"
+              .value=${this.commentLineInput}
+              @input=${(e: Event) => {
+                this.commentLineInput = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </div>
+          <div class="pr-comment-input-row">
+            <textarea
+              class="pr-comment-body-input"
+              rows="2"
+              placeholder="Write a review comment..."
+              .value=${this.commentBodyInput}
+              @input=${(e: Event) => {
+                this.commentBodyInput = (e.target as HTMLTextAreaElement).value;
+              }}
+            ></textarea>
+            <button
+              class="btn btn-primary pr-comment-submit"
+              data-testid="pr-comment-submit-${prId}"
+              ?disabled=${!this.commentBodyInput.trim() || isPosting}
+              @click=${() => this.handleAddPrComment(prId)}
+            >
+              ${isPosting ? 'Posting...' : 'Post Comment'}
+            </button>
+          </div>
+        </div>
+      </div>
     `;
   }
 

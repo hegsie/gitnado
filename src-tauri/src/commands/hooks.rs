@@ -7,11 +7,86 @@
 //! (githooks(5)). libgit2 runs no hooks, so without this the app would
 //! silently bypass pre-commit/commit-msg/pre-push/etc. on its default paths.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::command;
 
 use crate::error::{GitnadoError, Result};
+
+const MAX_HOOK_EXECUTION_LOGS: usize = 100;
+
+/// Recorded log entry for a single git hook execution
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookExecutionLog {
+    pub id: String,
+    pub repo_path: String,
+    pub hook_name: String,
+    pub timestamp: i64,
+    pub duration_ms: u64,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub output: String,
+}
+
+static HOOK_EXECUTION_LOGS: OnceLock<Mutex<VecDeque<HookExecutionLog>>> = OnceLock::new();
+static NEXT_HOOK_LOG_ID: AtomicU64 = AtomicU64::new(1);
+
+fn hook_execution_logs() -> &'static Mutex<VecDeque<HookExecutionLog>> {
+    HOOK_EXECUTION_LOGS.get_or_init(|| Mutex::new(VecDeque::with_capacity(MAX_HOOK_EXECUTION_LOGS)))
+}
+
+fn trim_trailing_separators(path: &str) -> &str {
+    path.trim_end_matches(['/', '\\'])
+}
+
+fn same_repo_path(a: &str, b: &str) -> bool {
+    let a_trimmed = trim_trailing_separators(a);
+    let b_trimmed = trim_trailing_separators(b);
+    if a_trimmed == b_trimmed {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+fn record_hook_execution(
+    repo_path: String,
+    hook_name: String,
+    duration_ms: u64,
+    success: bool,
+    exit_code: Option<i32>,
+    output: String,
+) {
+    let id = NEXT_HOOK_LOG_ID.fetch_add(1, Ordering::Relaxed).to_string();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let entry = HookExecutionLog {
+        id,
+        repo_path,
+        hook_name,
+        timestamp,
+        duration_ms,
+        success,
+        exit_code,
+        output,
+    };
+    let mut guard = hook_execution_logs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    guard.push_front(entry);
+    while guard.len() > MAX_HOOK_EXECUTION_LOGS {
+        guard.pop_back();
+    }
+}
 
 /// Resolve the hooks directory exactly as git does:
 /// - `core.hooksPath` if set. A leading `~` is expanded to `$HOME`; a relative
@@ -155,6 +230,8 @@ pub fn run_hook(
     // would misdirect them (and break linked worktrees). cwd = workdir is
     // exactly what git relies on.
 
+    let started = Instant::now();
+
     let mut child = cmd.spawn().map_err(|e| {
         GitnadoError::OperationFailed(format!("Failed to run {} hook: {}", name, e))
     })?;
@@ -171,6 +248,8 @@ pub fn run_hook(
         GitnadoError::OperationFailed(format!("Failed to run {} hook: {}", name, e))
     })?;
 
+    let duration_ms = started.elapsed().as_millis() as u64;
+
     let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.is_empty() {
@@ -180,9 +259,21 @@ pub fn run_hook(
         combined.push_str(&stderr);
     }
 
+    let success = output.status.success();
+    let exit_code = output.status.code();
+    let repo_path_str = trim_trailing_separators(&workdir.to_string_lossy()).to_string();
+    record_hook_execution(
+        repo_path_str,
+        name.to_string(),
+        duration_ms,
+        success,
+        exit_code,
+        combined.clone(),
+    );
+
     Ok(HookOutcome {
         ran: true,
-        success: output.status.success(),
+        success,
         output: combined,
     })
 }
@@ -620,6 +711,34 @@ pub async fn toggle_hook(path: String, name: String, enabled: bool) -> Result<()
         }
     }
 
+    Ok(())
+}
+
+/// Get recent hook execution logs for a repository (newest first)
+#[command]
+pub async fn get_hook_execution_logs(path: String) -> Result<Vec<HookExecutionLog>> {
+    let guard = hook_execution_logs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let logs = guard
+        .iter()
+        .filter(|entry| same_repo_path(&entry.repo_path, &path))
+        .map(|entry| {
+            let mut copy = entry.clone();
+            copy.repo_path = path.clone();
+            copy
+        })
+        .collect();
+    Ok(logs)
+}
+
+/// Clear recorded hook execution logs for a repository
+#[command]
+pub async fn clear_hook_execution_logs(path: String) -> Result<()> {
+    let mut guard = hook_execution_logs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    guard.retain(|entry| !same_repo_path(&entry.repo_path, &path));
     Ok(())
 }
 
@@ -1219,5 +1338,66 @@ mod tests {
         repo.install_hook("commit-msg", "#!/bin/sh\nexit 1\n");
         let git_repo = repo.repo();
         assert!(run_commit_msg_hook(&git_repo, "msg").is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_hook_execution_logs_recorded_and_cleared() {
+        let repo = TestRepo::with_initial_commit();
+        let other_repo = TestRepo::with_initial_commit();
+        clear_hook_execution_logs(repo.path_str()).await.unwrap();
+        clear_hook_execution_logs(other_repo.path_str())
+            .await
+            .unwrap();
+
+        repo.install_hook(
+            "pre-commit",
+            "#!/bin/sh\necho 'running lint'\necho 'warning line' 1>&2\nexit 0\n",
+        );
+        repo.install_hook("pre-push", "#!/bin/sh\necho 'push blocked' 1>&2\nexit 2\n");
+        other_repo.install_hook("post-commit", "#!/bin/sh\necho 'other repo'\nexit 0\n");
+
+        let git_repo = repo.repo();
+        let outcome1 = run_hook(&git_repo, "pre-commit", &[], None).unwrap();
+        assert!(outcome1.ran && outcome1.success);
+
+        let outcome2 = run_hook(&git_repo, "pre-push", &[], None).unwrap();
+        assert!(outcome2.ran && !outcome2.success);
+
+        // Skipped hook (not installed) must NOT record a log entry
+        let skipped = run_hook(&git_repo, "prepare-commit-msg", &[], None).unwrap();
+        assert!(!skipped.ran);
+
+        let other_git_repo = other_repo.repo();
+        let other_outcome = run_hook(&other_git_repo, "post-commit", &[], None).unwrap();
+        assert!(other_outcome.ran && other_outcome.success);
+
+        let logs = get_hook_execution_logs(repo.path_str()).await.unwrap();
+        assert_eq!(logs.len(), 2, "expected 2 logs for repo, got {:?}", logs);
+
+        // Newest first: pre-push then pre-commit
+        assert_eq!(logs[0].hook_name, "pre-push");
+        assert!(!logs[0].success);
+        assert_eq!(logs[0].exit_code, Some(2));
+        assert!(logs[0].output.contains("push blocked"));
+        assert_eq!(logs[0].repo_path, repo.path_str());
+        assert!(logs[0].timestamp > 0);
+
+        assert_eq!(logs[1].hook_name, "pre-commit");
+        assert!(logs[1].success);
+        assert_eq!(logs[1].exit_code, Some(0));
+        assert!(logs[1].output.contains("running lint"));
+        assert!(logs[1].output.contains("warning line"));
+
+        // Clearing repo logs does not clear other_repo's logs
+        clear_hook_execution_logs(repo.path_str()).await.unwrap();
+        let cleared = get_hook_execution_logs(repo.path_str()).await.unwrap();
+        assert!(cleared.is_empty(), "logs for repo should be cleared");
+
+        let other_logs = get_hook_execution_logs(other_repo.path_str())
+            .await
+            .unwrap();
+        assert_eq!(other_logs.len(), 1);
+        assert_eq!(other_logs[0].hook_name, "post-commit");
     }
 }

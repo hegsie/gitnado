@@ -118,6 +118,7 @@ import './components/dialogs/lv-workspace-manager-dialog.ts';
 import './components/dialogs/lv-scan-repositories-dialog.ts';
 import './components/dialogs/lv-init-dialog.ts';
 import './components/dialogs/lv-hooks-dialog.ts';
+import './components/dialogs/lv-jira-dialog.ts';
 import './components/dialogs/lv-create-tag-dialog.ts';
 import './components/dialogs/lv-create-branch-dialog.ts';
 import './components/dialogs/lv-cherry-pick-dialog.ts';
@@ -934,6 +935,7 @@ export class AppShell extends LitElement {
    * exactly as it did when each dialog had its own `@state()` flag.
    */
   @state() private dialogVersion = 0;
+  @state() private showJiraDialog = false;
   private unsubscribeDialogs?: () => void;
   /**
    * Keys for destructive actions already running.
@@ -1674,6 +1676,7 @@ export class AppShell extends LitElement {
       // unless it says otherwise.
       if (state.openRepositories.length === 0) {
         dialogs.closeRepoScoped();
+        this.showJiraDialog = false;
       }
 
       // Closing the pinned repo's TAB while its conflict dialog is up
@@ -5113,7 +5116,18 @@ export class AppShell extends LitElement {
     if (this.paletteCommandsCache && this.paletteCommandsCacheKey === mod) {
       return this.paletteCommandsCache;
     }
-    const commands = buildPaletteCommands(this satisfies PaletteCommandHost);
+    const commands: PaletteCommand[] = [
+      ...buildPaletteCommands(this satisfies PaletteCommandHost),
+      {
+        id: 'jira-issues',
+        label: 'Jira Issues...',
+        category: 'action',
+        icon: 'globe',
+        action: this.requiresRepository(() => {
+          this.showJiraDialog = true;
+        }),
+      },
+    ];
     this.paletteCommandsCacheKey = mod;
     this.paletteCommandsCache = commands;
     return commands;  }
@@ -6712,6 +6726,12 @@ export class AppShell extends LitElement {
           .repoPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('hooks'); }}
         ></lv-hooks-dialog>
+        <lv-jira-dialog
+          ?open=${this.showJiraDialog}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { this.showJiraDialog = false; }}
+          @branch-created=${() => this.handleRefresh()}
+        ></lv-jira-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`

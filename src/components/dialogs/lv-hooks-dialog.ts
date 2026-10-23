@@ -6,8 +6,16 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
-import { getHooks, getHook, saveHook, deleteHook, toggleHook } from '../../services/git.service.ts';
-import type { GitHook } from '../../services/git.service.ts';
+import {
+  getHooks,
+  getHook,
+  saveHook,
+  deleteHook,
+  toggleHook,
+  getHookExecutionLogs,
+  clearHookExecutionLogs,
+} from '../../services/git.service.ts';
+import type { GitHook, HookExecutionLog } from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { pushOverlay, removeOverlay, isTopOverlay } from '../../utils/overlay-stack.ts';
@@ -677,6 +685,149 @@ export class LvHooksDialog extends LitElement {
         width: 12px;
         height: 12px;
       }
+
+      /* Execution logs section */
+      .execution-logs-section {
+        border-top: 1px solid var(--color-border);
+        background: var(--color-bg-secondary);
+        display: flex;
+        flex-direction: column;
+        max-height: 220px;
+        flex-shrink: 0;
+      }
+
+      .execution-logs-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: var(--spacing-xs) var(--spacing-md);
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-tertiary);
+      }
+
+      .execution-logs-title {
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-semibold);
+        color: var(--color-text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .clear-logs-btn {
+        padding: 2px var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-secondary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+      }
+
+      .clear-logs-btn:hover:not(:disabled) {
+        background: var(--color-bg-hover);
+        color: var(--color-text-primary);
+      }
+
+      .clear-logs-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .execution-logs-list {
+        overflow-y: auto;
+        padding: var(--spacing-xs) var(--spacing-md);
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-xs);
+      }
+
+      .execution-logs-empty {
+        padding: var(--spacing-md);
+        text-align: center;
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+      }
+
+      .execution-log-item {
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        overflow: hidden;
+      }
+
+      .execution-log-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--spacing-sm);
+        padding: var(--spacing-xs) var(--spacing-sm);
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .execution-log-row:hover {
+        background: var(--color-bg-hover);
+      }
+
+      .execution-log-left {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        min-width: 0;
+      }
+
+      .execution-log-hook-name {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-medium);
+        color: var(--color-text-primary);
+      }
+
+      .execution-log-badge {
+        font-size: var(--font-size-xs);
+        padding: 1px 6px;
+        border-radius: var(--radius-sm);
+        font-weight: var(--font-weight-medium);
+      }
+
+      .execution-log-badge.pass {
+        background: var(--color-success-bg, rgba(39, 174, 96, 0.15));
+        color: var(--color-success, #27ae60);
+      }
+
+      .execution-log-badge.fail {
+        background: var(--color-error-bg, rgba(231, 76, 60, 0.15));
+        color: var(--color-error, #e74c3c);
+      }
+
+      .execution-log-meta {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+        flex-shrink: 0;
+      }
+
+      .execution-log-duration {
+        font-family: var(--font-mono);
+      }
+
+      .execution-log-output {
+        margin: 0;
+        padding: var(--spacing-xs) var(--spacing-sm);
+        border-top: 1px solid var(--color-border);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-primary);
+        font-family: var(--font-mono);
+        font-size: var(--font-size-xs);
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 120px;
+        overflow-y: auto;
+      }
     `,
   ];
 
@@ -684,6 +835,9 @@ export class LvHooksDialog extends LitElement {
   @property({ type: String }) repoPath = '';
 
   @state() private hooks: GitHook[] = [];
+  @state() private executionLogs: HookExecutionLog[] = [];
+  @state() private collapsedLogIds = new Set<string>();
+  @state() private clearingLogs = false;
   @state() private selectedHook: GitHook | null = null;
   @state() private editContent = '';
   @state() private loading = false;
@@ -712,7 +866,7 @@ export class LvHooksDialog extends LitElement {
    * not report "hooks closed" over a write still landing on disk.
    */
   public get operationInFlight(): boolean {
-    return this.saving;
+    return this.saving || this.clearingLogs;
   }
 
   async updated(changedProps: Map<string, unknown>): Promise<void> {
@@ -731,13 +885,22 @@ export class LvHooksDialog extends LitElement {
 
     this.loading = true;
     this.hooks = [];
+    this.executionLogs = [];
+    this.collapsedLogIds = new Set();
     this.selectedHook = null;
     this.editContent = '';
     this.hasUnsavedChanges = false;
     this.confirmingDelete = null;
 
     try {
-      const result = await getHooks(this.pinnedRepoPath);
+      const [logsResult, result] = await Promise.all([
+        getHookExecutionLogs(this.pinnedRepoPath),
+        getHooks(this.pinnedRepoPath),
+      ]);
+
+      if (logsResult.success && Array.isArray(logsResult.data)) {
+        this.executionLogs = logsResult.data;
+      }
 
       if (result.success && result.data) {
         this.hooks = result.data;
@@ -750,6 +913,61 @@ export class LvHooksDialog extends LitElement {
     } finally {
       this.loading = false;
     }
+  }
+
+  private async loadExecutionLogs(): Promise<void> {
+    if (!this.pinnedRepoPath) return;
+
+    try {
+      const result = await getHookExecutionLogs(this.pinnedRepoPath);
+      if (result.success && Array.isArray(result.data)) {
+        this.executionLogs = result.data;
+      }
+    } catch (err) {
+      console.error('Failed to load hook execution logs:', err);
+    }
+  }
+
+  private async handleClearLogs(): Promise<void> {
+    if (!this.pinnedRepoPath || this.clearingLogs) return;
+
+    this.clearingLogs = true;
+    try {
+      const result = await clearHookExecutionLogs(this.pinnedRepoPath);
+      if (result.success) {
+        this.executionLogs = [];
+        this.collapsedLogIds = new Set();
+        await this.loadExecutionLogs();
+        showToast('Hook execution logs cleared', 'success');
+      } else {
+        showToast(
+          `Failed to clear hook execution logs: ${result.error?.message ?? 'Unknown error'}`,
+          'error',
+        );
+      }
+    } catch (err) {
+      console.error('Failed to clear hook execution logs:', err);
+      showToast('Failed to clear hook execution logs', 'error');
+    } finally {
+      this.clearingLogs = false;
+    }
+  }
+
+  private toggleLogExpanded(id: string): void {
+    const next = new Set(this.collapsedLogIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    this.collapsedLogIds = next;
+  }
+
+  private formatLogTimestamp(timestamp: number): string {
+    const ms = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return String(timestamp);
+    return date.toLocaleString();
   }
 
   private async selectHook(hook: GitHook): Promise<void> {
@@ -1087,6 +1305,61 @@ export class LvHooksDialog extends LitElement {
     `;
   }
 
+  private renderExecutionLogsSection() {
+    return html`
+      <div class="execution-logs-section">
+        <div class="execution-logs-header">
+          <span class="execution-logs-title">Recent Execution Logs</span>
+          <button
+            class="clear-logs-btn"
+            type="button"
+            ?disabled=${this.clearingLogs}
+            @click=${this.handleClearLogs}
+          >
+            Clear Logs
+          </button>
+        </div>
+        ${this.executionLogs.length === 0
+          ? html`<div class="execution-logs-empty">No hook executions recorded yet</div>`
+          : html`
+              <div class="execution-logs-list">
+                ${this.executionLogs.map((log) => {
+                  const isExpanded = !this.collapsedLogIds.has(log.id);
+                  return html`
+                    <div class="execution-log-item">
+                      <div
+                        class="execution-log-row"
+                        @click=${() => this.toggleLogExpanded(log.id)}
+                      >
+                        <div class="execution-log-left">
+                          <span class="execution-log-hook-name">${log.hookName}</span>
+                          <span class="execution-log-badge ${log.success ? 'pass' : 'fail'}">
+                            ${log.success
+                              ? 'Pass'
+                              : log.exitCode !== null && log.exitCode !== undefined
+                                ? `Fail (exit ${log.exitCode})`
+                                : 'Fail'}
+                          </span>
+                        </div>
+                        <div class="execution-log-meta">
+                          <span class="execution-log-duration">${log.durationMs}ms</span>
+                          <span class="execution-log-timestamp">
+                            ${this.formatLogTimestamp(log.timestamp)}
+                          </span>
+                        </div>
+                      </div>
+                      ${isExpanded && log.output
+                        ? html`<pre class="execution-log-output">${log.output}</pre>`
+                        : nothing}
+                    </div>
+                  `;
+                })}
+              </div>
+            `}
+      </div>
+    `;
+  }
+
   private renderConfirmDelete() {
     if (!this.confirmingDelete) return nothing;
 
@@ -1150,6 +1423,8 @@ export class LvHooksDialog extends LitElement {
             ${this.renderEditorPanel()}
           </div>
         </div>
+
+        ${this.renderExecutionLogsSection()}
 
         <div class="footer">
           <div class="footer-left">
