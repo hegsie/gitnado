@@ -16,13 +16,13 @@ test.describe('Detached HEAD indicator', () => {
       branches: defaultMockData.branches.map((b) => ({ ...b, isHead: false })),
     });
 
-    const compactChip = page.locator('lv-context-dashboard .detached-head');
+    const compactChip = page.locator('gn-context-dashboard .detached-head');
     await expect(compactChip).toBeVisible();
     await expect(compactChip).toHaveText(/Detached HEAD @ [0-9a-f]{7}/);
 
-    await page.locator('lv-context-dashboard .expand-btn').click();
+    await page.locator('gn-context-dashboard .expand-btn').click();
 
-    const cardChip = page.locator('lv-repository-card .branch-name.detached');
+    const cardChip = page.locator('gn-repository-card .branch-name.detached');
     await expect(cardChip).toBeVisible();
     await expect(cardChip).toHaveText(
       new RegExp(`Detached HEAD @ ${DETACHED_OID.slice(0, 7)}`)
@@ -34,8 +34,8 @@ test.describe('Detached HEAD indicator', () => {
 
     await expect(page.locator('.detached-head')).toHaveCount(0);
 
-    await page.locator('lv-context-dashboard .expand-btn').click();
-    await expect(page.locator('lv-repository-card .branch-name')).toHaveText(/main/);
-    await expect(page.locator('lv-repository-card .branch-name.detached')).toHaveCount(0);
+    await page.locator('gn-context-dashboard .expand-btn').click();
+    await expect(page.locator('gn-repository-card .branch-name')).toHaveText(/main/);
+    await expect(page.locator('gn-repository-card .branch-name.detached')).toHaveCount(0);
   });
 });

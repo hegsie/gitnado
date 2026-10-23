@@ -9,7 +9,7 @@ import {
 
 async function openSettings(page: Page): Promise<void> {
   await page.keyboard.press('Meta+,');
-  await expect(page.locator('lv-settings-dialog')).toBeVisible();
+  await expect(page.locator('gn-settings-dialog')).toBeVisible();
 }
 
 // =========================================================================
@@ -41,7 +41,7 @@ function externalToolMocks(): Record<string, unknown> {
 
 /** The `.setting-row` whose `.setting-name` is exactly `name`. */
 function settingRow(page: Page, name: string) {
-  return page.locator('lv-settings-dialog .setting-row', {
+  return page.locator('gn-settings-dialog .setting-row', {
     has: page.locator('.setting-name', { hasText: new RegExp(`^${name}$`) }),
   });
 }
@@ -55,7 +55,7 @@ function diffSelect(page: Page) {
 }
 
 function errorToast(page: Page) {
-  return page.locator('lv-toast-container .toast.error .toast-message');
+  return page.locator('gn-toast-container .toast.error .toast-message');
 }
 
 /**
@@ -233,7 +233,7 @@ async function installToolConfigState(
 }
 
 function toolSelect(page: Page, label: 'Merge Tool' | 'Diff Tool'): Locator {
-  return page.locator(`lv-settings-dialog .setting-row:has-text("${label}") select`).first();
+  return page.locator(`gn-settings-dialog .setting-row:has-text("${label}") select`).first();
 }
 
 async function unsetArgs(page: Page): Promise<Array<{ key?: string; path?: string }>> {

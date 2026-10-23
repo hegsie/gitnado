@@ -57,7 +57,7 @@ const SKIPPABLE_STATES: readonly RepositoryState[] = ['cherrypick', 'revert'];
 /**
  * The palette query that turns the command palette into a branch switcher.
  *
- * Matches the label lv-command-palette gives every branch entry
+ * Matches the label gn-command-palette gives every branch entry
  * ("Switch to <branch>"), so a prefix match puts them all above every other
  * command. Kept as a constant so the two cannot drift silently.
  */
@@ -75,86 +75,86 @@ const SWITCH_BRANCH_PALETTE_QUERY = 'Switch to ';
 function operationLabel(state: RepositoryState): string {
   return state === 'cherrypick' ? 'cherry-pick' : state;
 }
-import './components/toolbar/lv-toolbar.ts';
-import './components/welcome/lv-welcome.ts';
-import './components/graph/lv-graph-canvas.ts';
-import './components/panels/lv-diff-view.ts';
-import type { LvDiffView } from './components/panels/lv-diff-view.ts';
-import './components/panels/lv-blame-view.ts';
-import './components/panels/lv-output-panel.ts';
-import './components/sidebar/lv-left-panel.ts';
-import './components/sidebar/lv-right-panel.ts';
-import './components/dialogs/lv-settings-dialog.ts';
-import './components/dialogs/lv-modal.ts';
-import './components/dialogs/lv-conflict-resolution-dialog.ts';
-import type { GitflowFinishContext } from './components/dialogs/lv-conflict-resolution-dialog.ts';
-import './components/dialogs/lv-command-palette.ts';
-import './components/dialogs/lv-reflog-dialog.ts';
-import './components/dialogs/lv-describe-dialog.ts';
-import './components/dialogs/lv-compare-branches-dialog.ts';
-import './components/dialogs/lv-search-dialog.ts';
-import './components/dialogs/lv-keyboard-shortcuts-dialog.ts';
-import './components/dialogs/lv-remote-dialog.ts';
-import './components/dialogs/lv-changelog-dialog.ts';
-import './components/dialogs/lv-clean-dialog.ts';
-import './components/dialogs/lv-export-import-dialog.ts';
-import './components/dialogs/lv-bisect-dialog.ts';
-import './components/dialogs/lv-submodule-dialog.ts';
-import './components/dialogs/lv-worktree-dialog.ts';
-import './components/dialogs/lv-lfs-dialog.ts';
-import './components/dialogs/lv-gpg-dialog.ts';
-import './components/dialogs/lv-ssh-dialog.ts';
-import './components/dialogs/lv-config-dialog.ts';
-import './components/dialogs/lv-gitignore-dialog.ts';
-import './components/dialogs/lv-credentials-dialog.ts';
-import './components/dialogs/lv-github-dialog.ts';
-import './components/dialogs/lv-gitlab-dialog.ts';
-import './components/dialogs/lv-oidc-dialog.ts';
-import './components/dialogs/lv-bitbucket-dialog.ts';
-import './components/dialogs/lv-azure-devops-dialog.ts';
-import './components/dialogs/lv-profile-manager-dialog.ts';
-import './components/dialogs/lv-migration-dialog.ts';
-import './components/dialogs/lv-workspace-manager-dialog.ts';
-import './components/dialogs/lv-scan-repositories-dialog.ts';
-import './components/dialogs/lv-init-dialog.ts';
-import './components/dialogs/lv-hooks-dialog.ts';
-import './components/dialogs/lv-jira-dialog.ts';
-import './components/dialogs/lv-create-tag-dialog.ts';
-import './components/dialogs/lv-create-branch-dialog.ts';
-import './components/dialogs/lv-cherry-pick-dialog.ts';
-import './components/dialogs/lv-interactive-rebase-dialog.ts';
-import './components/dialogs/lv-repository-health-dialog.ts';
-import './components/panels/lv-file-history.ts';
-import './components/common/lv-toast-container.ts';
-import './components/common/lv-progress-indicator.ts';
+import './components/toolbar/gn-toolbar.ts';
+import './components/welcome/gn-welcome.ts';
+import './components/graph/gn-graph-canvas.ts';
+import './components/panels/gn-diff-view.ts';
+import type { GnDiffView } from './components/panels/gn-diff-view.ts';
+import './components/panels/gn-blame-view.ts';
+import './components/panels/gn-output-panel.ts';
+import './components/sidebar/gn-left-panel.ts';
+import './components/sidebar/gn-right-panel.ts';
+import './components/dialogs/gn-settings-dialog.ts';
+import './components/dialogs/gn-modal.ts';
+import './components/dialogs/gn-conflict-resolution-dialog.ts';
+import type { GitflowFinishContext } from './components/dialogs/gn-conflict-resolution-dialog.ts';
+import './components/dialogs/gn-command-palette.ts';
+import './components/dialogs/gn-reflog-dialog.ts';
+import './components/dialogs/gn-describe-dialog.ts';
+import './components/dialogs/gn-compare-branches-dialog.ts';
+import './components/dialogs/gn-search-dialog.ts';
+import './components/dialogs/gn-keyboard-shortcuts-dialog.ts';
+import './components/dialogs/gn-remote-dialog.ts';
+import './components/dialogs/gn-changelog-dialog.ts';
+import './components/dialogs/gn-clean-dialog.ts';
+import './components/dialogs/gn-export-import-dialog.ts';
+import './components/dialogs/gn-bisect-dialog.ts';
+import './components/dialogs/gn-submodule-dialog.ts';
+import './components/dialogs/gn-worktree-dialog.ts';
+import './components/dialogs/gn-lfs-dialog.ts';
+import './components/dialogs/gn-gpg-dialog.ts';
+import './components/dialogs/gn-ssh-dialog.ts';
+import './components/dialogs/gn-config-dialog.ts';
+import './components/dialogs/gn-gitignore-dialog.ts';
+import './components/dialogs/gn-credentials-dialog.ts';
+import './components/dialogs/gn-github-dialog.ts';
+import './components/dialogs/gn-gitlab-dialog.ts';
+import './components/dialogs/gn-oidc-dialog.ts';
+import './components/dialogs/gn-bitbucket-dialog.ts';
+import './components/dialogs/gn-azure-devops-dialog.ts';
+import './components/dialogs/gn-profile-manager-dialog.ts';
+import './components/dialogs/gn-migration-dialog.ts';
+import './components/dialogs/gn-workspace-manager-dialog.ts';
+import './components/dialogs/gn-scan-repositories-dialog.ts';
+import './components/dialogs/gn-init-dialog.ts';
+import './components/dialogs/gn-hooks-dialog.ts';
+import './components/dialogs/gn-jira-dialog.ts';
+import './components/dialogs/gn-create-tag-dialog.ts';
+import './components/dialogs/gn-create-branch-dialog.ts';
+import './components/dialogs/gn-cherry-pick-dialog.ts';
+import './components/dialogs/gn-interactive-rebase-dialog.ts';
+import './components/dialogs/gn-repository-health-dialog.ts';
+import './components/panels/gn-file-history.ts';
+import './components/common/gn-toast-container.ts';
+import './components/common/gn-progress-indicator.ts';
 import { progressService } from './services/progress.service.ts';
-import type { ProgressOperation } from './components/common/lv-progress-indicator.ts';
-import './components/dashboard/lv-context-dashboard.ts';
-import type { CommitSelectedEvent, LvGraphCanvas } from './components/graph/lv-graph-canvas.ts';
-import { evictGraphCache } from './components/graph/lv-graph-canvas.ts';
-import type { LvCreateTagDialog } from './components/dialogs/lv-create-tag-dialog.ts';
-import type { LvCreateBranchDialog } from './components/dialogs/lv-create-branch-dialog.ts';
-import type { LvCherryPickDialog } from './components/dialogs/lv-cherry-pick-dialog.ts';
-import type { LvInteractiveRebaseDialog } from './components/dialogs/lv-interactive-rebase-dialog.ts';
-import type { LvProfileManagerDialog } from './components/dialogs/lv-profile-manager-dialog.ts';
-import type { LvReflogDialog } from './components/dialogs/lv-reflog-dialog.ts';
-import type { LvDescribeDialog } from './components/dialogs/lv-describe-dialog.ts';
-import type { LvCompareBranchesDialog } from './components/dialogs/lv-compare-branches-dialog.ts';
-import type { LvGitHubDialog } from './components/dialogs/lv-github-dialog.ts';
-import type { LvGitLabDialog } from './components/dialogs/lv-gitlab-dialog.ts';
-import type { LvBitbucketDialog } from './components/dialogs/lv-bitbucket-dialog.ts';
-import type { LvAzureDevOpsDialog } from './components/dialogs/lv-azure-devops-dialog.ts';
+import type { ProgressOperation } from './components/common/gn-progress-indicator.ts';
+import './components/dashboard/gn-context-dashboard.ts';
+import type { CommitSelectedEvent, GnGraphCanvas } from './components/graph/gn-graph-canvas.ts';
+import { evictGraphCache } from './components/graph/gn-graph-canvas.ts';
+import type { GnCreateTagDialog } from './components/dialogs/gn-create-tag-dialog.ts';
+import type { GnCreateBranchDialog } from './components/dialogs/gn-create-branch-dialog.ts';
+import type { GnCherryPickDialog } from './components/dialogs/gn-cherry-pick-dialog.ts';
+import type { GnInteractiveRebaseDialog } from './components/dialogs/gn-interactive-rebase-dialog.ts';
+import type { GnProfileManagerDialog } from './components/dialogs/gn-profile-manager-dialog.ts';
+import type { GnReflogDialog } from './components/dialogs/gn-reflog-dialog.ts';
+import type { GnDescribeDialog } from './components/dialogs/gn-describe-dialog.ts';
+import type { GnCompareBranchesDialog } from './components/dialogs/gn-compare-branches-dialog.ts';
+import type { GnGitHubDialog } from './components/dialogs/gn-github-dialog.ts';
+import type { GnGitLabDialog } from './components/dialogs/gn-gitlab-dialog.ts';
+import type { GnBitbucketDialog } from './components/dialogs/gn-bitbucket-dialog.ts';
+import type { GnAzureDevOpsDialog } from './components/dialogs/gn-azure-devops-dialog.ts';
 import type { PullRequestProviderId } from './services/pull-request.service.ts';
-import type { SearchDialogMode } from './components/dialogs/lv-search-dialog.ts';
-import type { LvCleanDialog } from './components/dialogs/lv-clean-dialog.ts';
-import type { LvExportImportDialog } from './components/dialogs/lv-export-import-dialog.ts';
-import type { LvRemoteDialog } from './components/dialogs/lv-remote-dialog.ts';
-import type { LvRepositoryHealthDialog } from './components/dialogs/lv-repository-health-dialog.ts';
-import type { LvChangelogDialog } from './components/dialogs/lv-changelog-dialog.ts';
+import type { SearchDialogMode } from './components/dialogs/gn-search-dialog.ts';
+import type { GnCleanDialog } from './components/dialogs/gn-clean-dialog.ts';
+import type { GnExportImportDialog } from './components/dialogs/gn-export-import-dialog.ts';
+import type { GnRemoteDialog } from './components/dialogs/gn-remote-dialog.ts';
+import type { GnRepositoryHealthDialog } from './components/dialogs/gn-repository-health-dialog.ts';
+import type { GnChangelogDialog } from './components/dialogs/gn-changelog-dialog.ts';
 import type { IntegrationOpenContext, IntegrationType } from './types/integration-accounts.types.ts';
 import type { Commit, RefInfo, StatusEntry, Tag, Branch, RepositoryState } from './types/git.types.ts';
-import type { SearchFilter } from './components/toolbar/lv-search-bar.ts';
-import type { PaletteCommand } from './components/dialogs/lv-command-palette.ts';
+import type { SearchFilter } from './components/toolbar/gn-search-bar.ts';
+import type { PaletteCommand } from './components/dialogs/gn-command-palette.ts';
 import { buildPaletteCommands, type PaletteCommandHost } from './palette-commands.ts';
 import * as gitService from './services/git.service.ts';
 import * as updateService from './services/update.service.ts';
@@ -215,7 +215,7 @@ import {
  * Main application shell component
  * Provides the top-level layout and routing
  */
-@customElement('lv-app-shell')
+@customElement('gn-app-shell')
 // Only the Settings modal's own title is localised here so far — but the shell
 // still has to re-render on a locale change, or that title would go stale while
 // the dialog inside it switches language.
@@ -282,9 +282,9 @@ export class AppShell extends LitElement {
 
       /* Drop affordance for the REPOSITORY-OPEN window.
          The OS drop is accepted in both states — dropping a folder with a repo
-         open opens it in a new tab — but only lv-welcome had an overlay, so the
+         open opens it in a new tab — but only gn-welcome had an overlay, so the
          same drag looked accepted on one screen and ignored on the other. Same
-         wording and same dashed frame as lv-welcome's copy; it cannot be shared
+         wording and same dashed frame as gn-welcome's copy; it cannot be shared
          as one element because that one lives inside the welcome component's
          shadow root. Fixed rather than absolute: the shell is a flex column and
          the overlay must cover the whole window, toolbar included. */
@@ -359,7 +359,7 @@ export class AppShell extends LitElement {
          detached the subtree mid-execute, so the open-conflict-dialog event
          it raises on REBASE_CONFLICT never reached app-shell's listener and
          the repo was left mid-rebase with no conflict dialog. Keeping it
-         mounted also means lv-branch-list's window listeners stay registered. */
+         mounted also means gn-branch-list's window listeners stay registered. */
       .left-panel.hidden,
       .resize-handle-h.hidden {
         display: none;
@@ -383,7 +383,7 @@ export class AppShell extends LitElement {
         overflow: hidden;
       }
 
-      .output-panel-container lv-output-panel {
+      .output-panel-container gn-output-panel {
         flex: 1;
         min-height: 0;
         display: flex;
@@ -595,7 +595,7 @@ export class AppShell extends LitElement {
         color: var(--color-text-secondary);
       }
 
-      lv-welcome {
+      gn-welcome {
         flex: 1;
       }
 
@@ -878,25 +878,25 @@ export class AppShell extends LitElement {
   private resizePendingClientX: number | null = null;
   private resizeRafId: number | null = null;
 
-  @query('lv-graph-canvas') graphCanvas?: LvGraphCanvas;
-  @query('lv-diff-view') private diffView?: LvDiffView;
-  @query('lv-create-tag-dialog') createTagDialog?: LvCreateTagDialog;
-  @query('lv-create-branch-dialog') createBranchDialog?: LvCreateBranchDialog;
-  @query('lv-cherry-pick-dialog') private cherryPickDialog?: LvCherryPickDialog;
-  @query('lv-export-import-dialog') exportImportDialog?: LvExportImportDialog;
-  @query('#app-rebase-dialog') private interactiveRebaseDialog?: LvInteractiveRebaseDialog;
-  @query('lv-profile-manager-dialog') private profileManagerDialog?: LvProfileManagerDialog;
-  @query('lv-reflog-dialog') private reflogDialog?: LvReflogDialog;
-  @query('lv-describe-dialog') describeDialog?: LvDescribeDialog;
-  @query('lv-compare-branches-dialog') compareBranchesDialog?: LvCompareBranchesDialog;
-  @query('lv-clean-dialog') private cleanDialog?: LvCleanDialog;
-  @query('lv-remote-dialog') private remoteDialog?: LvRemoteDialog;
-  @query('lv-repository-health-dialog') private repositoryHealthDialog?: LvRepositoryHealthDialog;
-  @query('lv-changelog-dialog') private changelogDialog?: LvChangelogDialog;
-  @query('lv-github-dialog') private githubDialog?: LvGitHubDialog;
-  @query('lv-gitlab-dialog') private gitlabDialog?: LvGitLabDialog;
-  @query('lv-bitbucket-dialog') private bitbucketDialog?: LvBitbucketDialog;
-  @query('lv-azure-devops-dialog') private azureDevOpsDialog?: LvAzureDevOpsDialog;
+  @query('gn-graph-canvas') graphCanvas?: GnGraphCanvas;
+  @query('gn-diff-view') private diffView?: GnDiffView;
+  @query('gn-create-tag-dialog') createTagDialog?: GnCreateTagDialog;
+  @query('gn-create-branch-dialog') createBranchDialog?: GnCreateBranchDialog;
+  @query('gn-cherry-pick-dialog') private cherryPickDialog?: GnCherryPickDialog;
+  @query('gn-export-import-dialog') exportImportDialog?: GnExportImportDialog;
+  @query('#app-rebase-dialog') private interactiveRebaseDialog?: GnInteractiveRebaseDialog;
+  @query('gn-profile-manager-dialog') private profileManagerDialog?: GnProfileManagerDialog;
+  @query('gn-reflog-dialog') private reflogDialog?: GnReflogDialog;
+  @query('gn-describe-dialog') describeDialog?: GnDescribeDialog;
+  @query('gn-compare-branches-dialog') compareBranchesDialog?: GnCompareBranchesDialog;
+  @query('gn-clean-dialog') private cleanDialog?: GnCleanDialog;
+  @query('gn-remote-dialog') private remoteDialog?: GnRemoteDialog;
+  @query('gn-repository-health-dialog') private repositoryHealthDialog?: GnRepositoryHealthDialog;
+  @query('gn-changelog-dialog') private changelogDialog?: GnChangelogDialog;
+  @query('gn-github-dialog') private githubDialog?: GnGitHubDialog;
+  @query('gn-gitlab-dialog') private gitlabDialog?: GnGitLabDialog;
+  @query('gn-bitbucket-dialog') private bitbucketDialog?: GnBitbucketDialog;
+  @query('gn-azure-devops-dialog') private azureDevOpsDialog?: GnAzureDevOpsDialog;
 
   private unsubscribe?: () => void;
   private unsubscribeUi?: () => void;
@@ -913,7 +913,7 @@ export class AppShell extends LitElement {
   // must only restart timers when THIS value actually changes)
   /** Repos with a window-focus fetch already running. */
   private focusFetchInFlight = new Set<string>();
-  /** Guards the graph ref menu's merge/rebase the way lv-branch-list guards
+  /** Guards the graph ref menu's merge/rebase the way gn-branch-list guards
    * its own: from the graph you could right-click a second ref and start a
    * second history rewrite while the first was still running.
    *
@@ -1145,18 +1145,18 @@ export class AppShell extends LitElement {
    * Open the branch-cleanup dialog from the command palette.
    *
    * Unlike every sibling palette action, this one cannot just flip a flag on
-   * app-shell: the dialog is owned by `lv-branch-list`, which is rendered only
+   * app-shell: the dialog is owned by `gn-branch-list`, which is rendered only
    * while the left panel is visible. With the panel hidden (Ctrl+B) the
    * `open-branch-cleanup` event had no listener at all and the command
    * silently did nothing. Reveal the panel first, then wait for the panel AND
-   * its branch list to render — `lv-branch-list` registers the window listener
+   * its branch list to render — `gn-branch-list` registers the window listener
    * in connectedCallback, so dispatching before it exists is the same dead end.
    */
   async openBranchCleanup(): Promise<void> {
     if (!this.leftPanelVisible) {
       uiStore.getState().togglePanel('left');
       await this.updateComplete;
-      const panel = this.renderRoot.querySelector('lv-left-panel') as LitElement | null;
+      const panel = this.renderRoot.querySelector('gn-left-panel') as LitElement | null;
       await panel?.updateComplete;
     }
     window.dispatchEvent(new CustomEvent('open-branch-cleanup'));
@@ -1183,7 +1183,7 @@ export class AppShell extends LitElement {
       return;
     }
     // The ACTIVE repo's tab badges must stay live too — but only when the
-    // right panel is hidden: while it's mounted, lv-file-status already
+    // right panel is hidden: while it's mounted, gn-file-status already
     // reloads on these events and mirrors into the store, so hydrating here
     // as well would just double every status query.
     if (!this.rightPanelVisible) {
@@ -1663,8 +1663,8 @@ export class AppShell extends LitElement {
       // set. Open the next repository and the element is reconstructed with
       // ?open=true — a full-screen overlay springing up unbidden over a repo
       // the user just opened, freshly constructed with every button
-      // re-enabled. lv-repository-health-dialog carries that exact story, and
-      // lv-bisect-dialog then reproduced it because it has no pinned path and
+      // re-enabled. gn-repository-health-dialog carries that exact story, and
+      // gn-bisect-dialog then reproduced it because it has no pinned path and
       // so was in neither hand-written sweep.
       //
       // This used to reflect over Lit's reactive-property map and match field
@@ -1721,56 +1721,56 @@ export class AppShell extends LitElement {
           state.openRepositories.some((r) => r.repository.path === path),
         hostHasRepositories: state.openRepositories.length > 0,
         entries: {
-          'lv-cherry-pick-dialog': {
+          'gn-cherry-pick-dialog': {
             dismissed: 'cherry-pick cancelled',
             running: 'cherry-pick',
           },
-          'lv-interactive-rebase-dialog': {
+          'gn-interactive-rebase-dialog': {
             dismissed: 'interactive rebase cancelled',
             running: 'interactive rebase',
           },
           // create-branch even moves HEAD via checkout, so a "cancelled" it did
           // not honour is a silent mutation of a repo not in the tab bar.
-          'lv-create-tag-dialog': {
+          'gn-create-tag-dialog': {
             dismissed: 'tag creation cancelled',
             running: 'tag creation',
           },
-          'lv-create-branch-dialog': {
+          'gn-create-branch-dialog': {
             dismissed: 'branch creation cancelled',
             running: 'branch creation',
           },
-          'lv-clean-dialog': {
+          'gn-clean-dialog': {
             dismissed: 'clean cancelled',
             running: 'clean',
             clearFlag: () => { dialogs.close('clean'); },
           },
           // No clearFlag: this dialog owns its own open state via open()/close(),
-          // like lv-create-branch-dialog.
-          'lv-export-import-dialog': {
+          // like gn-create-branch-dialog.
+          'gn-export-import-dialog': {
             dismissed: 'export/import cancelled',
             running: 'patch/bundle operation',
           },
-          'lv-reflog-dialog': {
+          'gn-reflog-dialog': {
             dismissed: 'undo history closed',
             running: 'reset',
             clearFlag: () => { dialogs.close('reflog'); },
           },
           // Read-only: it never reports work in flight, so the sweep always
           // takes the dismissal branch here.
-          'lv-describe-dialog': {
+          'gn-describe-dialog': {
             dismissed: 'describe closed',
             running: 'describe',
           },
-          'lv-compare-branches-dialog': {
+          'gn-compare-branches-dialog': {
             dismissed: 'branch comparison closed',
             running: 'branch comparison',
           },
-          'lv-search-dialog': {
+          'gn-search-dialog': {
             dismissed: 'search closed',
             running: 'search',
             clearFlag: () => { dialogs.close('search'); },
           },
-          'lv-remote-dialog': {
+          'gn-remote-dialog': {
             dismissed: 'remote management closed',
             running: 'remote update',
             clearFlag: () => { dialogs.close('remotes'); },
@@ -1778,52 +1778,52 @@ export class AppShell extends LitElement {
           // Closing this one DESTROYS the element (its render block is gated on
           // the repositoryHealth dialog), so it implements closeWhenIdle() and the
           // sweep hands the close over rather than orphaning a running gc.
-          'lv-repository-health-dialog': {
+          'gn-repository-health-dialog': {
             dismissed: 'repository health closed',
             running: 'maintenance operation',
             clearFlag: () => { dialogs.close('repositoryHealth'); },
           },
-          'lv-worktree-dialog': {
+          'gn-worktree-dialog': {
             dismissed: 'worktrees closed',
             running: 'worktree removal',
             clearFlag: () => { dialogs.close('worktrees'); },
           },
-          'lv-submodule-dialog': {
+          'gn-submodule-dialog': {
             dismissed: 'submodules closed',
             running: 'submodule removal',
             clearFlag: () => { dialogs.close('submodules'); },
           },
-          'lv-lfs-dialog': {
+          'gn-lfs-dialog': {
             dismissed: 'Git LFS closed',
             running: 'LFS prune',
             clearFlag: () => { dialogs.close('lfs'); },
           },
-          'lv-gpg-dialog': {
+          'gn-gpg-dialog': {
             dismissed: 'signing settings closed',
             running: 'signing update',
             clearFlag: () => { dialogs.close('gpg'); },
           },
-          'lv-config-dialog': {
+          'gn-config-dialog': {
             dismissed: 'configuration closed',
             running: 'configuration save',
             clearFlag: () => { dialogs.close('config'); },
           },
-          'lv-credentials-dialog': {
+          'gn-credentials-dialog': {
             dismissed: 'credentials closed',
             running: 'credential test',
             clearFlag: () => { dialogs.close('credentials'); },
           },
-          'lv-hooks-dialog': {
+          'gn-hooks-dialog': {
             dismissed: 'hooks closed',
             running: 'hook save',
             clearFlag: () => { dialogs.close('hooks'); },
           },
-          'lv-gitignore-dialog': {
+          'gn-gitignore-dialog': {
             dismissed: 'ignore rules closed',
             running: 'ignore rule update',
             clearFlag: () => { dialogs.close('gitignore'); },
           },
-          'lv-changelog-dialog': {
+          'gn-changelog-dialog': {
             dismissed: 'changelog closed',
             running: 'changelog generation',
           },
@@ -2312,7 +2312,7 @@ export class AppShell extends LitElement {
 
   /**
    * Walk a DOM subtree, descending through shadow roots, for a blocking
-   * overlay: any open lv-modal, or any dialog reflecting `open`.
+   * overlay: any open gn-modal, or any dialog reflecting `open`.
    */
   private static containsOpenModal(
     root: ParentNode,
@@ -2338,7 +2338,7 @@ export class AppShell extends LitElement {
    *
    * Walks from document.body, not from this element. Two earlier attempts
    * drifted by enumerating dialogs; the third fixed that but still hard-coded
-   * its ROOT as app-shell's renderRoot, which made lv-prompt-dialog invisible
+   * its ROOT as app-shell's renderRoot, which made gn-prompt-dialog invisible
    * by construction — showPrompt appends that singleton to document.body, so
    * it is app-shell's SIBLING. Escape then closed the diff behind an open
    * prompt as soon as focus left its autofocused input (the keyboard service's
@@ -2357,7 +2357,7 @@ export class AppShell extends LitElement {
    * key goes dead app-wide with no visible cause.
    */
   private hasSidebarDialogOpen(): boolean {
-    const panel = this.renderRoot.querySelector('lv-left-panel');
+    const panel = this.renderRoot.querySelector('gn-left-panel');
     return panel?.shadowRoot
       ? AppShell.containsOpenModal(panel.shadowRoot, new Set<ShadowRoot>())
       : false;
@@ -2384,7 +2384,7 @@ export class AppShell extends LitElement {
    */
   private handleRepositoryHealthClose = (): void => {
     if (this.repositoryHealthDialog?.isRunning) {
-      const modal = this.renderRoot.querySelector('lv-modal[modalTitle="Repository Health"]');
+      const modal = this.renderRoot.querySelector('gn-modal[modalTitle="Repository Health"]');
       if (modal) (modal as HTMLElement & { open: boolean }).open = true;
       return;
     }
@@ -2394,7 +2394,7 @@ export class AppShell extends LitElement {
   private handleCloseOverlay(): void {
     // Close any open overlay in priority order
     if (this.hasModalDialogOpen()) {
-      // A modal owns this Escape and dismisses itself, through lv-modal's
+      // A modal owns this Escape and dismisses itself, through gn-modal's
       // handler or its own — each now gated on being the TOPMOST overlay.
       //
       // This arm is FIRST. The shortcuts and command-palette arms used
@@ -2678,7 +2678,7 @@ export class AppShell extends LitElement {
     this.refContextMenu = { ...this.refContextMenu, visible: false };
 
     // Deleting from the graph's ref menu destroys the same branch as the
-    // sidebar's delete, so it must be gated the same way (lv-branch-list.ts
+    // sidebar's delete, so it must be gated the same way (gn-branch-list.ts
     // handleDeleteBranch). Without this, one click on a graph label is enough.
     const confirmed = await showConfirm(
       'Delete Branch',
@@ -2723,7 +2723,7 @@ export class AppShell extends LitElement {
     if (!this.claimRefOperation(repoPath)) return;
     this.refContextMenu = { ...this.refContextMenu, visible: false };
 
-    // Gated to match the sidebar's tag delete (lv-tag-list.ts) — the graph ref
+    // Gated to match the sidebar's tag delete (gn-tag-list.ts) — the graph ref
     // menu deletes the same tag and must not be the one unguarded path. Shared
     // wording so the two surfaces cannot drift.
     const confirmed = await confirmDeleteTag(tagName);
@@ -3216,7 +3216,7 @@ export class AppShell extends LitElement {
     // raised two abort prompts — the second then ran against an
     // already-restored tree with a stale `state` and reported a failure for an
     // operation that had in fact succeeded. Same reasoning as
-    // lv-gitflow-panel's handleFinishFeature.
+    // gn-gitflow-panel's handleFinishFeature.
     //
     // The claim is on the SHARED working-tree lock, not just this banner's own
     // flag. An abort is a full working-tree restore, and this is the only
@@ -3431,7 +3431,7 @@ export class AppShell extends LitElement {
     // This fires from the "Force Delete" action on an error-suggestion toast,
     // i.e. one click away from an ordinary delete that just failed as unmerged.
     // Force-deleting discards commits that exist on no other ref, so it needs
-    // its own gate — the sidebar escalation (lv-branch-list.ts) re-confirms
+    // its own gate — the sidebar escalation (gn-branch-list.ts) re-confirms
     // here too, and the toast button must not be the cheaper route to the same
     // irreversible outcome.
     const confirmed = await showConfirm(
@@ -3512,7 +3512,7 @@ export class AppShell extends LitElement {
     const path = (e as CustomEvent<{ path?: string }>).detail?.path;
     if (!path || path !== this.repositoryScanPath) return;
     if (!dialogs.isOpen('repositoryScan')) return;
-    const dialog = this.shadowRoot?.querySelector('lv-scan-repositories-dialog');
+    const dialog = this.shadowRoot?.querySelector('gn-scan-repositories-dialog');
     if (dialog && !dialog.isOfferingInitialize) return;
     dialogs.close('repositoryScan');
   };
@@ -3526,12 +3526,12 @@ export class AppShell extends LitElement {
     const path = (e as CustomEvent<{ path?: string }>).detail?.path;
     dialogs.close('repositoryScan');
     await this.updateComplete;
-    const welcome = this.renderRoot.querySelector('lv-welcome');
+    const welcome = this.renderRoot.querySelector('gn-welcome');
     if (welcome) {
       welcome.openInitDialog(path);
       return;
     }
-    const initDialog = this.renderRoot.querySelector('lv-init-dialog');
+    const initDialog = this.renderRoot.querySelector('gn-init-dialog');
     if (initDialog) {
       initDialog.open(path);
       return;
@@ -4448,7 +4448,7 @@ export class AppShell extends LitElement {
    * Copy the graph canvas's loaded commits and tag tips into state.
    *
    * All three fields are sampled together so the repository path always
-   * describes the two lists beside it — lv-export-import-dialog uses exactly
+   * describes the two lists beside it — gn-export-import-dialog uses exactly
    * that comparison to decide whether the lists belong to the repo it shows.
    */
   private syncGraphPaletteData(): void {
@@ -4582,7 +4582,7 @@ export class AppShell extends LitElement {
   }
 
   /**
-   * `trigger-amend` is heard only by `lv-commit-panel`, which lives in the
+   * `trigger-amend` is heard only by `gn-commit-panel`, which lives in the
    * right panel's Changes tab.
    *
    * Right-clicking a commit in the graph selects it first, and a new selection
@@ -4599,7 +4599,7 @@ export class AppShell extends LitElement {
     }
     // Optional chaining: a shell that has never rendered has no renderRoot,
     // and the dispatch below must still happen.
-    const panel = this.renderRoot?.querySelector('lv-right-panel') as
+    const panel = this.renderRoot?.querySelector('gn-right-panel') as
       | (LitElement & { showChanges?: () => void })
       | null;
     await panel?.updateComplete;
@@ -4609,7 +4609,7 @@ export class AppShell extends LitElement {
   }
 
   /**
-   * `stage-all` / `unstage-all` are heard only by `lv-file-status`, which lives
+   * `stage-all` / `unstage-all` are heard only by `gn-file-status`, which lives
    * inside the right panel and is unmounted while that panel is hidden — so
    * with Ctrl+J pressed the `s` / `u` shortcuts and both palette entries
    * silently did nothing, and there was no other way to stage. Reveal the panel
@@ -4622,15 +4622,15 @@ export class AppShell extends LitElement {
       await this.updateComplete;
     }
     {
-      const panel = this.renderRoot.querySelector('lv-right-panel') as LitElement | null;
+      const panel = this.renderRoot.querySelector('gn-right-panel') as LitElement | null;
       await panel?.updateComplete;
-      // Mounted is not the same as ready. lv-file-status registers the listener
+      // Mounted is not the same as ready. gn-file-status registers the listener
       // in connectedCallback but loads its file list over IPC, so dispatching
       // as soon as it exists found `unstagedFiles` still empty and
       // handleStageAll returned at `if (paths.length === 0)` — the first press
       // did nothing, the second worked. loadStatus is sequence-guarded, so
       // awaiting it again is safe.
-      const fileStatus = panel?.renderRoot?.querySelector('lv-file-status') as
+      const fileStatus = panel?.renderRoot?.querySelector('gn-file-status') as
         | (LitElement & { ensureStatusFresh?: () => Promise<void> })
         | null;
       await fileStatus?.updateComplete;
@@ -4813,7 +4813,7 @@ export class AppShell extends LitElement {
   }
 
   handleToggleSearch(): void {
-    const toolbar = this.shadowRoot?.querySelector('lv-toolbar');
+    const toolbar = this.shadowRoot?.querySelector('gn-toolbar');
     if (toolbar) {
       (toolbar as HTMLElement).dispatchEvent(new CustomEvent('focus-search'));
     }
@@ -5075,7 +5075,7 @@ export class AppShell extends LitElement {
    * their dialogs - the same route handleToggleSearch already uses.
    */
   private dispatchToToolbar(eventName: string, label: string): void {
-    const toolbar = this.shadowRoot?.querySelector('lv-toolbar');
+    const toolbar = this.shadowRoot?.querySelector('gn-toolbar');
     if (!toolbar) {
       showToast(`${label} is not available right now`, 'error');
       return;
@@ -5104,7 +5104,7 @@ export class AppShell extends LitElement {
    * which is why they are not private on this class.
    *
    * Memoised: render() calls this on every update of a component with ~90
-   * reactive fields, and rebuilding the table handed lv-command-palette a new
+   * reactive fields, and rebuilding the table handed gn-command-palette a new
    * array identity each time, making it re-filter its whole list while closed.
    * Nothing in the table varies with repository or dialog state — every action
    * reads live state when it RUNS, which is also what lets the native menu
@@ -5525,7 +5525,7 @@ export class AppShell extends LitElement {
     if (message === null) return;
     const stashMessage = message.trim();
 
-    // includeUntracked matches the stash-list button (lv-stash-list.ts): both
+    // includeUntracked matches the stash-list button (gn-stash-list.ts): both
     // surfaces report an identical "Stash created", so they must stash the same
     // set — otherwise the shortcut silently leaves untracked files behind and
     // the divergence only surfaces during a later checkout or clean.
@@ -5866,7 +5866,7 @@ export class AppShell extends LitElement {
   /**
    * The drag-over affordance for a window that already has a repository open.
    *
-   * lv-welcome renders its own copy (via `.dragActive`), so this one is only
+   * gn-welcome renders its own copy (via `.dragActive`), so this one is only
    * for the other state — otherwise a drag over the welcome screen would show
    * two dashed frames. Without it the window silently accepted a drop it gave
    * no sign of accepting: `startRepositoryDropListener` is bound for the whole
@@ -5901,7 +5901,7 @@ export class AppShell extends LitElement {
 
       ${this.renderWindowDropOverlay()}
 
-      <lv-toolbar
+      <gn-toolbar
         @open-settings=${() => { dialogs.open('settings'); }}
         @open-shortcuts=${() => { dialogs.open('shortcuts'); }}
         @open-command-palette=${() => {
@@ -5928,11 +5928,11 @@ export class AppShell extends LitElement {
         @remote-pull=${this.requiresRepository(() => void this.handlePull())}
         @remote-push=${this.requiresRepository(() => void this.handlePush())}
         @manage-accounts=${this.handleManageAccounts}
-      ></lv-toolbar>
+      ></gn-toolbar>
 
       ${this.activeRepository
         ? html`
-            <lv-context-dashboard
+            <gn-context-dashboard
               @open-profile-manager=${() => { dialogs.open('profileManager'); }}
               @open-github=${() => this.openIntegrationStandalone('github')}
               @open-gitlab=${() => this.openIntegrationStandalone('gitlab')}
@@ -5941,7 +5941,7 @@ export class AppShell extends LitElement {
               @open-oidc=${() => this.openIntegrationStandalone('oidc')}
               @refresh-account=${this.handleRefreshAccount}
               @repository-refresh=${() => this.handleRefresh()}
-            ></lv-context-dashboard>
+            ></gn-context-dashboard>
 
             <div class="main-content">
               <aside
@@ -5966,7 +5966,7 @@ export class AppShell extends LitElement {
                   if (provider) this.openIntegrationStandalone(provider);
                 }}
               >
-                <lv-left-panel></lv-left-panel>
+                <gn-left-panel></gn-left-panel>
               </aside>
 
               <div
@@ -6047,7 +6047,7 @@ export class AppShell extends LitElement {
                     `
                   : ''}
                 <div class="graph-area">
-                  <lv-graph-canvas
+                  <gn-graph-canvas
                     repositoryPath=${this.activeRepository.repository.path}
                     .searchFilter=${this.searchFilter}
                     @commit-selected=${this.handleCommitSelected}
@@ -6057,7 +6057,7 @@ export class AppShell extends LitElement {
                     @copy-sha=${this.handleCopySha}
                     @graph-notice=${this.handleGraphNotice}
                     @graph-commits-changed=${this.handleGraphCommitsChanged}
-                  ></lv-graph-canvas>
+                  ></gn-graph-canvas>
                 </div>
 
                 ${dialogs.isOpen('diff')
@@ -6080,7 +6080,7 @@ export class AppShell extends LitElement {
                           </button>
                         </div>
                         <div class="diff-content">
-                          <lv-diff-view
+                          <gn-diff-view
                             .repositoryPath=${this.activeRepository.repository.path}
                             .file=${this.diffFile}
                             .commitFile=${this.diffCommitFile}
@@ -6088,44 +6088,44 @@ export class AppShell extends LitElement {
                             @file-edited=${() => this.handleRefresh()}
                             @status-changed=${() => this.handleRefresh()}
                             @file-cleared=${this.handleCloseDiff}
-                          ></lv-diff-view>
+                          ></gn-diff-view>
                         </div>
                       </div>
                     `
                   : dialogs.isOpen('blame') && this.blameFile
                     ? html`
                         <div class="diff-area">
-                          <lv-blame-view
+                          <gn-blame-view
                             .repositoryPath=${this.activeRepository.repository.path}
                             .filePath=${this.blameFile}
                             .commitOid=${this.blameCommitOid}
                             @close=${this.handleCloseBlame}
                             @commit-click=${this.handleBlameCommitClick}
-                          ></lv-blame-view>
+                          ></gn-blame-view>
                         </div>
                       `
                     : dialogs.isOpen('fileHistory') && this.fileHistoryPath
                       ? html`
                           <div class="diff-area">
-                            <lv-file-history
+                            <gn-file-history
                               .repositoryPath=${this.activeRepository.repository.path}
                               .filePath=${this.fileHistoryPath}
                               @close=${this.handleCloseFileHistory}
                               @commit-selected=${this.handleFileHistoryCommitSelected}
                               @view-diff=${this.handleFileHistoryViewDiff}
                               @show-blame=${this.handleShowBlame}
-                            ></lv-file-history>
+                            ></gn-file-history>
                           </div>
                         `
                       : ''}
                 ${dialogs.isOpen('outputPanel')
                   ? html`
                       <div class="output-panel-container">
-                        <lv-output-panel
+                        <gn-output-panel
                           closable
                           .repositoryPath=${this.activeRepository.repository.path}
                           @close=${() => { dialogs.close('outputPanel'); }}
-                        ></lv-output-panel>
+                        ></gn-output-panel>
                       </div>
                     `
                   : ''}
@@ -6149,12 +6149,12 @@ export class AppShell extends LitElement {
                   @notes-changed=${this.handleNotesChanged}
                   @repository-changed=${() => this.handleRefresh()}
                 >
-                  <lv-right-panel
+                  <gn-right-panel
                     .commit=${this.selectedCommit}
                     .refs=${this.selectedCommitRefs}
                     @open-settings=${() => { dialogs.open('settings'); }}
                     @tab-changed=${(e: CustomEvent) => { this.activeRightPanelTab = e.detail?.tab; }}
-                  ></lv-right-panel>
+                  ></gn-right-panel>
                 </aside>
               ` : ''}
             </div>
@@ -6164,32 +6164,32 @@ export class AppShell extends LitElement {
               ${this.renderRemoteBadges()}
             </footer>
           `
-        : html`<lv-welcome
+        : html`<gn-welcome
             .dragActive=${this.fileDragActive}
             @open-workspace-manager=${() => { dialogs.open('workspaceManager'); }}
             @open-profile-manager=${() => { dialogs.open('profileManager'); }}
             @open-repository-scan=${this.handleOpenRepositoryScan}
             @manage-accounts=${this.handleManageAccounts}
-          ></lv-welcome>`}
+          ></gn-welcome>`}
 
       ${dialogs.isOpen('settings')
         ? html`
-            <lv-modal
+            <gn-modal
               open
               modalTitle=${msg('Settings')}
               @close=${this.handleCloseSettings}
             >
-              <lv-settings-dialog
+              <gn-settings-dialog
                 @close=${this.handleCloseSettings}
                 @open-profile-manager=${() => { dialogs.open('profileManager'); }}
-              ></lv-settings-dialog>
-            </lv-modal>
+              ></gn-settings-dialog>
+            </gn-modal>
           `
         : ''}
 
       ${dialogs.isOpen('conflict') && this.conflictDialogConfig
         ? html`
-            <lv-conflict-resolution-dialog
+            <gn-conflict-resolution-dialog
               open
               repositoryPath=${this.conflictDialogConfig.repoPath}
               operationType=${this.conflictDialogConfig.operationType}
@@ -6202,7 +6202,7 @@ export class AppShell extends LitElement {
               .gitflowFinish=${this.conflictDialogConfig.gitflowFinish}
               @operation-completed=${this.handleConflictResolved}
               @operation-aborted=${this.handleConflictAborted}
-            ></lv-conflict-resolution-dialog>
+            ></gn-conflict-resolution-dialog>
           `
         : ''}
 
@@ -6463,7 +6463,7 @@ export class AppShell extends LitElement {
           `
         : ''}
 
-      <lv-command-palette
+      <gn-command-palette
         ?open=${dialogs.isOpen('commandPalette')}
         .repositoryPath=${this.commandPaletteRepositoryPath ?? ''}
         .initialQuery=${this.commandPaletteQuery}
@@ -6476,10 +6476,10 @@ export class AppShell extends LitElement {
         @checkout-branch=${this.handleCheckoutBranch}
         @open-file=${this.handleOpenFileFromPalette}
         @navigate-to-commit=${this.handleNavigateToCommit}
-      ></lv-command-palette>
+      ></gn-command-palette>
 
       ${this.activeRepository ? html`
-        <lv-reflog-dialog
+        <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('reflog'); }}
@@ -6488,9 +6488,9 @@ export class AppShell extends LitElement {
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
           @show-commit=${(e: CustomEvent<{ oid: string }>) => { dialogs.close('reflog'); this.revealCommitInGraph(e.detail.oid); }}
-        ></lv-reflog-dialog>
+        ></gn-reflog-dialog>
 
-        <lv-search-dialog
+        <gn-search-dialog
           ?open=${dialogs.isOpen('search')}
           .mode=${this.searchDialogMode}
           .repositoryPath=${this.activeRepository.repository.path}
@@ -6498,56 +6498,56 @@ export class AppShell extends LitElement {
           @mode-changed=${(e: CustomEvent<{ mode: SearchDialogMode }>) => { dialogs.setContext('search', { mode: e.detail.mode }); }}
           @show-blame=${this.handleShowBlame}
           @show-working-diff=${this.handleShowWorkingDiff}
-        ></lv-search-dialog>
+        ></gn-search-dialog>
       ` : ''}
 
-      <lv-keyboard-shortcuts-dialog
+      <gn-keyboard-shortcuts-dialog
         ?open=${dialogs.isOpen('shortcuts')}
         ?vimMode=${this.vimMode}
         @close=${() => { dialogs.close('shortcuts'); }}
         @vim-mode-change=${this.handleVimModeChange}
-      ></lv-keyboard-shortcuts-dialog>
+      ></gn-keyboard-shortcuts-dialog>
 
       ${this.activeRepository ? html`
-        <lv-remote-dialog
+        <gn-remote-dialog
           ?open=${dialogs.isOpen('remotes')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('remotes'); }}
           @remotes-changed=${() => this.handleRefresh()}
-        ></lv-remote-dialog>
+        ></gn-remote-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-clean-dialog
+        <gn-clean-dialog
           ?open=${dialogs.isOpen('clean')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('clean'); }}
           @files-cleaned=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-clean-dialog>
+        ></gn-clean-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-changelog-dialog
+        <gn-changelog-dialog
           .repositoryPath=${this.activeRepository.repository.path}
-        ></lv-changelog-dialog>
+        ></gn-changelog-dialog>
       ` : ''}
 
       ${this.activeRepository && dialogs.isOpen('repositoryHealth') ? html`
-        <lv-modal
+        <gn-modal
           modalTitle="Repository Health"
           ?open=${dialogs.isOpen('repositoryHealth')}
           @close=${this.handleRepositoryHealthClose}
         >
-          <lv-repository-health-dialog
+          <gn-repository-health-dialog
             .repositoryPath=${this.activeRepository.repository.path}
             @close=${this.handleRepositoryHealthClose}
-          ></lv-repository-health-dialog>
-        </lv-modal>
+          ></gn-repository-health-dialog>
+        </gn-modal>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-bisect-dialog
+        <gn-bisect-dialog
           ?open=${dialogs.isOpen('bisect')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('bisect'); }}
@@ -6557,11 +6557,11 @@ export class AppShell extends LitElement {
             dialogs.close('bisect');
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
-        ></lv-bisect-dialog>
+        ></gn-bisect-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-submodule-dialog
+        <gn-submodule-dialog
           ?open=${dialogs.isOpen('submodules')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('submodules'); }}
@@ -6571,11 +6571,11 @@ export class AppShell extends LitElement {
             // operation refreshed the wrong repo — and left the right one out
             // of staleRepoPaths, so it never recovered on re-activation either.
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-submodule-dialog>
+        ></gn-submodule-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-worktree-dialog
+        <gn-worktree-dialog
           ?open=${dialogs.isOpen('worktrees')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('worktrees'); }}
@@ -6585,11 +6585,11 @@ export class AppShell extends LitElement {
             // operation refreshed the wrong repo — and left the right one out
             // of staleRepoPaths, so it never recovered on re-activation either.
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-worktree-dialog>
+        ></gn-worktree-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-lfs-dialog
+        <gn-lfs-dialog
           ?open=${dialogs.isOpen('lfs')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('lfs'); }}
@@ -6599,86 +6599,86 @@ export class AppShell extends LitElement {
             // operation refreshed the wrong repo — and left the right one out
             // of staleRepoPaths, so it never recovered on re-activation either.
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-lfs-dialog>
+        ></gn-lfs-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-gpg-dialog
+        <gn-gpg-dialog
           ?open=${dialogs.isOpen('gpg')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('gpg'); }}
           @gpg-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-gpg-dialog>
+        ></gn-gpg-dialog>
       ` : ''}
 
-      <lv-ssh-dialog
+      <gn-ssh-dialog
         ?open=${dialogs.isOpen('ssh')}
         @close=${() => { dialogs.close('ssh'); }}
-      ></lv-ssh-dialog>
+      ></gn-ssh-dialog>
 
       ${this.activeRepository ? html`
-        <lv-config-dialog
+        <gn-config-dialog
           ?open=${dialogs.isOpen('config')}
           .repositoryPath=${this.activeRepository.repository.path}
           @git-identity-changed=${() => this.handleRefresh()}
           @close=${() => { dialogs.close('config'); }}
-        ></lv-config-dialog>
+        ></gn-config-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-credentials-dialog
+        <gn-credentials-dialog
           ?open=${dialogs.isOpen('credentials')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('credentials'); }}
-        ></lv-credentials-dialog>
+        ></gn-credentials-dialog>
       ` : ''}
 
-      <lv-github-dialog
+      <gn-github-dialog
         ?open=${dialogs.isOpen('gitHub')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
         @close=${() => this.handleIntegrationDialogClose('github')}
         @manage-accounts=${this.handleManageAccounts}
-      ></lv-github-dialog>
+      ></gn-github-dialog>
 
-      <lv-gitlab-dialog
+      <gn-gitlab-dialog
         ?open=${dialogs.isOpen('gitLab')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
         @close=${() => this.handleIntegrationDialogClose('gitlab')}
         @manage-accounts=${this.handleManageAccounts}
-      ></lv-gitlab-dialog>
+      ></gn-gitlab-dialog>
 
-      <lv-bitbucket-dialog
+      <gn-bitbucket-dialog
         ?open=${dialogs.isOpen('bitbucket')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
         @close=${() => this.handleIntegrationDialogClose('bitbucket')}
         @manage-accounts=${this.handleManageAccounts}
-      ></lv-bitbucket-dialog>
+      ></gn-bitbucket-dialog>
 
-      <lv-azure-devops-dialog
+      <gn-azure-devops-dialog
         ?open=${dialogs.isOpen('azureDevOps')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         .repositoryPath=${this.activeRepository?.repository.path ?? ''}
         @close=${() => this.handleIntegrationDialogClose('azure-devops')}
         @manage-accounts=${this.handleManageAccounts}
-      ></lv-azure-devops-dialog>
+      ></gn-azure-devops-dialog>
 
-      <lv-oidc-dialog
+      <gn-oidc-dialog
         ?open=${dialogs.isOpen('oidc')}
         ?backButton=${this.integrationBackButton}
         .attachToProfileName=${this.integrationAttachName}
         @close=${() => this.handleIntegrationDialogClose('oidc')}
         @manage-accounts=${this.handleManageAccounts}
-      ></lv-oidc-dialog>
+      ></gn-oidc-dialog>
 
-      <lv-profile-manager-dialog
+      <gn-profile-manager-dialog
         ?open=${dialogs.isOpen('profileManager')}
         ?demoted=${this.profileManagerDemoted}
         .repoPath=${this.activeRepository?.repository.path ?? ''}
@@ -6691,51 +6691,51 @@ export class AppShell extends LitElement {
         @open-oidc=${(e: CustomEvent<IntegrationOpenContext>) => this.handleOpenIntegrationFromManager('oidc', e)}
         @migration-needed=${() => { dialogs.open('migration'); }}
         @request-restore-provider=${this.handleRestoreProvider}
-      ></lv-profile-manager-dialog>
+      ></gn-profile-manager-dialog>
 
-      <lv-migration-dialog
+      <gn-migration-dialog
         ?open=${dialogs.isOpen('migration')}
         @close=${() => { dialogs.close('migration'); }}
         @open-profile-manager=${() => { dialogs.open('profileManager'); }}
-      ></lv-migration-dialog>
+      ></gn-migration-dialog>
 
-      <lv-workspace-manager-dialog
+      <gn-workspace-manager-dialog
         ?open=${dialogs.isOpen('workspaceManager')}
         @close=${() => { dialogs.close('workspaceManager'); }}
         @open-repo-file=${this.handleWorkspaceOpenRepoFile}
-      ></lv-workspace-manager-dialog>
+      ></gn-workspace-manager-dialog>
 
-      <lv-scan-repositories-dialog
+      <gn-scan-repositories-dialog
         ?open=${dialogs.isOpen('repositoryScan')}
         .scanPath=${this.repositoryScanPath}
         .mode=${this.repositoryScanMode}
         .requestId=${this.repositoryScanRequest}
         @close=${() => { dialogs.close('repositoryScan'); }}
         @initialize-repository=${this.handleInitializeRepositoryRequest}
-      ></lv-scan-repositories-dialog>
+      ></gn-scan-repositories-dialog>
 
       ${this.activeRepository
         // The welcome screen mounts its own init dialog, so this one exists
         // only while a repository is open — never two at once.
-        ? html`<lv-init-dialog></lv-init-dialog>`
+        ? html`<gn-init-dialog></gn-init-dialog>`
         : ''}
 
       ${this.activeRepository ? html`
-        <lv-hooks-dialog
+        <gn-hooks-dialog
           ?open=${dialogs.isOpen('hooks')}
           .repoPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('hooks'); }}
-        ></lv-hooks-dialog>
-        <lv-jira-dialog
+        ></gn-hooks-dialog>
+        <gn-jira-dialog
           ?open=${this.showJiraDialog}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { this.showJiraDialog = false; }}
           @branch-created=${() => this.handleRefresh()}
-        ></lv-jira-dialog>
+        ></gn-jira-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-gitignore-dialog
+        <gn-gitignore-dialog
           ?open=${dialogs.isOpen('gitignore')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('gitignore'); }}
@@ -6745,29 +6745,29 @@ export class AppShell extends LitElement {
             // handleRefresh resolves activeRepository at call time, so a Ctrl+Tab
             // during the write would otherwise refresh the wrong repository.
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-gitignore-dialog>
+        ></gn-gitignore-dialog>
       ` : ''}
 
       ${this.activeRepository ? html`
-        <lv-create-tag-dialog
+        <gn-create-tag-dialog
           .repositoryPath=${this.activeRepository.repository.path}
           @tag-created=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-create-tag-dialog>
-        <lv-create-branch-dialog
+        ></gn-create-tag-dialog>
+        <gn-create-branch-dialog
           .repositoryPath=${this.activeRepository.repository.path}
           @branch-created=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-create-branch-dialog>
-        <lv-describe-dialog
+        ></gn-create-branch-dialog>
+        <gn-describe-dialog
           .repositoryPath=${this.activeRepository.repository.path}
           @describe-create-tag=${(e: CustomEvent<{ target?: string; repositoryPath?: string }>) =>
             this.createTagDialog?.open(e.detail?.target || undefined, e.detail?.repositoryPath || undefined)}
-        ></lv-describe-dialog>
-        <lv-compare-branches-dialog
+        ></gn-describe-dialog>
+        <gn-compare-branches-dialog
           .repositoryPath=${this.activeRepository.repository.path}
-        ></lv-compare-branches-dialog>
-        <lv-export-import-dialog
+        ></gn-compare-branches-dialog>
+        <gn-export-import-dialog
           .repositoryPath=${this.activeRepository.repository.path}
           .graphRepositoryPath=${this.graphPaletteRepositoryPath}
           .branches=${this.activeRepository?.branches ?? []}
@@ -6777,30 +6777,30 @@ export class AppShell extends LitElement {
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
           @bundle-imported=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
-        ></lv-export-import-dialog>
-        <lv-cherry-pick-dialog
+        ></gn-export-import-dialog>
+        <gn-cherry-pick-dialog
           .repositoryPath=${this.activeRepository.repository.path}
           .currentBranch=${this.activeRepository.currentBranch?.shorthand ?? 'HEAD'}
           @cherry-pick-complete=${this.handleCherryPickComplete}
           @cherry-pick-conflict=${this.handleCherryPickConflict}
-        ></lv-cherry-pick-dialog>
-        <lv-interactive-rebase-dialog
+        ></gn-cherry-pick-dialog>
+        <gn-interactive-rebase-dialog
           id="app-rebase-dialog"
           .repositoryPath=${this.activeRepository.repository.path}
-        ></lv-interactive-rebase-dialog>
+        ></gn-interactive-rebase-dialog>
       ` : ''}
 
-      <lv-toast-container></lv-toast-container>
-      <lv-progress-indicator
+      <gn-toast-container></gn-toast-container>
+      <gn-progress-indicator
         .operations=${this.progressOperations}
         @cancel-operation=${this.handleCancelOperation}
-      ></lv-progress-indicator>
+      ></gn-progress-indicator>
     `;
   }
 }
 
 declare global {
   interface HTMLElementTagNameMap {
-    'lv-app-shell': AppShell;
+    'gn-app-shell': AppShell;
   }
 }

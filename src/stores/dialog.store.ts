@@ -1,6 +1,6 @@
 import { createStore } from 'zustand/vanilla';
-import type { GitflowFinishContext } from '../components/dialogs/lv-conflict-resolution-dialog.ts';
-import type { SearchDialogMode } from '../components/dialogs/lv-search-dialog.ts';
+import type { GitflowFinishContext } from '../components/dialogs/gn-conflict-resolution-dialog.ts';
+import type { SearchDialogMode } from '../components/dialogs/gn-search-dialog.ts';
 
 /**
  * Which overlay app-shell has on screen, and its open-time payload.

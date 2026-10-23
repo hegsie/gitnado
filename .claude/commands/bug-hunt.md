@@ -1,6 +1,6 @@
 ---
 description: Hunt for bugs, bad implementations, and incoherent UX across a feature area (not diff-scoped)
-argument-hint: "[feature area, path, or 'recent' — e.g. 'stash', 'src/components/dialogs/lv-github-dialog.ts', 'recent']"
+argument-hint: "[feature area, path, or 'recent' — e.g. 'stash', 'src/components/dialogs/gn-github-dialog.ts', 'recent']"
 ---
 
 # Bug Hunt: $ARGUMENTS
@@ -29,7 +29,7 @@ Establish the surface before reading line by line.
 - If `$ARGUMENTS` is `recent`, use `git log --since="3 weeks ago" --name-only --pretty=format:` to rank files by churn and hunt the top ~15.
 - If `$ARGUMENTS` is empty, ask which area — do not audit 76 Rust command files at once.
 
-Write a short inventory: every **user-reachable entry point** into this area. Gitnado exposes the same operation from many places — toolbar buttons, context menus, the command palette (`lv-command-palette.ts`), keyboard shortcuts (`keyboard.service.ts`), dialogs, and drag-and-drop. Enumerate them all; divergence between them is one of the richest defect sources here.
+Write a short inventory: every **user-reachable entry point** into this area. Gitnado exposes the same operation from many places — toolbar buttons, context menus, the command palette (`gn-command-palette.ts`), keyboard shortcuts (`keyboard.service.ts`), dialogs, and drag-and-drop. Enumerate them all; divergence between them is one of the richest defect sources here.
 
 ## Phase 1 — Trace each flow end to end
 

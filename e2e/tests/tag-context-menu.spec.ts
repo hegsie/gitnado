@@ -413,7 +413,7 @@ test.describe('Tag Context Menu - Error Handling', () => {
     // Push-tag failures now route through the suggestion service, like every
     // other push surface: the server's own words are shown (or a recovery
     // suggestion when one matches), rather than a "Failed to push tag:" prefix.
-    const toast = page.locator('lv-toast-container .toast');
+    const toast = page.locator('gn-toast-container .toast');
     await expect(toast.first()).toBeVisible();
     await expect(toast.first()).toContainText('remote rejected');
   });
@@ -434,8 +434,8 @@ test.describe('Tag Context Menu - Error Handling', () => {
     await expect(deleteOption).toBeVisible();
     await clickMenuItem(deleteOption);
 
-    // The component calls showToast which adds to the UI store, rendered by lv-toast-container
-    const toast = page.locator('lv-toast-container .toast');
+    // The component calls showToast which adds to the UI store, rendered by gn-toast-container
+    const toast = page.locator('gn-toast-container .toast');
     await expect(toast.first()).toBeVisible();
     await expect(toast.first()).toContainText('delete tag');
   });
@@ -569,7 +569,7 @@ test.describe('Tag Context Menu - UI Outcome Verification', () => {
 
     // An auth failure matches a suggestion, so the user gets the actionable
     // wording plus an Open Settings button instead of the raw string.
-    const toast = page.locator('lv-toast-container .toast');
+    const toast = page.locator('gn-toast-container .toast');
     await expect(toast.first()).toBeVisible();
     await expect(toast.first()).toContainText(/authentication failed/i);
 
@@ -610,7 +610,7 @@ test.describe('Tag Context Menu - UI Outcome Verification', () => {
     await clickMenuItem(deleteOption);
 
     // Verify the error toast appears
-    const toast = page.locator('lv-toast-container .toast');
+    const toast = page.locator('gn-toast-container .toast');
     await expect(toast.first()).toBeVisible();
     await expect(toast.first()).toContainText('delete tag');
 
@@ -668,7 +668,7 @@ test.describe('Tag Context Menu - Push destination', () => {
     expect(args.name).toBe('v1.0.0');
     expect(args.remote).toBe('upstream');
 
-    const toast = page.locator('lv-toast-container .toast');
+    const toast = page.locator('gn-toast-container .toast');
     await expect(toast.first()).toContainText('Pushed tag v1.0.0 to upstream');
   });
 
@@ -688,7 +688,7 @@ test.describe('Tag Context Menu - Push destination', () => {
     await clickMenuItem(page.locator('.context-menu-item', { hasText: /Push to Remote/ }));
     await clickMenuItem(page.locator('.push-remote-item', { hasText: /^\s*upstream\s*$/ }));
 
-    const forceAction = page.locator('lv-toast-container .toast button', {
+    const forceAction = page.locator('gn-toast-container .toast button', {
       hasText: /Force Push Tag/,
     });
     await expect(forceAction).toBeVisible();

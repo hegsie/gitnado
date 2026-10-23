@@ -16,14 +16,14 @@ import {
  * The bisect dialog is opened via the command palette ("Start bisect (find bug)").
  * It has three states: setup -> in-progress -> complete.
  *
- * The dialog element is `lv-bisect-dialog` with an `open` attribute.
+ * The dialog element is `gn-bisect-dialog` with an `open` attribute.
  * It renders an overlay dialog with `.dialog` class inside its shadow root.
  */
 
 /** Open the bisect dialog via the command palette */
 async function openBisectDialog(page: import('@playwright/test').Page) {
   await openViaCommandPalette(page, 'bisect');
-  await page.locator('lv-bisect-dialog .dialog').waitFor({ state: 'visible' });
+  await page.locator('gn-bisect-dialog .dialog').waitFor({ state: 'visible' });
 }
 
 test.describe('Bisect Dialog - Setup State', () => {
@@ -73,28 +73,28 @@ test.describe('Bisect Dialog - Setup State', () => {
   test('dialog opens and shows setup state with bad/good commit inputs', async ({ page }) => {
     await openBisectDialog(page);
 
-    const dialog = page.locator('lv-bisect-dialog .dialog');
+    const dialog = page.locator('gn-bisect-dialog .dialog');
     await expect(dialog).toBeVisible();
 
     // Should show "Git Bisect" title
-    const title = page.locator('lv-bisect-dialog .dialog-title');
+    const title = page.locator('gn-bisect-dialog .dialog-title');
     await expect(title).toContainText('Git Bisect');
 
     // Should have Bad Commit and Good Commit sections
-    const badSection = page.locator('lv-bisect-dialog h3', { hasText: 'Bad Commit' });
-    const goodSection = page.locator('lv-bisect-dialog h3', { hasText: 'Good Commit' });
+    const badSection = page.locator('gn-bisect-dialog h3', { hasText: 'Bad Commit' });
+    const goodSection = page.locator('gn-bisect-dialog h3', { hasText: 'Good Commit' });
     await expect(badSection).toBeVisible();
     await expect(goodSection).toBeVisible();
 
     // Should have two input fields
-    const inputs = page.locator('lv-bisect-dialog .commit-input input');
+    const inputs = page.locator('gn-bisect-dialog .commit-input input');
     await expect(inputs).toHaveCount(2);
   });
 
   test('Start Bisect button is disabled without both inputs', async ({ page }) => {
     await openBisectDialog(page);
 
-    const startBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
+    const startBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
     await expect(startBtn).toBeDisabled();
   });
 
@@ -102,15 +102,15 @@ test.describe('Bisect Dialog - Setup State', () => {
     await openBisectDialog(page);
 
     // Fill in bad commit
-    const badInput = page.locator('lv-bisect-dialog .commit-input input').first();
+    const badInput = page.locator('gn-bisect-dialog .commit-input input').first();
     await badInput.fill('HEAD');
 
     // Fill in good commit
-    const goodInput = page.locator('lv-bisect-dialog .commit-input input').nth(1);
+    const goodInput = page.locator('gn-bisect-dialog .commit-input input').nth(1);
     await goodInput.fill('abc123');
 
     // Start button should be enabled
-    const startBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
+    const startBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
     await expect(startBtn).toBeEnabled();
   });
 
@@ -119,13 +119,13 @@ test.describe('Bisect Dialog - Setup State', () => {
     await openBisectDialog(page);
 
     // Fill inputs
-    const badInput = page.locator('lv-bisect-dialog .commit-input input').first();
+    const badInput = page.locator('gn-bisect-dialog .commit-input input').first();
     await badInput.fill('HEAD');
-    const goodInput = page.locator('lv-bisect-dialog .commit-input input').nth(1);
+    const goodInput = page.locator('gn-bisect-dialog .commit-input input').nth(1);
     await goodInput.fill('abc123');
 
     // Click Start
-    const startBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
+    const startBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
     await startBtn.click();
 
     await waitForCommand(page, 'bisect_start');
@@ -139,7 +139,7 @@ test.describe('Bisect Dialog - Setup State', () => {
     expect(args.goodCommit).toBe('abc123');
 
     // Should transition to in-progress state showing current commit
-    const currentCommitLabel = page.locator('lv-bisect-dialog .current-commit-label');
+    const currentCommitLabel = page.locator('gn-bisect-dialog .current-commit-label');
     await expect(currentCommitLabel).toBeVisible();
     await expect(currentCommitLabel).toContainText('Current Commit');
   });
@@ -147,11 +147,11 @@ test.describe('Bisect Dialog - Setup State', () => {
   test('Cancel button closes dialog', async ({ page }) => {
     await openBisectDialog(page);
 
-    const cancelBtn = page.locator('lv-bisect-dialog .btn-secondary', { hasText: 'Cancel' });
+    const cancelBtn = page.locator('gn-bisect-dialog .btn-secondary', { hasText: 'Cancel' });
     await cancelBtn.click();
 
     // Dialog should close (no longer visible)
-    const dialog = page.locator('lv-bisect-dialog .dialog');
+    const dialog = page.locator('gn-bisect-dialog .dialog');
     await expect(dialog).not.toBeVisible();
   });
 });
@@ -249,12 +249,12 @@ test.describe('Bisect Dialog - In-Progress State', () => {
     await openBisectDialog(page);
 
     // Should display the current commit OID (truncated to first 12 chars)
-    const commitOid = page.locator('lv-bisect-dialog .current-commit-oid');
+    const commitOid = page.locator('gn-bisect-dialog .current-commit-oid');
     await expect(commitOid).toBeVisible();
     await expect(commitOid).toContainText('test123abc45');
 
     // Should display the commit message
-    const commitMessage = page.locator('lv-bisect-dialog .current-commit-message');
+    const commitMessage = page.locator('gn-bisect-dialog .current-commit-message');
     await expect(commitMessage).toBeVisible();
     await expect(commitMessage).toContainText('Test commit to evaluate');
   });
@@ -262,7 +262,7 @@ test.describe('Bisect Dialog - In-Progress State', () => {
   test('shows progress stats (commits left, steps taken, total steps)', async ({ page }) => {
     await openBisectDialog(page);
 
-    const statValues = page.locator('lv-bisect-dialog .progress-stat-value');
+    const statValues = page.locator('gn-bisect-dialog .progress-stat-value');
     // Should have at least 3 stat values
     await expect(statValues.first()).toBeVisible();
     const count = await statValues.count();
@@ -272,9 +272,9 @@ test.describe('Bisect Dialog - In-Progress State', () => {
   test('shows Good, Bad, and Skip action buttons', async ({ page }) => {
     await openBisectDialog(page);
 
-    const goodBtn = page.locator('lv-bisect-dialog .action-btn.good');
-    const badBtn = page.locator('lv-bisect-dialog .action-btn.bad');
-    const skipBtn = page.locator('lv-bisect-dialog .action-btn.skip');
+    const goodBtn = page.locator('gn-bisect-dialog .action-btn.good');
+    const badBtn = page.locator('gn-bisect-dialog .action-btn.bad');
+    const skipBtn = page.locator('gn-bisect-dialog .action-btn.skip');
 
     await expect(goodBtn).toBeVisible();
     await expect(badBtn).toBeVisible();
@@ -290,9 +290,9 @@ test.describe('Bisect Dialog - In-Progress State', () => {
     await openBisectDialog(page);
 
     // Verify we start in the in-progress state with action buttons visible
-    await expect(page.locator('lv-bisect-dialog .action-btn.good')).toBeVisible();
+    await expect(page.locator('gn-bisect-dialog .action-btn.good')).toBeVisible();
 
-    const abortBtn = page.locator('lv-bisect-dialog .btn-danger', { hasText: 'Abort Bisect' });
+    const abortBtn = page.locator('gn-bisect-dialog .btn-danger', { hasText: 'Abort Bisect' });
     await expect(abortBtn).toBeVisible();
     // Aborting now asks first — a bisect session is many deliberate good/bad
     // decisions and nothing in git records them.
@@ -305,17 +305,17 @@ test.describe('Bisect Dialog - In-Progress State', () => {
     expect(commands.length).toBeGreaterThanOrEqual(1);
 
     // Verify the dialog closes after aborting bisect (handleReset dispatches 'bisect-complete')
-    await expect(page.locator('lv-bisect-dialog .dialog')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-bisect-dialog .dialog')).not.toBeVisible({ timeout: 5000 });
   });
 
   test('shows bisect history log', async ({ page }) => {
     await openBisectDialog(page);
 
-    const logTitle = page.locator('lv-bisect-dialog .bisect-log-title');
+    const logTitle = page.locator('gn-bisect-dialog .bisect-log-title');
     await expect(logTitle).toBeVisible();
     await expect(logTitle).toContainText('Bisect History');
 
-    const logEntries = page.locator('lv-bisect-dialog .bisect-log-entry');
+    const logEntries = page.locator('gn-bisect-dialog .bisect-log-entry');
     await expect(logEntries).toHaveCount(2);
   });
 });
@@ -449,25 +449,25 @@ test.describe('Bisect Dialog - Complete State', () => {
     await openBisectDialog(page);
 
     // Click Good to trigger culprit detection
-    const goodBtn = page.locator('lv-bisect-dialog .action-btn.good');
+    const goodBtn = page.locator('gn-bisect-dialog .action-btn.good');
     await goodBtn.click();
 
-    const culpritCard = page.locator('lv-bisect-dialog .culprit-card');
+    const culpritCard = page.locator('gn-bisect-dialog .culprit-card');
     await expect(culpritCard).toBeVisible();
 
     // Should show "Bug-Introducing Commit Found"
-    const culpritTitle = page.locator('lv-bisect-dialog .culprit-title');
+    const culpritTitle = page.locator('gn-bisect-dialog .culprit-title');
     await expect(culpritTitle).toContainText('Bug-Introducing Commit Found');
 
     // Should show culprit OID and summary
-    const culpritOid = page.locator('lv-bisect-dialog .culprit-oid');
+    const culpritOid = page.locator('gn-bisect-dialog .culprit-oid');
     await expect(culpritOid).toContainText('culprit_abc123def456');
 
-    const culpritSummary = page.locator('lv-bisect-dialog .culprit-summary');
+    const culpritSummary = page.locator('gn-bisect-dialog .culprit-summary');
     await expect(culpritSummary).toContainText('This commit introduced the bug');
 
     // Should show Finish button instead of action buttons
-    const finishBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Finish' });
+    const finishBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Finish' });
     await expect(finishBtn).toBeVisible();
   });
 
@@ -529,10 +529,10 @@ test.describe('Bisect Dialog - Complete State', () => {
     await openBisectDialog(page);
 
     // Get to complete state
-    const goodBtn = page.locator('lv-bisect-dialog .action-btn.good');
+    const goodBtn = page.locator('gn-bisect-dialog .action-btn.good');
     await goodBtn.click();
 
-    const finishBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Finish' });
+    const finishBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Finish' });
     await expect(finishBtn).toBeVisible();
     await finishBtn.click();
 
@@ -542,7 +542,7 @@ test.describe('Bisect Dialog - Complete State', () => {
     expect(commands.length).toBeGreaterThanOrEqual(1);
 
     // Verify the dialog closes after finishing bisect
-    await expect(page.locator('lv-bisect-dialog .dialog')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-bisect-dialog .dialog')).not.toBeVisible({ timeout: 5000 });
   });
 
   // The session stays active in git until Finish runs `bisect reset`, so a
@@ -571,14 +571,14 @@ test.describe('Bisect Dialog - Complete State', () => {
     // No Good/Bad clicks: this is the reopen path, straight from status.
     await openBisectDialog(page);
 
-    await expect(page.locator('lv-bisect-dialog .culprit-card')).toBeVisible();
-    await expect(page.locator('lv-bisect-dialog .culprit-oid')).toContainText(
+    await expect(page.locator('gn-bisect-dialog .culprit-card')).toBeVisible();
+    await expect(page.locator('gn-bisect-dialog .culprit-oid')).toContainText(
       'culprit_abc123def456'
     );
     await expect(
-      page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Finish' })
+      page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Finish' })
     ).toBeVisible();
-    await expect(page.locator('lv-bisect-dialog .action-btn')).toHaveCount(0);
+    await expect(page.locator('gn-bisect-dialog .action-btn')).toHaveCount(0);
   });
 
   // A range holding a single candidate converges inside `git bisect start`
@@ -623,15 +623,15 @@ test.describe('Bisect Dialog - Complete State', () => {
 
     await openBisectDialog(page);
 
-    await page.locator('lv-bisect-dialog .commit-input input').first().fill('HEAD');
-    await page.locator('lv-bisect-dialog .commit-input input').nth(1).fill('HEAD~1');
-    await page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Start Bisect' }).click();
+    await page.locator('gn-bisect-dialog .commit-input input').first().fill('HEAD');
+    await page.locator('gn-bisect-dialog .commit-input input').nth(1).fill('HEAD~1');
+    await page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Start Bisect' }).click();
 
-    await expect(page.locator('lv-bisect-dialog .culprit-card')).toBeVisible();
-    await expect(page.locator('lv-bisect-dialog .culprit-oid')).toContainText(
+    await expect(page.locator('gn-bisect-dialog .culprit-card')).toBeVisible();
+    await expect(page.locator('gn-bisect-dialog .culprit-oid')).toContainText(
       'culprit_abc123def456'
     );
-    await expect(page.locator('lv-bisect-dialog .action-btn')).toHaveCount(0);
+    await expect(page.locator('gn-bisect-dialog .action-btn')).toHaveCount(0);
   });
 });
 
@@ -659,16 +659,16 @@ test.describe('Bisect Dialog - Error Handling', () => {
     await openBisectDialog(page);
 
     // Fill inputs
-    const badInput = page.locator('lv-bisect-dialog .commit-input input').first();
+    const badInput = page.locator('gn-bisect-dialog .commit-input input').first();
     await badInput.fill('HEAD');
-    const goodInput = page.locator('lv-bisect-dialog .commit-input input').nth(1);
+    const goodInput = page.locator('gn-bisect-dialog .commit-input input').nth(1);
     await goodInput.fill('nonexistent');
 
     // Click Start
-    const startBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
+    const startBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
     await startBtn.click();
 
-    const errorMessage = page.locator('lv-bisect-dialog .message.error');
+    const errorMessage = page.locator('gn-bisect-dialog .message.error');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Invalid commit reference');
   });
@@ -677,7 +677,7 @@ test.describe('Bisect Dialog - Error Handling', () => {
     await openBisectDialog(page);
 
     // The Start Bisect button should be disabled when inputs are empty
-    const startBtn = page.locator('lv-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
+    const startBtn = page.locator('gn-bisect-dialog .btn-primary', { hasText: 'Start Bisect' });
     await expect(startBtn).toBeDisabled();
   });
 });
@@ -754,16 +754,16 @@ test.describe('Bisect Dialog - Extended Tests', () => {
     await openBisectDialog(page);
 
     // Verify initial state shows current commit OID
-    const commitOid = page.locator('lv-bisect-dialog .current-commit-oid');
+    const commitOid = page.locator('gn-bisect-dialog .current-commit-oid');
     await expect(commitOid).toBeVisible();
     await expect(commitOid).toContainText('commit_step2');
 
     // Verify initial progress stats are visible
-    const statValues = page.locator('lv-bisect-dialog .progress-stat-value');
+    const statValues = page.locator('gn-bisect-dialog .progress-stat-value');
     await expect(statValues.first()).toBeVisible();
 
     // Click Good to advance bisect
-    const goodBtn = page.locator('lv-bisect-dialog .action-btn.good');
+    const goodBtn = page.locator('gn-bisect-dialog .action-btn.good');
     await goodBtn.click();
 
     // After marking good, the dialog should update to show new current commit
@@ -771,8 +771,8 @@ test.describe('Bisect Dialog - Extended Tests', () => {
     await expect(commitOid).toContainText('commit_step3');
 
     // The dialog should remain in the in-progress state with action buttons
-    await expect(page.locator('lv-bisect-dialog .action-btn.good')).toBeVisible();
-    await expect(page.locator('lv-bisect-dialog .action-btn.bad')).toBeVisible();
+    await expect(page.locator('gn-bisect-dialog .action-btn.good')).toBeVisible();
+    await expect(page.locator('gn-bisect-dialog .action-btn.bad')).toBeVisible();
   });
 
   test('bisect history log shows entries with correct good/bad action labels', async ({ page }) => {
@@ -811,12 +811,12 @@ test.describe('Bisect Dialog - Extended Tests', () => {
     await openBisectDialog(page);
 
     // The bisect history log section should be visible
-    const logTitle = page.locator('lv-bisect-dialog .bisect-log-title');
+    const logTitle = page.locator('gn-bisect-dialog .bisect-log-title');
     await expect(logTitle).toBeVisible();
     await expect(logTitle).toContainText('Bisect History');
 
     // Verify the correct number of log entries (3 steps taken)
-    const logEntries = page.locator('lv-bisect-dialog .bisect-log-entry');
+    const logEntries = page.locator('gn-bisect-dialog .bisect-log-entry');
     await expect(logEntries).toHaveCount(3);
 
     // Verify the first entry shows "bad" action label

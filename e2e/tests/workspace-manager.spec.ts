@@ -9,12 +9,12 @@ import {
 
 async function openWorkspaceManager(page: import('@playwright/test').Page): Promise<void> {
   await openViaCommandPalette(page, 'workspaces');
-  await page.locator('lv-workspace-manager-dialog[open]').waitFor({ state: 'visible', timeout: 3000 });
+  await page.locator('gn-workspace-manager-dialog[open]').waitFor({ state: 'visible', timeout: 3000 });
 }
 
 /**
  * Dispatch open-repo-file event from the workspace manager dialog.
- * The dialog is inside the shadow DOM of lv-app-shell, so we need to
+ * The dialog is inside the shadow DOM of gn-app-shell, so we need to
  * traverse shadow roots to find it.
  */
 async function dispatchOpenRepoFileEvent(
@@ -23,8 +23,8 @@ async function dispatchOpenRepoFileEvent(
 ): Promise<void> {
   await page.evaluate((detail) => {
     // Traverse shadow DOM to find the workspace-manager-dialog
-    const appShell = document.querySelector('lv-app-shell');
-    const dialog = appShell?.shadowRoot?.querySelector('lv-workspace-manager-dialog');
+    const appShell = document.querySelector('gn-app-shell');
+    const dialog = appShell?.shadowRoot?.querySelector('gn-workspace-manager-dialog');
     if (dialog) {
       dialog.dispatchEvent(new CustomEvent('open-repo-file', {
         detail,
@@ -47,7 +47,7 @@ test.describe('Workspace Manager - open-repo-file handler', () => {
 
   test('should open workspace manager from command palette', async ({ page }) => {
     await openWorkspaceManager(page);
-    await expect(page.locator('lv-workspace-manager-dialog[open]')).toBeVisible();
+    await expect(page.locator('gn-workspace-manager-dialog[open]')).toBeVisible();
   });
 
   test('open-repo-file event should close workspace manager and show blame view', async ({ page }) => {
@@ -57,7 +57,7 @@ test.describe('Workspace Manager - open-repo-file handler', () => {
     await dispatchOpenRepoFileEvent(page, { repoPath: '/tmp/test-repo', filePath: 'src/main.ts', lineNumber: 10 });
 
     // Workspace manager should close
-    await expect(page.locator('lv-workspace-manager-dialog[open]')).not.toBeVisible();
+    await expect(page.locator('gn-workspace-manager-dialog[open]')).not.toBeVisible();
   });
 
   test('open-repo-file for different repo should call open_repository', async ({ page }) => {
@@ -106,7 +106,7 @@ test.describe('Workspace Manager - open-repo-file handler', () => {
     await dispatchOpenRepoFileEvent(page, { repoPath: '/tmp/nonexistent', filePath: 'file.ts', lineNumber: 1 });
 
     // Should show an error toast
-    await expect(page.locator('lv-toast-container .toast.error, lv-toast-container .toast-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-toast-container .toast.error, gn-toast-container .toast-error')).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -160,7 +160,7 @@ test.describe('Workspace Manager - repo status chips', () => {
     // The dialog auto-selects the first workspace on open.
     await openWorkspaceManager(page);
 
-    const dialog = page.locator('lv-workspace-manager-dialog');
+    const dialog = page.locator('gn-workspace-manager-dialog');
 
     // The tracked branch keeps its name and its counts...
     await expect(dialog.locator('.repo-branch').first()).toHaveText('main');
@@ -211,7 +211,7 @@ test.describe('Workspace Manager - partial search failures', () => {
 
     await openWorkspaceManager(page);
 
-    const dialog = page.locator('lv-workspace-manager-dialog');
+    const dialog = page.locator('gn-workspace-manager-dialog');
     await dialog.locator('.search-input').fill('needle');
     await dialog.locator('.search-btn').click();
 
@@ -242,7 +242,7 @@ test.describe('Workspace Manager - partial search failures', () => {
 
     await openWorkspaceManager(page);
 
-    const dialog = page.locator('lv-workspace-manager-dialog');
+    const dialog = page.locator('gn-workspace-manager-dialog');
     await dialog.locator('.search-input').fill('needle');
     // Typing is not a search: the verdict only arrives once the search has run.
     await expect(dialog.locator('.search-no-results')).toHaveCount(0);
@@ -276,13 +276,13 @@ test.describe('Workspace Manager - partial search failures', () => {
 
     await openWorkspaceManager(page);
 
-    const dialog = page.locator('lv-workspace-manager-dialog');
+    const dialog = page.locator('gn-workspace-manager-dialog');
     await dialog.locator('.search-input').fill('needle');
     await dialog.locator('.search-btn').click();
     await expect(dialog.locator('.search-failures')).toContainText('alpha');
 
     await page.keyboard.press('Escape');
-    await expect(page.locator('lv-workspace-manager-dialog[open]')).not.toBeVisible();
+    await expect(page.locator('gn-workspace-manager-dialog[open]')).not.toBeVisible();
 
     await openWorkspaceManager(page);
     await expect(dialog.locator('.search-failures')).toHaveCount(0);

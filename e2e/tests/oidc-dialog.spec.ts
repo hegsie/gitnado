@@ -21,7 +21,7 @@ import {
 
 const ISSUER = 'https://auth.example.com';
 
-const dialog = (page: import('@playwright/test').Page) => page.locator('lv-oidc-dialog lv-modal[open]');
+const dialog = (page: import('@playwright/test').Page) => page.locator('gn-oidc-dialog gn-modal[open]');
 
 async function openOidcDialog(app: AppPage): Promise<void> {
   await app.executeCommand('Enterprise SSO');
@@ -39,9 +39,9 @@ test.describe('OIDC Dialog - Display', () => {
     await openOidcDialog(app);
 
     await expect(dialog(page)).toBeVisible();
-    await expect(page.locator('lv-oidc-dialog input[type="url"]')).toBeVisible();
-    await expect(page.locator('lv-oidc-dialog .sign-in-btn')).toBeVisible();
-    await expect(page.locator('lv-oidc-dialog .discover-btn')).toBeVisible();
+    await expect(page.locator('gn-oidc-dialog input[type="url"]')).toBeVisible();
+    await expect(page.locator('gn-oidc-dialog .sign-in-btn')).toBeVisible();
+    await expect(page.locator('gn-oidc-dialog .discover-btn')).toBeVisible();
   });
 });
 
@@ -67,10 +67,10 @@ test.describe('OIDC Dialog - Discovery', () => {
     await openOidcDialog(app);
     await expect(dialog(page)).toBeVisible();
 
-    await page.locator('lv-oidc-dialog input[type="url"]').fill(ISSUER);
-    await page.locator('lv-oidc-dialog .discover-btn').click();
+    await page.locator('gn-oidc-dialog input[type="url"]').fill(ISSUER);
+    await page.locator('gn-oidc-dialog .discover-btn').click();
 
-    const discovery = page.locator('lv-oidc-dialog .discovery');
+    const discovery = page.locator('gn-oidc-dialog .discovery');
     await expect(discovery).toBeVisible();
     await expect(discovery).toContainText(`${ISSUER}/authorize`);
     await expect(discovery).toContainText(`${ISSUER}/token`);
@@ -86,15 +86,15 @@ test.describe('OIDC Dialog - Discovery', () => {
     await openOidcDialog(app);
     await expect(dialog(page)).toBeVisible();
 
-    await page.locator('lv-oidc-dialog input[type="url"]').fill('https://localhost');
-    await page.locator('lv-oidc-dialog .discover-btn').click();
+    await page.locator('gn-oidc-dialog input[type="url"]').fill('https://localhost');
+    await page.locator('gn-oidc-dialog .discover-btn').click();
 
-    const errorEl = page.locator('lv-oidc-dialog .error');
+    const errorEl = page.locator('gn-oidc-dialog .error');
     await expect(errorEl).toBeVisible();
     await expect(errorEl).toContainText('loopback');
     // Dialog stays open and no discovery panel is shown.
     await expect(dialog(page)).toBeVisible();
-    await expect(page.locator('lv-oidc-dialog .discovery')).toHaveCount(0);
+    await expect(page.locator('gn-oidc-dialog .discovery')).toHaveCount(0);
   });
 });
 
@@ -139,12 +139,12 @@ test.describe('OIDC Dialog - Sign in + account creation', () => {
     await openOidcDialog(app);
     await expect(dialog(page)).toBeVisible();
 
-    await page.locator('lv-oidc-dialog input[type="text"]').first().fill('Acme SSO');
-    await page.locator('lv-oidc-dialog input[type="url"]').fill(ISSUER);
+    await page.locator('gn-oidc-dialog input[type="text"]').first().fill('Acme SSO');
+    await page.locator('gn-oidc-dialog input[type="url"]').fill(ISSUER);
     // Client ID is the only plain text input after the name field.
-    await page.locator('lv-oidc-dialog input[type="text"]').nth(1).fill('acme-client');
+    await page.locator('gn-oidc-dialog input[type="text"]').nth(1).fill('acme-client');
 
-    await page.locator('lv-oidc-dialog .sign-in-btn').click();
+    await page.locator('gn-oidc-dialog .sign-in-btn').click();
 
     // Verify startOAuth -> oauth_get_authorize_url was called with provider oidc.
     await waitForCommand(page, 'oauth_get_authorize_url');
@@ -180,7 +180,7 @@ test.describe('OIDC Dialog - Sign in + account creation', () => {
     expect(account.config).toMatchObject({ type: 'oidc', issuerUrl: ISSUER, clientId: 'acme-client' });
 
     // Connected UI shows the decoded identity.
-    const status = page.locator('lv-oidc-dialog .connection-status');
+    const status = page.locator('gn-oidc-dialog .connection-status');
     await expect(status).toBeVisible();
     await expect(status).toContainText('SSO User');
   });

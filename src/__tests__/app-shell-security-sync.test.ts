@@ -84,7 +84,7 @@ describe('security settings reach the backend', () => {
 
   it('pushes the current values on startup, before anything can run', async () => {
     settingsStore.setState({ offlineMode: true, remoteAllowlist: ['github.com'] });
-    el = document.createElement('lv-app-shell') as AppShell;
+    el = document.createElement('gn-app-shell') as AppShell;
 
     (el as any).setupAutoFetch();
 
@@ -96,7 +96,7 @@ describe('security settings reach the backend', () => {
   });
 
   it('pushes again when offline mode is turned on', async () => {
-    el = document.createElement('lv-app-shell') as AppShell;
+    el = document.createElement('gn-app-shell') as AppShell;
     (el as any).setupAutoFetch();
     await waitUntil(() => securityPushes().length > 0);
     const before = securityPushes().length;
@@ -113,7 +113,7 @@ describe('security settings reach the backend', () => {
   });
 
   it('pushes again when the remote allowlist changes', async () => {
-    el = document.createElement('lv-app-shell') as AppShell;
+    el = document.createElement('gn-app-shell') as AppShell;
     (el as any).setupAutoFetch();
     await waitUntil(() => securityPushes().length > 0);
     const before = securityPushes().length;

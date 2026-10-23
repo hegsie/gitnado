@@ -32,13 +32,13 @@ const APP_PASSWORD_PREFIX: &str = "bbapp:";
 
 /// Default page size for the pull-request and issue listings.
 ///
-/// Kept in sync with BITBUCKET_LIST_PAGE_SIZE in lv-bitbucket-dialog.ts, which
+/// Kept in sync with BITBUCKET_LIST_PAGE_SIZE in gn-bitbucket-dialog.ts, which
 /// discloses it to the user.
 const LIST_DEFAULT_PAGELEN: u32 = 30;
 
 /// Default page size for the pipeline listing.
 ///
-/// Kept in sync with BITBUCKET_PIPELINE_PAGE_SIZE in lv-bitbucket-dialog.ts.
+/// Kept in sync with BITBUCKET_PIPELINE_PAGE_SIZE in gn-bitbucket-dialog.ts.
 const PIPELINES_DEFAULT_PAGELEN: u32 = 20;
 
 /// Build the `pagelen=<n>` query fragment for a listing.
@@ -1470,7 +1470,7 @@ pub async fn list_bitbucket_pipelines(
 
 /// Default page size for the account repository listing.
 ///
-/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in gn-account-repo-picker.ts, which
 /// discloses it to the user.
 const REPOSITORIES_DEFAULT_PAGELEN: u32 = 30;
 

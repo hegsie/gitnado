@@ -71,13 +71,13 @@ describe('dialog.service', () => {
       // unwind past the release and hold that repo's lock for the session —
       // disabling every ref control in every surface. Being unable to ask is
       // the same as a cancel.
-      const el = document.querySelector('lv-prompt-dialog');
+      const el = document.querySelector('gn-prompt-dialog');
       el?.remove();
       const original = document.createElement.bind(document);
       (document as unknown as { createElement: unknown }).createElement = ((
         tag: string,
       ) => {
-        if (tag === 'lv-prompt-dialog') throw new Error('chunk load failed');
+        if (tag === 'gn-prompt-dialog') throw new Error('chunk load failed');
         return original(tag);
       }) as typeof document.createElement;
 

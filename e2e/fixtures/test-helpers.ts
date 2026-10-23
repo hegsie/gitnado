@@ -245,9 +245,9 @@ export async function autoConfirmDialogs(page: Page): Promise<void> {
  */
 export async function openViaCommandPalette(page: Page, commandName: string): Promise<void> {
   await page.keyboard.press('Meta+p');
-  await page.locator('lv-command-palette[open]').waitFor({ state: 'visible' });
-  await page.locator('lv-command-palette[open] .search-input').fill(commandName);
-  await page.locator('lv-command-palette[open] .command').first().waitFor({ state: 'visible' });
+  await page.locator('gn-command-palette[open]').waitFor({ state: 'visible' });
+  await page.locator('gn-command-palette[open] .search-input').fill(commandName);
+  await page.locator('gn-command-palette[open] .command').first().waitFor({ state: 'visible' });
   await page.keyboard.press('Enter');
 }
 

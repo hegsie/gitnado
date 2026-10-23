@@ -49,8 +49,8 @@ test.describe('Application menu — with a repository open', () => {
 
     await chooseMenuItem(page, 'clean');
 
-    await expect(page.locator('lv-clean-dialog[open] .dialog')).toBeVisible();
-    await expect(page.locator('lv-clean-dialog .title')).toContainText('Clean Working Directory');
+    await expect(page.locator('gn-clean-dialog[open] .dialog')).toBeVisible();
+    await expect(page.locator('gn-clean-dialog .title')).toContainText('Clean Working Directory');
   });
 
   test('Repository ▸ Remotes opens the remotes dialog', async ({ page }) => {
@@ -60,34 +60,34 @@ test.describe('Application menu — with a repository open', () => {
     // route for anyone who did not already know it was there.
     await chooseMenuItem(page, 'remotes');
 
-    await expect(page.locator('lv-remote-dialog')).toBeVisible();
+    await expect(page.locator('gn-remote-dialog')).toBeVisible();
   });
 
   test('View ▸ Command Palette opens the palette', async ({ page }) => {
     await chooseMenuItem(page, 'command-palette');
 
-    await expect(page.locator('lv-command-palette[open]')).toBeVisible();
+    await expect(page.locator('gn-command-palette[open]')).toBeVisible();
   });
 
   test('Help ▸ Keyboard Shortcuts opens the shortcuts dialog', async ({ page }) => {
     await chooseMenuItem(page, 'keyboard-shortcuts');
 
-    await expect(page.locator('lv-keyboard-shortcuts-dialog[open]')).toBeVisible();
+    await expect(page.locator('gn-keyboard-shortcuts-dialog[open]')).toBeVisible();
   });
 
   test('File ▸ Close Repository Tab closes the active tab', async ({ page }) => {
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(1);
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(1);
 
     await chooseMenuItem(page, 'close-repository-tab');
 
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(0);
-    await expect(page.locator('lv-welcome')).toBeVisible();
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(0);
+    await expect(page.locator('gn-welcome')).toBeVisible();
   });
 
   test('an unroutable menu id is reported rather than ignored', async ({ page }) => {
     await chooseMenuItem(page, 'not-a-real-menu-item');
 
-    await expect(page.locator('lv-toast-container .toast.error')).toContainText('not available');
+    await expect(page.locator('gn-toast-container .toast.error')).toContainText('not available');
   });
 });
 
@@ -96,29 +96,29 @@ test.describe('Application menu — with no repository open', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await page.waitForLoadState('domcontentloaded');
-    await expect(page.locator('lv-welcome')).toBeVisible();
+    await expect(page.locator('gn-welcome')).toBeVisible();
   });
 
   test('a repository action explains why nothing happened', async ({ page }) => {
     await chooseMenuItem(page, 'clean');
 
-    await expect(page.locator('lv-toast-container .toast.warning')).toContainText(
+    await expect(page.locator('gn-toast-container .toast.warning')).toContainText(
       'open a repository'
     );
-    await expect(page.locator('lv-clean-dialog[open] .dialog')).toHaveCount(0);
+    await expect(page.locator('gn-clean-dialog[open] .dialog')).toHaveCount(0);
   });
 
   test('actions that need no repository still work', async ({ page }) => {
     await chooseMenuItem(page, 'command-palette');
 
-    await expect(page.locator('lv-command-palette[open]')).toBeVisible();
-    await expect(page.locator('lv-toast-container .toast.warning')).toHaveCount(0);
+    await expect(page.locator('gn-command-palette[open]')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.warning')).toHaveCount(0);
   });
 
   test('File ▸ Clone Repository opens the clone dialog', async ({ page }) => {
     await chooseMenuItem(page, 'clone-repository');
 
-    await expect(page.locator('lv-clone-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-clone-dialog gn-modal[open]')).toBeVisible();
   });
 });
 
@@ -127,7 +127,7 @@ test.describe('Application menu — enabled state follows the open repository', 
     await setupTauriMocks(page);
     await page.goto('/');
     await page.waitForLoadState('domcontentloaded');
-    await expect(page.locator('lv-welcome')).toBeVisible();
+    await expect(page.locator('gn-welcome')).toBeVisible();
 
     await startCommandCapture(page);
     await initializeRepositoryStore(page);
@@ -145,7 +145,7 @@ test.describe('Application menu — enabled state follows the open repository', 
     await startCommandCapture(page);
 
     await chooseMenuItem(page, 'close-repository-tab');
-    await expect(page.locator('lv-welcome')).toBeVisible();
+    await expect(page.locator('gn-welcome')).toBeVisible();
     await waitForCommand(page, 'sync_app_menu');
 
     const items = await lastMenuSync(page);

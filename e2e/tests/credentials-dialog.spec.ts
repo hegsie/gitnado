@@ -9,7 +9,7 @@ import {
 } from '../fixtures/test-helpers';
 
 /**
- * E2E tests for the Credential Management dialog (lv-credentials-dialog).
+ * E2E tests for the Credential Management dialog (gn-credentials-dialog).
  *
  * A URL-scoped credential helper (`credential.<url>.helper`) can be written in
  * any git config file. Removing one has to target the file it actually lives
@@ -65,7 +65,7 @@ async function mockCredentialHelpers(
 async function openCredentialsDialog(page: import('@playwright/test').Page): Promise<void> {
   await openViaCommandPalette(page, 'Credential Management');
   await page
-    .locator('lv-credentials-dialog lv-modal[open]')
+    .locator('gn-credentials-dialog gn-modal[open]')
     .waitFor({ state: 'visible', timeout: 5000 });
 }
 
@@ -84,19 +84,19 @@ test.describe('Credentials Dialog - removing URL-scoped helpers', () => {
     });
     await openCredentialsDialog(page);
 
-    const helperItem = page.locator('lv-credentials-dialog .helper-item');
+    const helperItem = page.locator('gn-credentials-dialog .helper-item');
     await expect(helperItem).toHaveCount(1);
 
-    await page.locator('lv-credentials-dialog .helper-item .btn-icon.danger').click();
+    await page.locator('gn-credentials-dialog .helper-item .btn-icon.danger').click();
 
     // Assert the settled, reloaded list — `.helper-item` is briefly absent
     // while loadData() renders its loading state, so an empty list on its own
     // would pass even when the removal did nothing.
-    await expect(page.locator('lv-credentials-dialog .empty-state')).toContainText(
+    await expect(page.locator('gn-credentials-dialog .empty-state')).toContainText(
       'No credential helpers configured'
     );
     await expect(helperItem).toHaveCount(0);
-    await expect(page.locator('lv-credentials-dialog .error-banner')).not.toBeVisible();
+    await expect(page.locator('gn-credentials-dialog .error-banner')).not.toBeVisible();
   });
 
   test('a system-scoped helper is not offered as removable', async ({ page }) => {
@@ -109,7 +109,7 @@ test.describe('Credentials Dialog - removing URL-scoped helpers', () => {
     });
     await openCredentialsDialog(page);
 
-    const removeButton = page.locator('lv-credentials-dialog .helper-item .btn-icon.danger');
+    const removeButton = page.locator('gn-credentials-dialog .helper-item .btn-icon.danger');
     await expect(removeButton).toBeDisabled();
     await expect(removeButton).toHaveAttribute('title', /system git config/);
   });
@@ -131,16 +131,16 @@ test.describe('Credentials Dialog - testing a remote', () => {
   /** Open the tab and select the remote, without pressing Test. */
   async function openTestTabAndSelect(page: import('@playwright/test').Page): Promise<void> {
     await openCredentialsDialog(page);
-    await page.locator('lv-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
-    await expect(page.locator('lv-credentials-dialog .remote-item')).toHaveCount(1);
+    await page.locator('gn-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
+    await expect(page.locator('gn-credentials-dialog .remote-item')).toHaveCount(1);
   }
 
   async function openTestTab(page: import('@playwright/test').Page): Promise<void> {
     await openCredentialsDialog(page);
-    await page.locator('lv-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
-    await expect(page.locator('lv-credentials-dialog .remote-item')).toHaveCount(1);
-    await page.locator('lv-credentials-dialog .form-actions .btn-primary').click();
-    await expect(page.locator('lv-credentials-dialog .test-result')).toBeVisible();
+    await page.locator('gn-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
+    await expect(page.locator('gn-credentials-dialog .remote-item')).toHaveCount(1);
+    await page.locator('gn-credentials-dialog .form-actions .btn-primary').click();
+    await expect(page.locator('gn-credentials-dialog .test-result')).toBeVisible();
   }
 
   test('an scp-form remote is reported over ssh and offers nothing to erase', async ({ page }) => {
@@ -161,7 +161,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('Credentials Working');
     await expect(result).toContainText('Protocol: ssh');
     // SSH authenticates with a key; there is no credential entry to reject, so
@@ -187,7 +187,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('SSH Authentication Failed');
     await expect(result).not.toContainText('No Credentials Found');
     await expect(result).toContainText('Permission denied (publickey).');
@@ -211,7 +211,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('Protocol: https');
     await expect(result.locator('button', { hasText: 'Erase Credentials' })).toBeVisible();
   });
@@ -236,7 +236,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('Protocol: http');
     await result.locator('button', { hasText: 'Erase Credentials' }).click();
 
@@ -269,7 +269,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // `git://` does not authenticate at all, so "No Credentials Found" reads as
     // a fault to go and fix when there is nothing to fix — and an erase button
     // there rejects an entry git would never have consulted.
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('No Credentials Needed');
     // Case-INSENSITIVELY: what the panel actually carried was the backend's own
     // lowercase `No credentials found for <host>`, printed verbatim under a
@@ -309,7 +309,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // The backend keeps a scheme-carrying URL's own scheme, so a local remote
     // arrives as `file` rather than being reported as https — the transport
     // this branch was written for could not previously reach it.
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('Protocol: file');
     await expect(result).toContainText('Path: file:///srv/git/app.git');
     await expect(result, 'a URL is not a hostname').not.toContainText('Host:');
@@ -341,7 +341,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // https" — an HTTPS host invented from the path, appearing nowhere in the
     // user's config — while the same repository spelled `file:///srv/git/
     // repo.git` was correctly told nothing is stored for it.
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('No Credentials Needed');
     await expect(result).toContainText('Path: /srv/git/repo.git');
     await expect(result).toContainText('Protocol: file');
@@ -374,7 +374,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('No Credentials Needed');
     await expect(result).toContainText('Path: \\\\server\\share\\repo.git');
     await expect(result, 'a share path is not a hostname').not.toContainText('Host:');
@@ -413,7 +413,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('Host: server');
     await expect(result, 'a resolved host is not a path').not.toContainText('Path:');
     await expect(result).not.toContainText('filesystem path');
@@ -450,7 +450,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     });
     await openTestTab(page);
 
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('SSH Authentication Failed');
     await expect(result).toContainText('Host: git.example.test');
     await expect(result).toContainText('Protocol: ssh');
@@ -481,7 +481,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
 
     // https DOES store a credential, so a missing one is a real fault and keeps
     // the failure styling the neutral branch drops.
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('No Credentials Found');
     await expect(result).toHaveClass(/\berror\b/);
   });
@@ -506,13 +506,13 @@ test.describe('Credentials Dialog - testing a remote', () => {
       'BLOCKED'
     );
     await openTestTabAndSelect(page);
-    await page.locator('lv-credentials-dialog .form-actions .btn-primary').click();
+    await page.locator('gn-credentials-dialog .form-actions .btn-primary').click();
 
     await expect(page.locator('.toast.error').first()).toContainText('not in your allowlist');
     // Said once: the dialog stays quiet on a BLOCKED result precisely because
     // the gate accounts for it, so an inline banner would repeat the toast.
-    await expect(page.locator('lv-credentials-dialog .error-banner')).toHaveCount(0);
-    await expect(page.locator('lv-credentials-dialog .test-result')).toHaveCount(0);
+    await expect(page.locator('gn-credentials-dialog .error-banner')).toHaveCount(0);
+    await expect(page.locator('gn-credentials-dialog .test-result')).toHaveCount(0);
   });
 
   test('a username with no password is not reported as no credentials at all', async ({ page }) => {
@@ -537,7 +537,7 @@ test.describe('Credentials Dialog - testing a remote', () => {
     // found but no password for git.example.test", with `Username: alice`
     // listed between them — three lines contradicting each other, pointing at
     // the wrong repair. The login is stored; the secret is what is missing.
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toContainText('Password Not Stored');
     await expect(result).not.toContainText(/no credentials found/i);
     await expect(result).toContainText('Username: alice');

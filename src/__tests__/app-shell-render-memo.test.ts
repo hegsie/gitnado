@@ -28,7 +28,7 @@ import '../app-shell.ts';
 import { repositoryStore } from '../stores/index.ts';
 import { dialogs } from '../stores/dialog.store.ts';
 import type { Commit, Repository } from '../types/git.types.ts';
-import type { PaletteCommand } from '../components/dialogs/lv-command-palette.ts';
+import type { PaletteCommand } from '../components/dialogs/gn-command-palette.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -63,7 +63,7 @@ function makeCommit(oid: string, summary: string): Commit {
 
 /** A detached shell: connectedCallback (and all its backend work) never runs. */
 function makeShell(): AppShell {
-  return document.createElement('lv-app-shell') as AppShell;
+  return document.createElement('gn-app-shell') as AppShell;
 }
 
 /** Force navigator.platform for the duration of a test. */

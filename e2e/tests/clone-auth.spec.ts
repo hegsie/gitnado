@@ -126,7 +126,7 @@ test.describe('Clone Dialog - account token', () => {
     await injectCommandError(page, 'clone_repository', 'authentication required');
     await dialogs.clone.clone();
 
-    const errorMessage = page.locator('lv-clone-dialog .error-message');
+    const errorMessage = page.locator('gn-clone-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('authentication required');
     await expect(dialogs.clone.dialog).toBeVisible();

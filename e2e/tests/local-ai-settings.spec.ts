@@ -155,26 +155,26 @@ async function setSecurity(
 
 /**
  * The Offline Mode switch, in the Security section of the same scrolling page
- * as the AI provider picker. `lv-toggle` renders a `button[role="switch"]` in
+ * as the AI provider picker. `gn-toggle` renders a `button[role="switch"]` in
  * its shadow root; Playwright pierces it.
  */
 const offlineToggle =
-  'lv-settings-dialog .setting-row:has(.setting-name:text-is("Offline Mode")) lv-toggle button[role="switch"]';
+  'gn-settings-dialog .setting-row:has(.setting-name:text-is("Offline Mode")) gn-toggle button[role="switch"]';
 
 async function openSettings(page: Page) {
   await page.keyboard.press('Meta+,');
-  await expect(page.locator('lv-settings-dialog')).toBeVisible();
+  await expect(page.locator('gn-settings-dialog')).toBeVisible();
 }
 
 /** Close the settings dialog, which unmounts it along with its listeners */
 async function closeSettings(page: Page) {
-  await page.locator('lv-modal:has(lv-settings-dialog) .close-btn[aria-label="Close"]').click();
-  await expect(page.locator('lv-settings-dialog')).toHaveCount(0);
+  await page.locator('gn-modal:has(gn-settings-dialog) .close-btn[aria-label="Close"]').click();
+  await expect(page.locator('gn-settings-dialog')).toHaveCount(0);
 }
 
 /** Force the commit panel to re-check AI availability */
 async function refreshCommitPanelAi(page: Page) {
-  await page.locator('lv-commit-panel').evaluate(async (el: unknown) => {
+  await page.locator('gn-commit-panel').evaluate(async (el: unknown) => {
     const panel = el as { checkAiAvailability?: () => Promise<void>; updateComplete?: Promise<boolean> };
     if (typeof panel.checkAiAvailability === 'function') {
       await panel.checkAiAvailability();
@@ -196,7 +196,7 @@ test.describe('Settings Dialog — Local AI', () => {
     await injectCommandMock(page, localAiMocks());
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog select option[value="local_inference"]');
+    const option = page.locator('gn-settings-dialog select option[value="local_inference"]');
     await expect(option).toContainText('Unavailable');
   });
 
@@ -210,7 +210,7 @@ test.describe('Settings Dialog — Local AI', () => {
     }));
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog select option[value="local_inference"]');
+    const option = page.locator('gn-settings-dialog select option[value="local_inference"]');
     await expect(option).toContainText('Available');
   });
 
@@ -219,7 +219,7 @@ test.describe('Settings Dialog — Local AI', () => {
     await openSettings(page);
 
     // Use tier text to distinguish from recommended section
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await expect(modelRow).toBeVisible();
     await expect(modelRow.getByRole('button', { name: 'Download' })).toBeVisible();
   });
@@ -230,7 +230,7 @@ test.describe('Settings Dialog — Local AI', () => {
     }));
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await expect(modelRow.getByRole('button', { name: 'Load' })).toBeVisible();
     await expect(modelRow.locator('.status-indicator')).toContainText('Downloaded');
   });
@@ -244,7 +244,7 @@ test.describe('Settings Dialog — Local AI', () => {
     }));
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await expect(modelRow.getByRole('button', { name: 'Unload' })).toBeVisible();
     await expect(modelRow.locator('.status-indicator.configured')).toContainText('Loaded');
   });
@@ -270,7 +270,7 @@ test.describe('Settings Dialog — Local AI', () => {
 
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Load' }).click();
 
     // Should show Loading... state
@@ -284,7 +284,7 @@ test.describe('Settings Dialog — Local AI', () => {
     });
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Load' }).click();
 
     const cmds = await findCommand(page, 'load_model');
@@ -304,7 +304,7 @@ test.describe('Settings Dialog — Local AI', () => {
     });
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Unload' }).click();
 
     const cmds = await findCommand(page, 'unload_model');
@@ -354,11 +354,11 @@ test.describe('Settings Dialog — Local AI', () => {
 
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog select option[value="local_inference"]');
+    const option = page.locator('gn-settings-dialog select option[value="local_inference"]');
     await expect(option).toContainText('Unavailable');
 
     // Click Load
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Load' }).click();
 
     // Dropdown should update to Available
@@ -372,10 +372,10 @@ test.describe('Settings Dialog — Local AI', () => {
     });
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Load' }).click();
 
-    await expect(page.locator('lv-settings-dialog .error-text')).toBeVisible();
+    await expect(page.locator('gn-settings-dialog .error-text')).toBeVisible();
   });
 
   test('delete unloads model first when loaded', async ({ page }) => {
@@ -393,7 +393,7 @@ test.describe('Settings Dialog — Local AI', () => {
     });
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Delete' }).click();
 
     const unloadCmds = await findCommand(page, 'unload_model');
@@ -416,7 +416,7 @@ test.describe('Settings Dialog — Local AI', () => {
     await openSettings(page);
 
     // Both should show Load buttons since model status is 'unloaded'
-    const loadButtons = page.locator('lv-settings-dialog .setting-row button', { hasText: 'Load' });
+    const loadButtons = page.locator('gn-settings-dialog .setting-row button', { hasText: 'Load' });
     await expect(loadButtons).toHaveCount(2);
   });
 
@@ -428,7 +428,7 @@ test.describe('Settings Dialog — Local AI', () => {
     await startCommandCaptureWithMocks(page, localAiMocks({ download_model: null }));
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Download' }).click();
     await waitForCommand(page, 'download_model');
 
@@ -439,7 +439,7 @@ test.describe('Settings Dialog — Local AI', () => {
       error: 'Network unreachable',
     });
 
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('Network unreachable');
   });
@@ -448,7 +448,7 @@ test.describe('Settings Dialog — Local AI', () => {
     await startCommandCaptureWithMocks(page, localAiMocks({ download_model: null }));
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Download' }).click();
     await waitForCommand(page, 'download_model');
 
@@ -460,7 +460,7 @@ test.describe('Settings Dialog — Local AI', () => {
       loadError: 'Out of memory',
     });
 
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('Out of memory');
   });
@@ -469,7 +469,7 @@ test.describe('Settings Dialog — Local AI', () => {
     await startCommandCaptureWithMocks(page, localAiMocks({ download_model: null }));
     await openSettings(page);
 
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Download' }).click();
     await waitForCommand(page, 'download_model');
 
@@ -481,7 +481,7 @@ test.describe('Settings Dialog — Local AI', () => {
       error: 'Download cancelled',
     });
 
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
   });
 
   test('renders Pro tier status pill and custom downloaded GGUF models', async ({ page }) => {
@@ -502,10 +502,10 @@ test.describe('Settings Dialog — Local AI', () => {
     }));
     await openSettings(page);
 
-    const systemRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Pro (32GB+ RAM)' });
+    const systemRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Pro (32GB+ RAM)' });
     await expect(systemRow).toBeVisible();
 
-    const customRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Custom Qwen Coder 7B' });
+    const customRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Custom Qwen Coder 7B' });
     await expect(customRow).toBeVisible();
     await expect(customRow).toContainText('Custom GGUF');
     await expect(customRow.getByRole('button', { name: 'Load' })).toBeVisible();
@@ -527,7 +527,7 @@ test.describe('Settings Dialog — Local AI', () => {
     });
     await openSettings(page);
 
-    const importBtn = page.locator('lv-settings-dialog button', { hasText: 'Import .gguf…' });
+    const importBtn = page.locator('gn-settings-dialog button', { hasText: 'Import .gguf…' });
     await expect(importBtn).toBeVisible();
     await importBtn.click();
 
@@ -537,7 +537,7 @@ test.describe('Settings Dialog — Local AI', () => {
       expect.objectContaining({ path: '/Users/dev/models/DeepSeek-Coder-6.7B.gguf' }),
     );
 
-    const toastMessage = page.locator('lv-toast-container .toast.success .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.success .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('DeepSeek Coder 6.7B');
   });
@@ -576,10 +576,10 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     }));
     await openSettings(page);
 
-    const row = page.locator('lv-settings-dialog .setting-row', { hasText: 'OpenAI API Key' });
+    const row = page.locator('gn-settings-dialog .setting-row', { hasText: 'OpenAI API Key' });
     await row.getByRole('button', { name: 'Test' }).click();
 
-    await expect(page.locator('lv-settings-dialog .error-text')).toHaveText(
+    await expect(page.locator('gn-settings-dialog .error-text')).toHaveText(
       'OpenAI is not available. Check your API key and try again.'
     );
     await expect(row.locator('.status-indicator').last()).toContainText('Failed');
@@ -602,12 +602,12 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     await setSecurity(page, { offlineMode: true });
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    const option = page.locator('gn-settings-dialog option', { hasText: 'OpenAI' });
     await expect(option).toHaveCount(1);
     await expect(option).toContainText('(Not checked - offline)');
     // The other providers were probed, so they keep their real verdict.
     await expect(
-      page.locator('lv-settings-dialog option', { hasText: 'Anthropic Claude' })
+      page.locator('gn-settings-dialog option', { hasText: 'Anthropic Claude' })
     ).toContainText('(API key required)');
   });
 
@@ -627,7 +627,7 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     await setSecurity(page, { offlineMode: false, remoteAllowlist: ['github.com'] });
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    const option = page.locator('gn-settings-dialog option', { hasText: 'OpenAI' });
     await expect(option).toHaveCount(1);
     await expect(option).toContainText('(Not checked - not in your remote allowlist)');
     await expect(option).not.toContainText('offline');
@@ -652,7 +652,7 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     await setSecurity(page, { offlineMode: true, remoteAllowlist: [] });
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    const option = page.locator('gn-settings-dialog option', { hasText: 'OpenAI' });
     await expect(option).toContainText('(Not checked - offline)');
 
     await page.locator(offlineToggle).click();
@@ -678,7 +678,7 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     await setSecurity(page, { offlineMode: true, remoteAllowlist: [] });
     await openSettings(page);
 
-    const option = page.locator('lv-settings-dialog option', { hasText: 'OpenAI' });
+    const option = page.locator('gn-settings-dialog option', { hasText: 'OpenAI' });
     await expect(option).toContainText('(Not checked - offline)');
 
     // With the policy lifted the backend probes the provider for real.
@@ -703,7 +703,7 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     await openSettings(page);
 
     await expect(
-      page.locator('lv-settings-dialog option', { hasText: 'OpenAI' })
+      page.locator('gn-settings-dialog option', { hasText: 'OpenAI' })
     ).toContainText('(Unavailable)');
   });
 
@@ -714,11 +714,11 @@ test.describe('Settings Dialog — Cloud provider test', () => {
     }));
     await openSettings(page);
 
-    const row = page.locator('lv-settings-dialog .setting-row', { hasText: 'OpenAI API Key' });
+    const row = page.locator('gn-settings-dialog .setting-row', { hasText: 'OpenAI API Key' });
     await row.getByRole('button', { name: 'Test' }).click();
 
     await expect(row.locator('.status-indicator').last()).toContainText('Working');
-    await expect(page.locator('lv-settings-dialog .error-text')).toHaveCount(0);
+    await expect(page.locator('gn-settings-dialog .error-text')).toHaveCount(0);
   });
 });
 
@@ -737,7 +737,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
     await setupOpenRepository(page);
 
     // Default mocks have is_ai_available: false
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toBeVisible();
     await expect(btn).toHaveAttribute('title', /[Cc]onfigure/);
   });
@@ -751,18 +751,18 @@ test.describe('Commit Panel — AI Generate Flow', () => {
     await injectCommandMock(page, { is_ai_available: true });
     await refreshCommitPanelAi(page);
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', 'Generate commit message using AI');
   });
 
   test('Configure AI button opens settings dialog', async ({ page }) => {
     await setupOpenRepository(page);
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', /[Cc]onfigure/);
     await btn.click();
 
-    await expect(page.locator('lv-settings-dialog')).toBeVisible();
+    await expect(page.locator('gn-settings-dialog')).toBeVisible();
   });
 
   test('Generate button is disabled with no staged files', async ({ page }) => {
@@ -771,7 +771,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
     await injectCommandMock(page, { is_ai_available: true });
     await refreshCommitPanelAi(page);
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', 'Stage changes to generate a commit message');
     await expect(btn).toBeDisabled();
   });
@@ -785,7 +785,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
     await injectCommandMock(page, { is_ai_available: true });
     await refreshCommitPanelAi(page);
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', 'Generate commit message using AI');
     await expect(btn).toBeEnabled();
   });
@@ -837,7 +837,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
 
     await refreshCommitPanelAi(page);
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await btn.click();
 
     await expect(btn.locator('.spinner')).toBeVisible();
@@ -858,7 +858,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
     await rightPanel.aiGenerateButton.click();
 
     // Error should appear
-    const errorEl = page.locator('lv-commit-panel .error, lv-commit-panel .generation-error');
+    const errorEl = page.locator('gn-commit-panel .error, gn-commit-panel .generation-error');
     await expect(errorEl).toBeVisible({ timeout: 5000 });
   });
 
@@ -878,7 +878,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
     await rightPanel.aiGenerateButton.click();
 
     // Wait for error to appear, then verify message wasn't overwritten
-    const errorEl = page.locator('lv-commit-panel .error, lv-commit-panel .generation-error');
+    const errorEl = page.locator('gn-commit-panel .error, gn-commit-panel .generation-error');
     await expect(errorEl).toBeVisible({ timeout: 5000 });
     await expect(rightPanel.commitMessage).toHaveValue('my manual commit message');
   });
@@ -889,7 +889,7 @@ test.describe('Commit Panel — AI Generate Flow', () => {
       withStagedFiles([{ path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false }])
     );
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', /[Cc]onfigure/);
 
     // Simulate: settings change makes AI available
@@ -924,7 +924,7 @@ test.describe('Local AI Full Lifecycle', () => {
     );
 
     // Start with no model, AI unavailable
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', /[Cc]onfigure/);
 
     // Set up stateful mock that transitions through states
@@ -966,14 +966,14 @@ test.describe('Local AI Full Lifecycle', () => {
 
     // Open settings and load the model
     await openSettings(page);
-    const modelRow = page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+    const modelRow = page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
     await modelRow.getByRole('button', { name: 'Load' }).click();
 
     // Verify model shows as Loaded
     await expect(modelRow.locator('.status-indicator.configured')).toContainText('Loaded');
 
     // Provider dropdown should show Available
-    const option = page.locator('lv-settings-dialog select option[value="local_inference"]');
+    const option = page.locator('gn-settings-dialog select option[value="local_inference"]');
     await expect(option).toContainText('Available');
 
     // Close settings
@@ -1000,7 +1000,7 @@ test.describe('Local AI Full Lifecycle', () => {
       withStagedFiles([{ path: 'src/main.ts', status: 'modified', isStaged: true, isConflicted: false }])
     );
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     // Initially AI is unavailable (simulating model not loaded yet)
     await expect(btn).toHaveAttribute('title', /[Cc]onfigure/);
 
@@ -1029,7 +1029,7 @@ test.describe('Local AI Full Lifecycle', () => {
 
     await refreshCommitPanelAi(page);
 
-    const btn = page.locator('lv-commit-panel .generate-btn');
+    const btn = page.locator('gn-commit-panel .generate-btn');
     await expect(btn).toHaveAttribute('title', 'Generate commit message using AI');
     await expect(btn).toBeEnabled();
 

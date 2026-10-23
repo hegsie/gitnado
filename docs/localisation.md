@@ -15,11 +15,11 @@ not hand-kept: `scripts/i18n-coverage.test.mjs` fails if a file gains or loses a
 call site is here, and nothing else in `src/` has one.
 
 - `src/app-shell.ts` — the Settings modal's title.
-- `src/components/dialogs/lv-clone-dialog.ts` — the recursive submodule clone option.
-- `src/components/dialogs/lv-settings-dialog.ts` — everything the dialog
+- `src/components/dialogs/gn-clone-dialog.ts` — the recursive submodule clone option.
+- `src/components/dialogs/gn-settings-dialog.ts` — everything the dialog
   renders (section titles, setting names and descriptions, options, buttons,
   status text) plus the language picker's own error toast.
-- `src/components/welcome/lv-welcome.ts` — the whole component, including its
+- `src/components/welcome/gn-welcome.ts` — the whole component, including its
   toast messages and accessible labels.
 - `src/services/local-ai.service.ts` — the model tier labels the Settings
   dialog shows next to each local model.
@@ -52,9 +52,9 @@ locale we no longer ship falls back to English rather than failing to render.
    ```ts
    import { localized, msg, str } from '@lit/localize';
 
-   @customElement('lv-thing')
+   @customElement('gn-thing')
    @localized() // re-renders the component when the locale changes
-   export class LvThing extends LitElement { … }
+   export class GnThing extends LitElement { … }
    ```
 
 2. Wrap user-visible text in `msg()`:

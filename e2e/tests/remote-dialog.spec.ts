@@ -11,7 +11,7 @@ import {
 
 async function openRemoteDialog(page: import('@playwright/test').Page): Promise<void> {
   await openViaCommandPalette(page, 'remotes');
-  await page.locator('lv-remote-dialog').waitFor({ state: 'visible', timeout: 3000 });
+  await page.locator('gn-remote-dialog').waitFor({ state: 'visible', timeout: 3000 });
 }
 
 test.describe('Remote Dialog - List View', () => {
@@ -35,14 +35,14 @@ test.describe('Remote Dialog - List View', () => {
   test('should open remote dialog from command palette', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     await expect(remoteDialog).toBeVisible();
   });
 
   test('should display list of remotes', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     await expect(remoteDialog.getByText('origin').first()).toBeVisible();
     await expect(remoteDialog.getByText('upstream').first()).toBeVisible();
@@ -51,7 +51,7 @@ test.describe('Remote Dialog - List View', () => {
   test('should show remote name and URL', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     await expect(remoteDialog.getByText('origin').first()).toBeVisible();
     await expect(remoteDialog.getByText(/github\.com\/user\/repo/i).first()).toBeVisible();
@@ -60,7 +60,7 @@ test.describe('Remote Dialog - List View', () => {
   test('should have Add Remote button', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await expect(addButton).toBeVisible();
   });
@@ -68,7 +68,7 @@ test.describe('Remote Dialog - List View', () => {
   test('should have action buttons for each remote', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const actionButtons = remoteDialog.locator(
       'button[title*="Edit"], button[title*="Rename"], button[title*="Delete"], button[title*="Remove"], button[aria-label*="edit"], button[aria-label*="rename"], button[aria-label*="delete"]'
@@ -92,7 +92,7 @@ test.describe('Remote Dialog - Add Remote', () => {
   test('clicking Add Remote should show add form', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await addButton.click();
 
@@ -104,7 +104,7 @@ test.describe('Remote Dialog - Add Remote', () => {
   test('add form should have Cancel and Save buttons', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await addButton.click();
 
@@ -117,7 +117,7 @@ test.describe('Remote Dialog - Add Remote', () => {
   test('Save button should be disabled until form is valid', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await addButton.click();
 
@@ -140,7 +140,7 @@ test.describe('Remote Dialog - Edit Remote', () => {
   test('clicking Edit should show edit form with URL input', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const editButton = remoteDialog.locator('button[title*="Edit"], button[aria-label*="edit"]').first();
     await expect(editButton).toBeVisible();
@@ -154,7 +154,7 @@ test.describe('Remote Dialog - Edit Remote', () => {
   test('edit form should have fetch and push URL fields', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const editButton = remoteDialog.locator('button[title*="Edit"], button[aria-label*="edit"]').first();
     await expect(editButton).toBeVisible();
@@ -187,7 +187,7 @@ test.describe('Remote Dialog - Delete Remote', () => {
   test('clicking Delete should trigger remove_remote command', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const deleteButton = remoteDialog.locator('button[title*="Delete"], button[title*="Remove"], button[aria-label*="delete"]').first();
     await expect(deleteButton).toBeVisible();
@@ -199,7 +199,7 @@ test.describe('Remote Dialog - Delete Remote', () => {
     expect(removeCommands.length).toBeGreaterThan(0);
 
     // Verify the remote dialog is still visible after deletion (list refreshes)
-    await expect(page.locator('lv-remote-dialog')).toBeVisible();
+    await expect(page.locator('gn-remote-dialog')).toBeVisible();
   });
 });
 
@@ -215,7 +215,7 @@ test.describe('Remote Dialog - Empty State', () => {
   test('should show empty state when no remotes', async ({ page }) => {
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const emptyState = remoteDialog.locator('.empty, [class*="empty"]', { hasText: /no.*remote/i });
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
@@ -241,7 +241,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await addButton.click();
 
@@ -265,7 +265,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
     expect(argsStr).toContain('https://github.com/fork/repo.git');
 
     // Verify the add form is no longer visible (returns to list view after success)
-    const remoteDialogAfter = page.locator('lv-remote-dialog');
+    const remoteDialogAfter = page.locator('gn-remote-dialog');
     await expect(remoteDialogAfter).toBeVisible();
   });
 
@@ -277,7 +277,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await addButton.click();
 
@@ -315,7 +315,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const deleteButton = remoteDialog.locator('button[title*="Delete"], button[title*="Remove"], button[aria-label*="delete"]').first();
     await expect(deleteButton).toBeVisible();
@@ -331,7 +331,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
     expect(argsStr).toMatch(/origin|upstream/);
 
     // Verify the remote dialog is still visible after deletion (list refreshes)
-    await expect(page.locator('lv-remote-dialog')).toBeVisible();
+    await expect(page.locator('gn-remote-dialog')).toBeVisible();
   });
 
   test('rename remote should invoke rename_remote command', async ({ page }) => {
@@ -343,7 +343,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const renameButton = remoteDialog.locator('button[title*="Rename"], button[aria-label*="rename"]').first();
     if (await renameButton.count() > 0) {
@@ -362,7 +362,7 @@ test.describe('Remote Dialog - Add Remote E2E', () => {
         expect(renameCommands.length).toBeGreaterThan(0);
 
         // Verify the remote dialog is still visible after rename (list refreshes)
-        await expect(page.locator('lv-remote-dialog')).toBeVisible();
+        await expect(page.locator('gn-remote-dialog')).toBeVisible();
       }
     }
   });
@@ -382,7 +382,7 @@ test.describe('Remote Dialog Error Scenarios', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     const addButton = remoteDialog.locator('button', { hasText: /add.*remote/i });
     await addButton.click();
 
@@ -411,7 +411,7 @@ test.describe('Remote Dialog Error Scenarios', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const renameButton = remoteDialog.locator('button[title*="Rename"], button[aria-label*="rename"]').first();
     if (await renameButton.count() > 0) {
@@ -443,7 +443,7 @@ test.describe('Remote Dialog Error Scenarios', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     const deleteButton = remoteDialog.locator('button[title*="Delete"], button[title*="Remove"], button[aria-label*="delete"]').first();
     await expect(deleteButton).toBeVisible();
@@ -470,7 +470,7 @@ test.describe('Remote Dialog - Extended Tests', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     // Click the Edit button for the remote
     const editButton = remoteDialog.locator('button[title*="Edit"], button[aria-label*="edit"]').first();
@@ -512,7 +512,7 @@ test.describe('Remote Dialog - Extended Tests', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
     await expect(page.getByText('Push: git@github.com:user/repo.git')).toBeVisible();
 
     const editButton = remoteDialog.locator('button[title*="Edit"]').first();
@@ -553,7 +553,7 @@ test.describe('Remote Dialog - Extended Tests', () => {
 
     await openRemoteDialog(page);
 
-    const remoteDialog = page.locator('lv-remote-dialog');
+    const remoteDialog = page.locator('gn-remote-dialog');
 
     // Verify initial state shows origin
     await expect(remoteDialog.getByText('origin').first()).toBeVisible();

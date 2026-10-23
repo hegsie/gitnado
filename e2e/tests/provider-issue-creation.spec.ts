@@ -111,13 +111,13 @@ test.describe('Bitbucket Dialog - Create Issue', () => {
     await dialogs.bitbucket.issuesTab.click();
     await expect(dialogs.bitbucket.issuesTab).toHaveClass(/active/);
 
-    const newIssueBtn = page.locator('lv-bitbucket-dialog .btn', { hasText: 'New Issue' });
+    const newIssueBtn = page.locator('gn-bitbucket-dialog .btn', { hasText: 'New Issue' });
     await newIssueBtn.click();
 
-    await page.locator('lv-bitbucket-dialog .token-form input[type="text"]').fill('New E2E bug');
-    await page.locator('lv-bitbucket-dialog .token-form textarea').fill('It is broken');
+    await page.locator('gn-bitbucket-dialog .token-form input[type="text"]').fill('New E2E bug');
+    await page.locator('gn-bitbucket-dialog .token-form textarea').fill('It is broken');
 
-    await page.locator('lv-bitbucket-dialog .btn-primary', { hasText: 'Create Issue' }).click();
+    await page.locator('gn-bitbucket-dialog .btn-primary', { hasText: 'Create Issue' }).click();
 
     await waitForCommand(page, 'create_bitbucket_issue');
     const cmds = await findCommand(page, 'create_bitbucket_issue');
@@ -131,7 +131,7 @@ test.describe('Bitbucket Dialog - Create Issue', () => {
 
     // Returns to issues list and shows success toast
     await expect(dialogs.bitbucket.issuesTab).toHaveClass(/active/);
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('shows an error (not silent) when issue creation fails', async ({ page }) => {
@@ -139,16 +139,16 @@ test.describe('Bitbucket Dialog - Create Issue', () => {
     await expect(dialogs.bitbucket.dialog).toBeVisible();
 
     await dialogs.bitbucket.issuesTab.click();
-    await page.locator('lv-bitbucket-dialog .btn', { hasText: 'New Issue' }).click();
+    await page.locator('gn-bitbucket-dialog .btn', { hasText: 'New Issue' }).click();
 
     await injectCommandError(page, 'create_bitbucket_issue', 'Issue tracker disabled');
 
-    await page.locator('lv-bitbucket-dialog .token-form input[type="text"]').fill('Will fail');
-    await page.locator('lv-bitbucket-dialog .btn-primary', { hasText: 'Create Issue' }).click();
+    await page.locator('gn-bitbucket-dialog .token-form input[type="text"]').fill('Will fail');
+    await page.locator('gn-bitbucket-dialog .btn-primary', { hasText: 'Create Issue' }).click();
 
     await expect(dialogs.bitbucket.dialog).toBeVisible();
     await expect(
-      page.locator('lv-bitbucket-dialog .error, .toast.error').first()
+      page.locator('gn-bitbucket-dialog .error, .toast.error').first()
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -246,13 +246,13 @@ test.describe('Azure DevOps Dialog - Create Work Item', () => {
     await dialogs.azureDevOps.workItemsTab.click();
     await expect(dialogs.azureDevOps.workItemsTab).toHaveClass(/active/);
 
-    const newBtn = page.locator('lv-azure-devops-dialog .btn', { hasText: 'New Work Item' });
+    const newBtn = page.locator('gn-azure-devops-dialog .btn', { hasText: 'New Work Item' });
     await newBtn.click();
 
-    await page.locator('lv-azure-devops-dialog .token-form input[type="text"]').fill('New E2E task');
-    await page.locator('lv-azure-devops-dialog .token-form textarea').fill('Do the work');
+    await page.locator('gn-azure-devops-dialog .token-form input[type="text"]').fill('New E2E task');
+    await page.locator('gn-azure-devops-dialog .token-form textarea').fill('Do the work');
 
-    await page.locator('lv-azure-devops-dialog .btn-primary', { hasText: 'Create Work Item' }).click();
+    await page.locator('gn-azure-devops-dialog .btn-primary', { hasText: 'Create Work Item' }).click();
 
     await waitForCommand(page, 'create_azure_devops_work_item');
     const cmds = await findCommand(page, 'create_azure_devops_work_item');
@@ -266,7 +266,7 @@ test.describe('Azure DevOps Dialog - Create Work Item', () => {
     expect(input.description).toBe('Do the work');
 
     await expect(dialogs.azureDevOps.workItemsTab).toHaveClass(/active/);
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('shows an error (not silent) when work-item creation fails', async ({ page }) => {
@@ -274,16 +274,16 @@ test.describe('Azure DevOps Dialog - Create Work Item', () => {
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
 
     await dialogs.azureDevOps.workItemsTab.click();
-    await page.locator('lv-azure-devops-dialog .btn', { hasText: 'New Work Item' }).click();
+    await page.locator('gn-azure-devops-dialog .btn', { hasText: 'New Work Item' }).click();
 
     await injectCommandError(page, 'create_azure_devops_work_item', 'Permission denied');
 
-    await page.locator('lv-azure-devops-dialog .token-form input[type="text"]').fill('Will fail');
-    await page.locator('lv-azure-devops-dialog .btn-primary', { hasText: 'Create Work Item' }).click();
+    await page.locator('gn-azure-devops-dialog .token-form input[type="text"]').fill('Will fail');
+    await page.locator('gn-azure-devops-dialog .btn-primary', { hasText: 'Create Work Item' }).click();
 
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
     await expect(
-      page.locator('lv-azure-devops-dialog .error, .toast.error').first()
+      page.locator('gn-azure-devops-dialog .error, .toast.error').first()
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -370,7 +370,7 @@ test.describe('GitLab Dialog - Create Issue with labels', () => {
     await dialogs.gitlab.issuesTab.click();
     await expect(dialogs.gitlab.issuesTab).toHaveClass(/active/);
 
-    await page.locator('lv-gitlab-dialog .btn', { hasText: 'New Issue' }).click();
+    await page.locator('gn-gitlab-dialog .btn', { hasText: 'New Issue' }).click();
   }
 
   test('attaches the picked label to the created issue', async ({ page }) => {
@@ -390,14 +390,14 @@ test.describe('GitLab Dialog - Create Issue with labels', () => {
 
     await openCreateIssueForm(page);
 
-    await page.locator('lv-gitlab-dialog .token-form input[type="text"]').fill('E2E labelled issue');
+    await page.locator('gn-gitlab-dialog .token-form input[type="text"]').fill('E2E labelled issue');
 
     await expect(dialogs.gitlab.labelChips).toHaveCount(2);
     const bugChip = dialogs.gitlab.labelChips.filter({ hasText: 'bug' });
     await bugChip.click();
     await expect(bugChip).toHaveClass(/selected/);
 
-    await page.locator('lv-gitlab-dialog .btn-primary', { hasText: 'Create Issue' }).click();
+    await page.locator('gn-gitlab-dialog .btn-primary', { hasText: 'Create Issue' }).click();
 
     await waitForCommand(page, 'create_gitlab_issue');
     const cmds = await findCommand(page, 'create_gitlab_issue');
@@ -409,13 +409,13 @@ test.describe('GitLab Dialog - Create Issue with labels', () => {
 
     // Returns to the issues list and reports success.
     await expect(dialogs.gitlab.issuesTab).toHaveClass(/active/);
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('shows an error and keeps the picked label when creation fails', async ({ page }) => {
     await openCreateIssueForm(page);
 
-    await page.locator('lv-gitlab-dialog .token-form input[type="text"]').fill('Will fail');
+    await page.locator('gn-gitlab-dialog .token-form input[type="text"]').fill('Will fail');
 
     await expect(dialogs.gitlab.labelChips).toHaveCount(2);
     const bugChip = dialogs.gitlab.labelChips.filter({ hasText: 'bug' });
@@ -424,11 +424,11 @@ test.describe('GitLab Dialog - Create Issue with labels', () => {
 
     await injectCommandError(page, 'create_gitlab_issue', 'Labels not allowed');
 
-    await page.locator('lv-gitlab-dialog .btn-primary', { hasText: 'Create Issue' }).click();
+    await page.locator('gn-gitlab-dialog .btn-primary', { hasText: 'Create Issue' }).click();
 
     await expect(dialogs.gitlab.dialog).toBeVisible();
     await expect(
-      page.locator('lv-gitlab-dialog .error, .toast.error').first()
+      page.locator('gn-gitlab-dialog .error, .toast.error').first()
     ).toBeVisible({ timeout: 5000 });
 
     // The form (and the picked label) survives so the user can retry.

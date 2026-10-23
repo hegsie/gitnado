@@ -45,14 +45,14 @@ export class AppPage {
 
     // Main layout - pierce shadow DOM with locator chaining
     this.appShell = page.locator('app-shell');
-    this.toolbar = page.locator('lv-toolbar');
-    this.leftPanel = page.locator('lv-left-panel');
-    this.centerPanel = page.locator('lv-graph-canvas');
-    this.rightPanel = page.locator('lv-right-panel');
-    this.statusBar = page.locator('lv-status-bar');
+    this.toolbar = page.locator('gn-toolbar');
+    this.leftPanel = page.locator('gn-left-panel');
+    this.centerPanel = page.locator('gn-graph-canvas');
+    this.rightPanel = page.locator('gn-right-panel');
+    this.statusBar = page.locator('gn-status-bar');
 
     // Welcome screen elements
-    this.welcomeScreen = page.locator('lv-welcome');
+    this.welcomeScreen = page.locator('gn-welcome');
     this.welcomeLogo = this.welcomeScreen.locator('.logo');
     this.welcomeTagline = this.welcomeScreen.locator('.tagline');
 
@@ -68,21 +68,21 @@ export class AppPage {
     this.clearRecentButton = this.welcomeScreen.locator('.clear-btn');
 
     // Dialogs
-    this.cloneDialog = page.locator('lv-clone-dialog');
-    // More than one <lv-init-dialog> is mounted at a time: the toolbar keeps
+    this.cloneDialog = page.locator('gn-clone-dialog');
+    // More than one <gn-init-dialog> is mounted at a time: the toolbar keeps
     // its own for the Init button, and the welcome screen (no repository) or
     // app-shell (a repository open) mounts the one the scan/drop flows use. A
-    // bare `lv-init-dialog` locator therefore matches all of them and trips
+    // bare `gn-init-dialog` locator therefore matches all of them and trips
     // Playwright's strict mode. This resolves to the one actually on screen —
-    // `open` is reflected onto the inner <lv-modal>, and the host itself has
+    // `open` is reflected onto the inner <gn-modal>, and the host itself has
     // no box of its own to be "visible". Its fields are slotted, so they are
     // NOT descendants of this locator: reach them through
     // `DialogsPage.init`'s role-based locators.
-    this.initDialog = page.locator('lv-init-dialog lv-modal[open]');
-    this.settingsDialog = page.locator('lv-settings-dialog');
+    this.initDialog = page.locator('gn-init-dialog gn-modal[open]');
+    this.settingsDialog = page.locator('gn-settings-dialog');
 
     // Command palette
-    this.commandPalette = page.locator('lv-command-palette');
+    this.commandPalette = page.locator('gn-command-palette');
     this.commandInput = this.commandPalette.locator('input');
   }
 
@@ -98,7 +98,7 @@ export class AppPage {
    */
   async waitForReady(): Promise<void> {
     // Wait for either welcome screen or main view to be visible
-    await this.page.waitForSelector('lv-welcome, lv-graph-canvas', { timeout: 10000 });
+    await this.page.waitForSelector('gn-welcome, gn-graph-canvas', { timeout: 10000 });
   }
 
   /**

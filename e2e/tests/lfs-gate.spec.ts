@@ -72,7 +72,7 @@ function lfsRepositoryMocks(endpoint: string | null, kind: EndpointKind = 'confi
 
 async function openLfsDialog(page: Page): Promise<void> {
   await openViaCommandPalette(page, 'Manage Git LFS');
-  await expect(page.locator('lv-lfs-dialog .dialog')).toBeVisible();
+  await expect(page.locator('gn-lfs-dialog .dialog')).toBeVisible();
 }
 
 test.describe('LFS transfers are gated on the LFS endpoint', () => {
@@ -87,7 +87,7 @@ test.describe('LFS transfers are gated on the LFS endpoint', () => {
     await setAllowlist(page, ['github.com']);
     await openLfsDialog(page);
 
-    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+    await page.locator('gn-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
 
     // The gate refuses before anything reaches git-lfs, and says why — naming
     // the host the transfer would really have gone to, not the git remote.
@@ -103,10 +103,10 @@ test.describe('LFS transfers are gated on the LFS endpoint', () => {
     await setAllowlist(page, ['github.com']);
     await openLfsDialog(page);
 
-    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+    await page.locator('gn-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
 
     await waitForCommand(page, 'lfs_pull');
-    await expect(page.locator('lv-lfs-dialog .message.success')).toContainText(
+    await expect(page.locator('gn-lfs-dialog .message.success')).toContainText(
       'LFS files pulled successfully'
     );
   });
@@ -127,10 +127,10 @@ test.describe('LFS transfers are gated on the LFS endpoint', () => {
     await setAllowlist(page, ['github.com']);
     await openLfsDialog(page);
 
-    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+    await page.locator('gn-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
 
     await waitForCommand(page, 'lfs_pull');
-    await expect(page.locator('lv-lfs-dialog .message.success')).toContainText(
+    await expect(page.locator('gn-lfs-dialog .message.success')).toContainText(
       'LFS files pulled successfully'
     );
     await expect(page.locator('.toast')).toHaveCount(0);
@@ -147,7 +147,7 @@ test.describe('LFS transfers are gated on the LFS endpoint', () => {
     await setAllowlist(page, ['github.com']);
     await openLfsDialog(page);
 
-    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+    await page.locator('gn-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
 
     const toast = page.locator('.toast');
     await expect(toast).toBeVisible();
@@ -161,7 +161,7 @@ test.describe('LFS transfers are gated on the LFS endpoint', () => {
     await setAllowlist(page, ['gitlab.com']);
     await openLfsDialog(page);
 
-    await page.locator('lv-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
+    await page.locator('gn-lfs-dialog').getByRole('button', { name: /Pull Files/i }).click();
 
     const toast = page.locator('.toast');
     await expect(toast).toContainText('not in your allowlist');

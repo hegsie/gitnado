@@ -71,7 +71,7 @@ let dialogs: DialogStoreModule['dialogs'];
  * between what it queries and what the app registers is invisible to types and
  * silently drops every late conflict.
  */
-const APP_SHELL_TAG = 'lv-app-shell';
+const APP_SHELL_TAG = 'gn-app-shell';
 
 /** The repository every event below names. */
 const REPO_PATH = '/repos/alpha';

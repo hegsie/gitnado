@@ -46,8 +46,8 @@ import '../app-shell.ts';
 import { dialogs } from '../stores/dialog.store.ts';
 
 // Side-effect import so showPrompt finds the singleton already in the DOM.
-import '../components/dialogs/lv-prompt-dialog.ts';
-import type { LvPromptDialog } from '../components/dialogs/lv-prompt-dialog.ts';
+import '../components/dialogs/gn-prompt-dialog.ts';
+import type { GnPromptDialog } from '../components/dialogs/gn-prompt-dialog.ts';
 
 /**
  * The stash shortcut/palette path now asks for an optional stash message, so
@@ -56,16 +56,16 @@ import type { LvPromptDialog } from '../components/dialogs/lv-prompt-dialog.ts';
  * asserted below.
  */
 function setupMockPrompt(value: string | null): void {
-  let dialog = document.querySelector<LvPromptDialog>('lv-prompt-dialog');
+  let dialog = document.querySelector<GnPromptDialog>('gn-prompt-dialog');
   if (!dialog) {
-    dialog = document.createElement('lv-prompt-dialog') as LvPromptDialog;
+    dialog = document.createElement('gn-prompt-dialog') as GnPromptDialog;
     document.body.appendChild(dialog);
   }
   dialog.open = async () => value;
 }
 
 function cleanupMockPrompt(): void {
-  const dialog = document.querySelector('lv-prompt-dialog');
+  const dialog = document.querySelector('gn-prompt-dialog');
   if (dialog) dialog.remove();
 }
 
@@ -118,7 +118,7 @@ function setupDefaultMocks(): void {
 }
 
 function createAppShell(): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (el as any).activeRepository = mockOpenRepository;
   return el;

@@ -44,15 +44,15 @@ test.describe('Keyboard Shortcuts', () => {
   // the user clicked something.
   // The palette restores focus to wherever it was when it opened. When the
   // command it ran opens a dialog, that restore must NOT yank focus back out
-  // of the new dialog — lv-modal focuses in a rAF, which lands after the
+  // of the new dialog — gn-modal focuses in a rAF, which lands after the
   // palette's restore, but the ordering is worth pinning down.
   test('a dialog opened from the palette keeps focus', async ({ page }) => {
     await page.keyboard.press('Meta+p');
-    await expect(page.locator('lv-command-palette[open]')).toBeVisible();
+    await expect(page.locator('gn-command-palette[open]')).toBeVisible();
 
-    await page.locator('lv-command-palette input').fill('Create tag');
+    await page.locator('gn-command-palette input').fill('Create tag');
     await page.keyboard.press('Enter');
-    await expect(page.locator('lv-create-tag-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-create-tag-dialog gn-modal[open]')).toBeVisible();
 
     // POLLED, not read once. The dialog moves focus asynchronously after it
     // renders, so a single `evaluate` right after the modal becomes visible can
@@ -92,7 +92,7 @@ test.describe('Keyboard Shortcuts', () => {
   test('a rebound shortcut survives a reload', async ({ page }) => {
     const row = () =>
       page
-        .locator('lv-keyboard-shortcuts-dialog[open] .shortcut-row')
+        .locator('gn-keyboard-shortcuts-dialog[open] .shortcut-row')
         .filter({ hasText: 'Toggle left panel' });
 
     await page.keyboard.press('?');
@@ -493,7 +493,7 @@ test.describe('Keyboard - Error Scenarios', () => {
     await dialogs.commandPalette.executeFirst();
 
     // The error should be surfaced to the user via a toast or error indicator
-    const errorIndicator = page.locator('lv-toast-container .toast.error, .error-message, .error-banner').first();
+    const errorIndicator = page.locator('gn-toast-container .toast.error, .error-message, .error-banner').first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
   });
 
@@ -510,7 +510,7 @@ test.describe('Keyboard - Error Scenarios', () => {
     await expect(dialogs.commandPalette.palette).not.toBeVisible();
 
     // Error should be displayed to user
-    const errorIndicator = page.locator('lv-toast-container .toast.error, .error-message, .error-banner').first();
+    const errorIndicator = page.locator('gn-toast-container .toast.error, .error-message, .error-banner').first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
   });
 });

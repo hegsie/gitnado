@@ -68,7 +68,7 @@ export async function restoreFileFromCommit(
     // Pinned refresh: repoPath was captured before the awaits, so a tab switch
     // mid-operation cannot refresh the wrong repo (app-shell
     // handleWindowRefresh -> refreshConflictDialogRepo). `status-refresh` makes
-    // lv-file-status reload now, so the newly staged file shows up in Changes
+    // gn-file-status reload now, so the newly staged file shows up in Changes
     // instead of waiting on the watcher debounce — the same pair app-shell's
     // fixup/squash handlers dispatch.
     window.dispatchEvent(new CustomEvent('repository-refresh', { detail: { repoPath } }));

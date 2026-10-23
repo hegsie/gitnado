@@ -32,7 +32,7 @@ import { searchIndexService } from '../services/search-index.service.ts';
 import type { Repository } from '../types/git.types.ts';
 
 function createAppShell(): AppShell {
-  return document.createElement('lv-app-shell') as AppShell;
+  return document.createElement('gn-app-shell') as AppShell;
 }
 
 function mockRepo(path: string, name: string): Repository {
@@ -875,7 +875,7 @@ describe('app-shell multi-repo behavior', () => {
           })
         );
         await el.updateComplete;
-        const canvas = el.shadowRoot!.querySelector('lv-graph-canvas') as unknown as {
+        const canvas = el.shadowRoot!.querySelector('gn-graph-canvas') as unknown as {
           searchFilter: unknown;
         };
         expect(canvas.searchFilter, 'filter applied to active repo').to.not.be.null;
@@ -1298,7 +1298,7 @@ describe('app-shell multi-repo behavior', () => {
         repositoryStore.getState().setActiveByPath('/repo/a');
         await el.updateComplete;
 
-        const describeDialog = el.shadowRoot!.querySelector('lv-describe-dialog');
+        const describeDialog = el.shadowRoot!.querySelector('gn-describe-dialog');
         expect(describeDialog, 'describe dialog is rendered').to.exist;
 
         // Describe was opened on a commit in repo A; the user then switched
@@ -1316,7 +1316,7 @@ describe('app-shell multi-repo behavior', () => {
         );
         await el.updateComplete;
 
-        const tagDialog = el.shadowRoot!.querySelector('lv-create-tag-dialog') as HTMLElement & {
+        const tagDialog = el.shadowRoot!.querySelector('gn-create-tag-dialog') as HTMLElement & {
           pinnedRepositoryPathIfOpen: string | null;
           updateComplete: Promise<unknown>;
         };
@@ -1353,7 +1353,7 @@ describe('app-shell multi-repo behavior', () => {
         (el as any).openConflictDialogFromState();
         await el.updateComplete;
         const dialog = () =>
-          el.shadowRoot!.querySelector('lv-conflict-resolution-dialog') as HTMLElement & {
+          el.shadowRoot!.querySelector('gn-conflict-resolution-dialog') as HTMLElement & {
             repositoryPath: string;
           };
         expect(dialog(), 'dialog should open').to.exist;
@@ -1390,7 +1390,7 @@ describe('app-shell multi-repo behavior', () => {
         await el.updateComplete;
 
         expect(dialogs.isOpen('conflict')).to.be.false;
-        expect(el.shadowRoot!.querySelector('lv-conflict-resolution-dialog')).to.be.null;
+        expect(el.shadowRoot!.querySelector('gn-conflict-resolution-dialog')).to.be.null;
         const toasts = uiStore.getState().toasts;
         expect(toasts.some((t) => t.type === 'warning' && t.message.includes('tab was closed')))
           .to.be.true;
@@ -1418,7 +1418,7 @@ describe('app-shell multi-repo behavior', () => {
         await el.updateComplete;
 
         expect(dialogs.isOpen('conflict')).to.be.false;
-        expect(el.shadowRoot!.querySelector('lv-conflict-resolution-dialog')).to.be.null;
+        expect(el.shadowRoot!.querySelector('gn-conflict-resolution-dialog')).to.be.null;
         const toasts = uiStore.getState().toasts;
         expect(
           toasts.some((t) => t.type === 'warning' && t.message.includes('reopen it'))
@@ -1469,7 +1469,7 @@ describe('app-shell multi-repo behavior', () => {
         await el.updateComplete;
 
         const dialog = el.shadowRoot!.querySelector(
-          'lv-conflict-resolution-dialog'
+          'gn-conflict-resolution-dialog'
         ) as HTMLElement & { repositoryPath: string; operationType: string };
         expect(dialog.repositoryPath).to.equal('/repo/a');
         expect(dialog.operationType).to.equal('stash');
@@ -1500,7 +1500,7 @@ describe('app-shell multi-repo behavior', () => {
 
         expect((el as any).staleRepoPaths.has('/repo/a')).to.be.true;
         const dialog = el.shadowRoot!.querySelector(
-          'lv-conflict-resolution-dialog'
+          'gn-conflict-resolution-dialog'
         ) as HTMLElement & { repositoryPath: string };
         expect(dialog.repositoryPath).to.equal('/repo/a');
       } finally {
@@ -1730,8 +1730,8 @@ describe('app-shell multi-repo behavior', () => {
         // discovers dialogs from the DOM, so a plain object hung off the @query
         // field would never be seen — and the test would pass whatever the
         // sweep did.
-        const cp = stubPinnedDialog(el, 'lv-cherry-pick-dialog', '/repo/a');
-        const rb = stubPinnedDialog(el, 'lv-interactive-rebase-dialog', '/repo/a');
+        const cp = stubPinnedDialog(el, 'gn-cherry-pick-dialog', '/repo/a');
+        const rb = stubPinnedDialog(el, 'gn-interactive-rebase-dialog', '/repo/a');
 
         // Close repo A's tab — the store subscription must dismiss both.
         repositoryStore.getState().removeRepository('/repo/a');
@@ -1760,7 +1760,7 @@ describe('app-shell multi-repo behavior', () => {
 
         dialogs.open('clean');
         await el.updateComplete;
-        const clean = stubPinnedDialog(el, 'lv-clean-dialog', '/repo/a', true);
+        const clean = stubPinnedDialog(el, 'gn-clean-dialog', '/repo/a', true);
         uiStore.setState({ toasts: [] });
 
         repositoryStore.getState().removeRepository('/repo/a');
@@ -1798,7 +1798,7 @@ describe('app-shell multi-repo behavior', () => {
 
         dialogs.open('clean');
         await el.updateComplete;
-        const clean = stubPinnedDialog(el, 'lv-clean-dialog', '/repo/a', false);
+        const clean = stubPinnedDialog(el, 'gn-clean-dialog', '/repo/a', false);
         uiStore.setState({ toasts: [] });
 
         repositoryStore.getState().removeRepository('/repo/a');
@@ -1829,7 +1829,7 @@ describe('app-shell multi-repo behavior', () => {
         repositoryStore.getState().setActiveByPath('/repo/b');
         await el.updateComplete;
 
-        const rb = stubPinnedDialog(el, 'lv-interactive-rebase-dialog', '/repo/a', true);
+        const rb = stubPinnedDialog(el, 'gn-interactive-rebase-dialog', '/repo/a', true);
         uiStore.setState({ toasts: [] });
 
         repositoryStore.getState().removeRepository('/repo/a');
@@ -1856,10 +1856,10 @@ describe('app-shell multi-repo behavior', () => {
       // deinit -f, git lfs prune, and the reflog hard reset all kept running
       // behind a toast saying they had been closed.
       const cases: Array<[string, DialogId, string]> = [
-        ['lv-worktree-dialog', 'worktrees', 'worktree removal'],
-        ['lv-submodule-dialog', 'submodules', 'submodule removal'],
-        ['lv-lfs-dialog', 'lfs', 'LFS prune'],
-        ['lv-reflog-dialog', 'reflog', 'reset'],
+        ['gn-worktree-dialog', 'worktrees', 'worktree removal'],
+        ['gn-submodule-dialog', 'submodules', 'submodule removal'],
+        ['gn-lfs-dialog', 'lfs', 'LFS prune'],
+        ['gn-reflog-dialog', 'reflog', 'reset'],
       ];
       for (const [tag, flag, running] of cases) {
         const el = createAppShell();
@@ -1903,7 +1903,7 @@ describe('app-shell multi-repo behavior', () => {
 
         dialogs.open('clean');
         await el.updateComplete;
-        stubPinnedDialog(el, 'lv-clean-dialog', '/repo/a', true);
+        stubPinnedDialog(el, 'gn-clean-dialog', '/repo/a', true);
         uiStore.setState({ toasts: [] });
 
         repositoryStore.getState().removeRepository('/repo/a');
@@ -1992,7 +1992,7 @@ describe('app-shell multi-repo behavior', () => {
         (el as any).openConflictDialogFromState();
         await el.updateComplete;
         const dialog = el.shadowRoot!.querySelector(
-          'lv-conflict-resolution-dialog'
+          'gn-conflict-resolution-dialog'
         ) as HTMLElement & { repositoryPath: string };
         expect(dialog.repositoryPath).to.equal('/repo/b');
       } finally {
@@ -2213,7 +2213,7 @@ describe('app-shell multi-repo behavior', () => {
           await el.updateComplete;
 
           expect(dialogs.isOpen('conflict')).to.be.false;
-          expect(el.shadowRoot!.querySelector('lv-conflict-resolution-dialog')).to.be.null;
+          expect(el.shadowRoot!.querySelector('gn-conflict-resolution-dialog')).to.be.null;
           const toasts = uiStore.getState().toasts;
           expect(toasts.some((t) => t.type === 'warning' && t.message.includes(state))).to.be
             .true;
@@ -2244,8 +2244,8 @@ describe('closing the last repository closes its dialogs', () => {
   // closing the last tab destroys the ELEMENT while its show* flag stays true.
   // Open the next repository and the element is reconstructed with ?open=true —
   // a full-screen overlay springing up unbidden over a repo the user just
-  // opened. lv-repository-health-dialog carried that story already, and
-  // lv-bisect-dialog then reproduced it because it has no pinned path and so
+  // opened. gn-repository-health-dialog carried that story already, and
+  // gn-bisect-dialog then reproduced it because it has no pinned path and so
   // was in neither hand-written sweep. The fix is an EXCLUSION list, so a
   // newly added dialog defaults to the safe behaviour.
   it('clears every repo-scoped dialog flag when the last tab closes', async () => {
@@ -2345,7 +2345,7 @@ describe('closing the last repository closes its dialogs', () => {
     // Drive the REAL handler: the manager stacks a provider dialog on itself to
     // connect an account to a profile. The listener is bound directly on the
     // element, so the event does not need to bubble.
-    el.shadowRoot!.querySelector('lv-profile-manager-dialog')!.dispatchEvent(
+    el.shadowRoot!.querySelector('gn-profile-manager-dialog')!.dispatchEvent(
       new CustomEvent('open-github', {
         detail: {
           returnTo: 'profile-manager',
@@ -2365,11 +2365,11 @@ describe('closing the last repository closes its dialogs', () => {
     repositoryStore.setState({ openRepositories: [] as never, activeIndex: -1 });
     await el.updateComplete;
 
-    const gh = el.shadowRoot!.querySelector('lv-github-dialog') as HTMLElement & {
+    const gh = el.shadowRoot!.querySelector('gn-github-dialog') as HTMLElement & {
       open: boolean;
     };
     expect(gh.open, 'the connect dialog survives the tab close').to.be.true;
-    const pm = el.shadowRoot!.querySelector('lv-profile-manager-dialog') as HTMLElement & {
+    const pm = el.shadowRoot!.querySelector('gn-profile-manager-dialog') as HTMLElement & {
       open: boolean;
     };
     expect(pm.open, 'the manager underneath stays open').to.be.true;
@@ -2513,7 +2513,7 @@ describe('the toolbar command-palette button loads the active repo', () => {
     internal.paletteBranches = [];
     invokeCallArgs.length = 0;
 
-    const toolbar = el.shadowRoot!.querySelector('lv-toolbar');
+    const toolbar = el.shadowRoot!.querySelector('gn-toolbar');
     expect(toolbar, 'the toolbar must be rendered').to.not.be.null;
     toolbar!.dispatchEvent(
       new CustomEvent('open-command-palette', { bubbles: true, composed: true })
@@ -2600,7 +2600,7 @@ describe('the toolbar command-palette button loads the active repo', () => {
     await (el as unknown as { openCommandPalette: () => Promise<void> }).openCommandPalette();
     await el.updateComplete;
 
-    const palette = el.shadowRoot!.querySelector('lv-command-palette');
+    const palette = el.shadowRoot!.querySelector('gn-command-palette');
     expect(palette, 'the palette must be rendered').to.not.be.null;
     expect((palette as unknown as { repositoryPath: string }).repositoryPath).to.equal('/repo/a');
 
@@ -2643,7 +2643,7 @@ describe('the toolbar command-palette button loads the active repo', () => {
     await waitUntil(() => branchResolvers.length > 0 && fileResolvers.length > 0);
 
     // Escape: the palette dismisses itself and reports it through `close`.
-    const palette = el.shadowRoot!.querySelector('lv-command-palette');
+    const palette = el.shadowRoot!.querySelector('gn-command-palette');
     expect(palette, 'the palette must be rendered').to.not.be.null;
     (palette as unknown as { close: () => void }).close();
     await el.updateComplete;

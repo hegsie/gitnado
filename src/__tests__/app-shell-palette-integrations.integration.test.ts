@@ -32,7 +32,7 @@ interface PaletteCommand {
 }
 
 function createAppShellNoRepo(): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (el as any).activeRepository = null;
   return el;

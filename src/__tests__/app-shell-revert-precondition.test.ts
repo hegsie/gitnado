@@ -85,7 +85,7 @@ describe('app-shell revert precondition failures', () => {
     it(`toasts a ${name} refusal without opening the conflict dialog`, async () => {
       mockErrors['revert'] = { code: 'OPERATION_FAILED', message };
 
-      const el = document.createElement('lv-app-shell') as AppShell;
+      const el = document.createElement('gn-app-shell') as AppShell;
       (el as any).activeRepository = { repository: mockRepo() };
       (el as any).contextMenu = {
         visible: true,
@@ -117,7 +117,7 @@ describe('app-shell revert precondition failures', () => {
     mockErrors['revert'] = { code: 'REVERT_CONFLICT', message: 'Revert conflict' };
 
     const repo = mockRepo();
-    const el = document.createElement('lv-app-shell') as AppShell;
+    const el = document.createElement('gn-app-shell') as AppShell;
     (el as any).activeRepository = { repository: repo };
     (el as any).contextMenu = {
       visible: true,

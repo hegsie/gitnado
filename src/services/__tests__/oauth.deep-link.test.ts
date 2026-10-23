@@ -1,6 +1,5 @@
 /**
- * OAuth deep-link scheme recognition. The app accepts callbacks on both the
- * current `gitnado://` scheme and the pre-rename `leviathan://` scheme.
+ * OAuth deep-link scheme recognition.
  */
 
 import { expect } from '@open-wc/testing';
@@ -20,20 +19,14 @@ if (typeof import.meta === 'object' && !import.meta.env) {
 import { OAUTH_DEEP_LINK_PREFIXES, oauthDeepLinkProvider } from '../oauth.service.ts';
 
 describe('oauthDeepLinkProvider', () => {
-  it('accepts both the current and the legacy scheme', () => {
-    expect(OAUTH_DEEP_LINK_PREFIXES).to.deep.equal(['gitnado://oauth/', 'leviathan://oauth/']);
+  it('declares the gitnado://oauth/ scheme prefix', () => {
+    expect(OAUTH_DEEP_LINK_PREFIXES).to.deep.equal(['gitnado://oauth/']);
   });
 
   it('extracts the provider from a gitnado:// callback', () => {
     expect(oauthDeepLinkProvider('gitnado://oauth/gitlab/callback?code=abc&state=xyz')).to.equal(
       'gitlab'
     );
-  });
-
-  it('extracts the provider from a legacy leviathan:// callback', () => {
-    expect(
-      oauthDeepLinkProvider('leviathan://oauth/bitbucket/callback?code=abc&state=xyz')
-    ).to.equal('bitbucket');
   });
 
   it('handles a provider segment with no trailing path', () => {
@@ -43,7 +36,6 @@ describe('oauthDeepLinkProvider', () => {
 
   it('rejects non-OAuth and foreign-scheme links', () => {
     expect(oauthDeepLinkProvider('gitnado://open?repo=x')).to.be.null;
-    expect(oauthDeepLinkProvider('leviathan://something-else/gitlab')).to.be.null;
     expect(oauthDeepLinkProvider('https://example.com/oauth/gitlab/callback')).to.be.null;
     expect(oauthDeepLinkProvider('other://oauth/gitlab/callback')).to.be.null;
     expect(oauthDeepLinkProvider('')).to.be.null;

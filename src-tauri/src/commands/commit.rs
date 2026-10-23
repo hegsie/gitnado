@@ -1326,7 +1326,7 @@ async fn edit_commit_date_with_rebase(
 /// This uses git CLI under the hood as git2 doesn't support interactive rebase well.
 ///
 /// NOTE: no UI path reaches this command today — `handleRewordCommit` in
-/// `app-shell.ts` sends a non-HEAD reword through `lv-interactive-rebase-dialog`
+/// `app-shell.ts` sends a non-HEAD reword through `gn-interactive-rebase-dialog`
 /// and `execute_interactive_rebase` instead. It stays registered, and its
 /// `gitService.rewordCommit` wrapper stays exported, for callers that invoke it
 /// directly — so its tests are backend coverage only: passing tests here do not

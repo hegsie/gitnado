@@ -84,7 +84,7 @@ test.describe('Diff View Content', () => {
     await expect(diffPath).toContainText('main.ts');
 
     // Verify diff view contains actual diff content (the mock returns hunks with lines)
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     await expect(diffView).toBeVisible();
   });
 });
@@ -281,7 +281,7 @@ test.describe('Image Diff Difference Mode', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Find and click the Difference button
-    const differenceButton = page.locator('lv-image-diff').getByRole('button', { name: 'Difference' });
+    const differenceButton = page.locator('gn-image-diff').getByRole('button', { name: 'Difference' });
     await expect(differenceButton).toBeVisible();
     await differenceButton.click();
 
@@ -298,11 +298,11 @@ test.describe('Image Diff Difference Mode', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Click the Difference button
-    const differenceButton = page.locator('lv-image-diff').getByRole('button', { name: 'Difference' });
+    const differenceButton = page.locator('gn-image-diff').getByRole('button', { name: 'Difference' });
     await differenceButton.click();
 
     // Verify sensitivity slider is visible
-    const sensitivitySlider = page.locator('lv-image-diff').getByRole('slider', { name: /sensitivity/i });
+    const sensitivitySlider = page.locator('gn-image-diff').getByRole('slider', { name: /sensitivity/i });
     await expect(sensitivitySlider).toBeVisible({ timeout: 5000 });
   });
 
@@ -315,11 +315,11 @@ test.describe('Image Diff Difference Mode', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Click the Difference button
-    const differenceButton = page.locator('lv-image-diff').getByRole('button', { name: 'Difference' });
+    const differenceButton = page.locator('gn-image-diff').getByRole('button', { name: 'Difference' });
     await differenceButton.click();
 
     // Wait for difference computation to complete by checking loading state disappears
-    const imageDiff = page.locator('lv-image-diff');
+    const imageDiff = page.locator('gn-image-diff');
     await expect(imageDiff.locator('.loading')).toBeHidden({ timeout: 10000 });
 
     // Verify legend items are displayed
@@ -337,11 +337,11 @@ test.describe('Image Diff Difference Mode', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Click the Difference button
-    const differenceButton = page.locator('lv-image-diff').getByRole('button', { name: 'Difference' });
+    const differenceButton = page.locator('gn-image-diff').getByRole('button', { name: 'Difference' });
     await differenceButton.click();
 
     // Wait for difference computation to complete by checking loading state disappears
-    const imageDiff = page.locator('lv-image-diff');
+    const imageDiff = page.locator('gn-image-diff');
     await expect(imageDiff.locator('.loading')).toBeHidden({ timeout: 10000 });
 
     // Verify percentages are shown in legend (format: "Added (X.X%)")
@@ -358,18 +358,18 @@ test.describe('Image Diff Difference Mode', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Click the Difference button
-    const differenceButton = page.locator('lv-image-diff').getByRole('button', { name: 'Difference' });
+    const differenceButton = page.locator('gn-image-diff').getByRole('button', { name: 'Difference' });
     await differenceButton.click();
 
     // Get the sensitivity slider
-    const sensitivitySlider = page.locator('lv-image-diff').getByRole('slider', { name: /sensitivity/i });
+    const sensitivitySlider = page.locator('gn-image-diff').getByRole('slider', { name: /sensitivity/i });
     await expect(sensitivitySlider).toBeVisible({ timeout: 5000 });
 
     // Adjust the slider value
     await sensitivitySlider.fill('50');
 
     // Verify the threshold value display updates
-    const thresholdValue = page.locator('lv-image-diff .threshold-value');
+    const thresholdValue = page.locator('gn-image-diff .threshold-value');
     await expect(thresholdValue).toHaveText('50');
   });
 
@@ -381,7 +381,7 @@ test.describe('Image Diff Difference Mode', () => {
     // Wait for diff overlay to appear
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
-    const imageDiff = page.locator('lv-image-diff');
+    const imageDiff = page.locator('gn-image-diff');
 
     // Verify all mode buttons are present
     await expect(imageDiff.getByRole('button', { name: 'Side by Side' })).toBeVisible();
@@ -454,13 +454,13 @@ test.describe('Diff View - Text Content Verification', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // The diff view uses .code-addition and .code-deletion classes on .line elements
-    const additionLines = page.locator('lv-diff-view .line.code-addition');
+    const additionLines = page.locator('gn-diff-view .line.code-addition');
     await expect(additionLines.first()).toBeVisible({ timeout: 5000 });
     const addCount = await additionLines.count();
     expect(addCount).toBeGreaterThan(0);
 
     // The diff view should contain deletion lines (red)
-    const deletionLines = page.locator('lv-diff-view .line.code-deletion');
+    const deletionLines = page.locator('gn-diff-view .line.code-deletion');
     const delCount = await deletionLines.count();
     expect(delCount).toBeGreaterThan(0);
   });
@@ -473,7 +473,7 @@ test.describe('Diff View - Text Content Verification', () => {
 
     // Verify the diff contains context/hunk content from the mock data
     // The diff view renders hunk content including the context line and code changes
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     // Check that the mock diff content (e.g., 'LitElement' from context line) is rendered
     await expect(diffView).toContainText('LitElement');
   });
@@ -496,9 +496,9 @@ test.describe('Diff View - Text Content Verification', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // The diff view header shows addition and deletion counts using .additions and .deletions spans
-    const additions = page.locator('lv-diff-view .additions');
+    const additions = page.locator('gn-diff-view .additions');
     await expect(additions).toContainText('+2');
-    const deletions = page.locator('lv-diff-view .deletions');
+    const deletions = page.locator('gn-diff-view .deletions');
     await expect(deletions).toContainText('-1');
   });
 });
@@ -541,7 +541,7 @@ test.describe('Diff View - Binary File Handling', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Should show some indication that the file is binary
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     await expect(diffView).toContainText(/binary|Binary/i);
   });
 
@@ -552,7 +552,7 @@ test.describe('Diff View - Binary File Handling', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // No diff lines should be shown for binary files
-    const diffLines = page.locator('lv-diff-view .line-addition, lv-diff-view .line-deletion, lv-diff-view .diff-line');
+    const diffLines = page.locator('gn-diff-view .line-addition, gn-diff-view .line-deletion, gn-diff-view .diff-line');
     const count = await diffLines.count();
     expect(count).toBe(0);
   });
@@ -610,7 +610,7 @@ test.describe('Diff View - Stage Hunk', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Stage hunk button has class .stage-btn.stage and title "Stage this hunk"
-    const stageHunkBtn = page.locator('lv-diff-view button.stage-btn.stage[title="Stage this hunk"]');
+    const stageHunkBtn = page.locator('gn-diff-view button.stage-btn.stage[title="Stage this hunk"]');
     await expect(stageHunkBtn.first()).toBeVisible();
   });
 
@@ -623,7 +623,7 @@ test.describe('Diff View - Stage Hunk', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // Click the stage hunk button (class .stage-btn.stage, title "Stage this hunk")
-    const stageHunkBtn = page.locator('lv-diff-view button.stage-btn.stage[title="Stage this hunk"]').first();
+    const stageHunkBtn = page.locator('gn-diff-view button.stage-btn.stage[title="Stage this hunk"]').first();
     await stageHunkBtn.click();
 
     await page.waitForFunction(() =>
@@ -649,11 +649,11 @@ test.describe('Diff View - Stage Hunk', () => {
 
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
-    await page.locator('lv-diff-view .view-btn[title="Split view"]').click();
-    await expect(page.locator('lv-diff-view .split-pane')).toHaveCount(2);
+    await page.locator('gn-diff-view .view-btn[title="Split view"]').click();
+    await expect(page.locator('gn-diff-view .split-pane')).toHaveCount(2);
 
     await page
-      .locator('lv-diff-view .split-pane')
+      .locator('gn-diff-view .split-pane')
       .nth(1)
       .locator('button.stage-btn.stage[title="Stage this hunk"]')
       .first()
@@ -678,15 +678,15 @@ test.describe('Diff View - Stage Hunk', () => {
 
     await page
       .locator(
-        'lv-diff-view .view-btn[title="Toggle line selection mode for staging individual lines"]'
+        'gn-diff-view .view-btn[title="Toggle line selection mode for staging individual lines"]'
       )
       .click();
-    await page.locator('lv-diff-view .view-btn[title="Split view"]').click();
-    await expect(page.locator('lv-diff-view .split-pane')).toHaveCount(2);
+    await page.locator('gn-diff-view .view-btn[title="Split view"]').click();
+    await expect(page.locator('gn-diff-view .split-pane')).toHaveCount(2);
 
-    await page.locator('lv-diff-view .split-line.code-addition').first().click();
+    await page.locator('gn-diff-view .split-line.code-addition').first().click();
 
-    const selectionActions = page.locator('lv-diff-view .selection-actions');
+    const selectionActions = page.locator('gn-diff-view .selection-actions');
     await expect(selectionActions).toBeVisible();
     await expect(selectionActions).toContainText('1 line selected');
 
@@ -740,21 +740,21 @@ test.describe('Diff View - Stage Hunk', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     await page
-      .locator('lv-diff-view button.view-btn[title="Toggle line selection mode for staging individual lines"]')
+      .locator('gn-diff-view button.view-btn[title="Toggle line selection mode for staging individual lines"]')
       .click();
 
     // Select two lines the way a user would.
-    const checkboxes = page.locator('lv-diff-view .line-checkbox');
+    const checkboxes = page.locator('gn-diff-view .line-checkbox');
     await checkboxes.nth(0).check();
     await checkboxes.nth(1).check();
-    await expect(page.locator('lv-diff-view .selection-info')).toHaveText(/2 lines selected/);
+    await expect(page.locator('gn-diff-view .selection-info')).toHaveText(/2 lines selected/);
 
     // Stage a different line through the context menu.
-    await page.locator('lv-diff-view .line.code-addition').last().click({ button: 'right' });
-    await page.locator('lv-diff-view .context-menu-item', { hasText: 'Stage line' }).click();
+    await page.locator('gn-diff-view .line.code-addition').last().click({ button: 'right' });
+    await page.locator('gn-diff-view .context-menu-item', { hasText: 'Stage line' }).click();
 
     // The reloaded diff invalidated the old keys, so the selection bar is gone.
-    await expect(page.locator('lv-diff-view .selection-actions')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view .selection-actions')).toHaveCount(0);
     expect((await findCommand(page, 'stage_hunk')).length).toBeGreaterThan(0);
   });
 });
@@ -787,7 +787,7 @@ test.describe('Diff Error Scenarios', () => {
 
     // The diff view component renders errors as <div class="error"> inside its shadow DOM.
     // Use a scoped locator to avoid matching unrelated .empty elements from other components.
-    const errorDiv = page.locator('lv-diff-view .error');
+    const errorDiv = page.locator('gn-diff-view .error');
     await expect(errorDiv).toBeVisible();
     await expect(errorDiv).toContainText('Failed to read file: permission denied');
   });
@@ -816,7 +816,7 @@ test.describe('Diff Error Scenarios', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     // With no hunks, there should be no addition or deletion lines
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     const additionLines = diffView.locator('.line-addition, .diff-addition, .added');
     const deletionLines = diffView.locator('.line-deletion, .diff-deletion, .removed');
 
@@ -888,11 +888,11 @@ test.describe('Diff - UI Outcome Verification', () => {
     });
 
     // Click the stage hunk button
-    const stageHunkBtn = page.locator('lv-diff-view button.stage-btn.stage[title="Stage this hunk"]').first();
+    const stageHunkBtn = page.locator('gn-diff-view button.stage-btn.stage[title="Stage this hunk"]').first();
     await stageHunkBtn.click();
 
     // After staging, the staged section should show the file
-    const stagedHeader = page.locator('lv-file-status .section-header:has-text("Staged")');
+    const stagedHeader = page.locator('gn-file-status .section-header:has-text("Staged")');
     await expect(stagedHeader).toBeVisible({ timeout: 5000 });
   });
 
@@ -913,7 +913,7 @@ test.describe('Diff - UI Outcome Verification', () => {
     await file.click();
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
-    const imageDiff = page.locator('lv-image-diff');
+    const imageDiff = page.locator('gn-image-diff');
 
     // Verify Side by Side is the default active mode
     const sideBySideBtn = imageDiff.getByRole('button', { name: 'Side by Side' });
@@ -1050,21 +1050,21 @@ test.describe('Diff View - Large diff staging after Load full diff', () => {
     await rightPanel.getUnstagedFile('src/main.ts').click();
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
-    const loadFullBtn = page.locator('lv-diff-view .large-diff-info .btn-link');
+    const loadFullBtn = page.locator('gn-diff-view .large-diff-info .btn-link');
     await expect(loadFullBtn).toBeVisible();
 
     await startCommandCapture(page);
     await injectCommandMock(page, { get_file_diff: buildLargeDiff(), stage_hunk: null });
 
     await loadFullBtn.click();
-    await expect(page.locator('lv-diff-view .diff-virtualized-container')).toBeVisible();
+    await expect(page.locator('gn-diff-view .diff-virtualized-container')).toBeVisible();
   }
 
   test('staging a hunk still works after Load full diff on a large file', async ({ page }) => {
     await loadFullDiff(page);
 
     const stageBtn = page
-      .locator('lv-diff-view .diff-virtualized-container button.stage-btn.stage[title="Stage this hunk"]')
+      .locator('gn-diff-view .diff-virtualized-container button.stage-btn.stage[title="Stage this hunk"]')
       .first();
     await expect(stageBtn).toBeVisible();
     await stageBtn.click();
@@ -1080,13 +1080,13 @@ test.describe('Diff View - Large diff staging after Load full diff', () => {
   test('line selection is available in the virtualized view', async ({ page }) => {
     await loadFullDiff(page);
 
-    await page.locator('lv-diff-view button.view-btn[title^="Toggle line selection"]').click();
+    await page.locator('gn-diff-view button.view-btn[title^="Toggle line selection"]').click();
     await page
-      .locator('lv-diff-view .diff-virtualized-container .line.code-addition')
+      .locator('gn-diff-view .diff-virtualized-container .line.code-addition')
       .first()
       .click();
 
-    const bar = page.locator('lv-diff-view .selection-actions');
+    const bar = page.locator('gn-diff-view .selection-actions');
     await expect(bar).toBeVisible();
     await expect(bar).toContainText('Stage Selected');
   });
@@ -1098,9 +1098,9 @@ test.describe('Word Wrap setting', () => {
 
   // The diff view has its own `.diff-content` inside the app-shell wrapper of the
   // same name, so scope the assertion to the component.
-  const DIFF_CONTENT = 'lv-diff-view .diff-content';
+  const DIFF_CONTENT = 'gn-diff-view .diff-content';
   const wordWrapToggle = (page: Page) =>
-    page.locator('lv-settings-dialog').getByRole('switch', { name: 'Word Wrap' });
+    page.locator('gn-settings-dialog').getByRole('switch', { name: 'Word Wrap' });
 
   test.beforeEach(async ({ page }) => {
     rightPanel = new RightPanelPage(page);
@@ -1119,9 +1119,9 @@ test.describe('Word Wrap setting', () => {
     await expect(page.locator(DIFF_CONTENT)).not.toHaveClass(/word-wrap/);
 
     await page.keyboard.press('Meta+,');
-    await expect(page.locator('lv-settings-dialog')).toBeVisible();
+    await expect(page.locator('gn-settings-dialog')).toBeVisible();
     await wordWrapToggle(page).click();
-    await page.locator('lv-settings-dialog button:has-text("Done")').click();
+    await page.locator('gn-settings-dialog button:has-text("Done")').click();
 
     await expect(page.locator(DIFF_CONTENT)).toHaveClass(/word-wrap/);
   });
@@ -1132,9 +1132,9 @@ test.describe('Word Wrap setting', () => {
 
     await page.keyboard.press('Meta+,');
     await expect(wordWrapToggle(page)).not.toBeChecked();
-    await page.locator('lv-settings-dialog button:has-text("Done")').click();
+    await page.locator('gn-settings-dialog button:has-text("Done")').click();
 
-    await page.locator('lv-diff-view [title="Toggle word wrap"]').click();
+    await page.locator('gn-diff-view [title="Toggle word wrap"]').click();
     await expect(page.locator(DIFF_CONTENT)).toHaveClass(/word-wrap/);
 
     await page.keyboard.press('Meta+,');
@@ -1144,7 +1144,7 @@ test.describe('Word Wrap setting', () => {
   test('wrapping survives closing and reopening the diff', async ({ page }) => {
     await rightPanel.openFileDiff('src/main.ts');
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
-    await page.locator('lv-diff-view [title="Toggle word wrap"]').click();
+    await page.locator('gn-diff-view [title="Toggle word wrap"]').click();
     await expect(page.locator(DIFF_CONTENT)).toHaveClass(/word-wrap/);
 
     await graph.closeDiff();
@@ -1160,10 +1160,10 @@ test.describe('Diff whitespace and context settings', () => {
   let rightPanel: RightPanelPage;
   let graph: GraphPanelPage;
 
-  const WHITESPACE_SELECT = 'lv-diff-view #diff-ignore-whitespace';
-  const CONTEXT_INPUT = 'lv-diff-view #diff-context-lines';
-  const SETTINGS_WHITESPACE = 'lv-settings-dialog #diff-whitespace-select';
-  const SETTINGS_CONTEXT = 'lv-settings-dialog #diff-context-lines-input';
+  const WHITESPACE_SELECT = 'gn-diff-view #diff-ignore-whitespace';
+  const CONTEXT_INPUT = 'gn-diff-view #diff-context-lines';
+  const SETTINGS_WHITESPACE = 'gn-settings-dialog #diff-whitespace-select';
+  const SETTINGS_CONTEXT = 'gn-settings-dialog #diff-context-lines-input';
 
   /**
    * A get_file_diff mock that actually reacts to the two new arguments: one
@@ -1265,7 +1265,7 @@ test.describe('Diff whitespace and context settings', () => {
     await rightPanel.openFileDiff('src/main.ts');
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
-    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(3);
+    await expect(page.locator('gn-diff-view .line.context')).toHaveCount(3);
     const args = await lastDiffArgs(page);
     expect(args.ignoreWhitespace).toBe('none');
     expect(args.contextLines).toBe(3);
@@ -1276,25 +1276,25 @@ test.describe('Diff whitespace and context settings', () => {
   }) => {
     await rightPanel.openFileDiff('src/main.ts');
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('lv-diff-view .line.code-addition')).toHaveCount(1);
+    await expect(page.locator('gn-diff-view .line.code-addition')).toHaveCount(1);
 
     await page.locator(WHITESPACE_SELECT).selectOption('all');
 
     // The diff really re-rendered: no lines, and the reason is on screen.
-    await expect(page.locator('lv-diff-view .line.code-addition')).toHaveCount(0);
-    await expect(page.locator('lv-diff-view .empty')).toContainText('Ignore all whitespace');
+    await expect(page.locator('gn-diff-view .line.code-addition')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view .empty')).toContainText('Ignore all whitespace');
     expect((await lastDiffArgs(page)).ignoreWhitespace).toBe('all');
   });
 
   test('the toolbar context control re-fetches with the new count', async ({ page }) => {
     await rightPanel.openFileDiff('src/main.ts');
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(3);
+    await expect(page.locator('gn-diff-view .line.context')).toHaveCount(3);
 
     await page.locator(CONTEXT_INPUT).fill('1');
     await page.locator(CONTEXT_INPUT).blur();
 
-    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(1);
+    await expect(page.locator('gn-diff-view .line.context')).toHaveCount(1);
     expect((await lastDiffArgs(page)).contextLines).toBe(1);
   });
 
@@ -1308,7 +1308,7 @@ test.describe('Diff whitespace and context settings', () => {
     await page.locator(CONTEXT_INPUT).blur();
 
     await expect(page.locator(CONTEXT_INPUT)).toHaveValue('20');
-    await expect(page.locator('lv-diff-view .line.context')).toHaveCount(20);
+    await expect(page.locator('gn-diff-view .line.context')).toHaveCount(20);
     expect((await lastDiffArgs(page)).contextLines).toBe(20);
   });
 
@@ -1317,12 +1317,12 @@ test.describe('Diff whitespace and context settings', () => {
     await expect(graph.diffOverlay).toBeVisible({ timeout: 5000 });
 
     await page.keyboard.press('Meta+,');
-    await expect(page.locator('lv-settings-dialog')).toBeVisible();
+    await expect(page.locator('gn-settings-dialog')).toBeVisible();
     await expect(page.locator(SETTINGS_WHITESPACE)).toHaveValue('none');
     await page.locator(SETTINGS_WHITESPACE).selectOption('change');
     await page.locator(SETTINGS_CONTEXT).fill('5');
     await page.locator(SETTINGS_CONTEXT).blur();
-    await page.locator('lv-settings-dialog button:has-text("Done")').click();
+    await page.locator('gn-settings-dialog button:has-text("Done")').click();
 
     await expect(page.locator(WHITESPACE_SELECT)).toHaveValue('change');
     await expect(page.locator(CONTEXT_INPUT)).toHaveValue('5');

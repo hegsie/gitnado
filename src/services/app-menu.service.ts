@@ -15,7 +15,7 @@
  *   included.
  */
 
-import type { PaletteCommand } from '../components/dialogs/lv-command-palette.ts';
+import type { PaletteCommand } from '../components/dialogs/gn-command-palette.ts';
 import { keyboardService, type ShortcutBinding } from './keyboard.service.ts';
 import { invokeCommand } from './tauri-api.ts';
 import type { CommandResult } from '../types/api.types.ts';

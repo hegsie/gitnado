@@ -60,7 +60,7 @@ async function setAllowlist(page: Page, allowlist: string[]): Promise<void> {
 }
 
 function fetchButton(page: Page) {
-  return page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i });
+  return page.locator('gn-context-dashboard').getByRole('button', { name: /Fetch/i });
 }
 
 async function mockLocalOrigin(page: Page, url = LOCAL_REMOTE): Promise<void> {

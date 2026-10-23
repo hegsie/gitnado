@@ -5,11 +5,11 @@ import { GraphPanelPage, RightPanelPage } from '../pages/panels.page';
 import { startCommandCapture, startCommandCaptureWithMocks, findCommand, waitForRepositoryChanged, injectCommandError, injectCommandMock, waitForCommand } from '../fixtures/test-helpers';
 
 /**
- * Helper to get a Playwright ElementHandle for the lv-graph-canvas element.
+ * Helper to get a Playwright ElementHandle for the gn-graph-canvas element.
  * Uses Playwright's auto-piercing locator instead of manual shadowRoot traversal.
  */
 async function getGraphCanvasHandle(page: import('@playwright/test').Page) {
-  const graphCanvas = page.locator('lv-graph-canvas');
+  const graphCanvas = page.locator('gn-graph-canvas');
   await expect(graphCanvas).toBeAttached();
   return await graphCanvas.elementHandle();
 }
@@ -115,12 +115,12 @@ async function waitForNoSelectedNode(page: import('@playwright/test').Page): Pro
 }
 
 /**
- * Helper to focus the internal <canvas> element inside lv-graph-canvas
+ * Helper to focus the internal <canvas> element inside gn-graph-canvas
  * so keyboard events reach the component's own handler.
  * Uses Playwright's auto-piercing locator instead of manual shadowRoot traversal.
  */
 async function focusGraphInternalCanvas(page: import('@playwright/test').Page): Promise<void> {
-  const internalCanvas = page.locator('lv-graph-canvas canvas[role="img"]');
+  const internalCanvas = page.locator('gn-graph-canvas canvas[role="img"]');
   await expect(internalCanvas).toBeAttached();
   await internalCanvas.focus();
 }
@@ -315,7 +315,7 @@ test.describe('Graph with Multiple Commits', () => {
     const detailsTab = rightPanel.detailsTab;
     await expect(detailsTab).toBeVisible();
 
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails).toBeVisible();
     const commitMessage = commitDetails.locator('.commit-message');
     await expect(commitMessage).toContainText('Commit 0');
@@ -325,7 +325,7 @@ test.describe('Graph with Multiple Commits', () => {
     await graph.navigateDown();
     await waitForSelectedNode(page, 'commit0');
 
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails).toBeVisible();
     const commitMessage = commitDetails.locator('.commit-message');
     await expect(commitMessage).toContainText('Commit 0');
@@ -385,7 +385,7 @@ test.describe('Graph Commit Selection', () => {
     );
     await waitForSelectedNode(page, 'commit1');
 
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails).toBeVisible();
 
     const commitOid = commitDetails.locator('.commit-oid');
@@ -406,7 +406,7 @@ test.describe('Graph Commit Selection', () => {
     );
     await waitForSelectedNode(page, 'commit1');
 
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails.locator('.commit-message')).toContainText('Commit 1');
 
     // The history is rewritten (amend/rebase/squash): commit1 and commit2 are
@@ -474,7 +474,7 @@ test.describe('Graph Commit Selection', () => {
 
     // The panel follows the survivor instead of going blank while the graph
     // still highlights it
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails.locator('.commit-message')).toContainText('Commit 1');
     await expect(commitDetails.locator('.empty-state')).toHaveCount(0);
     expect(await getSelectedNodeOids(page)).toEqual(['commit1']);
@@ -516,7 +516,7 @@ test.describe('Graph Commit Selection', () => {
     );
     await waitForNodeCount(page, 4);
 
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails.locator('.commit-message')).toContainText('Commit 1');
     expect(await getSelectedNodeOid(page)).toBe('commit1');
   });
@@ -527,7 +527,7 @@ test.describe('Graph Commit Selection', () => {
     const selectedBefore = await getSelectedNodeOid(page);
     expect(selectedBefore).not.toBeNull();
 
-    // Focus the internal <canvas> element inside lv-graph-canvas
+    // Focus the internal <canvas> element inside gn-graph-canvas
     // so the Escape keydown event reaches the component's own handler
     await focusGraphInternalCanvas(page);
     await page.keyboard.press('Escape');
@@ -716,7 +716,7 @@ test.describe('Graph - UI Outcome Verification', () => {
     await waitForSelectedNode(page, 'commit2');
 
     // Verify the details panel shows the selected commit's information
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails).toBeVisible();
     await expect(commitDetails.locator('.commit-message')).toContainText('Commit 2');
     await expect(commitDetails.locator('.commit-oid')).toContainText('commit2'.slice(0, 7));
@@ -735,7 +735,7 @@ test.describe('Graph - UI Outcome Verification', () => {
     await waitForSelectedNode(page, 'commit1');
 
     // Verify the commit details panel is showing
-    const commitDetails = page.locator('lv-commit-details');
+    const commitDetails = page.locator('gn-commit-details');
     await expect(commitDetails).toBeVisible();
     await expect(commitDetails.locator('.commit-message')).toContainText('Commit 1');
 
@@ -863,7 +863,7 @@ test.describe('Graph Error Handling', () => {
     expect(await getSortedNodeCount(page)).toBe(nodesBefore);
     // The graph's real error surface is the info panel with "Error" text
     await expect(
-      page.locator('lv-graph-canvas .info-panel', { hasText: 'Error' })
+      page.locator('gn-graph-canvas .info-panel', { hasText: 'Error' })
     ).toHaveCount(0);
   });
 });
@@ -901,15 +901,15 @@ test.describe('Branch Visibility Filtering', () => {
       (el as HTMLElement & { refresh(): void }).refresh();
     }, handle);
     // Refs are loaded when the branch panel can list them
-    await page.locator('lv-graph-canvas .toolbar-btn', { hasText: 'Branches' }).click();
+    await page.locator('gn-graph-canvas .toolbar-btn', { hasText: 'Branches' }).click();
     await expect(
-      page.locator('lv-graph-canvas .branch-item', { hasText: 'feature' })
+      page.locator('gn-graph-canvas .branch-item', { hasText: 'feature' })
     ).toBeVisible();
   });
 
   test('hiding a branch removes its exclusive commits from the graph', async ({ page }) => {
     const featureCheckbox = page
-      .locator('lv-graph-canvas .branch-item', { hasText: 'feature' })
+      .locator('gn-graph-canvas .branch-item', { hasText: 'feature' })
       .locator('input[type="checkbox"]');
     await featureCheckbox.uncheck();
 
@@ -927,7 +927,7 @@ test.describe('Branch Visibility Filtering', () => {
 
   test('re-showing a hidden branch restores its commits', async ({ page }) => {
     const featureCheckbox = page
-      .locator('lv-graph-canvas .branch-item', { hasText: 'feature' })
+      .locator('gn-graph-canvas .branch-item', { hasText: 'feature' })
       .locator('input[type="checkbox"]');
 
     await featureCheckbox.uncheck();
@@ -939,7 +939,7 @@ test.describe('Branch Visibility Filtering', () => {
 
   test('hiding the HEAD branch keeps HEAD history visible', async ({ page }) => {
     const mainCheckbox = page
-      .locator('lv-graph-canvas .branch-item', { hasText: 'main' })
+      .locator('gn-graph-canvas .branch-item', { hasText: 'main' })
       .locator('input[type="checkbox"]');
     await mainCheckbox.uncheck();
 
@@ -1078,7 +1078,7 @@ test.describe('Graph refresh while scrolled deep', () => {
       (c) => ((c.args as { skip?: number } | undefined)?.skip ?? 0) > 0
     );
     expect(catchUpCalls.length).toBeGreaterThan(0);
-    await expect(page.locator('lv-graph-canvas .info-panel')).toHaveCount(0);
+    await expect(page.locator('gn-graph-canvas .info-panel')).toHaveCount(0);
   });
 });
 
@@ -1093,24 +1093,24 @@ test.describe('Graph Empty Repository', () => {
   });
 
   test('shows the empty state instead of a blank canvas', async ({ page }) => {
-    const emptyState = page.locator('lv-graph-canvas .graph-overlay.empty-state');
+    const emptyState = page.locator('gn-graph-canvas .graph-overlay.empty-state');
     await expect(emptyState).toBeVisible();
     await expect(emptyState).toContainText('No commits yet');
     await expect(emptyState).toContainText('Commit panel');
   });
 
   test('announces "No commits" rather than a permanent loading label', async ({ page }) => {
-    const canvasElement = page.locator('lv-graph-canvas canvas[role="img"]');
+    const canvasElement = page.locator('gn-graph-canvas canvas[role="img"]');
     await expect(canvasElement).toHaveAttribute('aria-label', 'No commits');
   });
 
   test('does not show the error panel for an empty repository', async ({ page }) => {
-    await expect(page.locator('lv-graph-canvas .graph-overlay.empty-state')).toBeVisible();
-    await expect(page.locator('lv-graph-canvas .info-panel.error-panel')).toHaveCount(0);
+    await expect(page.locator('gn-graph-canvas .graph-overlay.empty-state')).toBeVisible();
+    await expect(page.locator('gn-graph-canvas .info-panel.error-panel')).toHaveCount(0);
   });
 
   test('replaces the empty state once a commit exists', async ({ page }) => {
-    await expect(page.locator('lv-graph-canvas .graph-overlay.empty-state')).toBeVisible();
+    await expect(page.locator('gn-graph-canvas .graph-overlay.empty-state')).toBeVisible();
 
     await injectCommandMock(page, { get_commit_history: [makeCommit(0)] });
     const handle = await getGraphCanvasHandle(page);
@@ -1119,7 +1119,7 @@ test.describe('Graph Empty Repository', () => {
     }, handle);
 
     await waitForNodeCount(page, 1);
-    await expect(page.locator('lv-graph-canvas .graph-overlay.empty-state')).toHaveCount(0);
+    await expect(page.locator('gn-graph-canvas .graph-overlay.empty-state')).toHaveCount(0);
   });
 });
 
@@ -1147,7 +1147,7 @@ test.describe('Graph Load Error Retry', () => {
   test('shows a Retry button when the commit walk fails', async ({ page }) => {
     await failNextLoad(page, 'unable to read the object database');
 
-    const errorPanel = page.locator('lv-graph-canvas .info-panel.error-panel');
+    const errorPanel = page.locator('gn-graph-canvas .info-panel.error-panel');
     await expect(errorPanel).toBeVisible();
     await expect(errorPanel).toContainText('unable to read the object database');
     await expect(errorPanel.locator('.retry-btn')).toBeVisible();
@@ -1155,13 +1155,13 @@ test.describe('Graph Load Error Retry', () => {
 
     // The previously loaded commits are still painted, so the canvas keeps
     // announcing them — the failure is announced by the panel's role="alert"
-    const canvasElement = page.locator('lv-graph-canvas canvas[role="img"]');
+    const canvasElement = page.locator('gn-graph-canvas canvas[role="img"]');
     await expect(canvasElement).toHaveAttribute('aria-label', /showing 2/);
   });
 
   test('Retry reloads the graph and clears the error on success', async ({ page }) => {
     await failNextLoad(page, 'unable to read the object database');
-    const errorPanel = page.locator('lv-graph-canvas .info-panel.error-panel');
+    const errorPanel = page.locator('gn-graph-canvas .info-panel.error-panel');
     await expect(errorPanel).toBeVisible();
 
     // The repository becomes readable again
@@ -1177,7 +1177,7 @@ test.describe('Graph Load Error Retry', () => {
 
   test('Retry keeps the error panel when the reload fails again', async ({ page }) => {
     await failNextLoad(page, 'unable to read the object database');
-    const errorPanel = page.locator('lv-graph-canvas .info-panel.error-panel');
+    const errorPanel = page.locator('gn-graph-canvas .info-panel.error-panel');
     await expect(errorPanel).toBeVisible();
 
     await injectCommandError(page, 'get_commit_history', 'still unreadable');
@@ -1189,14 +1189,14 @@ test.describe('Graph Load Error Retry', () => {
 
   test('Retry on a repository that is now empty shows the empty state', async ({ page }) => {
     await failNextLoad(page, 'unable to read the object database');
-    const errorPanel = page.locator('lv-graph-canvas .info-panel.error-panel');
+    const errorPanel = page.locator('gn-graph-canvas .info-panel.error-panel');
     await expect(errorPanel).toBeVisible();
 
     await injectCommandMock(page, { get_commit_history: [] });
     await errorPanel.locator('.retry-btn').click();
 
     await expect(errorPanel).toHaveCount(0);
-    await expect(page.locator('lv-graph-canvas .graph-overlay.empty-state')).toBeVisible();
+    await expect(page.locator('gn-graph-canvas .graph-overlay.empty-state')).toBeVisible();
   });
 });
 
@@ -1216,7 +1216,7 @@ test.describe('Graph multi-selection actions', () => {
     page: import('@playwright/test').Page,
     row: number
   ): Promise<{ x: number; y: number }> {
-    const box = await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox();
+    const box = await page.locator('gn-graph-canvas canvas[role="img"]').boundingBox();
     if (!box) throw new Error('the graph canvas has no box');
     const handle = await getGraphCanvasHandle(page);
     const metrics = await page.evaluate((el) => {
@@ -1282,7 +1282,7 @@ test.describe('Graph multi-selection actions', () => {
 
   test.beforeEach(async ({ page }) => {
     await setupOpenRepository(page);
-    await expect(page.locator('lv-graph-canvas')).toBeVisible();
+    await expect(page.locator('gn-graph-canvas')).toBeVisible();
   });
 
   test('ctrl-clicking builds a selection the context menu can act on', async ({ page }) => {
@@ -1295,7 +1295,7 @@ test.describe('Graph multi-selection actions', () => {
 
     expect((await getSelectedNodeOids(page)).sort()).toEqual(['commit0', 'commit1', 'commit2']);
     // The set is announced, not just painted
-    await expect(page.locator('lv-graph-canvas [role="status"]')).toContainText(
+    await expect(page.locator('gn-graph-canvas [role="status"]')).toContainText(
       '3 commits selected'
     );
 
@@ -1376,12 +1376,12 @@ test.describe('Graph multi-selection actions', () => {
     await expect(page.locator('[data-testid="multi-compare"]')).toBeVisible();
     await page.locator('[data-testid="multi-compare"]').click();
 
-    await expect(page.locator('lv-compare-branches-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-compare-branches-dialog gn-modal[open]')).toBeVisible();
     // The older commit is the base, the newer one the compare side
-    await expect(page.locator('lv-compare-branches-dialog #base-ref-select')).toHaveValue(
+    await expect(page.locator('gn-compare-branches-dialog #base-ref-select')).toHaveValue(
       'commit2'
     );
-    await expect(page.locator('lv-compare-branches-dialog #compare-ref-select')).toHaveValue(
+    await expect(page.locator('gn-compare-branches-dialog #compare-ref-select')).toHaveValue(
       'commit0'
     );
   });
@@ -1399,14 +1399,14 @@ test.describe('Graph multi-selection actions', () => {
 
     await page.locator('[data-testid="multi-create-patch"]').click();
 
-    await expect(page.locator('lv-export-import-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-export-import-dialog gn-modal[open]')).toBeVisible();
     for (const oid of ['commit0', 'commit1', 'commit2']) {
       await expect(
-        page.locator(`lv-export-import-dialog input[data-oid="${oid}"]`)
+        page.locator(`gn-export-import-dialog input[data-oid="${oid}"]`)
       ).toBeChecked();
     }
     await expect(
-      page.locator('lv-export-import-dialog [data-testid="patch-selected-count"]')
+      page.locator('gn-export-import-dialog [data-testid="patch-selected-count"]')
     ).toContainText('3 selected');
   });
 });
@@ -1502,10 +1502,10 @@ test.describe('Graph with more lanes than fit', () => {
     expect(column.scrollLeft).toBe(column.maxScrollLeft);
 
     // The lane scrollbar sits under the graph column
-    const hscroll = page.locator('lv-graph-canvas .hscroll-container');
+    const hscroll = page.locator('gn-graph-canvas .hscroll-container');
     await expect(hscroll).toBeVisible();
     const box = (await hscroll.boundingBox())!;
-    const canvasBox = (await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox())!;
+    const canvasBox = (await page.locator('gn-graph-canvas canvas[role="img"]').boundingBox())!;
     expect(Math.round(box.x - canvasBox.x)).toBe(column.left);
     expect(Math.round(box.width)).toBe(column.width);
     expect(Math.round(box.y + box.height)).toBe(Math.round(canvasBox.y + canvasBox.height));
@@ -1513,7 +1513,7 @@ test.describe('Graph with more lanes than fit', () => {
 
   test('scrolls the lanes with a sideways wheel but never the text columns', async ({ page }) => {
     const before = await readColumn(page);
-    const canvasBox = (await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox())!;
+    const canvasBox = (await page.locator('gn-graph-canvas canvas[role="img"]').boundingBox())!;
 
     await page.mouse.move(canvasBox.x + before.left + before.width / 2, canvasBox.y + 100);
     await page.mouse.wheel(-120, 0);
@@ -1522,7 +1522,7 @@ test.describe('Graph with more lanes than fit', () => {
     const after = await readColumn(page);
     expect(after.handles).toEqual(before.handles);
     // The native scrollbar follows the wheel
-    const hscroll = page.locator('lv-graph-canvas .hscroll-container');
+    const hscroll = page.locator('gn-graph-canvas .hscroll-container');
     await expect(hscroll).toHaveJSProperty('scrollLeft', before.maxScrollLeft - 120);
 
     // Cannot scroll past the mainline side
@@ -1543,7 +1543,7 @@ test.describe('Graph with more lanes than fit', () => {
   });
 
   test('follows the lane scrollbar', async ({ page }) => {
-    const hscroll = page.locator('lv-graph-canvas .hscroll-container');
+    const hscroll = page.locator('gn-graph-canvas .hscroll-container');
     await hscroll.evaluate((el) => {
       el.scrollLeft = 0;
     });
@@ -1556,9 +1556,9 @@ test.describe('Graph with more lanes than fit', () => {
 
   test('widens the graph column by dragging its handle and remembers it', async ({ page }) => {
     const before = await readColumn(page);
-    const handle = page.locator('lv-graph-canvas .resize-handle[title="Resize graph column"]');
+    const handle = page.locator('gn-graph-canvas .resize-handle[title="Resize graph column"]');
     await expect(handle).toBeAttached();
-    const canvasBox = (await page.locator('lv-graph-canvas canvas[role="img"]').boundingBox())!;
+    const canvasBox = (await page.locator('gn-graph-canvas canvas[role="img"]').boundingBox())!;
 
     const startX = canvasBox.x + before.right;
     const y = canvasBox.y + 150;

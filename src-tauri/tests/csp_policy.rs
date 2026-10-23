@@ -47,7 +47,7 @@
 //!   have; left as-is deliberately.
 //!
 //! * `img-src 'self' data: https:` — `data:` covers image diffs, which are
-//!   base64 payloads returned by Rust (`src/components/panels/lv-image-diff.ts`
+//!   base64 payloads returned by Rust (`src/components/panels/gn-image-diff.ts`
 //!   builds `data:<mime>;base64,...`). The broad `https:` is REQUIRED and must
 //!   not be narrowed to an allowlist: avatar URLs are supplied by the provider
 //!   APIs at runtime and the app supports self-hosted instances, so the host is
@@ -55,18 +55,18 @@
 //!   - `src/graph/canvas-renderer.ts` loads `https://www.gravatar.com/avatar/...`
 //!     for commit-author avatars (opt-in; when the Gravatar setting is off no
 //!     network request is made at all).
-//!   - `src/components/dialogs/lv-github-dialog.ts` renders
+//!   - `src/components/dialogs/gn-github-dialog.ts` renders
 //!     `<img src="${user.avatarUrl}">` from the GitHub API — `avatars.
 //!     githubusercontent.com` for github.com, but an arbitrary host for GitHub
 //!     Enterprise Server.
-//!   - `src/components/dialogs/lv-gitlab-dialog.ts` and
-//!     `lv-bitbucket-dialog.ts` do the same with `user.avatarUrl`; GitLab
+//!   - `src/components/dialogs/gn-gitlab-dialog.ts` and
+//!     `gn-bitbucket-dialog.ts` do the same with `user.avatarUrl`; GitLab
 //!     avatars come from the configured instance (self-hosted GitLab is a
 //!     first-class option) and Bitbucket avatars from Atlassian CDN hosts.
-//!   - `src/components/dialogs/lv-azure-devops-dialog.ts` maps
+//!   - `src/components/dialogs/gn-azure-devops-dialog.ts` maps
 //!     `user.imageUrl`, which is served by the configured Azure DevOps
 //!     organisation (or a self-hosted server).
-//!   - `src/components/dialogs/lv-oidc-dialog.ts` renders the OIDC `picture`
+//!   - `src/components/dialogs/gn-oidc-dialog.ts` renders the OIDC `picture`
 //!     claim, i.e. whatever host the user's identity provider returns.
 //!
 //!   `http://127.0.0.1` was removed: nothing loads an image over loopback.

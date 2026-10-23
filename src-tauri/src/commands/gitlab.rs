@@ -233,13 +233,13 @@ fn state_query_param(state: Option<&str>) -> String {
 
 /// Default page size for the merge-request and issue listings.
 ///
-/// Kept in sync with GITLAB_LIST_PAGE_SIZE in lv-gitlab-dialog.ts, which
+/// Kept in sync with GITLAB_LIST_PAGE_SIZE in gn-gitlab-dialog.ts, which
 /// discloses it to the user.
 const LIST_DEFAULT_PER_PAGE: u32 = 30;
 
 /// Default page size for the pipeline listing.
 ///
-/// Kept in sync with GITLAB_PIPELINE_PAGE_SIZE in lv-gitlab-dialog.ts.
+/// Kept in sync with GITLAB_PIPELINE_PAGE_SIZE in gn-gitlab-dialog.ts.
 const PIPELINES_DEFAULT_PER_PAGE: u32 = 20;
 
 /// Build the `per_page=<n>` query fragment for a listing.
@@ -1139,7 +1139,7 @@ pub async fn get_gitlab_labels(
 
 /// Default page size for the account project listing.
 ///
-/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in gn-account-repo-picker.ts, which
 /// discloses it to the user.
 const PROJECTS_DEFAULT_PER_PAGE: u32 = 30;
 

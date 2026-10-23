@@ -50,7 +50,7 @@ const mockStatistics = {
 
 /**
  * Force the analytics panel to reload data.
- * The component lives deep in shadow DOM (app-shell > ... > lv-right-panel > lv-analytics-panel).
+ * The component lives deep in shadow DOM (app-shell > ... > gn-right-panel > gn-analytics-panel).
  * We traverse shadow roots to find it, reset its cache, and trigger loadStats().
  */
 async function reloadAnalyticsPanel(page: import('@playwright/test').Page): Promise<void> {
@@ -68,7 +68,7 @@ async function reloadAnalyticsPanel(page: import('@playwright/test').Page): Prom
       return null;
     }
 
-    const panel = deepQuerySelector(document, 'lv-analytics-panel');
+    const panel = deepQuerySelector(document, 'gn-analytics-panel');
     if (!panel) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ap = panel as any;
@@ -101,13 +101,13 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    await page.locator('lv-analytics-panel .stat-card').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('gn-analytics-panel .stat-card').first().waitFor({ state: 'visible', timeout: 5000 });
 
-    const cards = page.locator('lv-analytics-panel .stat-card');
+    const cards = page.locator('gn-analytics-panel .stat-card');
     await expect(cards).toHaveCount(9);
 
     // Verify commits count is displayed
-    const values = page.locator('lv-analytics-panel .stat-value');
+    const values = page.locator('gn-analytics-panel .stat-value');
     await expect(values.first()).toHaveText('256');
   });
 
@@ -115,7 +115,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const activityBars = page.locator('lv-analytics-panel .section:has-text("Commit Activity") .chart-bar');
+    const activityBars = page.locator('gn-analytics-panel .section:has-text("Commit Activity") .chart-bar');
     await activityBars.first().waitFor({ state: 'visible', timeout: 5000 });
 
     // Should have 3 bars (one per month)
@@ -126,7 +126,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const patternsSection = page.locator('lv-analytics-panel .section:has-text("Activity Patterns")');
+    const patternsSection = page.locator('gn-analytics-panel .section:has-text("Activity Patterns")');
     await expect(patternsSection).toBeVisible({ timeout: 5000 });
 
     await expect(patternsSection.locator('.chart-sub-title:has-text("Day of Week")')).toBeVisible();
@@ -137,7 +137,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const contribSection = page.locator('lv-analytics-panel .section:has-text("Top Contributors")');
+    const contribSection = page.locator('gn-analytics-panel .section:has-text("Top Contributors")');
     await expect(contribSection).toBeVisible({ timeout: 5000 });
 
     const rows = contribSection.locator('.contributor-row');
@@ -150,7 +150,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const fileSection = page.locator('lv-analytics-panel .section:has-text("File Types")');
+    const fileSection = page.locator('gn-analytics-panel .section:has-text("File Types")');
     await expect(fileSection).toBeVisible({ timeout: 5000 });
 
     await expect(fileSection.locator('.donut-container svg')).toBeVisible();
@@ -166,7 +166,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const errorEl = page.locator('lv-analytics-panel .error');
+    const errorEl = page.locator('gn-analytics-panel .error');
     await expect(errorEl).toBeVisible({ timeout: 5000 });
     await expect(errorEl).toContainText('Statistics unavailable');
   });
@@ -177,7 +177,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const retryBtn = page.locator('lv-analytics-panel .retry-btn');
+    const retryBtn = page.locator('gn-analytics-panel .retry-btn');
     await expect(retryBtn).toBeVisible({ timeout: 5000 });
   });
 
@@ -185,7 +185,7 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const values = page.locator('lv-analytics-panel .stat-value');
+    const values = page.locator('gn-analytics-panel .stat-value');
     await expect(values.first()).toHaveText('256');
 
     // A commit lands while the user is back on the Changes tab.
@@ -206,14 +206,14 @@ test.describe('Analytics Panel', () => {
     await rightPanel.switchToAnalytics();
     await reloadAnalyticsPanel(page);
 
-    const values = page.locator('lv-analytics-panel .stat-value');
+    const values = page.locator('gn-analytics-panel .stat-value');
     await expect(values.first()).toHaveText('256');
 
     await injectCommandMock(page, {
       get_repo_statistics: { ...mockStatistics, totalCommits: 300 },
     });
 
-    await page.locator('lv-analytics-panel .refresh-btn').click();
+    await page.locator('gn-analytics-panel .refresh-btn').click();
 
     await expect(values.first()).toHaveText('300');
   });

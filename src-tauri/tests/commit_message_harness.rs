@@ -51,7 +51,8 @@ fn extract_file_diffs(diff: &str) -> Vec<FileDiff> {
     let max_chars_per_file = if files.len() > 10 { 1500 } else { 2500 };
     for file in &mut files {
         if file.content.len() > max_chars_per_file {
-            file.content = file.content[..max_chars_per_file].to_string();
+            let end = file.content.floor_char_boundary(max_chars_per_file);
+            file.content = file.content[..end].to_string();
             file.content.push_str("\n[truncated]");
         }
     }

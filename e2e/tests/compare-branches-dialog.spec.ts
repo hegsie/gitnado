@@ -18,8 +18,8 @@ import {
  * sees when the comparison succeeds, comes back empty, or fails.
  */
 
-const DIALOG = 'lv-compare-branches-dialog';
-const MODAL = `${DIALOG} lv-modal[open]`;
+const DIALOG = 'gn-compare-branches-dialog';
+const MODAL = `${DIALOG} gn-modal[open]`;
 
 async function openFromContextMenu(page: Page, branch: string): Promise<void> {
   const leftPanel = new LeftPanelPage(page);

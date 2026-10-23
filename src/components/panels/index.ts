@@ -1,8 +1,8 @@
 /**
  * Panel component exports
  */
-export { LvCommitDetails } from './lv-commit-details.ts';
-export { LvDiffView } from './lv-diff-view.ts';
-export { LvBlameView } from './lv-blame-view.ts';
-export { LvImageDiff } from './lv-image-diff.ts';
-export { LvAnalyticsPanel } from './lv-analytics-panel.ts';
+export { GnCommitDetails } from './gn-commit-details.ts';
+export { GnDiffView } from './gn-diff-view.ts';
+export { GnBlameView } from './gn-blame-view.ts';
+export { GnImageDiff } from './gn-image-diff.ts';
+export { GnAnalyticsPanel } from './gn-analytics-panel.ts';

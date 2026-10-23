@@ -14,7 +14,7 @@ pub struct ProviderRepository {
     /// Provider-assigned id, stringified so GitHub's u64 and Bitbucket's UUID
     /// share one field. Used only as a list key.
     pub id: String,
-    /// Short repository name ("leviathan").
+    /// Short repository name ("gitnado").
     pub name: String,
     /// Owner / namespace / workspace / project the repository lives under.
     pub owner: String,

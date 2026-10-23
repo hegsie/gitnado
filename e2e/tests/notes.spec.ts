@@ -33,7 +33,7 @@ const commits = [makeCommit(0), makeCommit(1, ['commit0'])];
 
 /** Select a commit in the graph and open the details tab it feeds. */
 async function selectCommit(page: Page, oid: string): Promise<void> {
-  const graphCanvas = page.locator('lv-graph-canvas');
+  const graphCanvas = page.locator('gn-graph-canvas');
   await expect(graphCanvas).toBeAttached();
   const handle = await graphCanvas.elementHandle();
   await page.evaluate(
@@ -43,10 +43,10 @@ async function selectCommit(page: Page, oid: string): Promise<void> {
     { el: handle, target: oid }
   );
   await new RightPanelPage(page).switchToDetails();
-  await expect(page.locator('lv-commit-details')).toBeVisible();
+  await expect(page.locator('gn-commit-details')).toBeVisible();
 }
 
-const details = (page: Page) => page.locator('lv-commit-details');
+const details = (page: Page) => page.locator('gn-commit-details');
 
 test.describe('Commit notes', () => {
   test('a commit with no note offers to add one', async ({ page }) => {

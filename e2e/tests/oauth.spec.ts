@@ -45,7 +45,7 @@ test.describe('GitHub OAuth Integration', () => {
     await dialogs.commandPalette.executeFirst();
 
     // Either the connect button (PAT mode) or OAuth sign-in button should be visible
-    const connectOrOAuth = page.locator('lv-github-dialog button', { hasText: /connect|sign in/i });
+    const connectOrOAuth = page.locator('gn-github-dialog button', { hasText: /connect|sign in/i });
     await expect(connectOrOAuth.first()).toBeVisible();
   });
 
@@ -363,7 +363,7 @@ test.describe('GitHub PAT Submit Flow', () => {
 
     // Error should be displayed either as inline error or toast
     await expect(
-      page.locator('lv-github-dialog .error, lv-github-dialog .error-message, .toast.error, .toast')
+      page.locator('gn-github-dialog .error, gn-github-dialog .error-message, .toast.error, .toast')
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -466,7 +466,7 @@ test.describe('OAuth Error Scenarios', () => {
 
     // Error message should be displayed in the dialog or as a toast
     await expect(
-      page.locator('lv-github-dialog .error, lv-github-dialog .error-message, .toast.error, .toast')
+      page.locator('gn-github-dialog .error, gn-github-dialog .error-message, .toast.error, .toast')
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -486,7 +486,7 @@ test.describe('OAuth Error Scenarios', () => {
 
     // An error state should be visible to the user
     await expect(
-      page.locator('lv-github-dialog .error, lv-github-dialog .error-message, .toast.error, .toast')
+      page.locator('gn-github-dialog .error, gn-github-dialog .error-message, .toast.error, .toast')
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -507,7 +507,7 @@ test.describe('OAuth Error Scenarios', () => {
 
     // Error feedback should be visible
     await expect(
-      page.locator('lv-gitlab-dialog .error, lv-gitlab-dialog .error-message, .toast.error, .toast')
+      page.locator('gn-gitlab-dialog .error, gn-gitlab-dialog .error-message, .toast.error, .toast')
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -566,7 +566,7 @@ test.describe('OAuth - Strengthened Assertions', () => {
 
     // Capture the network error message text
     const networkErrorLocator = page.locator(
-      'lv-github-dialog .error, lv-github-dialog .error-message, .toast.error, .toast'
+      'gn-github-dialog .error, gn-github-dialog .error-message, .toast.error, .toast'
     );
     await expect(networkErrorLocator).toBeVisible({ timeout: 5000 });
     const networkErrorText = await networkErrorLocator.first().textContent();
@@ -588,7 +588,7 @@ test.describe('OAuth - Strengthened Assertions', () => {
     await dialogs.github.connectButton.click();
 
     const invalidTokenErrorLocator = page.locator(
-      'lv-github-dialog .error, lv-github-dialog .error-message, .toast.error, .toast'
+      'gn-github-dialog .error, gn-github-dialog .error-message, .toast.error, .toast'
     );
     await expect(invalidTokenErrorLocator).toBeVisible({ timeout: 5000 });
     const invalidTokenErrorText = await invalidTokenErrorLocator.first().textContent();

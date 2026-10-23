@@ -13,7 +13,7 @@ import {
 
 async function openHealthDialog(page: import('@playwright/test').Page): Promise<void> {
   await openViaCommandPalette(page, 'health');
-  await page.locator('lv-repository-health-dialog').waitFor({ state: 'visible', timeout: 3000 });
+  await page.locator('gn-repository-health-dialog').waitFor({ state: 'visible', timeout: 3000 });
 }
 
 // The Tauri command get_repository_stats returns { count, loose, sizeKb }
@@ -45,14 +45,14 @@ test.describe('Repository Health Dialog - Statistics', () => {
   test('should open repository health dialog from command palette', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     await expect(healthDialog).toBeVisible();
   });
 
   test('should display repository statistics', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     const stats = healthDialog.locator('.stat-card');
     await expect(stats.first()).toBeVisible();
@@ -63,7 +63,7 @@ test.describe('Repository Health Dialog - Statistics', () => {
   test('should show total objects count', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     await expect(healthDialog.getByText(/Total Objects/i).first()).toBeVisible();
   });
@@ -71,7 +71,7 @@ test.describe('Repository Health Dialog - Statistics', () => {
   test('should show repository size', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     // formatSize(5120) = "5.0 MB"
     await expect(healthDialog.getByText(/MB|KB|GB/i).first()).toBeVisible();
@@ -80,7 +80,7 @@ test.describe('Repository Health Dialog - Statistics', () => {
   test('should show loose objects count', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     await expect(healthDialog.getByText(/Loose/i).first()).toBeVisible();
   });
@@ -88,7 +88,7 @@ test.describe('Repository Health Dialog - Statistics', () => {
   test('should show pack files count', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     await expect(healthDialog.getByText(/Pack/i).first()).toBeVisible();
   });
@@ -119,7 +119,7 @@ test.describe('Repository Health Dialog - Maintenance Actions', () => {
   test('should have Garbage Collection button', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const gcButton = healthDialog.locator('.action-btn', { hasText: /Garbage Collection/i });
     await expect(gcButton.first()).toBeVisible();
   });
@@ -127,7 +127,7 @@ test.describe('Repository Health Dialog - Maintenance Actions', () => {
   test('should have Aggressive GC button', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const aggressiveButton = healthDialog.locator('.action-btn', { hasText: /Aggressive GC/i });
     await expect(aggressiveButton.first()).toBeVisible();
   });
@@ -135,7 +135,7 @@ test.describe('Repository Health Dialog - Maintenance Actions', () => {
   test('should have File System Check button', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const fsckButton = healthDialog.locator('.action-btn', { hasText: /File System Check/i });
     await expect(fsckButton.first()).toBeVisible();
   });
@@ -143,7 +143,7 @@ test.describe('Repository Health Dialog - Maintenance Actions', () => {
   test('should have Prune button', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const pruneButton = healthDialog.locator('.action-btn', { hasText: /Prune/i });
     await expect(pruneButton.first()).toBeVisible();
   });
@@ -151,7 +151,7 @@ test.describe('Repository Health Dialog - Maintenance Actions', () => {
   test('clicking GC should invoke run_gc command', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     await startCommandCapture(page);
 
@@ -191,7 +191,7 @@ test.describe('Repository Health Dialog - Recommendations', () => {
   test('should show recommendations when issues detected', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     // With loose > 500 and packCount > 10, recommendations are shown
     const recommendations = healthDialog.locator('.recommendation');
@@ -203,7 +203,7 @@ test.describe('Repository Health Dialog - Recommendations', () => {
   test('should show warning styling for high loose objects', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     // The loose objects stat-value gets the "warning" class when > 500
     const warningElements = healthDialog.locator('.stat-value.warning');
@@ -235,7 +235,7 @@ test.describe('Repository Health Dialog - Healthy State', () => {
   test('should show healthy message when no issues', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     // Component shows "Repository is healthy - no maintenance needed"
     await expect(healthDialog.getByText(/healthy/i).first()).toBeVisible();
@@ -264,7 +264,7 @@ test.describe('Repository Health Dialog - Footer', () => {
   test('should have Done button to close dialog', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const doneButton = healthDialog.locator('button.primary', { hasText: /Done/i });
     await expect(doneButton).toBeVisible();
   });
@@ -272,7 +272,7 @@ test.describe('Repository Health Dialog - Footer', () => {
   test('clicking Done should close dialog', async ({ page }) => {
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const doneButton = healthDialog.locator('button.primary', { hasText: /Done/i });
     await doneButton.click();
 
@@ -307,7 +307,7 @@ test.describe('Repository Health Dialog - GC E2E', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const gcButton = healthDialog.locator('.action-btn', { hasText: /Garbage Collection/i }).first();
     await expect(gcButton).toBeVisible();
     await gcButton.click();
@@ -341,7 +341,7 @@ test.describe('Repository Health Dialog - GC E2E', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const gcButton = healthDialog.locator('.action-btn', { hasText: /Garbage Collection/i }).first();
     await expect(gcButton).toBeVisible();
     await gcButton.click();
@@ -365,7 +365,7 @@ test.describe('Repository Health Dialog - GC E2E', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     // 1250.toLocaleString() produces "1,250"
     await expect(healthDialog.getByText(/1[,.]?250/).first()).toBeVisible();
@@ -387,7 +387,7 @@ test.describe('Repository Health Dialog - GC E2E', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const pruneButton = healthDialog.locator('.action-btn', { hasText: /Prune/i }).first();
     await expect(pruneButton).toBeVisible();
     await pruneButton.click();
@@ -426,7 +426,7 @@ test.describe('Repository Health Dialog - Error Scenarios', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const gcButton = healthDialog.locator('.action-btn', { hasText: /Garbage Collection/i }).first();
     await expect(gcButton).toBeVisible();
     await gcButton.click();
@@ -439,7 +439,7 @@ test.describe('Repository Health Dialog - Error Scenarios', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const fsckButton = healthDialog.locator('.action-btn', { hasText: /File System Check/i }).first();
     await expect(fsckButton).toBeVisible();
     await fsckButton.click();
@@ -473,7 +473,7 @@ test.describe('Repository Health - Extended Tests', () => {
     // Decline: plugin-dialog treats any non-OK label as cancel.
     await injectCommandMock(page, { 'plugin:dialog|message': 'Cancel' });
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const gcButton = healthDialog
       .locator('.action-btn', { hasText: /Garbage Collection/i })
       .first();
@@ -500,7 +500,7 @@ test.describe('Repository Health - Extended Tests', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const aggressiveButton = healthDialog.locator('.action-btn', { hasText: /Aggressive GC/i }).first();
     await expect(aggressiveButton).toBeVisible();
     await aggressiveButton.click();
@@ -535,7 +535,7 @@ test.describe('Repository Health - Extended Tests', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
     const fsckButton = healthDialog.locator('.action-btn', { hasText: /File System Check/i }).first();
     await expect(fsckButton).toBeVisible();
     await fsckButton.click();
@@ -570,7 +570,7 @@ test.describe('Repository Health - Extended Tests', () => {
 
     await openHealthDialog(page);
 
-    const healthDialog = page.locator('lv-repository-health-dialog');
+    const healthDialog = page.locator('gn-repository-health-dialog');
 
     // Verify initial stats are displayed with high loose objects
     await expect(healthDialog.locator('.stat-value.warning').first()).toBeVisible();

@@ -4,7 +4,7 @@
  * There were two implementations of these three operations. app-shell's
  * (keyboard shortcuts + command palette) took a per-repo lock, started a
  * progress row and refreshed the repository the operation ran ON.
- * `lv-context-dashboard`'s three buttons — the only route to fetch/pull/push a
+ * `gn-context-dashboard`'s three buttons — the only route to fetch/pull/push a
  * mouse can reach — did none of the progress bookkeeping and guarded only on
  * component-local `isFetching` / `isPulling` / `isPushing` flags, which no
  * other surface can see. So a slow dashboard push showed nothing but a
@@ -289,7 +289,7 @@ function openConflictResolution(repoPath: string, operationType: 'merge' | 'reba
     `Pull produced conflicts — resolve them to finish the ${operationType}`,
     'warning',
   );
-  const shell = document.querySelector('lv-app-shell');
+  const shell = document.querySelector('gn-app-shell');
   if (shell) {
     shell.dispatchEvent(
       new CustomEvent('merge-conflict', {

@@ -71,7 +71,7 @@ async function openAccountSource(page: Page, dialogs: DialogsPage): Promise<void
   await page.getByRole('button', { name: 'From account' }).click();
 }
 
-const repoItems = (page: Page) => page.locator('lv-account-repo-picker .repo-item');
+const repoItems = (page: Page) => page.locator('gn-account-repo-picker .repo-item');
 
 /**
  * Serve `list_github_repositories` one page at a time, optionally failing one
@@ -157,7 +157,7 @@ test.describe('Clone Dialog - from a connected account', () => {
         get_keyring_token: 'gh-e2e-tok',
         list_github_repositories: {
           repositories: [
-            repository('leviathan', {
+            repository('gitnado', {
               isPrivate: true,
               description: 'A git client',
               lastPushedAt: '2024-05-01T10:00:00Z',
@@ -167,8 +167,8 @@ test.describe('Clone Dialog - from a connected account', () => {
           nextPage: null,
         },
         clone_repository: {
-          path: '/home/user/projects/leviathan',
-          name: 'leviathan',
+          path: '/home/user/projects/gitnado',
+          name: 'gitnado',
           headRef: null,
           isBare: false,
         },
@@ -182,7 +182,7 @@ test.describe('Clone Dialog - from a connected account', () => {
 
       await expect(repoItems(page)).toHaveCount(2);
       const first = repoItems(page).first();
-      await expect(first).toContainText('leviathan');
+      await expect(first).toContainText('gitnado');
       await expect(first).toContainText('octocat');
       await expect(first).toContainText('Private');
       await expect(first).toContainText('A git client');
@@ -208,7 +208,7 @@ test.describe('Clone Dialog - from a connected account', () => {
 
       await fromUrl.press(' ');
       await expect(fromUrl).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.locator('lv-account-repo-picker')).toHaveCount(0);
+      await expect(page.locator('gn-account-repo-picker')).toHaveCount(0);
     });
 
     test('filters the listed repositories', async ({ page }) => {
@@ -228,10 +228,10 @@ test.describe('Clone Dialog - from a connected account', () => {
       await repoItems(page).first().click();
 
       await expect(dialogs.clone.urlInput).toHaveValue(
-        'https://github.com/octocat/leviathan.git',
+        'https://github.com/octocat/gitnado.git',
       );
       await dialogs.clone.fillPath('/home/user/projects');
-      await expect(page.getByText('Selected: octocat/leviathan')).toBeVisible();
+      await expect(page.getByText('Selected: octocat/gitnado')).toBeVisible();
 
       await startCommandCapture(page);
       await dialogs.clone.clone();
@@ -239,8 +239,8 @@ test.describe('Clone Dialog - from a connected account', () => {
 
       const cloneCommands = await findCommand(page, 'clone_repository');
       const args = cloneCommands[0].args as { url?: string; path?: string; token?: string };
-      expect(args.url).toBe('https://github.com/octocat/leviathan.git');
-      expect(args.path).toBe('/home/user/projects/leviathan');
+      expect(args.url).toBe('https://github.com/octocat/gitnado.git');
+      expect(args.path).toBe('/home/user/projects/gitnado');
       // The clone still picks up the account's token, unchanged by this flow.
       expect(args.token).toBe('gh-e2e-tok');
     });
@@ -259,12 +259,12 @@ test.describe('Clone Dialog - from a connected account', () => {
 
       const rows = list.getByRole('button');
       await expect(rows).toHaveCount(2);
-      const leviathan = rows.filter({ hasText: 'leviathan' });
-      await expect(leviathan).toHaveAttribute('aria-pressed', 'false');
+      const gitnado = rows.filter({ hasText: 'gitnado' });
+      await expect(gitnado).toHaveAttribute('aria-pressed', 'false');
 
-      await leviathan.click();
+      await gitnado.click();
 
-      await expect(leviathan).toHaveAttribute('aria-pressed', 'true');
+      await expect(gitnado).toHaveAttribute('aria-pressed', 'true');
       await expect(rows.filter({ hasText: 'dotfiles' })).toHaveAttribute(
         'aria-pressed',
         'false',
@@ -295,15 +295,15 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(page.getByRole('button', { name: 'Cancel Clone' })).toBeVisible();
 
       // The picker's account dropdown is locked along with everything else.
-      const selectorButton = page.locator('lv-clone-dialog lv-account-selector .selector-btn');
+      const selectorButton = page.locator('gn-clone-dialog gn-account-selector .selector-btn');
       await expect(selectorButton).toBeDisabled();
-      await expect(page.locator('lv-clone-dialog lv-account-selector .dropdown')).toHaveCount(0);
+      await expect(page.locator('gn-clone-dialog gn-account-selector .dropdown')).toHaveCount(0);
 
       // And even a request that somehow gets out of the picker is refused at
       // the clone dialog rather than reaching the host with a provider: the
       // manager must not open stacked on the cloning dialog, and closing it
       // later must not land on a GitHub Integration dialog.
-      await page.locator('lv-clone-dialog lv-account-repo-picker').evaluate((el) => {
+      await page.locator('gn-clone-dialog gn-account-repo-picker').evaluate((el) => {
         el.dispatchEvent(
           new CustomEvent('manage-accounts', {
             detail: { integrationType: 'github' },
@@ -313,7 +313,7 @@ test.describe('Clone Dialog - from a connected account', () => {
         );
       });
       await expect(dialogs.clone.dialog).toBeVisible();
-      await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+      await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(0);
       await expect(dialogs.github.dialog).toBeHidden();
     });
 
@@ -364,10 +364,10 @@ test.describe('Clone Dialog - from a connected account', () => {
       // The cancel took effect: the clone was never sent, the user is told, and
       // the dialog is theirs again rather than stuck on "Cancelling…".
       await expect(
-        page.locator('lv-toast-container .toast', { hasText: 'Clone cancelled' }),
+        page.locator('gn-toast-container .toast', { hasText: 'Clone cancelled' }),
       ).toBeVisible();
       await expect(cancelClone).toHaveCount(0);
-      await expect(page.locator('lv-clone-dialog').getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
+      await expect(page.locator('gn-clone-dialog').getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
       await expect(dialogs.clone.urlInput).toBeEnabled();
       await expect(dialogs.clone.cloneButton).toBeEnabled();
       expect(await findCommand(page, 'clone_repository')).toHaveLength(0);
@@ -391,51 +391,51 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(repoItems(page)).toHaveCount(2);
 
       // Clone → Manage Accounts… (from the picker's account dropdown).
-      await page.locator('lv-clone-dialog lv-account-selector .selector-btn').click();
+      await page.locator('gn-clone-dialog gn-account-selector .selector-btn').click();
       await page
-        .locator('lv-clone-dialog lv-account-selector .dropdown-action', {
+        .locator('gn-clone-dialog gn-account-selector .dropdown-action', {
           hasText: 'Manage Accounts',
         })
         .click();
       await expect(dialogs.clone.dialog).toBeHidden();
-      await expect(page.locator('lv-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
-      await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+      await expect(page.locator('gn-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
+      await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
         'Accounts',
       );
 
       // Manager → "Connect a new account" → GitHub, stacked on the manager.
       await page
-        .locator('lv-profile-manager-dialog')
+        .locator('gn-profile-manager-dialog')
         .getByRole('button', { name: 'GitHub', exact: true })
         .click();
       await expect(dialogs.github.dialog).toBeVisible();
-      await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(1);
+      await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(1);
 
       // GitHub dialog → Manage Accounts… → the manager again, on Accounts.
-      await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+      await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
       await page
-        .locator('lv-github-dialog lv-account-selector .dropdown-action', {
+        .locator('gn-github-dialog gn-account-selector .dropdown-action', {
           hasText: 'Manage Accounts',
         })
         .click();
       await expect(dialogs.github.dialog).toBeHidden();
-      await expect(page.locator('lv-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
-      await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+      await expect(page.locator('gn-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
+      await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
         'Accounts',
       );
 
       // × on the manager: back to the GitHub dialog the user came from — and
       // ONLY that. The clone dialog must not be reopened underneath it.
       await dialogs.profileManager.closeButton.click();
-      await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+      await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(0);
       await expect(dialogs.github.dialog).toBeVisible();
       await expect(dialogs.clone.dialog).toBeHidden();
 
       // Closing the GitHub dialog ends the trip: the clone the user started is
       // returned to them, still on the account source.
-      await page.locator('lv-github-dialog lv-modal [aria-label="Close"]').click();
+      await page.locator('gn-github-dialog gn-modal [aria-label="Close"]').click();
       await expect(dialogs.github.dialog).toBeHidden();
-      await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+      await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(0);
       await expect(dialogs.clone.dialog).toBeVisible();
       await expect(page.getByRole('button', { name: 'From account' })).toHaveAttribute(
         'aria-pressed',
@@ -480,11 +480,11 @@ test.describe('Clone Dialog - from a connected account', () => {
       await openAccountSource(page, dialogs);
       await expect(repoItems(page)).toHaveCount(2);
 
-      await page.locator('lv-clone-dialog #repo-provider').selectOption('gitlab');
+      await page.locator('gn-clone-dialog #repo-provider').selectOption('gitlab');
       await expect(repoItems(page)).toHaveCount(1);
       await expect(repoItems(page).first()).toContainText('gl-project');
 
-      const selector = page.locator('lv-clone-dialog lv-account-selector');
+      const selector = page.locator('gn-clone-dialog gn-account-selector');
       await expect(selector.locator('.account-name')).toHaveText('Work GitLab');
       await expect(selector.locator('.no-account')).toHaveCount(0);
 
@@ -584,7 +584,7 @@ test.describe('Clone Dialog - from a connected account', () => {
       await expect(repoItems(page)).toHaveCount(1);
       await expect(repoItems(page).first()).toContainText('work-service');
 
-      const selector = page.locator('lv-clone-dialog lv-account-selector');
+      const selector = page.locator('gn-clone-dialog gn-account-selector');
       await selector.locator('.selector-btn').click();
       await selector.locator('.dropdown-item', { hasText: 'Personal GitHub' }).click();
       await expect(selector.locator('.account-name')).toHaveText('Personal GitHub');
@@ -612,7 +612,7 @@ test.describe('Clone Dialog - from a connected account', () => {
       page,
     }) => {
       await openAccountSource(page, dialogs);
-      const selector = page.locator('lv-clone-dialog lv-account-selector');
+      const selector = page.locator('gn-clone-dialog gn-account-selector');
       await selector.locator('.selector-btn').click();
       await selector.locator('.dropdown-item', { hasText: 'Personal GitHub' }).click();
       await expect(repoItems(page).first()).toContainText('side-project');
@@ -727,7 +727,7 @@ test.describe('Clone Dialog - from a connected account', () => {
 
     // Pick the second repository so the highlight is observable.
     await repoItems(page).nth(1).click();
-    await expect(page.locator('lv-account-repo-picker .repo-item.selected')).toContainText(
+    await expect(page.locator('gn-account-repo-picker .repo-item.selected')).toContainText(
       'beta',
     );
 
@@ -739,11 +739,11 @@ test.describe('Clone Dialog - from a connected account', () => {
     await expect(failure).toContainText('GitHub API error 502');
     // The two pages already paid for are still on screen, under the error
     // rather than replaced by it — and so is the selection.
-    await expect(page.locator('lv-account-repo-picker .repo-list')).toBeVisible();
+    await expect(page.locator('gn-account-repo-picker .repo-list')).toBeVisible();
     await expect(repoItems(page)).toHaveCount(2);
     await expect(repoItems(page).nth(0)).toContainText('alpha');
     await expect(repoItems(page).nth(1)).toContainText('beta');
-    await expect(page.locator('lv-account-repo-picker .repo-item.selected')).toContainText(
+    await expect(page.locator('gn-account-repo-picker .repo-item.selected')).toContainText(
       'beta',
     );
     // The clone dialog still holds what was selected before the failure.
@@ -757,7 +757,7 @@ test.describe('Clone Dialog - from a connected account', () => {
     await expect(repoItems(page)).toHaveCount(3);
     await expect(repoItems(page).nth(2)).toContainText('gamma');
     await expect(page.locator('[data-state="load-more-error"]')).toHaveCount(0);
-    await expect(page.locator('lv-account-repo-picker .repo-item.selected')).toContainText(
+    await expect(page.locator('gn-account-repo-picker .repo-item.selected')).toContainText(
       'beta',
     );
     expect(await requestedPages(page)).toEqual([1, 2, 3, 3]);
@@ -826,9 +826,9 @@ test.describe('Clone Dialog - from a connected account', () => {
     // The clone dialog steps aside rather than trapping the user under the
     // accounts manager.
     await expect(dialogs.clone.dialog).toBeHidden();
-    await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(1);
+    await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(1);
     await expect(
-      page.locator('lv-profile-manager-dialog[open] .dialog-overlay'),
+      page.locator('gn-profile-manager-dialog[open] .dialog-overlay'),
     ).toBeVisible();
 
     // The account gets connected while the manager is up. The listing mocks go
@@ -851,9 +851,9 @@ test.describe('Clone Dialog - from a connected account', () => {
     // Closing the manager returns the user to the clone they were in the
     // middle of — NOT to a GitHub Integration dialog they never opened.
     await page
-      .locator('lv-profile-manager-dialog .dialog-footer button', { hasText: 'Back' })
+      .locator('gn-profile-manager-dialog .dialog-footer button', { hasText: 'Back' })
       .click();
-    await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+    await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(0);
     await expect(dialogs.github.dialog).toBeHidden();
     await expect(dialogs.clone.dialog).toBeVisible();
 

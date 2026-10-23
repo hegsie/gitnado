@@ -144,16 +144,16 @@ test.describe('GitHub Dialog - account switching re-checks connection', () => {
     });
 
     // Open dropdown and pick the other account
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-github-dialog lv-account-selector .dropdown-item', {
+      .locator('gn-github-dialog gn-account-selector .dropdown-item', {
         hasText: 'Personal GitHub',
       })
       .click();
 
     // Selector label flips to the new account…
     await expect(
-      page.locator('lv-github-dialog lv-account-selector .account-name'),
+      page.locator('gn-github-dialog gn-account-selector .account-name'),
     ).toHaveText('Personal GitHub');
 
     // …and a fresh connection check was kicked off for the new account.
@@ -199,15 +199,15 @@ test.describe('GitHub Dialog - Add Account from selector dropdown', () => {
     await expect(dialogs.github.pullRequestsTab).toHaveClass(/active/);
 
     // Open the account selector dropdown and click Add Account
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-github-dialog lv-account-selector .dropdown-action.primary', {
+      .locator('gn-github-dialog gn-account-selector .dropdown-action.primary', {
         hasText: 'Add Account',
       })
       .click();
 
     // Dropdown should close
-    await expect(page.locator('lv-github-dialog lv-account-selector .dropdown')).toHaveCount(0);
+    await expect(page.locator('gn-github-dialog gn-account-selector .dropdown')).toHaveCount(0);
 
     // Connection tab should be active so the user can connect a new account
     await expect(dialogs.github.connectionTab).toHaveClass(/active/);
@@ -242,7 +242,7 @@ test.describe('Profile manager - error toasts include backend error message', ()
     await page.getByRole('button', { name: 'Save Profile' }).click();
 
     // The error toast must contain the actual backend message — not just be "an error element"
-    const errorToastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const errorToastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(errorToastMessage).toBeVisible({ timeout: 5000 });
     await expect(errorToastMessage).toContainText(backendMessage);
   });
@@ -272,7 +272,7 @@ test.describe('Profile manager - error toasts include backend error message', ()
 
     await page.locator('button[title="Apply to current repository"]').first().click();
 
-    const errorToastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const errorToastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(errorToastMessage).toBeVisible({ timeout: 5000 });
     await expect(errorToastMessage).toContainText(backendMessage);
   });
@@ -314,7 +314,7 @@ test.describe('Profile manager - error toasts include backend error message', ()
 
     await page.getByRole('button', { name: 'Save Profile' }).click();
 
-    const errorToastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const errorToastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(errorToastMessage).toBeVisible({ timeout: 5000 });
     await expect(errorToastMessage).toContainText(backendMessage);
 
@@ -337,7 +337,7 @@ test.describe('Profile manager - restore migration backup', () => {
 
   test.beforeEach(async ({ page }) => {
     // Seed at least one profile — the backup section is currently only rendered when
-    // `profiles.length > 0` (lv-profile-manager-dialog.ts:1306). With zero profiles,
+    // `profiles.length > 0` (gn-profile-manager-dialog.ts:1306). With zero profiles,
     // the empty state hides the backup section entirely, which is itself a bug, but
     // not the one this test is targeting.
     await setupProfilesAndAccounts(page, {
@@ -362,7 +362,7 @@ test.describe('Profile manager - restore migration backup', () => {
     await openProfileManager(page, dialogs);
 
     // Expand the collapsed backup section first.
-    const backupToggle = page.locator('lv-profile-manager-dialog .backup-toggle');
+    const backupToggle = page.locator('gn-profile-manager-dialog .backup-toggle');
     await expect(backupToggle).toBeVisible({ timeout: 5000 });
     await backupToggle.click();
 
@@ -381,7 +381,7 @@ test.describe('Profile manager - restore migration backup', () => {
 
     // Success toast appears
     await expect(
-      page.locator('lv-toast-container .toast.success .toast-message'),
+      page.locator('gn-toast-container .toast.success .toast-message'),
     ).toContainText(/Restored/i, { timeout: 5000 });
 
     // The event bubbled up to window — at minimum the dispatch site is alive.
@@ -394,7 +394,7 @@ test.describe('Profile manager - restore migration backup', () => {
     // host element has display:block with zero dimensions (the overlay is the
     // child, position:fixed), so we assert on the overlay instead of the host.
     await expect(
-      page.locator('lv-migration-dialog[open] .dialog-overlay'),
+      page.locator('gn-migration-dialog[open] .dialog-overlay'),
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -402,7 +402,7 @@ test.describe('Profile manager - restore migration backup', () => {
 // ---------------------------------------------------------------------------
 // 5. Cross-component propagation — dialog actions must update the toolbar
 //
-// The `lv-context-dashboard` (the toolbar strip under the tabs) subscribes to
+// The `gn-context-dashboard` (the toolbar strip under the tabs) subscribes to
 // `unifiedProfileStore` and renders the active profile chip plus the integration
 // status dot. These tests act on dialogs and assert the toolbar updates without
 // requiring a reload. They probe the real user expectation: "I changed it in the
@@ -410,15 +410,15 @@ test.describe('Profile manager - restore migration backup', () => {
 // ---------------------------------------------------------------------------
 
 const dashboardProfileName = (page: Page) =>
-  page.locator('lv-context-dashboard .profile-name').first();
+  page.locator('gn-context-dashboard .profile-name').first();
 const dashboardCompactIdentity = (page: Page) =>
-  page.locator('lv-context-dashboard .compact-identity').first();
+  page.locator('gn-context-dashboard .compact-identity').first();
 const dashboardNoProfile = (page: Page) =>
-  page.locator('lv-context-dashboard .no-profile');
+  page.locator('gn-context-dashboard .no-profile');
 const dashboardAccountStatusDot = (page: Page) =>
-  page.locator('lv-context-dashboard .account-status-dot').first();
+  page.locator('gn-context-dashboard .account-status-dot').first();
 const dashboardConnectBtn = (page: Page) =>
-  page.locator('lv-context-dashboard .configure-btn, lv-context-dashboard .no-profile-btn');
+  page.locator('gn-context-dashboard .configure-btn, gn-context-dashboard .no-profile-btn');
 
 test.describe('Cross-component propagation - toolbar reflects dialog state', () => {
   test('applying a profile updates the toolbar chip immediately', async ({ page }) => {
@@ -562,7 +562,7 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
     await page.getByPlaceholder(/john@example.com/i).fill('new@company.com');
     await page.getByRole('button', { name: 'Save Profile' }).click();
 
-    const warning = page.locator('lv-toast-container .toast.warning .toast-message');
+    const warning = page.locator('gn-toast-container .toast.warning .toast-message');
     await expect(warning).toBeVisible({ timeout: 5000 });
     await expect(warning).toContainText('personal');
   });
@@ -629,9 +629,9 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
     });
 
     // Open the dashboard's profile dropdown
-    await page.locator('lv-context-dashboard .profile-selector-btn').click();
+    await page.locator('gn-context-dashboard .profile-selector-btn').click();
     // Click the other profile in the dropdown
-    await page.locator('lv-context-dashboard .profile-dropdown .dropdown-item', {
+    await page.locator('gn-context-dashboard .profile-dropdown .dropdown-item', {
       hasText: 'Personal',
     }).click();
 
@@ -674,8 +674,8 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
       },
     });
 
-    await page.locator('lv-context-dashboard .profile-selector-btn').click();
-    await page.locator('lv-context-dashboard .profile-dropdown .dropdown-item', {
+    await page.locator('gn-context-dashboard .profile-selector-btn').click();
+    await page.locator('gn-context-dashboard .profile-dropdown .dropdown-item', {
       hasText: 'Personal',
     }).click();
 
@@ -684,7 +684,7 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
 
     // ...the switch confirms itself instead of completing silently...
     await expect(
-      page.locator('lv-toast-container .toast.success .toast-message')
+      page.locator('gn-toast-container .toast.success .toast-message')
     ).toContainText('Personal', { timeout: 5000 });
 
     // ...and the repository-refresh reaches the commit panel, which re-reads
@@ -712,13 +712,13 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
     });
 
     // Expand the dashboard so the profile card (and its assignment badge) render.
-    const dashboard = page.locator('lv-context-dashboard');
+    const dashboard = page.locator('gn-context-dashboard');
     await expect(dashboard).toBeVisible({ timeout: 5000 });
     await dashboard.locator('.expand-btn').click();
     await expect(dashboard.locator('.card-grid')).toBeVisible({ timeout: 5000 });
 
     // workProfile is the default profile and has no repository assignment.
-    const badge = page.locator('lv-context-dashboard lv-profile-card .assignment-source');
+    const badge = page.locator('gn-context-dashboard gn-profile-card .assignment-source');
     await expect(badge).toHaveText('Default profile', { timeout: 5000 });
 
     // Switch to a non-default profile with no URL patterns. The only thing that
@@ -728,7 +728,7 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
 
     await expect(badge).toHaveText('Manually assigned', { timeout: 5000 });
     await expect(
-      page.locator('lv-context-dashboard lv-profile-card .assignment-source.fallback')
+      page.locator('gn-context-dashboard gn-profile-card .assignment-source.fallback')
     ).toHaveCount(0);
   });
 
@@ -787,7 +787,7 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
     });
 
     const reconnectBtn = page.locator(
-      'lv-context-dashboard .configure-btn:has-text("Reconnect GitHub")',
+      'gn-context-dashboard .configure-btn:has-text("Reconnect GitHub")',
     );
     await expect(reconnectBtn).toBeVisible();
 
@@ -797,10 +797,10 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
     await dialogs.github.selectPATMethod();
     await dialogs.github.tokenInput.waitFor({ state: 'visible', timeout: 5000 });
     await dialogs.github.tokenInput.fill('ghp_validtoken');
-    await page.locator('lv-github-dialog button:has-text("Connect to GitHub")').click();
+    await page.locator('gn-github-dialog button:has-text("Connect to GitHub")').click();
 
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.connected'),
+      page.locator('gn-context-dashboard .account-status-dot.connected'),
     ).toBeVisible({ timeout: 5000 });
     await expect(reconnectBtn).not.toBeVisible();
   });
@@ -827,7 +827,7 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
 
     // Start: connected status dot in toolbar
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.connected'),
+      page.locator('gn-context-dashboard .account-status-dot.connected'),
     ).toBeVisible();
 
     // Delete the only global account via the profile manager
@@ -844,7 +844,7 @@ test.describe('Cross-component propagation - toolbar reflects dialog state', () 
     // its place. The one thing the toolbar must NOT do is keep showing a green
     // connected dot for an account that no longer exists.
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.connected'),
+      page.locator('gn-context-dashboard .account-status-dot.connected'),
     ).not.toBeVisible({ timeout: 5000 });
   });
 });
@@ -884,21 +884,21 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Open the account selector dropdown and click Manage Accounts
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-github-dialog lv-account-selector .dropdown-action', {
+      .locator('gn-github-dialog gn-account-selector .dropdown-action', {
         hasText: 'Manage Accounts',
       })
       .click();
 
     // The Profile Manager must be visibly on top (not demoted behind the GitHub
     // dialog) so the user actually sees the navigation they asked for.
-    const profileManagerOverlay = page.locator('lv-profile-manager-dialog[open] .dialog-overlay');
+    const profileManagerOverlay = page.locator('gn-profile-manager-dialog[open] .dialog-overlay');
     await expect(profileManagerOverlay).toBeVisible({ timeout: 3000 });
     // And the integration dialog should be out of the way — either closed or
     // at least not demoted on top of where the user is looking.
     await expect(
-      page.locator('lv-profile-manager-dialog[open][demoted]'),
+      page.locator('gn-profile-manager-dialog[open][demoted]'),
     ).toHaveCount(0);
   });
 
@@ -933,20 +933,20 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
       .first()
       .locator('.account-actions .action-btn:not(.delete)')
       .click();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Edit Account',
     );
 
     // Rename the account
     const accountNameInput = page
-      .locator('lv-profile-manager-dialog')
+      .locator('gn-profile-manager-dialog')
       .getByPlaceholder(/Account name|e\.g\./i)
       .first();
     await accountNameInput.fill('Acme GitHub');
     await page.getByRole('button', { name: 'Save Account' }).click();
 
     // Should return to profile edit view, attached list shows new name
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Edit Profile',
     );
     await expect(dialogs.profileManager.attachedAccountItems.first()).toContainText(
@@ -1024,9 +1024,9 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Open selector → Add Account → clears selection, shows connect form
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-github-dialog lv-account-selector .dropdown-action.primary', {
+      .locator('gn-github-dialog gn-account-selector .dropdown-action.primary', {
         hasText: 'Add Account',
       })
       .click();
@@ -1036,18 +1036,18 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     await dialogs.github.tokenInput.fill('ghp_realtoken_for_test');
 
     await startCommandCapture(page);
-    await page.locator('lv-github-dialog button:has-text("Connect to GitHub")').click();
+    await page.locator('gn-github-dialog button:has-text("Connect to GitHub")').click();
     await waitForCommand(page, 'save_global_account');
 
     // Close and reopen — the new account must appear in the selector via the
     // REAL store-reload path (loadUnifiedProfiles → get_unified_profiles_config).
-    await page.locator('lv-github-dialog .close-btn, lv-github-dialog button[aria-label="Close"]').first().click();
+    await page.locator('gn-github-dialog .close-btn, gn-github-dialog button[aria-label="Close"]').first().click();
     await expect(dialogs.github.dialog).not.toBeVisible();
 
     await app.executeCommand('GitHub');
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await expect(
-      page.locator('lv-github-dialog lv-account-selector .dropdown-item', {
+      page.locator('gn-github-dialog gn-account-selector .dropdown-item', {
         hasText: 'GitHub (extra-user)',
       }),
     ).toBeVisible();
@@ -1135,19 +1135,19 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     // Open GitHub dialog under profile A — selector should show A's default
     await app.executeCommand('GitHub');
     await expect(
-      page.locator('lv-github-dialog lv-account-selector .account-name'),
+      page.locator('gn-github-dialog gn-account-selector .account-name'),
     ).toHaveText('Work GitHub');
-    await page.locator('lv-github-dialog .close-btn, lv-github-dialog button[aria-label="Close"]').first().click();
+    await page.locator('gn-github-dialog .close-btn, gn-github-dialog button[aria-label="Close"]').first().click();
 
     // Apply profile B (via the dashboard dropdown). In production, the backend
     // would persist the assignment; mirror that by re-injecting the mock so
     // subsequent reads return profileB.
-    await page.locator('lv-context-dashboard .profile-selector-btn').click();
-    await page.locator('lv-context-dashboard .profile-dropdown .dropdown-item', {
+    await page.locator('gn-context-dashboard .profile-selector-btn').click();
+    await page.locator('gn-context-dashboard .profile-dropdown .dropdown-item', {
       hasText: 'Personal',
     }).click();
     await expect(
-      page.locator('lv-context-dashboard .profile-name'),
+      page.locator('gn-context-dashboard .profile-name'),
     ).toHaveText('Personal');
     await injectCommandMock(page, {
       get_assigned_unified_profile: profileB,
@@ -1157,7 +1157,7 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     // Reopen GitHub dialog — selector must reflect profile B's default
     await app.executeCommand('GitHub');
     await expect(
-      page.locator('lv-github-dialog lv-account-selector .account-name'),
+      page.locator('gn-github-dialog gn-account-selector .account-name'),
     ).toHaveText('Personal GitHub', { timeout: 5000 });
   });
 
@@ -1226,23 +1226,23 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     await page.locator('.profile-item').first().click();
     await dialogs.profileManager.attachAccountButton.click();
     await expect(
-      page.locator('lv-profile-manager-dialog .dialog-title'),
+      page.locator('gn-profile-manager-dialog .dialog-title'),
     ).toContainText('Attach Account');
 
     await page
-      .locator('lv-profile-manager-dialog')
+      .locator('gn-profile-manager-dialog')
       .getByRole('button', { name: 'GitHub', exact: true })
       .click();
     await expect(dialogs.github.dialog).toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(1);
+    await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(1);
 
     // EXPLICIT navigation: the GitHub dialog shows a Back arrow (opened with a
     // return target) AND an "Adding to <profile>" breadcrumb naming the target.
     await expect(
-      page.locator('lv-github-dialog').getByRole('button', { name: 'Back' }),
+      page.locator('gn-github-dialog').getByRole('button', { name: 'Back' }),
     ).toBeVisible();
     await expect(
-      page.locator('lv-github-dialog [data-testid="attach-breadcrumb"]'),
+      page.locator('gn-github-dialog [data-testid="attach-breadcrumb"]'),
     ).toContainText('Personal');
 
     // REAL save flow.
@@ -1250,17 +1250,17 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     await dialogs.github.tokenInput.waitFor({ state: 'visible', timeout: 5000 });
     await dialogs.github.tokenInput.fill('ghp_realtoken_for_test');
     await startCommandCapture(page);
-    await page.locator('lv-github-dialog button:has-text("Connect to GitHub")').click();
+    await page.locator('gn-github-dialog button:has-text("Connect to GitHub")').click();
     await waitForCommand(page, 'save_global_account');
     await waitForCommand(page, 'store_keyring_token');
 
     // Back → profile manager reveals → PR #199 fix auto-attaches
-    await page.locator('lv-github-dialog').getByRole('button', { name: 'Back' }).click();
+    await page.locator('gn-github-dialog').getByRole('button', { name: 'Back' }).click();
     await expect(
-      page.locator('lv-profile-manager-dialog[open][demoted]'),
+      page.locator('gn-profile-manager-dialog[open][demoted]'),
     ).toHaveCount(0);
     await expect(
-      page.locator('lv-profile-manager-dialog .dialog-title'),
+      page.locator('gn-profile-manager-dialog .dialog-title'),
     ).toContainText('Edit Profile');
     await expect(dialogs.profileManager.attachedAccountItems.first()).toContainText(
       'GitHub (fresh-user)',
@@ -1311,18 +1311,18 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
 
     // Opened standalone: NO Back arrow, only a Close ×; and no attach breadcrumb.
     await expect(
-      page.locator('lv-github-dialog lv-modal').locator('[aria-label="Back"]'),
+      page.locator('gn-github-dialog gn-modal').locator('[aria-label="Back"]'),
     ).toHaveCount(0);
     await expect(
-      page.locator('lv-github-dialog lv-modal').locator('[aria-label="Close"]'),
+      page.locator('gn-github-dialog gn-modal').locator('[aria-label="Close"]'),
     ).toBeVisible();
     await expect(
-      page.locator('lv-github-dialog [data-testid="attach-breadcrumb"]'),
+      page.locator('gn-github-dialog [data-testid="attach-breadcrumb"]'),
     ).toHaveCount(0);
 
     // Close it, open the manager, edit the profile — the github account must NOT
     // have been auto-attached by the standalone open.
-    await page.locator('lv-github-dialog lv-modal [aria-label="Close"]').click();
+    await page.locator('gn-github-dialog gn-modal [aria-label="Close"]').click();
     await expect(dialogs.github.dialog).not.toBeVisible();
 
     await openProfileManager(page, dialogs);
@@ -1355,21 +1355,21 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Manage Accounts → lands on the Profiles & Accounts manager (on top).
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-github-dialog lv-account-selector .dropdown-action', {
+      .locator('gn-github-dialog gn-account-selector .dropdown-action', {
         hasText: 'Manage Accounts',
       })
       .click();
     await expect(
-      page.locator('lv-profile-manager-dialog[open] .dialog-overlay'),
+      page.locator('gn-profile-manager-dialog[open] .dialog-overlay'),
     ).toBeVisible();
     await expect(dialogs.github.dialog).not.toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText('Accounts');
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText('Accounts');
 
     // REVERSIBLE: Back from the Accounts view returns to the GitHub dialog.
-    await page.locator('lv-profile-manager-dialog .dialog-footer button', { hasText: 'Back' }).click();
-    await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0);
+    await page.locator('gn-profile-manager-dialog .dialog-footer button', { hasText: 'Back' }).click();
+    await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(0);
     await expect(dialogs.github.dialog).toBeVisible();
   });
 });
@@ -1436,7 +1436,7 @@ test.describe('Remaining flows - Profile Manager', () => {
 
     await openProfileManager(page, dialogs);
     // Expand the backup section
-    await page.locator('lv-profile-manager-dialog .backup-toggle').click();
+    await page.locator('gn-profile-manager-dialog .backup-toggle').click();
     const deleteBtn = page.getByRole('button', { name: 'Delete Backup' });
     await expect(deleteBtn).toBeVisible();
 
@@ -1444,11 +1444,11 @@ test.describe('Remaining flows - Profile Manager', () => {
 
     // Backup section should disappear
     await expect(
-      page.locator('lv-profile-manager-dialog .backup-toggle'),
+      page.locator('gn-profile-manager-dialog .backup-toggle'),
     ).toHaveCount(0, { timeout: 5000 });
     // And a success toast should appear
     await expect(
-      page.locator('lv-toast-container .toast.success .toast-message'),
+      page.locator('gn-toast-container .toast.success .toast-message'),
     ).toContainText(/Migration backup deleted/i);
   });
 
@@ -1473,7 +1473,7 @@ test.describe('Remaining flows - Profile Manager', () => {
     await page.locator('.profile-item').first().click();
 
     // Toggle the "Set as default" checkbox/control inside the edit form
-    const defaultToggle = page.locator('lv-profile-manager-dialog input[type="checkbox"]').first();
+    const defaultToggle = page.locator('gn-profile-manager-dialog input[type="checkbox"]').first();
     await expect(defaultToggle).toBeVisible();
     if (!(await defaultToggle.isChecked())) {
       await defaultToggle.check();
@@ -1554,7 +1554,7 @@ test.describe('Remaining flows - Profile Manager', () => {
     await page.getByRole('button', { name: 'Save Profile' }).click();
 
     await expect(
-      page.locator('lv-toast-container .toast.error .toast-message'),
+      page.locator('gn-toast-container .toast.error .toast-message'),
     ).toContainText(/Profile name is required/i, { timeout: 3000 });
     const saves = await findCommand(page, 'save_unified_profile');
     expect(saves.length).toBe(0);
@@ -1574,7 +1574,7 @@ test.describe('Remaining flows - Profile Manager', () => {
     await page.getByRole('button', { name: 'Save Profile' }).click();
 
     await expect(
-      page.locator('lv-toast-container .toast.error .toast-message'),
+      page.locator('gn-toast-container .toast.error .toast-message'),
     ).toContainText(/Git name is required/i, { timeout: 3000 });
     const saves = await findCommand(page, 'save_unified_profile');
     expect(saves.length).toBe(0);
@@ -1592,7 +1592,7 @@ test.describe('Remaining flows - Profile Manager', () => {
     await page.getByRole('button', { name: 'Save Profile' }).click();
 
     await expect(
-      page.locator('lv-toast-container .toast.error .toast-message'),
+      page.locator('gn-toast-container .toast.error .toast-message'),
     ).toContainText(/Git email is required/i, { timeout: 3000 });
     const saves = await findCommand(page, 'save_unified_profile');
     expect(saves.length).toBe(0);
@@ -1677,7 +1677,7 @@ test.describe('Integration dialog - disconnect & token management', () => {
     });
 
     // Click the Disconnect button visible in the connected-user view
-    const disconnect = page.locator('lv-github-dialog button:has-text("Disconnect")').first();
+    const disconnect = page.locator('gn-github-dialog button:has-text("Disconnect")').first();
     await expect(disconnect).toBeVisible({ timeout: 5000 });
     await disconnect.click();
 
@@ -1715,20 +1715,20 @@ test.describe('Integration dialog - disconnect & token management', () => {
 
     // Toolbar starts with the connected status dot
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.connected'),
+      page.locator('gn-context-dashboard .account-status-dot.connected'),
     ).toBeVisible();
 
     const app = new AppPage(page);
     await app.executeCommand('GitHub');
     await dialogs.github.connectionTab.click();
-    await page.locator('lv-github-dialog button:has-text("Disconnect")').first().click();
+    await page.locator('gn-github-dialog button:has-text("Disconnect")').first().click();
 
     // After disconnect, the toolbar must reflect disconnected/Reconnect state
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.connected'),
+      page.locator('gn-context-dashboard .account-status-dot.connected'),
     ).not.toBeVisible({ timeout: 5000 });
     await expect(
-      page.locator('lv-context-dashboard .configure-btn:has-text("Reconnect GitHub")'),
+      page.locator('gn-context-dashboard .configure-btn:has-text("Reconnect GitHub")'),
     ).toBeVisible();
   });
 
@@ -1779,13 +1779,13 @@ test.describe('Integration dialog - disconnect & token management', () => {
     });
 
     // Click Delete (the danger-outline button — sibling of Disconnect)
-    await page.locator('lv-github-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
+    await page.locator('gn-github-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
     await waitForCommand(page, 'delete_global_account');
 
     // The selector should now reflect that the deleted account is gone — only
     // Personal GitHub remains.
     await expect(
-      page.locator('lv-github-dialog lv-account-selector .account-name'),
+      page.locator('gn-github-dialog gn-account-selector .account-name'),
     ).toHaveText('Personal GitHub', { timeout: 5000 });
 
     // The store should no longer contain the deleted account.
@@ -1841,17 +1841,17 @@ test.describe('Integration dialog - disconnect & token management', () => {
       },
     });
 
-    await page.locator('lv-github-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
+    await page.locator('gn-github-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
 
     // No accounts remain — the dialog must NOT keep showing the connected user
     // view (Disconnect button) for an account that no longer exists.
     await expect(
-      page.locator('lv-github-dialog button:has-text("Disconnect")'),
+      page.locator('gn-github-dialog button:has-text("Disconnect")'),
     ).not.toBeVisible({ timeout: 5000 });
 
     // Toolbar should reflect no account → "Connect GitHub" affordance
     await expect(
-      page.locator('lv-context-dashboard .configure-btn:has-text("Connect GitHub")'),
+      page.locator('gn-context-dashboard .configure-btn:has-text("Connect GitHub")'),
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -1894,11 +1894,11 @@ test.describe('Integration dialog - disconnect & token management', () => {
       'plugin:dialog|ask': false,
     });
 
-    await page.locator('lv-github-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
+    await page.locator('gn-github-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
 
     // Account must still be in the store — nothing was destroyed.
     await expect(
-      page.locator('lv-github-dialog lv-account-selector .account-name'),
+      page.locator('gn-github-dialog gn-account-selector .account-name'),
     ).toHaveText('Work GitHub');
     const deleteCalls = await findCommand(page, 'delete_global_account');
     expect(deleteCalls.length).toBe(0);
@@ -1969,7 +1969,7 @@ test.describe('Connection statuses', () => {
 
     // refreshConnectionStatuses → refreshAccountCachedUser → setAccountConnectionStatus(_, 'checking')
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.checking'),
+      page.locator('gn-context-dashboard .account-status-dot.checking'),
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -1991,11 +1991,11 @@ test.describe('Keyboard & a11y', () => {
     await setupOpenRepository(page);
     await openProfileManager(page, dialogs);
 
-    await expect(page.locator('lv-profile-manager-dialog[open]')).toBeVisible();
+    await expect(page.locator('gn-profile-manager-dialog[open]')).toBeVisible();
     await page.evaluate(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
-    await expect(page.locator('lv-profile-manager-dialog[open]')).not.toBeVisible({ timeout: 3000 });
+    await expect(page.locator('gn-profile-manager-dialog[open]')).not.toBeVisible({ timeout: 3000 });
   });
 
   test.fixme('Escape from create form backs out to the list (does not destroy the whole dialog)', async ({ page }) => {
@@ -2010,7 +2010,7 @@ test.describe('Keyboard & a11y', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
     // Dialog should still be open, but back on the list view.
-    await expect(page.locator('lv-profile-manager-dialog[open]')).toBeVisible();
+    await expect(page.locator('gn-profile-manager-dialog[open]')).toBeVisible();
     await expect(dialogs.profileManager.addProfileButton).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save Profile' })).not.toBeVisible();
 
@@ -2018,7 +2018,7 @@ test.describe('Keyboard & a11y', () => {
     await page.evaluate(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
-    await expect(page.locator('lv-profile-manager-dialog[open]')).not.toBeVisible({ timeout: 3000 });
+    await expect(page.locator('gn-profile-manager-dialog[open]')).not.toBeVisible({ timeout: 3000 });
   });
 
   test.fixme('GitHub dialog can be closed with Escape from any tab', async ({ page }) => {
@@ -2154,7 +2154,7 @@ test.describe('Keyboard & a11y', () => {
 
     // Initial state shows connected dot
     await expect(
-      page.locator('lv-context-dashboard .account-status-dot.connected'),
+      page.locator('gn-context-dashboard .account-status-dot.connected'),
     ).toBeVisible();
 
     // Now simulate the next connection check failing — e.g. token expired
@@ -2165,7 +2165,7 @@ test.describe('Keyboard & a11y', () => {
 
     // Toolbar status flips to disconnected → "Reconnect" affordance appears
     await expect(
-      page.locator('lv-context-dashboard .configure-btn:has-text("Reconnect GitHub")'),
+      page.locator('gn-context-dashboard .configure-btn:has-text("Reconnect GitHub")'),
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -2255,15 +2255,15 @@ test.describe('Parity - GitLab dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('GitLab');
-    await expect(page.locator('lv-gitlab-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-gitlab-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, {
       check_gitlab_connection: { connected: true, user: { username: 'gitlabB', name: 'B', avatarUrl: null }, instanceUrl: 'https://gitlab.com' },
     });
 
-    await page.locator('lv-gitlab-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-gitlab-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-gitlab-dialog lv-account-selector .dropdown-item', { hasText: 'GitLab B' })
+      .locator('gn-gitlab-dialog gn-account-selector .dropdown-item', { hasText: 'GitLab B' })
       .click();
 
     await waitForCommand(page, 'check_gitlab_connection');
@@ -2294,17 +2294,17 @@ test.describe('Parity - GitLab dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('GitLab');
-    await expect(page.locator('lv-gitlab-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-gitlab-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, {
       'plugin:dialog|confirm': false,
       'plugin:dialog|ask': false,
     });
-    await page.locator('lv-gitlab-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
+    await page.locator('gn-gitlab-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
 
     const deletes = await findCommand(page, 'delete_global_account');
     expect(deletes.length).toBe(0);
-    await expect(page.locator('lv-gitlab-dialog lv-account-selector .account-name')).toHaveText('GitLab A');
+    await expect(page.locator('gn-gitlab-dialog gn-account-selector .account-name')).toHaveText('GitLab A');
   });
 
   test('GitLab: PAT save creates a new account via the real handleSaveToken path', async ({ page }) => {
@@ -2349,30 +2349,30 @@ test.describe('Parity - GitLab dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('GitLab');
-    await expect(page.locator('lv-gitlab-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-gitlab-dialog gn-modal[open]')).toBeVisible();
 
     // Use the selector's Add Account action to enter the "new account" PAT form.
-    await page.locator('lv-gitlab-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-gitlab-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-gitlab-dialog lv-account-selector .dropdown-action.primary', { hasText: 'Add Account' })
+      .locator('gn-gitlab-dialog gn-account-selector .dropdown-action.primary', { hasText: 'Add Account' })
       .click();
 
-    const tokenInput = page.locator('lv-gitlab-dialog input[type="password"]');
+    const tokenInput = page.locator('gn-gitlab-dialog input[type="password"]');
     await tokenInput.waitFor({ state: 'visible', timeout: 5000 });
     await tokenInput.fill('glpat_newtoken');
 
     await startCommandCapture(page);
-    await page.locator('lv-gitlab-dialog button:has-text("Connect with Token")').click();
+    await page.locator('gn-gitlab-dialog button:has-text("Connect with Token")').click();
     await waitForCommand(page, 'save_global_account');
     await waitForCommand(page, 'store_keyring_token');
 
     // Close + reopen; the new account must be present in the selector.
-    await page.locator('lv-gitlab-dialog button[aria-label="Close"]').first().click();
-    await expect(page.locator('lv-gitlab-dialog lv-modal[open]')).not.toBeVisible();
+    await page.locator('gn-gitlab-dialog button[aria-label="Close"]').first().click();
+    await expect(page.locator('gn-gitlab-dialog gn-modal[open]')).not.toBeVisible();
     await app.executeCommand('GitLab');
-    await page.locator('lv-gitlab-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-gitlab-dialog gn-account-selector .selector-btn').click();
     await expect(
-      page.locator('lv-gitlab-dialog lv-account-selector .dropdown-item', { hasText: 'GitLab (newuser)' }),
+      page.locator('gn-gitlab-dialog gn-account-selector .dropdown-item', { hasText: 'GitLab (newuser)' }),
     ).toBeVisible();
   });
 
@@ -2398,10 +2398,10 @@ test.describe('Parity - GitLab dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('GitLab');
-    await expect(page.locator('lv-gitlab-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-gitlab-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, { delete_keyring_token: null });
-    await page.locator('lv-gitlab-dialog button:has-text("Disconnect")').first().click();
+    await page.locator('gn-gitlab-dialog button:has-text("Disconnect")').first().click();
     await waitForCommand(page, 'delete_keyring_token');
     expect((await findCommand(page, 'delete_keyring_token')).length).toBeGreaterThan(0);
   });
@@ -2451,16 +2451,16 @@ test.describe('Parity - Bitbucket dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Bitbucket');
-    await expect(page.locator('lv-bitbucket-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-bitbucket-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, {
       get_keyring_token: 'bbp_stored',
       check_bitbucket_connection_with_token: { connected: true, user: { username: 'bbuser2', displayName: 'BB2' } },
     });
 
-    await page.locator('lv-bitbucket-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-bitbucket-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-bitbucket-dialog lv-account-selector .dropdown-item', { hasText: 'Bitbucket B' })
+      .locator('gn-bitbucket-dialog gn-account-selector .dropdown-item', { hasText: 'Bitbucket B' })
       .click();
 
     await waitForCommand(page, 'check_bitbucket_connection_with_token');
@@ -2491,17 +2491,17 @@ test.describe('Parity - Bitbucket dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Bitbucket');
-    await expect(page.locator('lv-bitbucket-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-bitbucket-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, {
       'plugin:dialog|confirm': false,
       'plugin:dialog|ask': false,
     });
-    await page.locator('lv-bitbucket-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
+    await page.locator('gn-bitbucket-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
     const deletes = await findCommand(page, 'delete_global_account');
     expect(deletes.length).toBe(0);
     await expect(
-      page.locator('lv-bitbucket-dialog lv-account-selector .account-name'),
+      page.locator('gn-bitbucket-dialog gn-account-selector .account-name'),
     ).toHaveText('Bitbucket A');
   });
 
@@ -2553,21 +2553,21 @@ test.describe('Parity - Bitbucket dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Bitbucket');
-    await expect(page.locator('lv-bitbucket-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-bitbucket-dialog gn-modal[open]')).toBeVisible();
 
-    await page.locator('lv-bitbucket-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-bitbucket-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-bitbucket-dialog lv-account-selector .dropdown-action.primary', { hasText: 'Add Account' })
+      .locator('gn-bitbucket-dialog gn-account-selector .dropdown-action.primary', { hasText: 'Add Account' })
       .click();
 
-    const userInput = page.locator('lv-bitbucket-dialog input[type="text"]').first();
-    const pwInput = page.locator('lv-bitbucket-dialog input[type="password"]');
+    const userInput = page.locator('gn-bitbucket-dialog input[type="text"]').first();
+    const pwInput = page.locator('gn-bitbucket-dialog input[type="password"]');
     await userInput.waitFor({ state: 'visible', timeout: 5000 });
     await userInput.fill('newbb');
     await pwInput.fill('bbp_newpassword');
 
     await startCommandCapture(page);
-    await page.locator('lv-bitbucket-dialog button:has-text("Connect with App Password")').click();
+    await page.locator('gn-bitbucket-dialog button:has-text("Connect with App Password")').click();
     await waitForCommand(page, 'save_global_account');
     await waitForCommand(page, 'store_keyring_token');
   });
@@ -2594,10 +2594,10 @@ test.describe('Parity - Bitbucket dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Bitbucket');
-    await expect(page.locator('lv-bitbucket-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-bitbucket-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, { delete_keyring_token: null });
-    await page.locator('lv-bitbucket-dialog button:has-text("Disconnect")').first().click();
+    await page.locator('gn-bitbucket-dialog button:has-text("Disconnect")').first().click();
     await waitForCommand(page, 'delete_keyring_token');
     expect((await findCommand(page, 'delete_keyring_token')).length).toBeGreaterThan(0);
   });
@@ -2646,15 +2646,15 @@ test.describe('Parity - Azure DevOps dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Azure DevOps');
-    await expect(page.locator('lv-azure-devops-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-azure-devops-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, {
       check_ado_connection: { connected: true, user: { displayName: 'ADO2', imageUrl: null }, organization: 'acme' },
     });
 
-    await page.locator('lv-azure-devops-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-azure-devops-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-azure-devops-dialog lv-account-selector .dropdown-item', { hasText: 'Azure B' })
+      .locator('gn-azure-devops-dialog gn-account-selector .dropdown-item', { hasText: 'Azure B' })
       .click();
 
     await waitForCommand(page, 'check_ado_connection');
@@ -2685,17 +2685,17 @@ test.describe('Parity - Azure DevOps dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Azure DevOps');
-    await expect(page.locator('lv-azure-devops-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-azure-devops-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, {
       'plugin:dialog|confirm': false,
       'plugin:dialog|ask': false,
     });
-    await page.locator('lv-azure-devops-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
+    await page.locator('gn-azure-devops-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ }).click();
     const deletes = await findCommand(page, 'delete_global_account');
     expect(deletes.length).toBe(0);
     await expect(
-      page.locator('lv-azure-devops-dialog lv-account-selector .account-name'),
+      page.locator('gn-azure-devops-dialog gn-account-selector .account-name'),
     ).toHaveText('Azure A');
   });
 
@@ -2740,21 +2740,21 @@ test.describe('Parity - Azure DevOps dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Azure DevOps');
-    await expect(page.locator('lv-azure-devops-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-azure-devops-dialog gn-modal[open]')).toBeVisible();
 
-    await page.locator('lv-azure-devops-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-azure-devops-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-azure-devops-dialog lv-account-selector .dropdown-action.primary', { hasText: 'Add Account' })
+      .locator('gn-azure-devops-dialog gn-account-selector .dropdown-action.primary', { hasText: 'Add Account' })
       .click();
 
-    const orgInput = page.locator('lv-azure-devops-dialog input[type="text"]').first();
-    const tokenInput = page.locator('lv-azure-devops-dialog input[type="password"]');
+    const orgInput = page.locator('gn-azure-devops-dialog input[type="text"]').first();
+    const tokenInput = page.locator('gn-azure-devops-dialog input[type="password"]');
     await orgInput.waitFor({ state: 'visible', timeout: 5000 });
     await orgInput.fill('acme');
     await tokenInput.fill('adopat_newtoken');
 
     await startCommandCapture(page);
-    await page.locator('lv-azure-devops-dialog .btn-primary:has-text("Connect")').click();
+    await page.locator('gn-azure-devops-dialog .btn-primary:has-text("Connect")').click();
     await waitForCommand(page, 'save_global_account');
     await waitForCommand(page, 'store_keyring_token');
   });
@@ -2781,10 +2781,10 @@ test.describe('Parity - Azure DevOps dialog', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('Azure DevOps');
-    await expect(page.locator('lv-azure-devops-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-azure-devops-dialog gn-modal[open]')).toBeVisible();
 
     await startCommandCaptureWithMocks(page, { delete_keyring_token: null });
-    await page.locator('lv-azure-devops-dialog button:has-text("Disconnect")').first().click();
+    await page.locator('gn-azure-devops-dialog button:has-text("Disconnect")').first().click();
     await waitForCommand(page, 'delete_keyring_token');
     expect((await findCommand(page, 'delete_keyring_token')).length).toBeGreaterThan(0);
   });
@@ -2812,7 +2812,7 @@ test.describe('No repository open - connect flow', () => {
       get_migration_backup_info: { hasBackup: false },
     });
     // No repo open → the welcome screen is visible (proves the precondition).
-    await expect(page.locator('lv-welcome')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('gn-welcome')).toBeVisible({ timeout: 10000 });
   }
 
   test('Connect GitHub from the picker opens the integration dialog with no repo open', async ({ page }) => {
@@ -2825,11 +2825,11 @@ test.describe('No repository open - connect flow', () => {
     await dialogs.profileManager.addProfileButton.click();
     await dialogs.profileManager.attachAccountButton.click();
     await expect(
-      page.locator('lv-profile-manager-dialog .dialog-title'),
+      page.locator('gn-profile-manager-dialog .dialog-title'),
     ).toContainText('Attach Account');
 
     await page
-      .locator('lv-profile-manager-dialog')
+      .locator('gn-profile-manager-dialog')
       .getByRole('button', { name: 'GitHub', exact: true })
       .click();
 
@@ -2837,7 +2837,7 @@ test.describe('No repository open - connect flow', () => {
     // repo), and the Profile Manager must be demoted behind it — not left
     // transparent with nothing on top.
     await expect(dialogs.github.dialog).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(1);
+    await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(1);
   });
 });
 
@@ -2869,19 +2869,19 @@ test.describe('Accounts management view', () => {
 
     await openProfileManager(page, dialogs);
     await page
-      .locator('lv-profile-manager-dialog .dialog-footer')
+      .locator('gn-profile-manager-dialog .dialog-footer')
       .getByRole('button', { name: 'Accounts' })
       .click();
 
     await expect(
-      page.locator('lv-profile-manager-dialog .dialog-title'),
+      page.locator('gn-profile-manager-dialog .dialog-title'),
     ).toContainText('Accounts');
     // Both global accounts are listed with edit + delete affordances.
     await expect(
-      page.locator('lv-profile-manager-dialog .accounts-list .account-item'),
+      page.locator('gn-profile-manager-dialog .accounts-list .account-item'),
     ).toHaveCount(2);
     await expect(
-      page.locator('lv-profile-manager-dialog .account-actions .action-btn.delete'),
+      page.locator('gn-profile-manager-dialog .account-actions .action-btn.delete'),
     ).toHaveCount(2);
   });
 
@@ -2905,11 +2905,11 @@ test.describe('Accounts management view', () => {
 
     await openProfileManager(page, dialogs);
     await page
-      .locator('lv-profile-manager-dialog .dialog-footer')
+      .locator('gn-profile-manager-dialog .dialog-footer')
       .getByRole('button', { name: 'Accounts' })
       .click();
     await expect(
-      page.locator('lv-profile-manager-dialog .accounts-list .account-item'),
+      page.locator('gn-profile-manager-dialog .accounts-list .account-item'),
     ).toHaveCount(2);
 
     // Backend: after delete the config no longer contains the first account.
@@ -2924,17 +2924,17 @@ test.describe('Accounts management view', () => {
     });
 
     await page
-      .locator('lv-profile-manager-dialog .account-actions .action-btn.delete')
+      .locator('gn-profile-manager-dialog .account-actions .action-btn.delete')
       .first()
       .click();
     await waitForCommand(page, 'delete_global_account');
 
     // Still on the accounts view, now showing only the remaining account.
     await expect(
-      page.locator('lv-profile-manager-dialog .dialog-title'),
+      page.locator('gn-profile-manager-dialog .dialog-title'),
     ).toContainText('Accounts');
     await expect(
-      page.locator('lv-profile-manager-dialog .accounts-list .account-item'),
+      page.locator('gn-profile-manager-dialog .accounts-list .account-item'),
     ).toHaveCount(1);
   });
 
@@ -2960,17 +2960,17 @@ test.describe('Accounts management view', () => {
     await app.executeCommand('GitHub');
     await expect(dialogs.github.dialog).toBeVisible();
 
-    await page.locator('lv-github-dialog lv-account-selector .selector-btn').click();
+    await page.locator('gn-github-dialog gn-account-selector .selector-btn').click();
     await page
-      .locator('lv-github-dialog lv-account-selector .dropdown-action', { hasText: 'Manage Accounts' })
+      .locator('gn-github-dialog gn-account-selector .dropdown-action', { hasText: 'Manage Accounts' })
       .click();
 
     // The Profile Manager opens directly on the account-management view (not the
     // profile list) and is on top (not demoted behind the integration dialog).
-    await expect(page.locator('lv-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(0);
+    await expect(page.locator('gn-profile-manager-dialog[open] .dialog-overlay')).toBeVisible();
+    await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(0);
     await expect(
-      page.locator('lv-profile-manager-dialog .dialog-title'),
+      page.locator('gn-profile-manager-dialog .dialog-title'),
     ).toContainText('Accounts');
   });
 });
@@ -3005,12 +3005,12 @@ test.describe('Unsaved-changes guard', () => {
     // Auto-confirm the discard prompt, then dismiss via the X button.
     await autoConfirmDialogs(page);
     await startCommandCapture(page);
-    await page.locator('lv-profile-manager-dialog .close-btn').click();
+    await page.locator('gn-profile-manager-dialog .close-btn').click();
 
     // A confirm dialog was shown (the guard fired) and the dialog then closed.
     await waitForCommand(page, 'plugin:dialog|message');
     const confirms = await findCommand(page, 'plugin:dialog|message');
     expect(confirms.length).toBeGreaterThan(0);
-    await expect(page.locator('lv-profile-manager-dialog[open]')).toHaveCount(0, { timeout: 5000 });
+    await expect(page.locator('gn-profile-manager-dialog[open]')).toHaveCount(0, { timeout: 5000 });
   });
 });

@@ -154,7 +154,7 @@ test.describe('Bitbucket Dialog - Connection Flow', () => {
 
     // Should still show the dialog with an error indicator
     await expect(dialogs.bitbucket.dialog).toBeVisible();
-    await expect(page.locator('lv-bitbucket-dialog .error, lv-bitbucket-dialog .error-message, .toast.error').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-bitbucket-dialog .error, gn-bitbucket-dialog .error-message, .toast.error').first()).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -228,7 +228,7 @@ test.describe('Bitbucket Dialog - Extended Scenarios', () => {
     await expect(dialogs.bitbucket.dialog).toBeVisible();
 
     // Verify the error is shown within the dialog
-    await expect(page.locator('lv-bitbucket-dialog .error, lv-bitbucket-dialog .error-message, .toast.error').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-bitbucket-dialog .error, gn-bitbucket-dialog .error-message, .toast.error').first()).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -354,9 +354,9 @@ test.describe('Bitbucket Dialog - Capped list disclosure', () => {
     await expect(dialogs.bitbucket.dialog).toBeVisible();
     await dialogs.bitbucket.pullRequestsTab.click();
 
-    await expect(page.locator('lv-bitbucket-dialog .pr-item')).toHaveCount(30);
+    await expect(page.locator('gn-bitbucket-dialog .pr-item')).toHaveCount(30);
 
-    const hint = page.locator('lv-bitbucket-dialog .capped-list-hint');
+    const hint = page.locator('gn-bitbucket-dialog .capped-list-hint');
     await expect(hint).toContainText('more may exist');
     await expect(hint).toContainText('30');
 
@@ -379,7 +379,7 @@ test.describe('Bitbucket Dialog - Capped list disclosure', () => {
     await expect(dialogs.bitbucket.dialog).toBeVisible();
     await dialogs.bitbucket.pullRequestsTab.click();
 
-    await expect(page.locator('lv-bitbucket-dialog .pr-item')).toHaveCount(1);
-    await expect(page.locator('lv-bitbucket-dialog .capped-list-hint')).toHaveCount(0);
+    await expect(page.locator('gn-bitbucket-dialog .pr-item')).toHaveCount(1);
+    await expect(page.locator('gn-bitbucket-dialog .capped-list-hint')).toHaveCount(0);
   });
 });

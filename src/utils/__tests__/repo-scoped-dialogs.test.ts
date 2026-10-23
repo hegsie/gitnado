@@ -1,5 +1,5 @@
 /**
- * The ONE tab-close sweep shared by app-shell and lv-branch-list.
+ * The ONE tab-close sweep shared by app-shell and gn-branch-list.
  *
  * Two properties matter and both have been broken here before:
  *  1. Discovery is from the DOM, not a hand-written list of tag names. Every

@@ -83,12 +83,12 @@ async function setSecurity(
 
 async function openSettings(page: Page) {
   await page.keyboard.press('Meta+,');
-  await expect(page.locator('lv-settings-dialog')).toBeVisible();
+  await expect(page.locator('gn-settings-dialog')).toBeVisible();
 }
 
 /** The registry row for the one model these mocks offer. */
 function modelRow(page: Page) {
-  return page.locator('lv-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
+  return page.locator('gn-settings-dialog .setting-row', { hasText: 'Ultra-Light' });
 }
 
 test.describe('Settings Dialog — model download respects the network gate', () => {
@@ -103,7 +103,7 @@ test.describe('Settings Dialog — model download respects the network gate', ()
 
     await modelRow(page).getByRole('button', { name: 'Download' }).click();
 
-    const error = page.locator('lv-settings-dialog .error-text');
+    const error = page.locator('gn-settings-dialog .error-text');
     await expect(error).toBeVisible();
     await expect(error).toContainText('Offline mode');
     await expect(error).toContainText('Settings > Security');
@@ -119,7 +119,7 @@ test.describe('Settings Dialog — model download respects the network gate', ()
 
     await modelRow(page).getByRole('button', { name: 'Download' }).click();
 
-    const error = page.locator('lv-settings-dialog .error-text');
+    const error = page.locator('gn-settings-dialog .error-text');
     await expect(error).toBeVisible();
     await expect(error).toContainText('huggingface.co');
     await expect(error).toContainText('allowlist');
@@ -137,7 +137,7 @@ test.describe('Settings Dialog — model download respects the network gate', ()
     await expect
       .poll(async () => (await findCommand(page, 'download_model')).length)
       .toBeGreaterThan(0);
-    await expect(page.locator('lv-settings-dialog .error-text')).toHaveCount(0);
+    await expect(page.locator('gn-settings-dialog .error-text')).toHaveCount(0);
   });
 
   test('with no policy in force the download starts as before', async ({ page }) => {
@@ -149,6 +149,6 @@ test.describe('Settings Dialog — model download respects the network gate', ()
     await expect
       .poll(async () => (await findCommand(page, 'download_model')).length)
       .toBeGreaterThan(0);
-    await expect(page.locator('lv-settings-dialog .error-text')).toHaveCount(0);
+    await expect(page.locator('gn-settings-dialog .error-text')).toHaveCount(0);
   });
 });

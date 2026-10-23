@@ -171,13 +171,13 @@
      Custom properties inherit through shadow boundaries, so these reach every
      Lit component; the rules that consume them live in the focusRingStyles
      fragment in src/styles/shared-styles.ts. Components may override
-     --lv-focus-ring-offset locally (e.g. -2px on a full-bleed list row that a
+     --gn-focus-ring-offset locally (e.g. -2px on a full-bleed list row that a
      scroll container would otherwise clip). The colour tracks --color-primary,
      which is themed per light/dark, so the ring stays visible in both. */
-  --lv-focus-ring-color: var(--color-primary);
-  --lv-focus-ring-width: 2px;
-  --lv-focus-ring-offset: 2px;
-  --lv-focus-ring: var(--lv-focus-ring-width) solid var(--lv-focus-ring-color);
+  --gn-focus-ring-color: var(--color-primary);
+  --gn-focus-ring-width: 2px;
+  --gn-focus-ring-offset: 2px;
+  --gn-focus-ring: var(--gn-focus-ring-width) solid var(--gn-focus-ring-color);
 
   /* Z-Index */
   --z-dropdown: 100;
@@ -435,8 +435,8 @@ select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: var(--lv-focus-ring);
-  outline-offset: var(--lv-focus-ring-offset);
+  outline: var(--gn-focus-ring);
+  outline-offset: var(--gn-focus-ring-offset);
 }
 
 /* Honour the OS "reduce motion" setting for light-DOM chrome. This block does

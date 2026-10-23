@@ -15,7 +15,7 @@ import {
  * surfaces — Ctrl/Cmd+P and the tab bar — rather than the internal flags.
  */
 
-const palette = 'lv-command-palette[open]';
+const palette = 'gn-command-palette[open]';
 
 async function addRepo(page: Page, path: string, name: string): Promise<void> {
   await page.evaluate(
@@ -48,7 +48,7 @@ test.describe('Command palette repository boundary', () => {
 
   test('an open palette closes when the active repository changes', async ({ page }) => {
     await addRepo(page, '/work/other-repo', 'other-repo');
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute(
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute(
       'title',
       '/work/other-repo'
     );
@@ -61,7 +61,7 @@ test.describe('Command palette repository boundary', () => {
     // nothing about the repository switch.
     await page.keyboard.press('Control+1');
 
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute('title', '/tmp/test-repo');
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute('title', '/tmp/test-repo');
     await expect(page.locator(palette)).toHaveCount(0);
   });
 
@@ -70,7 +70,7 @@ test.describe('Command palette repository boundary', () => {
 
     await page.keyboard.press('Meta+p');
 
-    await expect(page.locator('lv-toast-container .toast.error')).toContainText(
+    await expect(page.locator('gn-toast-container .toast.error')).toContainText(
       'Failed to load branches: branches unavailable'
     );
     await expect(page.locator(palette)).toBeVisible();
@@ -81,7 +81,7 @@ test.describe('Command palette repository boundary', () => {
 
     await page.keyboard.press('Meta+p');
 
-    await expect(page.locator('lv-toast-container .toast.error')).toContainText(
+    await expect(page.locator('gn-toast-container .toast.error')).toContainText(
       'Failed to load tracked files: index unreadable'
     );
     await expect(page.locator(palette)).toBeVisible();
@@ -91,7 +91,7 @@ test.describe('Command palette repository boundary', () => {
     await page.keyboard.press('Meta+p');
 
     await expect(page.locator(palette)).toBeVisible();
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
   });
 });
 
@@ -129,7 +129,7 @@ test.describe('Command palette: open the active repository elsewhere', () => {
     expect(calls[0].args).toMatchObject({ path: '/tmp/test-repo' });
 
     await expect(page.locator(palette)).toHaveCount(0);
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
   });
 
   test('Reveal in File Manager runs open_file_manager for the active repository', async ({
@@ -140,7 +140,7 @@ test.describe('Command palette: open the active repository elsewhere', () => {
     await waitForCommand(page, 'open_file_manager');
     const calls = await findCommand(page, 'open_file_manager');
     expect(calls[0].args).toMatchObject({ path: '/tmp/test-repo' });
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
   });
 
   test('Open in Editor opens the repository root in the configured editor', async ({ page }) => {
@@ -152,7 +152,7 @@ test.describe('Command palette: open the active repository elsewhere', () => {
       path: '/tmp/test-repo',
       filePath: '/tmp/test-repo',
     });
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
   });
 
   test('a backend failure surfaces its own message as an error toast', async ({ page }) => {
@@ -165,7 +165,7 @@ test.describe('Command palette: open the active repository elsewhere', () => {
 
     await runCommand(page, 'Open in Terminal');
 
-    await expect(page.locator('lv-toast-container .toast.error')).toContainText(
+    await expect(page.locator('gn-toast-container .toast.error')).toContainText(
       'No terminal emulator found'
     );
   });
@@ -202,7 +202,7 @@ test.describe('Command palette data freshness', () => {
   // The graph canvas exposes its loaded set as public methods, so the specs
   // drive it through a locator (which pierces the shadow DOM for us) rather
   // than reaching into shadowRoot by hand.
-  const graph = (page: Page) => page.locator('lv-graph-canvas');
+  const graph = (page: Page) => page.locator('gn-graph-canvas');
 
   /** Wait until the graph canvas holds exactly `count` loaded commits. */
   async function waitForGraphLoaded(page: Page, count: number): Promise<void> {

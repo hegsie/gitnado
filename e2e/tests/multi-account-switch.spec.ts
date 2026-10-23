@@ -88,16 +88,16 @@ test.describe('Multi-Account - Switching Between Accounts', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Click the account selector to open dropdown
-    const selectorBtn = page.locator('lv-github-dialog lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-github-dialog gn-account-selector .selector-btn');
     await selectorBtn.click();
 
     // Both accounts should be listed
-    const dropdownItems = page.locator('lv-github-dialog lv-account-selector .dropdown-item');
+    const dropdownItems = page.locator('gn-github-dialog gn-account-selector .dropdown-item');
     const count = await dropdownItems.count();
     expect(count).toBe(2);
 
     // Check account names are present
-    const dropdownText = await page.locator('lv-github-dialog lv-account-selector .dropdown').textContent();
+    const dropdownText = await page.locator('gn-github-dialog gn-account-selector .dropdown').textContent();
     expect(dropdownText).toContain('GitHub (personal)');
     expect(dropdownText).toContain('GitHub (work)');
   });
@@ -108,16 +108,16 @@ test.describe('Multi-Account - Switching Between Accounts', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Open dropdown
-    const selectorBtn = page.locator('lv-github-dialog lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-github-dialog gn-account-selector .selector-btn');
     await selectorBtn.click();
 
     // The default account should have a "Default" badge
-    const defaultBadge = page.locator('lv-github-dialog lv-account-selector .default-badge');
+    const defaultBadge = page.locator('gn-github-dialog gn-account-selector .default-badge');
     await expect(defaultBadge).toBeVisible();
     await expect(defaultBadge).toContainText('Default');
 
     // Only one default badge should exist
-    const badgeCount = await page.locator('lv-github-dialog lv-account-selector .default-badge').count();
+    const badgeCount = await page.locator('gn-github-dialog gn-account-selector .default-badge').count();
     expect(badgeCount).toBe(1);
   });
 
@@ -127,15 +127,15 @@ test.describe('Multi-Account - Switching Between Accounts', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Verify the initial account is shown
-    const selectorText = page.locator('lv-github-dialog lv-account-selector .account-name');
+    const selectorText = page.locator('gn-github-dialog gn-account-selector .account-name');
     await expect(selectorText).toHaveText('GitHub (personal)');
 
     // Open dropdown and click second account
-    const selectorBtn = page.locator('lv-github-dialog lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-github-dialog gn-account-selector .selector-btn');
     await selectorBtn.click();
 
     // Select the second account
-    const workAccountItem = page.locator('lv-github-dialog lv-account-selector .dropdown-item', { hasText: 'GitHub (work)' });
+    const workAccountItem = page.locator('gn-github-dialog gn-account-selector .dropdown-item', { hasText: 'GitHub (work)' });
     await workAccountItem.click();
 
     // The selector should now show the second account
@@ -148,11 +148,11 @@ test.describe('Multi-Account - Switching Between Accounts', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Open dropdown
-    const selectorBtn = page.locator('lv-github-dialog lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-github-dialog gn-account-selector .selector-btn');
     await selectorBtn.click();
 
     // Should show "Manage Accounts..." action
-    const manageBtn = page.locator('lv-github-dialog lv-account-selector .dropdown-action:has-text("Manage Accounts")');
+    const manageBtn = page.locator('gn-github-dialog gn-account-selector .dropdown-action:has-text("Manage Accounts")');
     await expect(manageBtn).toBeVisible();
   });
 });

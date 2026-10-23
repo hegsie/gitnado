@@ -45,26 +45,26 @@ function mcpMocks(overrides: Record<string, unknown> = {}): Record<string, unkno
 /** Open the settings dialog via keyboard shortcut */
 async function openSettings(page: Page) {
   await page.keyboard.press('Meta+,');
-  await expect(page.locator('lv-settings-dialog')).toBeVisible();
+  await expect(page.locator('gn-settings-dialog')).toBeVisible();
 }
 
 /** The MCP port input, scoped by its description so other number inputs don't match */
 function mcpPortInput(page: Page) {
   return page
-    .locator('lv-settings-dialog .setting-row', { hasText: 'Localhost port for the MCP server' })
+    .locator('gn-settings-dialog .setting-row', { hasText: 'Localhost port for the MCP server' })
     .locator('input');
 }
 
 /** The Start/Retry/Stop button in the MCP section */
 function mcpToggleButton(page: Page) {
   return page
-    .locator('lv-settings-dialog .setting-row', { hasText: 'Context Proxy' })
+    .locator('gn-settings-dialog .setting-row', { hasText: 'Context Proxy' })
     .locator('button.mcp-toggle');
 }
 
 /** The masked/revealed access token value in the MCP section */
 function mcpTokenValue(page: Page) {
-  return page.locator('lv-settings-dialog .mcp-token-value');
+  return page.locator('gn-settings-dialog .mcp-token-value');
 }
 
 /**
@@ -97,7 +97,7 @@ async function clipboardWrites(page: Page): Promise<string[]> {
 /** The Disable button, shown only while the server is enabled but not running */
 function mcpDisableButton(page: Page) {
   return page
-    .locator('lv-settings-dialog .setting-row', { hasText: 'Context Proxy' })
+    .locator('gn-settings-dialog .setting-row', { hasText: 'Context Proxy' })
     .locator('button.mcp-disable');
 }
 
@@ -141,9 +141,9 @@ test.describe('Settings Dialog — MCP Server', () => {
     await openSettings(page);
 
     await expect(
-      page.locator('lv-settings-dialog .setting-row', { hasText: 'Context Proxy' })
+      page.locator('gn-settings-dialog .setting-row', { hasText: 'Context Proxy' })
     ).toContainText('Stopped');
-    await expect(page.locator('lv-settings-dialog .error-text')).toContainText(
+    await expect(page.locator('gn-settings-dialog .error-text')).toContainText(
       'Failed to bind to 127.0.0.1:3001'
     );
   });
@@ -155,11 +155,11 @@ test.describe('Settings Dialog — MCP Server', () => {
 
     await mcpToggleButton(page).click();
 
-    await expect(page.locator('lv-settings-dialog .error-text')).toContainText(
+    await expect(page.locator('gn-settings-dialog .error-text')).toContainText(
       'Failed to write MCP config: disk full'
     );
     await expect(
-      page.locator('lv-settings-dialog .setting-row', { hasText: 'Context Proxy' })
+      page.locator('gn-settings-dialog .setting-row', { hasText: 'Context Proxy' })
     ).toContainText('Disabled');
     expect(await findCommand(page, 'start_mcp_server')).toHaveLength(0);
   });
@@ -213,10 +213,10 @@ test.describe('Settings Dialog — MCP Server', () => {
     await openSettings(page);
 
     await expect(
-      page.locator('lv-settings-dialog .setting-row', { hasText: 'Context Proxy' })
+      page.locator('gn-settings-dialog .setting-row', { hasText: 'Context Proxy' })
     ).toContainText('Disabled');
     await expect(mcpDisableButton(page)).toHaveCount(0);
-    await expect(page.locator('lv-settings-dialog .error-text')).toHaveCount(0);
+    await expect(page.locator('gn-settings-dialog .error-text')).toHaveCount(0);
   });
 
   test('offers no disable action while the server is stopped and disabled', async ({ page }) => {
@@ -234,16 +234,16 @@ test.describe('Settings Dialog — MCP Server', () => {
     // The token is a secret: it must not be on screen until the user asks
     await expect(mcpTokenValue(page)).toBeVisible();
     await expect(mcpTokenValue(page)).not.toContainText('token-abc123');
-    await expect(page.locator('lv-settings-dialog .mcp-client-config')).not.toContainText(
+    await expect(page.locator('gn-settings-dialog .mcp-client-config')).not.toContainText(
       'token-abc123'
     );
 
-    const reveal = page.locator('lv-settings-dialog button.mcp-token-reveal');
+    const reveal = page.locator('gn-settings-dialog button.mcp-token-reveal');
     await expect(reveal).toHaveText('Reveal');
     await reveal.click();
 
     await expect(mcpTokenValue(page)).toContainText('token-abc123');
-    await expect(page.locator('lv-settings-dialog .mcp-client-config')).toContainText(
+    await expect(page.locator('gn-settings-dialog .mcp-client-config')).toContainText(
       'Bearer token-abc123'
     );
     await expect(reveal).toHaveText('Hide');
@@ -257,14 +257,14 @@ test.describe('Settings Dialog — MCP Server', () => {
     await openSettings(page);
     await captureClipboard(page);
 
-    await page.locator('lv-settings-dialog button.mcp-token-copy').click();
+    await page.locator('gn-settings-dialog button.mcp-token-copy').click();
     await expect
       .poll(async () => (await clipboardWrites(page)).length)
       .toBeGreaterThan(0);
     expect((await clipboardWrites(page))[0]).toBe('token-abc123');
-    await expect(page.locator('lv-toast-container .toast.success')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.success')).toBeVisible();
 
-    await page.locator('lv-settings-dialog button.mcp-snippet-copy').click();
+    await page.locator('gn-settings-dialog button.mcp-snippet-copy').click();
     await expect
       .poll(async () => (await clipboardWrites(page)).length)
       .toBeGreaterThan(1);
@@ -281,7 +281,7 @@ test.describe('Settings Dialog — MCP Server', () => {
     await autoConfirmDialogs(page);
     await captureClipboard(page);
 
-    await page.locator('lv-settings-dialog button.mcp-token-regenerate').click();
+    await page.locator('gn-settings-dialog button.mcp-token-regenerate').click();
 
     await expect
       .poll(async () => (await findCommand(page, 'regenerate_mcp_token')).length)
@@ -291,11 +291,11 @@ test.describe('Settings Dialog — MCP Server', () => {
     const confirms = await findCommand(page, 'plugin:dialog|message');
     expect(JSON.stringify(confirms[confirms.length - 1].args)).toContain('stop working');
 
-    await expect(page.locator('lv-toast-container .toast.success')).toContainText('regenerated');
+    await expect(page.locator('gn-toast-container .toast.success')).toContainText('regenerated');
 
     // The new token is masked like the old one, and it is what gets copied
     await expect(mcpTokenValue(page)).not.toContainText('token-new456');
-    await page.locator('lv-settings-dialog button.mcp-token-reveal').click();
+    await page.locator('gn-settings-dialog button.mcp-token-reveal').click();
     await expect(mcpTokenValue(page)).toContainText('token-new456');
   });
 
@@ -305,14 +305,14 @@ test.describe('Settings Dialog — MCP Server', () => {
     // plugin-dialog resolves confirm() to false for anything but the OK label
     await injectCommandMock(page, { 'plugin:dialog|message': 'Cancel' });
 
-    await page.locator('lv-settings-dialog button.mcp-token-regenerate').click();
+    await page.locator('gn-settings-dialog button.mcp-token-regenerate').click();
 
     await expect
       .poll(async () => (await findCommand(page, 'plugin:dialog|message')).length)
       .toBeGreaterThan(0);
     expect(await findCommand(page, 'regenerate_mcp_token')).toHaveLength(0);
 
-    await page.locator('lv-settings-dialog button.mcp-token-reveal').click();
+    await page.locator('gn-settings-dialog button.mcp-token-reveal').click();
     await expect(mcpTokenValue(page)).toContainText('token-abc123');
   });
 
@@ -322,14 +322,14 @@ test.describe('Settings Dialog — MCP Server', () => {
     await autoConfirmDialogs(page);
     await injectCommandError(page, 'regenerate_mcp_token', 'Failed to write MCP config: disk full');
 
-    await page.locator('lv-settings-dialog button.mcp-token-regenerate').click();
+    await page.locator('gn-settings-dialog button.mcp-token-regenerate').click();
 
-    await expect(page.locator('lv-settings-dialog .error-text')).toContainText(
+    await expect(page.locator('gn-settings-dialog .error-text')).toContainText(
       'Failed to write MCP config: disk full'
     );
-    await expect(page.locator('lv-toast-container .toast.error')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.error')).toBeVisible();
     // The failed attempt must not pretend a new token exists
-    await page.locator('lv-settings-dialog button.mcp-token-reveal').click();
+    await page.locator('gn-settings-dialog button.mcp-token-reveal').click();
     await expect(mcpTokenValue(page)).toContainText('token-abc123');
   });
 
@@ -338,7 +338,7 @@ test.describe('Settings Dialog — MCP Server', () => {
     await openSettings(page);
 
     await expect(
-      page.locator('lv-settings-dialog .setting-row', { hasText: 'MCP Client Configuration' })
+      page.locator('gn-settings-dialog .setting-row', { hasText: 'MCP Client Configuration' })
     ).toContainText('401');
   });
 });

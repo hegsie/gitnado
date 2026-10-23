@@ -1,6 +1,6 @@
 /**
  * Focus entry tests for the three destructive dialogs that build their own
- * overlay instead of using <lv-modal>.
+ * overlay instead of using <gn-modal>.
  *
  * None of them contained a single focus(), autofocus or tabindex: opening one
  * from the command palette left focus on <body> (the palette restores focus to
@@ -30,12 +30,12 @@ const invokeHistory: Array<{ command: string; args?: unknown }> = [];
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
 import { expect, fixture, html } from '@open-wc/testing';
-import '../lv-clean-dialog.ts';
-import '../lv-reflog-dialog.ts';
-import '../lv-conflict-resolution-dialog.ts';
-import type { LvCleanDialog } from '../lv-clean-dialog.ts';
-import type { LvReflogDialog } from '../lv-reflog-dialog.ts';
-import type { LvConflictResolutionDialog } from '../lv-conflict-resolution-dialog.ts';
+import '../gn-clean-dialog.ts';
+import '../gn-reflog-dialog.ts';
+import '../gn-conflict-resolution-dialog.ts';
+import type { GnCleanDialog } from '../gn-clean-dialog.ts';
+import type { GnReflogDialog } from '../gn-reflog-dialog.ts';
+import type { GnConflictResolutionDialog } from '../gn-conflict-resolution-dialog.ts';
 import type { ConflictFile, ReflogEntry } from '../../../types/git.types.ts';
 import { deepActiveElement } from '../../../utils/focus.ts';
 import { resetOverlayStack } from '../../../utils/overlay-stack.ts';
@@ -97,10 +97,10 @@ describe('destructive dialogs take focus when they open', () => {
     document.body.focus();
   });
 
-  // ── lv-clean-dialog ──────────────────────────────────────────────────────
+  // ── gn-clean-dialog ──────────────────────────────────────────────────────
   it('clean dialog focuses Cancel — not the delete button — on open', async () => {
-    const el = await fixture<LvCleanDialog>(
-      html`<lv-clean-dialog .repositoryPath=${REPO_PATH}></lv-clean-dialog>`,
+    const el = await fixture<GnCleanDialog>(
+      html`<gn-clean-dialog .repositoryPath=${REPO_PATH}></gn-clean-dialog>`,
     );
     await el.updateComplete;
     expect(deepActiveElement() === null, 'focus starts outside the dialog, on <body>').to.be.true;
@@ -118,8 +118,8 @@ describe('destructive dialogs take focus when they open', () => {
   });
 
   it('clean dialog leaves focus alone when the user already moved it into the dialog', async () => {
-    const el = await fixture<LvCleanDialog>(
-      html`<lv-clean-dialog .repositoryPath=${REPO_PATH}></lv-clean-dialog>`,
+    const el = await fixture<GnCleanDialog>(
+      html`<gn-clean-dialog .repositoryPath=${REPO_PATH}></gn-clean-dialog>`,
     );
     await el.updateComplete;
 
@@ -134,10 +134,10 @@ describe('destructive dialogs take focus when they open', () => {
     expect(deepActiveElement() === closeBtn, 'the deferred pass did not yank focus').to.be.true;
   });
 
-  // ── lv-reflog-dialog ─────────────────────────────────────────────────────
+  // ── gn-reflog-dialog ─────────────────────────────────────────────────────
   it('reflog dialog focuses its close button on open', async () => {
-    const el = await fixture<LvReflogDialog>(
-      html`<lv-reflog-dialog .repositoryPath=${REPO_PATH}></lv-reflog-dialog>`,
+    const el = await fixture<GnReflogDialog>(
+      html`<gn-reflog-dialog .repositoryPath=${REPO_PATH}></gn-reflog-dialog>`,
     );
     await el.updateComplete;
     expect(deepActiveElement() === null, 'focus starts outside the dialog').to.be.true;
@@ -151,13 +151,13 @@ describe('destructive dialogs take focus when they open', () => {
     expect(deepActiveElement() === closeBtn, 'the close button holds focus').to.be.true;
   });
 
-  // ── lv-conflict-resolution-dialog ────────────────────────────────────────
+  // ── gn-conflict-resolution-dialog ────────────────────────────────────────
   it('conflict dialog moves focus inside itself on open', async () => {
-    const el = await fixture<LvConflictResolutionDialog>(html`
-      <lv-conflict-resolution-dialog
+    const el = await fixture<GnConflictResolutionDialog>(html`
+      <gn-conflict-resolution-dialog
         .repositoryPath=${REPO_PATH}
         .operationType=${'merge'}
-      ></lv-conflict-resolution-dialog>
+      ></gn-conflict-resolution-dialog>
     `);
     await el.updateComplete;
     expect(deepActiveElement() === null, 'focus starts outside the dialog').to.be.true;
@@ -178,12 +178,12 @@ describe('destructive dialogs take focus when they open', () => {
 });
 
 describe('conflict dialog abort confirm', () => {
-  async function openWithConfirm(): Promise<LvConflictResolutionDialog> {
-    const el = await fixture<LvConflictResolutionDialog>(html`
-      <lv-conflict-resolution-dialog
+  async function openWithConfirm(): Promise<GnConflictResolutionDialog> {
+    const el = await fixture<GnConflictResolutionDialog>(html`
+      <gn-conflict-resolution-dialog
         .repositoryPath=${REPO_PATH}
         .operationType=${'merge'}
-      ></lv-conflict-resolution-dialog>
+      ></gn-conflict-resolution-dialog>
     `);
     el.open = true;
     await el.updateComplete;
@@ -251,11 +251,11 @@ describe('conflict dialog abort confirm', () => {
   });
 
   it('Escape with no confirm up still does not close the dialog', async () => {
-    const el = await fixture<LvConflictResolutionDialog>(html`
-      <lv-conflict-resolution-dialog
+    const el = await fixture<GnConflictResolutionDialog>(html`
+      <gn-conflict-resolution-dialog
         .repositoryPath=${REPO_PATH}
         .operationType=${'merge'}
-      ></lv-conflict-resolution-dialog>
+      ></gn-conflict-resolution-dialog>
     `);
     el.open = true;
     await el.updateComplete;

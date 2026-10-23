@@ -29,10 +29,9 @@ thread_local! {
 ///
 /// Tests point this at a `TempDir` (see `TemplatesSandbox`). Without an
 /// override, `data_dir()` resolves the REAL user data directory — it
-/// `create_dir_all`s `~/.local/share/gitnado` and renames a pre-0.9.0
-/// `~/.local/share/leviathan` into it on the way — so a plain `cargo test`
-/// migrated the developer's own app data and read-modify-wrote their own
-/// templates file, from several threads at once.
+/// `create_dir_all`s `~/.local/share/gitnado` — so a plain `cargo test`
+/// would read-modify-write the developer's own templates file from several
+/// threads at once.
 fn templates_dir() -> Result<PathBuf> {
     #[cfg(test)]
     if let Some(dir) = TEMPLATES_DIR_OVERRIDE.with(|dir| dir.borrow().clone()) {
@@ -250,12 +249,10 @@ mod tests {
     /// The suite must never read or write the developer's own templates.
     ///
     /// `get_templates_path` resolves through `app_paths::data_dir()`, which
-    /// `create_dir_all`s the real `~/.local/share/gitnado` AND renames a
-    /// pre-0.9.0 `~/.local/share/leviathan` into it on the way. Three tests
+    /// `create_dir_all`s the real `~/.local/share/gitnado`. Three tests
     /// reached it, two of them read-modify-WRITING the real
     /// `commit-templates.json` with no lock between them — so a plain
-    /// `cargo test` migrated a real app-data directory and could drop the
-    /// user's own template entries.
+    /// `cargo test` could drop the user's own template entries.
     /// Points `templates_dir()` at a temporary directory for the rest of this
     /// test, and puts it back on drop.
     ///

@@ -13,7 +13,7 @@ import { startCommandCapture, startCommandCaptureWithMocks, findCommand, waitFor
  * dashboard's copies are covered in remote-operations.spec.ts.
  */
 function toolbarButton(page: import('@playwright/test').Page, name: RegExp) {
-  return page.locator('lv-toolbar').getByRole('button', { name });
+  return page.locator('gn-toolbar').getByRole('button', { name });
 }
 
 /**
@@ -25,7 +25,7 @@ function toolbarButton(page: import('@playwright/test').Page, name: RegExp) {
  * lookup above stays right for the idle states the other tests assert.
  */
 function remoteButton(page: import('@playwright/test').Page, op: 'fetch' | 'pull' | 'push') {
-  return page.locator(`lv-toolbar .remote-btn.${op}`);
+  return page.locator(`gn-toolbar .remote-btn.${op}`);
 }
 
 /**
@@ -222,7 +222,7 @@ test.describe('Toolbar Repository Tabs', () => {
 
   test('opening repo should highlight current branch in branch list', async ({ page }) => {
     // The current branch should be marked active in the branch list
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toBeVisible();
     await expect(activeBranch).toContainText('main');
   });
@@ -244,7 +244,7 @@ test.describe('Toolbar Settings Dialog', () => {
     const settingsButton = page.locator('button[title="Settings"]');
     await settingsButton.click();
 
-    const settingsDialog = page.locator('lv-settings-dialog');
+    const settingsDialog = page.locator('gn-settings-dialog');
     await expect(settingsDialog).toBeVisible();
   });
 
@@ -253,7 +253,7 @@ test.describe('Toolbar Settings Dialog', () => {
     await settingsButton.click();
 
     // Should have some theme-related UI
-    const themeSection = page.locator('lv-settings-dialog', { hasText: /theme|appearance/i });
+    const themeSection = page.locator('gn-settings-dialog', { hasText: /theme|appearance/i });
     await expect(themeSection).toBeVisible();
   });
 });
@@ -267,14 +267,14 @@ test.describe('Toolbar Command Palette', () => {
     const commandPaletteButton = page.locator('button[title*="Command Palette"]');
     await commandPaletteButton.click();
 
-    const commandPalette = page.locator('lv-command-palette');
+    const commandPalette = page.locator('gn-command-palette');
     await expect(commandPalette).toBeVisible();
   });
 
   test('should open command palette with Cmd+P', async ({ page }) => {
     await page.keyboard.press('Meta+p');
 
-    const commandPalette = page.locator('lv-command-palette');
+    const commandPalette = page.locator('gn-command-palette');
     await expect(commandPalette).toBeVisible();
   });
 
@@ -282,7 +282,7 @@ test.describe('Toolbar Command Palette', () => {
     const commandPaletteButton = page.locator('button[title*="Command Palette"]');
     await commandPaletteButton.click();
 
-    const searchInput = page.locator('lv-command-palette input');
+    const searchInput = page.locator('gn-command-palette input');
     await expect(searchInput).toBeVisible();
   });
 
@@ -290,7 +290,7 @@ test.describe('Toolbar Command Palette', () => {
     const commandPaletteButton = page.locator('button[title*="Command Palette"]');
     await commandPaletteButton.click();
 
-    const commandPalette = page.locator('lv-command-palette');
+    const commandPalette = page.locator('gn-command-palette');
     await expect(commandPalette).toBeVisible();
 
     await page.keyboard.press('Escape');
@@ -307,7 +307,7 @@ test.describe('Toolbar Keyboard Shortcuts Dialog', () => {
     const shortcutsButton = page.locator('button[title*="Keyboard Shortcuts"]');
     await shortcutsButton.click();
 
-    const shortcutsDialog = page.locator('lv-keyboard-shortcuts-dialog');
+    const shortcutsDialog = page.locator('gn-keyboard-shortcuts-dialog');
     await expect(shortcutsDialog).toBeVisible();
   });
 
@@ -316,7 +316,7 @@ test.describe('Toolbar Keyboard Shortcuts Dialog', () => {
     await page.click('body');
     await page.keyboard.press('?');
 
-    const shortcutsDialog = page.locator('lv-keyboard-shortcuts-dialog[open]');
+    const shortcutsDialog = page.locator('gn-keyboard-shortcuts-dialog[open]');
     await expect(shortcutsDialog).toBeVisible();
   });
 
@@ -325,11 +325,11 @@ test.describe('Toolbar Keyboard Shortcuts Dialog', () => {
     await shortcutsButton.click();
 
     // Wait for dialog to open
-    const shortcutsDialog = page.locator('lv-keyboard-shortcuts-dialog[open]');
+    const shortcutsDialog = page.locator('gn-keyboard-shortcuts-dialog[open]');
     await expect(shortcutsDialog).toBeVisible();
 
     // The dialog should show shortcuts content with shortcut rows
-    const shortcutRows = page.locator('lv-keyboard-shortcuts-dialog[open] .shortcut-row');
+    const shortcutRows = page.locator('gn-keyboard-shortcuts-dialog[open] .shortcut-row');
     const rowCount = await shortcutRows.count();
     expect(rowCount).toBeGreaterThanOrEqual(5);
   });
@@ -392,7 +392,7 @@ test.describe('Toolbar Clone Dialog - Full Flow', () => {
     await startCommandCapture(page);
 
     // Click Clone button
-    const dialogCloneButton = page.locator('lv-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
+    const dialogCloneButton = page.locator('gn-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
     await dialogCloneButton.click();
 
     await waitForCommand(page, 'clone_repository');
@@ -420,11 +420,11 @@ test.describe('Toolbar Clone Dialog - Full Flow', () => {
     await pathInput.fill('/tmp/clone-dest');
 
     // Click Clone
-    const dialogCloneButton = page.locator('lv-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
+    const dialogCloneButton = page.locator('gn-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
     await dialogCloneButton.click();
 
     // Error inline message should appear in the clone dialog
-    const errorMessage = page.locator('lv-clone-dialog .error-message');
+    const errorMessage = page.locator('gn-clone-dialog .error-message');
     await expect(errorMessage).toBeVisible({ timeout: 5000 });
     await expect(errorMessage).toContainText(/error|fail|not found/i);
   });
@@ -436,7 +436,7 @@ test.describe('Toolbar Close Repository Tab', () => {
   });
 
   test('closing repository tab should remove it from the toolbar', async ({ page }) => {
-    const repoTab = page.locator('lv-toolbar .tab', { hasText: 'test-repo' });
+    const repoTab = page.locator('gn-toolbar .tab', { hasText: 'test-repo' });
     await expect(repoTab).toBeVisible();
 
     // Click the close icon on the tab (the .tab-close span inside the tab)
@@ -448,7 +448,7 @@ test.describe('Toolbar Close Repository Tab', () => {
   });
 
   test('closing last tab should show welcome screen', async ({ page }) => {
-    const repoTab = page.locator('lv-toolbar .tab', { hasText: 'test-repo' });
+    const repoTab = page.locator('gn-toolbar .tab', { hasText: 'test-repo' });
     await expect(repoTab).toBeVisible();
 
     // Click the close icon (the .tab-close span inside the tab)
@@ -456,7 +456,7 @@ test.describe('Toolbar Close Repository Tab', () => {
     await closeIcon.click();
 
     // Welcome screen should appear
-    const welcomeScreen = page.locator('lv-welcome');
+    const welcomeScreen = page.locator('gn-welcome');
     await expect(welcomeScreen).toBeVisible({ timeout: 5000 });
   });
 });
@@ -573,7 +573,7 @@ test.describe('Toolbar - Extended Tests', () => {
     await pathInput.fill('/tmp');
 
     // Click Clone button
-    const dialogCloneButton = page.locator('lv-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
+    const dialogCloneButton = page.locator('gn-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
     await dialogCloneButton.click();
 
     // Wait for the clone command to be invoked
@@ -585,7 +585,7 @@ test.describe('Toolbar - Extended Tests', () => {
 
     // After a successful clone, the toolbar tab should eventually show the new repo name
     // The app opens the repository after cloning, so look for the new tab
-    const newRepoTab = page.locator('lv-toolbar .tab', { hasText: 'new-cloned-repo' });
+    const newRepoTab = page.locator('gn-toolbar .tab', { hasText: 'new-cloned-repo' });
     await expect(newRepoTab).toBeVisible({ timeout: 5000 });
   });
 
@@ -638,7 +638,7 @@ test.describe('Toolbar - Extended Tests', () => {
     await initializeButton.click();
 
     // After successful init, the toolbar should show the new repo name
-    const newRepoTab = page.locator('lv-toolbar .tab', { hasText: 'new-init-repo' });
+    const newRepoTab = page.locator('gn-toolbar .tab', { hasText: 'new-init-repo' });
     await expect(newRepoTab).toBeVisible({ timeout: 5000 });
   });
 });
@@ -766,7 +766,7 @@ test.describe('Toolbar Remote Operations', () => {
     await expect(remoteButton(page, 'pull').locator('.remote-count')).toHaveCount(0);
     await expect(remoteButton(page, 'pull')).toHaveClass(/idle/);
     // The row the runner opened is torn down again, and the buttons come back.
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(0);
     await expect(remoteButton(page, 'pull')).toBeEnabled();
   });
 
@@ -795,7 +795,7 @@ test.describe('Toolbar Remote Operations', () => {
 
     await expect(remoteButton(page, 'push').locator('.remote-count')).toHaveCount(0);
     await expect(remoteButton(page, 'push')).toHaveClass(/idle/);
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(0);
     await expect(remoteButton(page, 'push')).toBeEnabled();
   });
 
@@ -822,7 +822,7 @@ test.describe('Toolbar Remote Operations', () => {
     await expect(toast).toBeVisible();
     await expect(toast, 'the backend reason reaches the user').toContainText('lfs.evil.test');
     // And the button comes back rather than being left mid-operation.
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(0);
     await expect(remoteButton(page, 'push')).toBeEnabled();
   });
 
@@ -876,7 +876,7 @@ test.describe('Toolbar Remote Operations', () => {
     expect((await findCommand(page, 'fetch')).length, 'one fetch, not two').toBe(1);
     expect((await findCommand(page, 'push')).length, 'and no push behind it').toBe(0);
     // One row, not a second "Fetching from remote..." stacked on the first.
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(1);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(1);
   });
 
   test('a failed toolbar fetch is reported and the button comes back', async ({ page }) => {
@@ -897,6 +897,6 @@ test.describe('Toolbar Remote Operations', () => {
 
     await expect(fetchButton).toBeEnabled();
     await expect(fetchButton).toHaveAttribute('title', /Fetch from remote/);
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(0);
   });
 });

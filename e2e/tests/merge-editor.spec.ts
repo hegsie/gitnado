@@ -14,29 +14,29 @@ import {
  *
  * The conflict resolution dialog opens when the app-shell receives an
  * 'open-conflict-dialog' or 'merge-conflict' event. It embeds the
- * lv-merge-editor component for 3-way conflict resolution.
+ * gn-merge-editor component for 3-way conflict resolution.
  *
- * The dialog is `lv-conflict-resolution-dialog` (rendered by app-shell when showConflictDialog=true).
- * The merge editor within it is `lv-merge-editor`.
+ * The dialog is `gn-conflict-resolution-dialog` (rendered by app-shell when showConflictDialog=true).
+ * The merge editor within it is `gn-merge-editor`.
  */
 
 /** Open the conflict resolution dialog by clicking the "Resolve Conflicts" button in the operation banner */
 async function openConflictResolutionDialog(page: import('@playwright/test').Page) {
   // The operation banner appears when the repository state is 'merge' (set by withConflicts()).
   // It contains a "Resolve Conflicts" button that calls handleOpenConflictDialog() on app-shell,
-  // which sets showConflictDialog=true and renders the lv-conflict-resolution-dialog.
+  // which sets showConflictDialog=true and renders the gn-conflict-resolution-dialog.
   const resolveBtn = page.locator('.operation-btn-primary', { hasText: 'Resolve Conflicts' });
   await expect(resolveBtn).toBeVisible();
   await resolveBtn.click();
 
   // Wait for the dialog to become visible
-  await page.locator('lv-conflict-resolution-dialog[open]').waitFor({ state: 'visible' });
+  await page.locator('gn-conflict-resolution-dialog[open]').waitFor({ state: 'visible' });
 
   // Wait for conflicts to finish loading (file list items appear)
-  await page.locator('lv-conflict-resolution-dialog .file-item').first().waitFor({ state: 'visible' });
+  await page.locator('gn-conflict-resolution-dialog .file-item').first().waitFor({ state: 'visible' });
 
   // Wait for the merge editor to finish loading its content
-  await expect(page.locator('lv-merge-editor .toolbar')).toBeVisible();
+  await expect(page.locator('gn-merge-editor .toolbar')).toBeVisible();
 }
 
 /** Shared mock overrides for conflict resolution commands */
@@ -100,12 +100,12 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
 
     await openConflictResolutionDialog(page);
 
-    const suggest = page.locator('lv-merge-editor button', { hasText: 'AI Suggest' }).first();
+    const suggest = page.locator('gn-merge-editor button', { hasText: 'AI Suggest' }).first();
     await expect(suggest).toBeVisible();
     await expect(suggest).toBeDisabled();
     await expect(suggest).toHaveAttribute('title', /Anthropic Claude/);
 
-    const resolveAll = page.locator('lv-merge-editor button', { hasText: 'AI Resolve All' });
+    const resolveAll = page.locator('gn-merge-editor button', { hasText: 'AI Resolve All' });
     await expect(resolveAll).toBeVisible();
     await expect(resolveAll).toBeDisabled();
     await expect(resolveAll).toHaveAttribute('title', /Anthropic Claude/);
@@ -122,8 +122,8 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
 
     await openConflictResolutionDialog(page);
 
-    await expect(page.locator('lv-merge-editor button', { hasText: 'AI Suggest' })).toHaveCount(0);
-    await expect(page.locator('lv-merge-editor button', { hasText: 'AI Resolve All' })).toHaveCount(
+    await expect(page.locator('gn-merge-editor button', { hasText: 'AI Suggest' })).toHaveCount(0);
+    await expect(page.locator('gn-merge-editor button', { hasText: 'AI Resolve All' })).toHaveCount(
       0,
     );
   });
@@ -131,7 +131,7 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   test('dialog opens and lists conflicted files', async ({ page }) => {
     await openConflictResolutionDialog(page);
 
-    const dialog = page.locator('lv-conflict-resolution-dialog');
+    const dialog = page.locator('gn-conflict-resolution-dialog');
     await expect(dialog).toBeVisible();
 
     // Should show "Resolve Merge Conflicts" title
@@ -148,11 +148,11 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await openConflictResolutionDialog(page);
 
     // First file should be selected
-    const selectedFile = page.locator('lv-conflict-resolution-dialog .file-item.selected');
+    const selectedFile = page.locator('gn-conflict-resolution-dialog .file-item.selected');
     await expect(selectedFile).toBeVisible();
 
     // Merge editor should be visible
-    const mergeEditor = page.locator('lv-merge-editor');
+    const mergeEditor = page.locator('gn-merge-editor');
     await expect(mergeEditor).toBeVisible();
   });
 
@@ -161,7 +161,7 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   }) => {
     await openConflictResolutionDialog(page);
 
-    const mergeEditor = page.locator('lv-merge-editor');
+    const mergeEditor = page.locator('gn-merge-editor');
     await expect(mergeEditor).toBeVisible();
 
     // Should have the three source panel headers
@@ -184,17 +184,17 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   test('toolbar shows file path and action buttons', async ({ page }) => {
     await openConflictResolutionDialog(page);
 
-    const toolbar = page.locator('lv-merge-editor .toolbar');
+    const toolbar = page.locator('gn-merge-editor .toolbar');
     await expect(toolbar).toBeVisible();
 
     // File path should be visible in toolbar title
-    const toolbarTitle = page.locator('lv-merge-editor .toolbar-title');
+    const toolbarTitle = page.locator('gn-merge-editor .toolbar-title');
     await expect(toolbarTitle).toContainText('conflict');
 
     // Should have Use Ours, Use Theirs, and Mark Resolved buttons in toolbar-actions
-    const useOursBtn = page.locator('lv-merge-editor .toolbar-actions .btn-ours');
-    const useTheirsBtn = page.locator('lv-merge-editor .toolbar-actions .btn-theirs');
-    const markResolvedBtn = page.locator('lv-merge-editor .toolbar-actions .btn-primary');
+    const useOursBtn = page.locator('gn-merge-editor .toolbar-actions .btn-ours');
+    const useTheirsBtn = page.locator('gn-merge-editor .toolbar-actions .btn-theirs');
+    const markResolvedBtn = page.locator('gn-merge-editor .toolbar-actions .btn-primary');
 
     await expect(useOursBtn).toBeVisible();
     await expect(useTheirsBtn).toBeVisible();
@@ -210,7 +210,7 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   }) => {
     await openConflictResolutionDialog(page);
 
-    const mergeEditor = page.locator('lv-merge-editor');
+    const mergeEditor = page.locator('gn-merge-editor');
 
     // The conflict count in the output header should indicate conflicts remaining
     const conflictCount = mergeEditor.locator('.conflict-count');
@@ -233,7 +233,7 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   test('never renders raw conflict markers anywhere in the editor', async ({ page }) => {
     await openConflictResolutionDialog(page);
 
-    const mergeEditor = page.locator('lv-merge-editor');
+    const mergeEditor = page.locator('gn-merge-editor');
     await expect(mergeEditor.locator('.code-conflict-block')).toBeVisible();
 
     const text = await mergeEditor.innerText();
@@ -248,16 +248,16 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await openConflictResolutionDialog(page);
 
     // Mark Resolved is disabled while the conflict block is unresolved
-    const markResolvedBtn = page.locator('lv-merge-editor .toolbar-actions .btn-primary');
+    const markResolvedBtn = page.locator('gn-merge-editor .toolbar-actions .btn-primary');
     await expect(markResolvedBtn).toBeDisabled();
 
-    const block = page.locator('lv-merge-editor .code-conflict-block');
+    const block = page.locator('gn-merge-editor .code-conflict-block');
     await block.locator('button', { hasText: 'Use Theirs' }).click();
 
     // The block is resolved: count reads "No conflicts", theirs content is in
     // the output, and Mark Resolved becomes clickable
-    await expect(page.locator('lv-merge-editor .conflict-count')).toContainText('No conflicts');
-    await expect(page.locator('lv-merge-editor #panel-output')).toContainText('theirs');
+    await expect(page.locator('gn-merge-editor .conflict-count')).toContainText('No conflicts');
+    await expect(page.locator('gn-merge-editor #panel-output')).toContainText('theirs');
     await expect(markResolvedBtn).toBeEnabled();
   });
 
@@ -266,11 +266,11 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   }) => {
     await openConflictResolutionDialog(page);
 
-    const block = page.locator('lv-merge-editor .code-conflict-block');
+    const block = page.locator('gn-merge-editor .code-conflict-block');
     await block.locator('button', { hasText: 'Edit' }).click();
 
     // The edit textarea is prefilled from both sides, never with marker text
-    const textarea = page.locator('lv-merge-editor .segment-editor textarea');
+    const textarea = page.locator('gn-merge-editor .segment-editor textarea');
     await expect(textarea).toBeVisible();
     const draft = await textarea.inputValue();
     expect(draft).not.toContain('<<<<<<<');
@@ -279,21 +279,21 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     expect(draft).toContain('theirs');
 
     await textarea.fill('const value = "hand-merged";');
-    await page.locator('lv-merge-editor .segment-editor button', { hasText: 'Apply' }).click();
+    await page.locator('gn-merge-editor .segment-editor button', { hasText: 'Apply' }).click();
 
-    await expect(page.locator('lv-merge-editor .conflict-count')).toContainText('No conflicts');
-    await expect(page.locator('lv-merge-editor #panel-output')).toContainText('hand-merged');
+    await expect(page.locator('gn-merge-editor .conflict-count')).toContainText('No conflicts');
+    await expect(page.locator('gn-merge-editor #panel-output')).toContainText('hand-merged');
   });
 
   test('clicking Use Ours in toolbar replaces output with ours content', async ({ page }) => {
     await openConflictResolutionDialog(page);
 
-    const useOursBtn = page.locator('lv-merge-editor .toolbar-actions .btn-ours');
+    const useOursBtn = page.locator('gn-merge-editor .toolbar-actions .btn-ours');
     await expect(useOursBtn).toBeVisible();
     await useOursBtn.click();
 
     // After accepting ours, conflict count should show "No conflicts"
-    const conflictCount = page.locator('lv-merge-editor .conflict-count');
+    const conflictCount = page.locator('gn-merge-editor .conflict-count');
     await expect(conflictCount).toContainText('No conflicts');
   });
 
@@ -301,22 +301,22 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await openConflictResolutionDialog(page);
 
     // Make a per-block pick — this is the in-progress work the confirm guards.
-    const block = page.locator('lv-merge-editor .code-conflict-block');
+    const block = page.locator('gn-merge-editor .code-conflict-block');
     await block.locator('button', { hasText: 'Use Theirs' }).click();
-    const output = page.locator('lv-merge-editor #panel-output');
+    const output = page.locator('gn-merge-editor #panel-output');
     await expect(output).toContainText('const value = "theirs";');
 
     // Declining must leave the pick exactly as it was. The whole-file blobs
     // all read as `base` here, so its absence proves nothing was overwritten.
     await startCommandCaptureWithMocks(page, { 'plugin:dialog|confirm': false });
-    await page.locator('lv-merge-editor .toolbar-actions .btn-ours').click();
+    await page.locator('gn-merge-editor .toolbar-actions .btn-ours').click();
     await waitForCommand(page, 'plugin:dialog|message');
     await expect(output).toContainText('const value = "theirs";');
     await expect(output).not.toContainText('const value = "base";');
 
     // Accepting replaces the pick with the whole ours blob.
     await startCommandCaptureWithMocks(page, { 'plugin:dialog|confirm': true });
-    await page.locator('lv-merge-editor .toolbar-actions .btn-ours').click();
+    await page.locator('gn-merge-editor .toolbar-actions .btn-ours').click();
     await waitForCommand(page, 'plugin:dialog|message');
     await expect(output).toContainText('const value = "base";');
     await expect(output).not.toContainText('const value = "theirs";');
@@ -342,11 +342,11 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await openConflictResolutionDialog(page);
 
     // Accept ours whole-file first — the only in-editor work reachable here.
-    await page.locator('lv-merge-editor .toolbar-actions .btn-ours').click();
-    const output = page.locator('lv-merge-editor #panel-output');
+    await page.locator('gn-merge-editor .toolbar-actions .btn-ours').click();
+    const output = page.locator('gn-merge-editor #panel-output');
     await expect(output).toContainText('const value = "base";');
 
-    const deleteBtn = page.locator('lv-merge-editor .toolbar-actions .btn-theirs', {
+    const deleteBtn = page.locator('gn-merge-editor .toolbar-actions .btn-theirs', {
       hasText: 'Use Theirs (delete file)',
     });
     await expect(deleteBtn).toBeVisible();
@@ -371,12 +371,12 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   test('clicking Use Theirs in toolbar replaces output with theirs content', async ({ page }) => {
     await openConflictResolutionDialog(page);
 
-    const useTheirsBtn = page.locator('lv-merge-editor .toolbar-actions .btn-theirs');
+    const useTheirsBtn = page.locator('gn-merge-editor .toolbar-actions .btn-theirs');
     await expect(useTheirsBtn).toBeVisible();
     await useTheirsBtn.click();
 
     // After accepting theirs, conflict count should show "No conflicts"
-    const conflictCount = page.locator('lv-merge-editor .conflict-count');
+    const conflictCount = page.locator('gn-merge-editor .conflict-count');
     await expect(conflictCount).toContainText('No conflicts');
   });
 
@@ -384,12 +384,12 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await startCommandCapture(page);
     await openConflictResolutionDialog(page);
 
-    const useOursBtn = page.locator('lv-merge-editor .toolbar-actions .btn-ours');
+    const useOursBtn = page.locator('gn-merge-editor .toolbar-actions .btn-ours');
     await expect(useOursBtn).toBeVisible();
     await useOursBtn.click();
 
     // Click Mark Resolved
-    const markResolvedBtn = page.locator('lv-merge-editor .toolbar-actions .btn-primary');
+    const markResolvedBtn = page.locator('gn-merge-editor .toolbar-actions .btn-primary');
     await markResolvedBtn.click();
 
     await waitForCommand(page, 'resolve_conflict');
@@ -398,11 +398,11 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     expect(commands.length).toBeGreaterThanOrEqual(1);
 
     // Verify the file is marked as resolved in the file list
-    const resolvedFile = page.locator('lv-conflict-resolution-dialog .file-item.resolved');
+    const resolvedFile = page.locator('gn-conflict-resolution-dialog .file-item.resolved');
     await expect(resolvedFile).toBeVisible({ timeout: 3000 });
 
     // Verify the progress subtitle updates to reflect one resolved file
-    const subtitle = page.locator('lv-conflict-resolution-dialog .header-subtitle');
+    const subtitle = page.locator('gn-conflict-resolution-dialog .header-subtitle');
     await expect(subtitle).toContainText('1 of 2');
   });
 
@@ -411,13 +411,13 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
 
     // Click Abort button in the footer
     const abortBtn = page.locator(
-      'lv-conflict-resolution-dialog .footer-actions .btn-danger'
+      'gn-conflict-resolution-dialog .footer-actions .btn-danger'
     );
     await expect(abortBtn).toContainText('Abort');
     await abortBtn.click();
 
     // Confirmation dialog should appear
-    const confirmDialog = page.locator('lv-conflict-resolution-dialog .confirm-dialog');
+    const confirmDialog = page.locator('gn-conflict-resolution-dialog .confirm-dialog');
     await expect(confirmDialog).toBeVisible();
     await expect(confirmDialog).toContainText('Abort');
   });
@@ -427,7 +427,7 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
 
     // Continue button should be disabled since not all files are resolved
     const continueBtn = page.locator(
-      'lv-conflict-resolution-dialog .footer-actions .btn-primary'
+      'gn-conflict-resolution-dialog .footer-actions .btn-primary'
     );
     await expect(continueBtn).toBeDisabled();
   });
@@ -436,14 +436,14 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await openConflictResolutionDialog(page);
 
     // Should show navigation buttons
-    const nextBtn = page.locator('lv-conflict-resolution-dialog .nav-btn', { hasText: 'Next' });
+    const nextBtn = page.locator('gn-conflict-resolution-dialog .nav-btn', { hasText: 'Next' });
     await expect(nextBtn).toBeVisible();
 
     // Click next to go to second file
     await nextBtn.click();
 
     // Second file should now be selected
-    const selectedFile = page.locator('lv-conflict-resolution-dialog .file-item.selected');
+    const selectedFile = page.locator('gn-conflict-resolution-dialog .file-item.selected');
     await expect(selectedFile).toBeVisible();
   });
 
@@ -451,7 +451,7 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
     await openConflictResolutionDialog(page);
 
     // Header subtitle should show "0 of 2 conflicts resolved"
-    const subtitle = page.locator('lv-conflict-resolution-dialog .header-subtitle');
+    const subtitle = page.locator('gn-conflict-resolution-dialog .header-subtitle');
     await expect(subtitle).toContainText('0 of 2');
   });
 
@@ -460,22 +460,22 @@ test.describe('Merge Editor - Conflict Resolution Dialog', () => {
   }) => {
     // Click the SECOND conflicted file — the dialog must open on the file
     // that was actually clicked, not just the first conflict in the list.
-    const fileItem = page.locator('lv-file-status .file-item', { hasText: 'another.ts' }).first();
+    const fileItem = page.locator('gn-file-status .file-item', { hasText: 'another.ts' }).first();
     await expect(fileItem).toBeVisible();
     await fileItem.click();
 
     // The conflict resolution dialog opens instead of the raw diff view
-    await expect(page.locator('lv-conflict-resolution-dialog[open]')).toBeVisible();
-    await expect(page.locator('lv-merge-editor .toolbar')).toBeVisible();
+    await expect(page.locator('gn-conflict-resolution-dialog[open]')).toBeVisible();
+    await expect(page.locator('gn-merge-editor .toolbar')).toBeVisible();
 
     // Preselected on the clicked file
-    await expect(page.locator('lv-merge-editor .toolbar-title')).toContainText('another.ts');
+    await expect(page.locator('gn-merge-editor .toolbar-title')).toContainText('another.ts');
     await expect(
-      page.locator('lv-conflict-resolution-dialog .file-item.selected')
+      page.locator('gn-conflict-resolution-dialog .file-item.selected')
     ).toContainText('another.ts');
 
     // And no raw conflict markers are visible anywhere on the page
-    const dialogText = await page.locator('lv-conflict-resolution-dialog').innerText();
+    const dialogText = await page.locator('gn-conflict-resolution-dialog').innerText();
     expect(dialogText).not.toContain('<<<<<<<');
     expect(dialogText).not.toContain('>>>>>>>');
   });
@@ -495,11 +495,11 @@ test.describe('Merge Editor - Live diff transitions', () => {
     });
 
     // Open the diff on the (not yet conflicted) file
-    const fileItem = page.locator('lv-file-status .file-item', { hasText: 'live.ts' }).first();
+    const fileItem = page.locator('gn-file-status .file-item', { hasText: 'live.ts' }).first();
     await expect(fileItem).toBeVisible();
     await fileItem.click();
-    await expect(page.locator('lv-diff-view')).toBeVisible();
-    await expect(page.locator('lv-diff-view .conflict-redirect')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view')).toBeVisible();
+    await expect(page.locator('gn-diff-view .conflict-redirect')).toHaveCount(0);
 
     // An external merge conflicts the file — the status refresh must flip the
     // open diff to the merge-editor redirect instead of rendering marker text.
@@ -512,8 +512,8 @@ test.describe('Merge Editor - Live diff transitions', () => {
       ]);
     });
 
-    await expect(page.locator('lv-diff-view .conflict-redirect')).toBeVisible();
-    const text = await page.locator('lv-diff-view').innerText();
+    await expect(page.locator('gn-diff-view .conflict-redirect')).toBeVisible();
+    const text = await page.locator('gn-diff-view').innerText();
     expect(text).not.toContain('<<<<<<<');
 
     // The conflict is resolved and committed externally — the file leaves the
@@ -526,8 +526,8 @@ test.describe('Merge Editor - Live diff transitions', () => {
       stores.repositoryStore.getState().setStatus([]);
     });
 
-    await expect(page.locator('lv-diff-view .conflict-redirect')).toHaveCount(0);
-    await expect(page.locator('lv-diff-view')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view .conflict-redirect')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view')).toHaveCount(0);
   });
 });
 
@@ -562,22 +562,22 @@ test.describe('Merge Editor - Stash source certainty', () => {
     await expect(page.locator('.operation-text')).not.toContainText('Stash');
 
     // Open via the conflicted-file click (state-derived: uncertain source).
-    await page.locator('lv-file-status .file-item', { hasText: 'conflict.ts' }).first().click();
-    await expect(page.locator('lv-conflict-resolution-dialog[open]')).toBeVisible();
+    await page.locator('gn-file-status .file-item', { hasText: 'conflict.ts' }).first().click();
+    await expect(page.locator('gn-conflict-resolution-dialog[open]')).toBeVisible();
 
-    const abortBtn = page.locator('lv-conflict-resolution-dialog .footer-actions .btn-danger');
+    const abortBtn = page.locator('gn-conflict-resolution-dialog .footer-actions .btn-danger');
     await abortBtn.click();
-    const confirmMsg = page.locator('lv-conflict-resolution-dialog .confirm-message');
+    const confirmMsg = page.locator('gn-conflict-resolution-dialog .confirm-message');
     await expect(confirmMsg).toContainText('not saved anywhere else');
 
     // Abort for real to close the dialog.
-    await page.locator('lv-conflict-resolution-dialog .confirm-actions .btn-danger').click();
-    await expect(page.locator('lv-conflict-resolution-dialog[open]')).not.toBeVisible();
+    await page.locator('gn-conflict-resolution-dialog .confirm-actions .btn-danger').click();
+    await expect(page.locator('gn-conflict-resolution-dialog[open]')).not.toBeVisible();
 
     // Now an EXPLICIT stash conflict (as the stash panel dispatches it) —
     // the earlier uncertainty must not leak into its wording.
     await page.evaluate(() => {
-      const shell = document.querySelector('lv-app-shell');
+      const shell = document.querySelector('gn-app-shell');
       shell?.dispatchEvent(
         new CustomEvent('open-conflict-dialog', {
           detail: { operationType: 'stash', stashIndex: 0, dropStashOnComplete: false },
@@ -586,7 +586,7 @@ test.describe('Merge Editor - Stash source certainty', () => {
         })
       );
     });
-    await expect(page.locator('lv-conflict-resolution-dialog[open]')).toBeVisible();
+    await expect(page.locator('gn-conflict-resolution-dialog[open]')).toBeVisible();
 
     await abortBtn.click();
     await expect(confirmMsg).toContainText('remains in the stash list');
@@ -621,16 +621,16 @@ test.describe('Merge Editor - Error Handling', () => {
     await injectCommandError(page, 'resolve_conflict', 'Permission denied');
     await openConflictResolutionDialog(page);
 
-    const useOursBtn = page.locator('lv-merge-editor .toolbar-actions .btn-ours');
+    const useOursBtn = page.locator('gn-merge-editor .toolbar-actions .btn-ours');
     await expect(useOursBtn).toBeVisible();
     await useOursBtn.click();
 
     // Click Mark Resolved
-    const markResolvedBtn = page.locator('lv-merge-editor .toolbar-actions .btn-primary');
+    const markResolvedBtn = page.locator('gn-merge-editor .toolbar-actions .btn-primary');
     await markResolvedBtn.click();
 
     // The dialog should remain open (not close) since resolve failed
-    const dialog = page.locator('lv-conflict-resolution-dialog[open]');
+    const dialog = page.locator('gn-conflict-resolution-dialog[open]');
     await expect(dialog).toBeVisible();
   });
 
@@ -640,13 +640,13 @@ test.describe('Merge Editor - Error Handling', () => {
 
     // Click Abort in the footer
     const abortBtn = page.locator(
-      'lv-conflict-resolution-dialog .footer-actions .btn-danger'
+      'gn-conflict-resolution-dialog .footer-actions .btn-danger'
     );
     await abortBtn.click();
 
     // Confirm abort in the confirmation dialog
     const confirmBtn = page.locator(
-      'lv-conflict-resolution-dialog .confirm-actions .btn-danger'
+      'gn-conflict-resolution-dialog .confirm-actions .btn-danger'
     );
     await confirmBtn.click();
 
@@ -658,7 +658,7 @@ test.describe('Merge Editor - Error Handling', () => {
     // Verify the conflict resolution dialog closes after aborting merge
     // App-shell removes the dialog from DOM when showConflictDialog becomes false
     await expect(
-      page.locator('lv-conflict-resolution-dialog[open]')
+      page.locator('gn-conflict-resolution-dialog[open]')
     ).not.toBeVisible({ timeout: 3000 });
   });
 });
@@ -705,23 +705,23 @@ test.describe('Merge Editor - UI Outcome Verification', () => {
     await openConflictResolutionDialog(page);
 
     // Before clicking Use Ours, the conflict count should indicate conflicts exist
-    const conflictCount = page.locator('lv-merge-editor .conflict-count');
+    const conflictCount = page.locator('gn-merge-editor .conflict-count');
     await expect(conflictCount).toBeVisible();
     const initialText = await conflictCount.textContent();
     expect(initialText).not.toContain('No conflicts');
 
     // Click Use Ours
-    const useOursBtn = page.locator('lv-merge-editor .toolbar-actions .btn-ours');
+    const useOursBtn = page.locator('gn-merge-editor .toolbar-actions .btn-ours');
     await useOursBtn.click();
 
     // After clicking Use Ours, the conflict count should show "No conflicts"
     await expect(conflictCount).toContainText('No conflicts');
 
     // The output panel should now reflect the ours content (no conflict markers)
-    const outputPanel = page.locator('lv-merge-editor .output-panel');
+    const outputPanel = page.locator('gn-merge-editor .output-panel');
     await expect(outputPanel).toBeVisible();
     // There should be no conflict blocks remaining in the output
-    const conflictBlocks = page.locator('lv-merge-editor .output-panel .code-conflict-block');
+    const conflictBlocks = page.locator('gn-merge-editor .output-panel .code-conflict-block');
     const blockCount = await conflictBlocks.count();
     expect(blockCount).toBe(0);
   });
@@ -743,17 +743,17 @@ test.describe('Merge Editor - UI Outcome Verification', () => {
     await openConflictResolutionDialog(page);
 
     // Click Use Theirs
-    const useTheirsBtn = page.locator('lv-merge-editor .toolbar-actions .btn-theirs');
+    const useTheirsBtn = page.locator('gn-merge-editor .toolbar-actions .btn-theirs');
     await useTheirsBtn.click();
 
     // After clicking Use Theirs, the conflict count should show "No conflicts"
-    const conflictCount = page.locator('lv-merge-editor .conflict-count');
+    const conflictCount = page.locator('gn-merge-editor .conflict-count');
     await expect(conflictCount).toContainText('No conflicts');
 
     // The output panel should reflect the theirs content (no conflict markers)
-    const outputPanel = page.locator('lv-merge-editor .output-panel');
+    const outputPanel = page.locator('gn-merge-editor .output-panel');
     await expect(outputPanel).toBeVisible();
-    const conflictBlocks = page.locator('lv-merge-editor .output-panel .code-conflict-block');
+    const conflictBlocks = page.locator('gn-merge-editor .output-panel .code-conflict-block');
     const blockCount = await conflictBlocks.count();
     expect(blockCount).toBe(0);
   });
@@ -773,19 +773,19 @@ test.describe('Merge Editor - UI Outcome Verification', () => {
 
     // Continue button should be disabled initially (unresolved conflicts)
     const continueBtn = page.locator(
-      'lv-conflict-resolution-dialog .footer-actions .btn-primary'
+      'gn-conflict-resolution-dialog .footer-actions .btn-primary'
     );
     await expect(continueBtn).toBeDisabled();
 
     // Resolve the conflict: Use Ours then Mark Resolved
-    const useOursBtn = page.locator('lv-merge-editor .toolbar-actions .btn-ours');
+    const useOursBtn = page.locator('gn-merge-editor .toolbar-actions .btn-ours');
     await useOursBtn.click();
 
-    const markResolvedBtn = page.locator('lv-merge-editor .toolbar-actions .btn-primary');
+    const markResolvedBtn = page.locator('gn-merge-editor .toolbar-actions .btn-primary');
     await markResolvedBtn.click();
 
     // Wait for the file to be marked as resolved
-    const resolvedFile = page.locator('lv-conflict-resolution-dialog .file-item.resolved');
+    const resolvedFile = page.locator('gn-conflict-resolution-dialog .file-item.resolved');
     await expect(resolvedFile).toBeVisible({ timeout: 3000 });
 
     // Continue button should now be enabled since all conflicts are resolved
@@ -821,11 +821,11 @@ test.describe('Merge Editor - UI Outcome Verification', () => {
     await resolveBtn.click();
 
     // The dialog should open
-    const dialog = page.locator('lv-conflict-resolution-dialog');
+    const dialog = page.locator('gn-conflict-resolution-dialog');
     await expect(dialog).toBeVisible({ timeout: 5000 });
 
     // Error feedback should be shown: either a toast or an error indicator inside the dialog
-    const errorToast = page.locator('lv-toast-container .toast.error, .error-banner');
+    const errorToast = page.locator('gn-toast-container .toast.error, .error-banner');
     const errorMsg = dialog.locator('.error-message, .error, .loading-error');
 
     // Use .first() to handle the case where both a toast and an in-dialog error are visible
@@ -841,7 +841,7 @@ test.describe('Merge Editor - UI Outcome Verification', () => {
     } else {
       // Must show explicit error feedback
       await expect(
-        page.locator('.toast, .error-message, .error, .error-banner, lv-merge-editor .error').first()
+        page.locator('.toast, .error-message, .error, .error-banner, gn-merge-editor .error').first()
       ).toBeVisible({ timeout: 5000 });
     }
   });

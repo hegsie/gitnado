@@ -1,6 +1,6 @@
 /**
  * Common component exports
  */
-export { LvButton } from './lv-button.ts';
-export { LvInput } from './lv-input.ts';
-export { LvToggle } from './lv-toggle.ts';
+export { GnButton } from './gn-button.ts';
+export { GnInput } from './gn-input.ts';
+export { GnToggle } from './gn-toggle.ts';

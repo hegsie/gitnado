@@ -295,7 +295,7 @@ test.describe('GitHub Dialog - Extended Scenarios', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Verify the error message is shown in the dialog
-    const errorText = page.locator('lv-github-dialog .error-message');
+    const errorText = page.locator('gn-github-dialog .error-message');
     await expect(errorText).toBeVisible({ timeout: 5000 });
   });
 });
@@ -358,7 +358,7 @@ test.describe('GitHub Dialog - GitHub App', () => {
     await app.executeCommand('GitHub');
     await expect(dialogs.github.dialog).toBeVisible();
 
-    const selector = page.locator('lv-github-dialog lv-account-selector');
+    const selector = page.locator('gn-github-dialog gn-account-selector');
     await expect(selector).toContainText('GitHub (testuser)');
 
     await startCommandCaptureWithMocks(page, {
@@ -389,7 +389,7 @@ test.describe('GitHub Dialog - GitHub App', () => {
     }
 
     // The existing PAT account survives, both as a record and in the selector.
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible({
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible({
       timeout: 5000,
     });
     // The App becomes the selected account, but the existing PAT account is
@@ -417,7 +417,7 @@ test.describe('GitHub Dialog - GitHub App', () => {
 
     await expect(
       page
-        .locator('lv-github-dialog .error-message, lv-toast-container .toast.error')
+        .locator('gn-github-dialog .error-message, gn-toast-container .toast.error')
         .first()
     ).toBeVisible({ timeout: 5000 });
 
@@ -489,7 +489,7 @@ test.describe('GitHub Dialog - GitHub App replacement', () => {
     await app.executeCommand('GitHub');
     await expect(dialogs.github.dialog).toBeVisible();
 
-    const selector = page.locator('lv-github-dialog lv-account-selector');
+    const selector = page.locator('gn-github-dialog gn-account-selector');
     await expect(selector).toContainText('GitHub (testuser)');
 
     await startCommandCaptureWithMocks(page, {
@@ -518,7 +518,7 @@ test.describe('GitHub Dialog - GitHub App replacement', () => {
       'github-app-999999',
     ]);
 
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible({
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible({
       timeout: 5000,
     });
 
@@ -572,14 +572,14 @@ test.describe('GitHub Dialog - GitHub App replacement', () => {
     await expect(dialogs.github.appIdInput).toBeVisible();
     await dialogs.github.connectViaApp('123456', PEM, '7890');
 
-    await expect(page.locator('lv-toast-container .toast.warning').first()).toBeVisible({
+    await expect(page.locator('gn-toast-container .toast.warning').first()).toBeVisible({
       timeout: 5000,
     });
     // The connection itself still succeeded.
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible({
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible({
       timeout: 5000,
     });
-    await expect(page.locator('lv-github-dialog .error-message')).toHaveCount(0);
+    await expect(page.locator('gn-github-dialog .error-message')).toHaveCount(0);
   });
 });
 /**
@@ -738,17 +738,17 @@ test.describe('GitHub Dialog - Pagination', () => {
     await expect(dialogs.github.dialog).toBeVisible();
     await dialogs.github.switchToPullRequestsTab();
 
-    const prItems = page.locator('lv-github-dialog .pr-item');
+    const prItems = page.locator('gn-github-dialog .pr-item');
     await expect(prItems).toHaveCount(30);
 
-    const loadMore = page.locator('lv-github-dialog .load-more button');
+    const loadMore = page.locator('gn-github-dialog .load-more button');
     await expect(loadMore).toBeVisible();
     await loadMore.click();
 
     // The second page is appended, not swapped in, and the button disappears
     // once the short page proves the list has ended.
     await expect(prItems).toHaveCount(40);
-    await expect(page.locator('lv-github-dialog .pr-item:has-text("Paged PR 40")')).toBeVisible();
+    await expect(page.locator('gn-github-dialog .pr-item:has-text("Paged PR 40")')).toBeVisible();
     await expect(loadMore).toHaveCount(0);
 
     const calls = await findCommand(page, 'list_pull_requests');
@@ -764,14 +764,14 @@ test.describe('GitHub Dialog - Pagination', () => {
     await expect(dialogs.github.dialog).toBeVisible();
     await dialogs.github.switchToPullRequestsTab();
 
-    const prItems = page.locator('lv-github-dialog .pr-item');
+    const prItems = page.locator('gn-github-dialog .pr-item');
     await expect(prItems).toHaveCount(30);
 
-    const loadMore = page.locator('lv-github-dialog .load-more button');
+    const loadMore = page.locator('gn-github-dialog .load-more button');
     await loadMore.click();
 
-    await expect(page.locator('lv-github-dialog .error-message')).toBeVisible();
-    await expect(page.locator('lv-github-dialog .error-message')).toContainText('Rate limit exceeded');
+    await expect(page.locator('gn-github-dialog .error-message')).toBeVisible();
+    await expect(page.locator('gn-github-dialog .error-message')).toContainText('Rate limit exceeded');
     // Nothing already loaded is thrown away, and the button stays for a retry.
     await expect(prItems).toHaveCount(30);
     await expect(loadMore).toBeVisible();
@@ -785,13 +785,13 @@ test.describe('GitHub Dialog - Pagination', () => {
     await expect(dialogs.github.dialog).toBeVisible();
     await dialogs.github.switchToPullRequestsTab();
 
-    const loadMore = page.locator('lv-github-dialog .load-more button');
+    const loadMore = page.locator('gn-github-dialog .load-more button');
     await expect(loadMore).toHaveText('Load more');
     await loadMore.click();
     await expect(loadMore).toHaveText('Loading...');
 
     await dialogs.github.switchToActionsTab();
-    await expect(page.locator('lv-github-dialog .workflow-item')).toHaveCount(20);
+    await expect(page.locator('gn-github-dialog .workflow-item')).toHaveCount(20);
     await expect(loadMore).toHaveText('Load more');
     await expect(loadMore).toBeEnabled();
 

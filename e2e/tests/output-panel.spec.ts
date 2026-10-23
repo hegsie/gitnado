@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
 
 /**
- * E2E tests for the Output Panel (lv-output-panel).
+ * E2E tests for the Output Panel (gn-output-panel).
  *
  * The output panel is a singleton log viewer that shows git command executions.
  * It uses a module-level logEntries array and notifies listeners on changes.
@@ -21,29 +21,29 @@ import { setupOpenRepository } from '../fixtures/tauri-mock';
  * bottom covers the real app flow.
  */
 
-/** Inject lv-output-panel into the page */
+/** Inject gn-output-panel into the page */
 async function injectOutputPanel(page: import('@playwright/test').Page): Promise<void> {
   // The IPC layer now logs real commands into the singleton store; reset it
   // so these injection tests keep deterministic entry counts.
   await clearEntries(page);
 
   await page.evaluate(() => {
-    const existing = document.querySelector('lv-output-panel');
+    const existing = document.querySelector('gn-output-panel');
     if (existing) existing.remove();
 
-    const panel = document.createElement('lv-output-panel');
+    const panel = document.createElement('gn-output-panel');
     panel.style.cssText = 'display: flex; flex-direction: column; width: 600px; height: 400px;';
     document.body.appendChild(panel);
   });
   // Wait for the component to render by checking for a visible element inside it
-  await expect(page.locator('lv-output-panel .header-title')).toBeVisible();
+  await expect(page.locator('gn-output-panel .header-title')).toBeVisible();
 }
 
 /** Add log entries via the module's exported function */
 async function addLogEntries(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(() => {
     // @ts-expect-error - dynamic import resolved by Vite at runtime
-    import('/src/components/panels/lv-output-panel.ts').then((mod: Record<string, unknown>) => {
+    import('/src/components/panels/gn-output-panel.ts').then((mod: Record<string, unknown>) => {
       const logFn = mod.logGitCommand as (cmd: string, output: string, success: boolean) => void;
       logFn('git fetch origin', 'Fetching origin\nFrom github.com:test/repo\n * [new branch]      main -> origin/main', true);
       logFn('git pull origin main', 'Already up to date.', true);
@@ -51,7 +51,7 @@ async function addLogEntries(page: import('@playwright/test').Page): Promise<voi
     });
   });
 
-  await expect(page.locator('lv-output-panel .entry')).toHaveCount(3);
+  await expect(page.locator('gn-output-panel .entry')).toHaveCount(3);
 }
 
 /** Add a single failed entry for error-specific tests */
@@ -63,7 +63,7 @@ async function addFailedEntry(
   await page.evaluate(
     ({ cmd, out }) => {
       // @ts-expect-error - dynamic import resolved by Vite at runtime
-      import('/src/components/panels/lv-output-panel.ts').then((mod: Record<string, unknown>) => {
+      import('/src/components/panels/gn-output-panel.ts').then((mod: Record<string, unknown>) => {
         const logFn = mod.logGitCommand as (cmd: string, output: string, success: boolean) => void;
         logFn(cmd, out, false);
       });
@@ -76,11 +76,11 @@ async function addFailedEntry(
 async function clearEntries(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(async () => {
     // @ts-expect-error - dynamic import resolved by Vite at runtime
-    const mod = await import('/src/components/panels/lv-output-panel.ts');
+    const mod = await import('/src/components/panels/gn-output-panel.ts');
     const clearFn = mod.clearLogEntries as () => void;
     clearFn();
   });
-  await expect(page.locator('lv-output-panel .entry')).toHaveCount(0);
+  await expect(page.locator('gn-output-panel .entry')).toHaveCount(0);
 }
 
 // --------------------------------------------------------------------------
@@ -94,19 +94,19 @@ test.describe('Output Panel - Empty State', () => {
   });
 
   test('should show header with "Output" title', async ({ page }) => {
-    await expect(page.locator('lv-output-panel .header-title')).toContainText('Output');
+    await expect(page.locator('gn-output-panel .header-title')).toContainText('Output');
   });
 
   test('should show "No output yet" when no entries exist', async ({ page }) => {
-    await expect(page.locator('lv-output-panel .empty')).toHaveText('No output yet');
+    await expect(page.locator('gn-output-panel .empty')).toHaveText('No output yet');
   });
 
   test('should not show Clear button when no entries exist', async ({ page }) => {
-    await expect(page.locator('lv-output-panel .clear-btn')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .clear-btn')).toHaveCount(0);
   });
 
   test('should not show entry count in header when no entries exist', async ({ page }) => {
-    await expect(page.locator('lv-output-panel .entry-count')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .entry-count')).toHaveCount(0);
   });
 });
 
@@ -122,15 +122,15 @@ test.describe('Output Panel - With Entries', () => {
   });
 
   test('should show entries after commands are logged', async ({ page }) => {
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(3);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(3);
   });
 
   test('should show entry count in header', async ({ page }) => {
-    await expect(page.locator('lv-output-panel .entry-count')).toHaveText('(3)');
+    await expect(page.locator('gn-output-panel .entry-count')).toHaveText('(3)');
   });
 
   test('each entry should show a timestamp in HH:MM:SS format', async ({ page }) => {
-    const timestamps = page.locator('lv-output-panel .entry-timestamp');
+    const timestamps = page.locator('gn-output-panel .entry-timestamp');
     await expect(timestamps).toHaveCount(3);
 
     for (let i = 0; i < 3; i++) {
@@ -140,7 +140,7 @@ test.describe('Output Panel - With Entries', () => {
   });
 
   test('each entry should show the command text', async ({ page }) => {
-    const commands = page.locator('lv-output-panel .entry-command');
+    const commands = page.locator('gn-output-panel .entry-command');
     await expect(commands).toHaveCount(3);
 
     // Entries are added most recent first (unshift)
@@ -150,25 +150,25 @@ test.describe('Output Panel - With Entries', () => {
   });
 
   test('each entry should show a status dot (success or failure)', async ({ page }) => {
-    const statusDots = page.locator('lv-output-panel .status-dot');
+    const statusDots = page.locator('gn-output-panel .status-dot');
     await expect(statusDots).toHaveCount(3);
 
     // First entry (push) failed
-    await expect(page.locator('lv-output-panel .entry').nth(0).locator('.status-dot.failure')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry').nth(0).locator('.status-dot.failure')).toBeVisible();
     // Second entry (pull) succeeded
-    await expect(page.locator('lv-output-panel .entry').nth(1).locator('.status-dot.success')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry').nth(1).locator('.status-dot.success')).toBeVisible();
     // Third entry (fetch) succeeded
-    await expect(page.locator('lv-output-panel .entry').nth(2).locator('.status-dot.success')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry').nth(2).locator('.status-dot.success')).toBeVisible();
   });
 
   test('failed command should have failure class on command text', async ({ page }) => {
     await expect(
-      page.locator('lv-output-panel .entry').nth(0).locator('.entry-command.failure')
+      page.locator('gn-output-panel .entry').nth(0).locator('.entry-command.failure')
     ).toBeVisible();
   });
 
   test('should show Clear button when entries exist', async ({ page }) => {
-    const clearBtn = page.locator('lv-output-panel .clear-btn');
+    const clearBtn = page.locator('gn-output-panel .clear-btn');
     await expect(clearBtn).toBeVisible();
     await expect(clearBtn).toContainText('Clear');
   });
@@ -187,63 +187,63 @@ test.describe('Output Panel - Entry Expansion', () => {
 
   test('clicking an entry header should expand it to show output', async ({ page }) => {
     // Click the first entry header (the push failure, which has output)
-    await page.locator('lv-output-panel .entry-header').first().click();
+    await page.locator('gn-output-panel .entry-header').first().click();
 
-    await expect(page.locator('lv-output-panel .entry-output')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry-output')).toBeVisible();
   });
 
   test('expanded entry should show the correct output text', async ({ page }) => {
     // Expand the first entry (push failure)
-    await page.locator('lv-output-panel .entry-header').first().click();
+    await page.locator('gn-output-panel .entry-header').first().click();
 
-    await expect(page.locator('lv-output-panel .entry-output').first()).toHaveText(
+    await expect(page.locator('gn-output-panel .entry-output').first()).toHaveText(
       'error: failed to push some refs'
     );
   });
 
   test('expanding a success entry should show its output', async ({ page }) => {
     // Click the third entry header (fetch, which succeeded)
-    await page.locator('lv-output-panel .entry-header').nth(2).click();
+    await page.locator('gn-output-panel .entry-header').nth(2).click();
 
-    await expect(page.locator('lv-output-panel .entry-output')).toContainText('Fetching origin');
-    await expect(page.locator('lv-output-panel .entry-output')).toContainText(
+    await expect(page.locator('gn-output-panel .entry-output')).toContainText('Fetching origin');
+    await expect(page.locator('gn-output-panel .entry-output')).toContainText(
       'main -> origin/main'
     );
   });
 
   test('clicking the entry header again should collapse the output', async ({ page }) => {
-    const firstHeader = page.locator('lv-output-panel .entry-header').first();
+    const firstHeader = page.locator('gn-output-panel .entry-header').first();
 
     // Expand
     await firstHeader.click();
-    await expect(page.locator('lv-output-panel .entry-output')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry-output')).toBeVisible();
 
     // Collapse
     await firstHeader.click();
-    await expect(page.locator('lv-output-panel .entry-output')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .entry-output')).toHaveCount(0);
   });
 
   test('expand icon should rotate when entry is expanded', async ({ page }) => {
     // Expand
-    await page.locator('lv-output-panel .entry-header').first().click();
+    await page.locator('gn-output-panel .entry-header').first().click();
 
     await expect(
-      page.locator('lv-output-panel .entry').first().locator('.expand-icon.expanded')
+      page.locator('gn-output-panel .entry').first().locator('.expand-icon.expanded')
     ).toBeVisible();
   });
 
   test('expand icon should not be rotated when entry is collapsed', async ({ page }) => {
-    const firstHeader = page.locator('lv-output-panel .entry-header').first();
+    const firstHeader = page.locator('gn-output-panel .entry-header').first();
 
     // Expand then collapse
     await firstHeader.click();
     await expect(
-      page.locator('lv-output-panel .entry').first().locator('.expand-icon.expanded')
+      page.locator('gn-output-panel .entry').first().locator('.expand-icon.expanded')
     ).toBeVisible();
 
     await firstHeader.click();
     await expect(
-      page.locator('lv-output-panel .entry').first().locator('.expand-icon.expanded')
+      page.locator('gn-output-panel .entry').first().locator('.expand-icon.expanded')
     ).toHaveCount(0);
   });
 });
@@ -260,27 +260,27 @@ test.describe('Output Panel - Clear', () => {
   });
 
   test('clicking Clear should remove all entries', async ({ page }) => {
-    await page.locator('lv-output-panel .clear-btn').click();
+    await page.locator('gn-output-panel .clear-btn').click();
 
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(0);
   });
 
   test('should show empty state after clearing', async ({ page }) => {
-    await page.locator('lv-output-panel .clear-btn').click();
+    await page.locator('gn-output-panel .clear-btn').click();
 
-    await expect(page.locator('lv-output-panel .empty')).toHaveText('No output yet');
+    await expect(page.locator('gn-output-panel .empty')).toHaveText('No output yet');
   });
 
   test('Clear button should disappear after clearing', async ({ page }) => {
-    await page.locator('lv-output-panel .clear-btn').click();
+    await page.locator('gn-output-panel .clear-btn').click();
 
-    await expect(page.locator('lv-output-panel .clear-btn')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .clear-btn')).toHaveCount(0);
   });
 
   test('entry count should disappear after clearing', async ({ page }) => {
-    await page.locator('lv-output-panel .clear-btn').click();
+    await page.locator('gn-output-panel .clear-btn').click();
 
-    await expect(page.locator('lv-output-panel .entry-count')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .entry-count')).toHaveCount(0);
   });
 });
 
@@ -296,69 +296,69 @@ test.describe('Output Panel - Error Entry Display', () => {
 
   test('failed command should display with failure status dot', async ({ page }) => {
     await addFailedEntry(page, 'git merge feature', 'CONFLICT (content): Merge conflict in file.ts\nAutomatic merge failed; fix conflicts and then commit the result.');
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(1);
 
-    await expect(page.locator('lv-output-panel .status-dot.failure')).toBeVisible();
-    await expect(page.locator('lv-output-panel .status-dot.success')).toHaveCount(0);
+    await expect(page.locator('gn-output-panel .status-dot.failure')).toBeVisible();
+    await expect(page.locator('gn-output-panel .status-dot.success')).toHaveCount(0);
   });
 
   test('failed command text should have failure class', async ({ page }) => {
     await addFailedEntry(page, 'git rebase main', 'error: could not apply abc1234');
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(1);
 
-    await expect(page.locator('lv-output-panel .entry-command.failure')).toBeVisible();
-    await expect(page.locator('lv-output-panel .entry-command.failure')).toHaveText('git rebase main');
+    await expect(page.locator('gn-output-panel .entry-command.failure')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry-command.failure')).toHaveText('git rebase main');
   });
 
   test('expanding a failed entry should show the error output', async ({ page }) => {
     const errorOutput = 'CONFLICT (content): Merge conflict in file.ts\nAutomatic merge failed; fix conflicts and then commit the result.';
     await addFailedEntry(page, 'git merge feature', errorOutput);
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(1);
 
     // Expand the entry
-    await page.locator('lv-output-panel .entry-header').click();
+    await page.locator('gn-output-panel .entry-header').click();
 
-    await expect(page.locator('lv-output-panel .entry-output')).toBeVisible();
-    await expect(page.locator('lv-output-panel .entry-output')).toContainText('CONFLICT (content)');
-    await expect(page.locator('lv-output-panel .entry-output')).toContainText('Automatic merge failed');
+    await expect(page.locator('gn-output-panel .entry-output')).toBeVisible();
+    await expect(page.locator('gn-output-panel .entry-output')).toContainText('CONFLICT (content)');
+    await expect(page.locator('gn-output-panel .entry-output')).toContainText('Automatic merge failed');
   });
 
   test('multiple failed entries should all show failure styling', async ({ page }) => {
     await addFailedEntry(page, 'git push origin main', 'rejected: non-fast-forward');
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(1);
 
     await addFailedEntry(page, 'git pull --rebase', 'error: cannot pull with rebase');
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(2);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(2);
 
-    await expect(page.locator('lv-output-panel .status-dot.failure')).toHaveCount(2);
-    await expect(page.locator('lv-output-panel .entry-command.failure')).toHaveCount(2);
+    await expect(page.locator('gn-output-panel .status-dot.failure')).toHaveCount(2);
+    await expect(page.locator('gn-output-panel .entry-command.failure')).toHaveCount(2);
   });
 
   test('failed entry with empty output should explain the empty row', async ({ page }) => {
     await addFailedEntry(page, 'git checkout nonexistent', '');
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(1);
 
-    await page.locator('lv-output-panel .entry-header').click();
+    await page.locator('gn-output-panel .entry-header').click();
 
     // An expanded row is never an unexplained empty box: with nothing captured
     // the panel says so rather than rendering blank.
-    await expect(page.locator('lv-output-panel .entry-output.empty-output')).toContainText(
+    await expect(page.locator('gn-output-panel .entry-output.empty-output')).toContainText(
       'Failed with no output'
     );
 
     // And the expand icon still toggles
     await expect(
-      page.locator('lv-output-panel .entry').first().locator('.expand-icon.expanded')
+      page.locator('gn-output-panel .entry').first().locator('.expand-icon.expanded')
     ).toBeVisible();
   });
 
   test('failed output is styled distinctly from a successful one', async ({ page }) => {
     await addFailedEntry(page, 'git push origin main', 'error: failed to push some refs');
-    await expect(page.locator('lv-output-panel .entry')).toHaveCount(1);
+    await expect(page.locator('gn-output-panel .entry')).toHaveCount(1);
 
-    await page.locator('lv-output-panel .entry-header').click();
+    await page.locator('gn-output-panel .entry-header').click();
 
-    await expect(page.locator('lv-output-panel .entry-output.failure')).toContainText(
+    await expect(page.locator('gn-output-panel .entry-output.failure')).toContainText(
       'error: failed to push some refs'
     );
   });
@@ -377,7 +377,7 @@ test.describe('Output Panel - In-app integration', () => {
     const app = new AppPage(page);
 
     // Panel hidden by default
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toHaveCount(0);
 
     await app.executeCommand('Toggle Output Panel');
@@ -388,10 +388,10 @@ test.describe('Output Panel - In-app integration', () => {
     await app.executeCommand('Create stash');
     // Stashes are nameable now: the palette entry opens the themed prompt
     // before it reaches the backend.
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('panel probe');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     // The panel shows a READABLE GIT COMMAND, not the IPC name.
     await expect(
@@ -412,14 +412,14 @@ test.describe('Output Panel - In-app integration', () => {
     const app = new AppPage(page);
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
 
     await app.executeCommand('Create stash');
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('equivalence probe');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     // git2 did the work — the panel must not imply the CLI ran.
     await expect(appPanel.locator('.synth-mark').first()).toBeVisible();
@@ -468,15 +468,15 @@ test.describe('Output Panel - In-app integration', () => {
     }, '/tmp/test-repo');
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
     await clearEntries(page);
 
     await app.executeCommand('Create stash');
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('cli probe');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     // ONE row for one operation — not the real line plus a weaker synthesised
     // twin that omits `--keep-index`.
@@ -560,7 +560,7 @@ test.describe('Output Panel - In-app integration', () => {
     await mergeCommitsThroughSignedCli(page, { success: true });
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
     await clearEntries(page);
 
@@ -592,7 +592,7 @@ test.describe('Output Panel - In-app integration', () => {
     });
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
     await clearEntries(page);
 
@@ -624,7 +624,7 @@ test.describe('Output Panel - In-app integration', () => {
     const app = new AppPage(page);
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
     await clearEntries(page);
 
@@ -657,10 +657,10 @@ test.describe('Output Panel - In-app integration', () => {
 
     // A real operation still logs, so the assertions below are not vacuous.
     await app.executeCommand('Create stash');
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('plumbing probe');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     await expect(
       appPanel.locator('.entry-command', { hasText: 'git stash push' })
@@ -682,7 +682,7 @@ test.describe('Output Panel - In-app integration', () => {
     const app = new AppPage(page);
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
     await clearEntries(page);
 
@@ -732,18 +732,18 @@ test.describe('Output Panel - In-app integration', () => {
     const app = new AppPage(page);
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
     await clearEntries(page);
 
     await startCommandCapture(page);
     await injectCommandHang(page, 'fetch');
-    await page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i }).click();
+    await page.locator('gn-context-dashboard').getByRole('button', { name: /Fetch/i }).click();
     await waitForCommand(page, 'fetch');
 
-    await page.locator('lv-progress-indicator .cancel-btn').click();
+    await page.locator('gn-progress-indicator .cancel-btn').click();
     await waitForCommand(page, 'cancel_operation');
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(0);
 
     // The cancel itself is not a git operation and carries no repository, so
     // it must not leave a bare `cancel_operation` row in every panel.
@@ -765,14 +765,14 @@ test.describe('Output Panel - In-app integration', () => {
     );
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
 
     await app.executeCommand('Create stash');
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('doomed');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     // The failure is marked, and the git line is still readable
     const failedEntry = appPanel.locator('.entry').filter({ has: page.locator('.status-dot.failure') }).first();
@@ -802,14 +802,14 @@ test.describe('Output Panel - In-app integration', () => {
     );
 
     await app.executeCommand('Toggle Output Panel');
-    const appPanel = page.locator('lv-app-shell lv-output-panel');
+    const appPanel = page.locator('gn-app-shell gn-output-panel');
     await expect(appPanel).toBeVisible();
 
     await app.executeCommand('Create stash');
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('leak probe');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     const failedEntry = appPanel.locator('.entry').filter({ has: page.locator('.status-dot.failure') }).first();
     await failedEntry.locator('.entry-header').click();

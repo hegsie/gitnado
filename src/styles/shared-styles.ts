@@ -13,12 +13,12 @@ import { css } from 'lit';
  * `!important` is deliberate: `sharedStyles` comes first in every styles array,
  * so at equal specificity the component's own `animation:` / `transition:`
  * declarations would otherwise win — and the spinner markup in
- * lv-azure-devops-dialog sets `animation` in an inline `style` attribute, which
+ * gn-azure-devops-dialog sets `animation` in an inline `style` attribute, which
  * only an important declaration can override.
  *
  * Indeterminate progress bars translate themselves off-screen and would be left
  * parked at their final keyframe (invisible) by the blanket rule, so app-shell
- * and lv-progress-indicator each carry a small reduced-motion override that
+ * and gn-progress-indicator each carry a small reduced-motion override that
  * paints them as a static filled bar instead.
  */
 export const reducedMotionStyles = css`
@@ -47,9 +47,9 @@ export const reducedMotionStyles = css`
  * explicit list of interactive selectors so keyboard users get an indicator
  * everywhere, while mouse focus stays quiet.
  *
- * The ring is expressed through the `--lv-focus-ring-*` custom properties
+ * The ring is expressed through the `--gn-focus-ring-*` custom properties
  * defined in src/styles/tokens.css (they inherit through shadow boundaries), so
- * a component can still tune it — e.g. set `--lv-focus-ring-offset: -2px` on a
+ * a component can still tune it — e.g. set `--gn-focus-ring-offset: -2px` on a
  * full-bleed list row so the ring is not clipped by the scroll container —
  * without fighting the `!important`.
  *
@@ -73,9 +73,9 @@ export const focusRingStyles = css`
   [role='menuitemradio']:focus-visible,
   [role='checkbox']:focus-visible,
   [role='switch']:focus-visible {
-    outline: var(--lv-focus-ring-width, 2px) solid
-      var(--lv-focus-ring-color, var(--color-primary, #1a73e8)) !important;
-    outline-offset: var(--lv-focus-ring-offset, 2px) !important;
+    outline: var(--gn-focus-ring-width, 2px) solid
+      var(--gn-focus-ring-color, var(--color-primary, #1a73e8)) !important;
+    outline-offset: var(--gn-focus-ring-offset, 2px) !important;
   }
 
   /* Form fields sit flush against their own border, so the ring hugs the field
@@ -84,16 +84,16 @@ export const focusRingStyles = css`
   input,
   select,
   textarea {
-    --lv-focus-ring-offset: 0px;
+    --gn-focus-ring-offset: 0px;
   }
 
-  /* Hosts that put themselves in the tab order (lv-file-status, lv-diff-view)
+  /* Hosts that put themselves in the tab order (gn-file-status, gn-diff-view)
      cannot be reached by the [tabindex] rule above from inside their own
      shadow root, so they get a matching inset ring here. */
   :host([tabindex]:not([tabindex='-1']):focus-visible) {
-    outline: var(--lv-focus-ring-width, 2px) solid
-      var(--lv-focus-ring-color, var(--color-primary, #1a73e8)) !important;
-    outline-offset: calc(-1 * var(--lv-focus-ring-width, 2px)) !important;
+    outline: var(--gn-focus-ring-width, 2px) solid
+      var(--gn-focus-ring-color, var(--color-primary, #1a73e8)) !important;
+    outline-offset: calc(-1 * var(--gn-focus-ring-width, 2px)) !important;
   }
 
   /* Mouse/touch focus stays quiet — only :focus-visible paints a ring. */

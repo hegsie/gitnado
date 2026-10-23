@@ -31,8 +31,8 @@ import type { AppShell } from '../app-shell.ts';
 import '../app-shell.ts';
 import { dialogs } from '../stores/dialog.store.ts';
 // Side-effect import so showPrompt finds the singleton already in the DOM.
-import '../components/dialogs/lv-prompt-dialog.ts';
-import type { LvPromptDialog } from '../components/dialogs/lv-prompt-dialog.ts';
+import '../components/dialogs/gn-prompt-dialog.ts';
+import type { GnPromptDialog } from '../components/dialogs/gn-prompt-dialog.ts';
 import { uiStore, repositoryStore } from '../stores/index.ts';
 import type { Repository, StatusEntry } from '../types/git.types.ts';
 import { tryAcquireRefOp, isRefOpRunning, resetRefOpLocks } from '../utils/ref-lock.ts';
@@ -45,16 +45,16 @@ import { tryAcquireRefOp, isRefOpRunning, resetRefOpLocks } from '../utils/ref-l
  * dismissal.
  */
 function setupMockPrompt(value: string | null): void {
-  let dialog = document.querySelector<LvPromptDialog>('lv-prompt-dialog');
+  let dialog = document.querySelector<GnPromptDialog>('gn-prompt-dialog');
   if (!dialog) {
-    dialog = document.createElement('lv-prompt-dialog') as LvPromptDialog;
+    dialog = document.createElement('gn-prompt-dialog') as GnPromptDialog;
     document.body.appendChild(dialog);
   }
   dialog.open = async () => value;
 }
 
 function cleanupMockPrompt(): void {
-  const dialog = document.querySelector('lv-prompt-dialog');
+  const dialog = document.querySelector('gn-prompt-dialog');
   if (dialog) dialog.remove();
 }
 
@@ -116,7 +116,7 @@ describe('app-shell destructive guards', () => {
   });
 
   function shellOnRepo(state = 'clean'): AppShell {
-    const el = document.createElement('lv-app-shell') as AppShell;
+    const el = document.createElement('gn-app-shell') as AppShell;
     (el as any).activeRepository = { repository: mockRepo('/repo/one', 'one', state) };
     return el;
   }
@@ -195,7 +195,7 @@ describe('app-shell destructive guards', () => {
     });
 
     it('reveals the panel that owns the listener before dispatching', async () => {
-      // trigger-amend is heard only by lv-commit-panel, in the right panel's
+      // trigger-amend is heard only by gn-commit-panel, in the right panel's
       // Changes tab. Right-clicking a commit selects it first, and a new
       // selection auto-switches that panel to Details — so amend mode was
       // turned on inside a tab-panel with display:none and the gesture looked
@@ -319,7 +319,7 @@ describe('app-shell destructive guards', () => {
     function shellWithDirtyEditor(path: string): AppShell {
       const el = shellOnRepo();
       // `diffView` is a @query getter, so it has to be shadowed on the
-      // instance. This stands in for a mounted lv-diff-view whose inline
+      // instance. This stands in for a mounted gn-diff-view whose inline
       // editor holds typed text.
       Object.defineProperty(el, 'diffView', {
         configurable: true,
@@ -362,8 +362,8 @@ describe('app-shell destructive guards', () => {
 
     it('opening Blame from the commit panel warns the same way', async () => {
       // A fourth app-shell-owned gesture that unmounts the same pane. The ×
-      // and the tab switch were guarded; this one swaps lv-diff-view for
-      // lv-blame-view through the same `showDiff = false`.
+      // and the tab switch were guarded; this one swaps gn-diff-view for
+      // gn-blame-view through the same `showDiff = false`.
       const el = shellWithDirtyEditor('src/main.ts');
       uiStore.setState({ toasts: [] });
 
@@ -379,7 +379,7 @@ describe('app-shell destructive guards', () => {
 
     it('opening file history from the commit panel warns the same way', async () => {
       // Same swap as Blame: the History button in the commit panel replaces
-      // lv-diff-view in the center pane, so it drops the typed text with it.
+      // gn-diff-view in the center pane, so it drops the typed text with it.
       const el = shellWithDirtyEditor('src/main.ts');
       uiStore.setState({ toasts: [] });
 
@@ -779,7 +779,7 @@ describe('app-shell destructive guards', () => {
       const el = shellOnRepo();
       let heldDuringPull = false;
       mockResponses['pull'] = () => {
-        // What lv-branch-list and lv-file-status read to gate their controls.
+        // What gn-branch-list and gn-file-status read to gate their controls.
         heldDuringPull = isRefOpRunning('/repo/one');
         return null;
       };
@@ -806,8 +806,8 @@ describe('app-shell destructive guards', () => {
   });
 
   describe('the graph lock is shared with the sidebar lists', () => {
-    // app-shell and lv-branch-list/lv-tag-list/lv-stash-list used to hold two
-    // disjoint locks over the same commands, and <lv-left-panel> is rendered
+    // app-shell and gn-branch-list/gn-tag-list/gn-stash-list used to hold two
+    // disjoint locks over the same commands, and <gn-left-panel> is rendered
     // with no props, so nothing passed a busy signal between them. A hard
     // reset from the graph and a double-clicked sidebar checkout ran
     // concurrently against the same working tree; the auto-stash checkout
@@ -820,7 +820,7 @@ describe('app-shell destructive guards', () => {
       (el as any).refContextMenu = {
         visible: true, x: 0, y: 0, fullName: '', refType: 'localBranch', refName: 'feature',
       };
-      // What lv-branch-list.handleCheckout does when the user double-clicks a row.
+      // What gn-branch-list.handleCheckout does when the user double-clicks a row.
       tryAcquireRefOp('/repo/one');
       invokeCallArgs.length = 0;
 
@@ -842,7 +842,7 @@ describe('app-shell destructive guards', () => {
 
       let heldDuringOperation = false;
       mockResponses['delete_branch'] = () => {
-        // lv-branch-list reads exactly this to gate its own handlers.
+        // gn-branch-list reads exactly this to gate its own handlers.
         heldDuringOperation = isRefOpRunning('/repo/one');
         return null;
       };
@@ -1294,7 +1294,7 @@ describe('app-shell destructive guards', () => {
         status: twoStatus,
       };
       repositoryStore.setState({ openRepositories: [one, two], activeIndex: 0 });
-      const el = document.createElement('lv-app-shell') as AppShell;
+      const el = document.createElement('gn-app-shell') as AppShell;
       (el as any).activeRepository = one;
       return el;
     }

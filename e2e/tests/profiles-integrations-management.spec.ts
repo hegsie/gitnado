@@ -108,17 +108,17 @@ async function openProfileManager(page: Page, dialogs: DialogsPage): Promise<voi
  */
 async function openAccountEditFromAccountsView(page: Page): Promise<void> {
   await page
-    .locator('lv-profile-manager-dialog .dialog-footer')
+    .locator('gn-profile-manager-dialog .dialog-footer')
     .getByRole('button', { name: 'Accounts' })
     .click();
-  await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+  await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
     'Accounts',
   );
   await page
-    .locator('lv-profile-manager-dialog .accounts-list .account-item .account-actions .action-btn:not(.delete)')
+    .locator('gn-profile-manager-dialog .accounts-list .account-item .account-actions .action-btn:not(.delete)')
     .first()
     .click();
-  await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+  await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
     'Edit Account',
   );
 }
@@ -150,7 +150,7 @@ test.describe('account config fields are editable', () => {
     await openAccountEditFromAccountsView(page);
 
     // The GitLab instance URL field renders (previously it never did).
-    const instanceUrlInput = page.locator('lv-profile-manager-dialog input[type="url"]');
+    const instanceUrlInput = page.locator('gn-profile-manager-dialog input[type="url"]');
     await expect(instanceUrlInput).toBeVisible();
     await expect(instanceUrlInput).toHaveValue('https://gitlab.com');
 
@@ -189,7 +189,7 @@ test.describe('account config fields are editable', () => {
     await openProfileManager(page, dialogs);
     await openAccountEditFromAccountsView(page);
 
-    const orgInput = page.locator('lv-profile-manager-dialog input[placeholder="my-organization"]');
+    const orgInput = page.locator('gn-profile-manager-dialog input[placeholder="my-organization"]');
     await expect(orgInput).toBeVisible();
     await expect(orgInput).toHaveValue('acme');
 
@@ -225,7 +225,7 @@ test.describe('account config fields are editable', () => {
     await openProfileManager(page, dialogs);
     await openAccountEditFromAccountsView(page);
 
-    const workspaceInput = page.locator('lv-profile-manager-dialog input[placeholder="my-workspace"]');
+    const workspaceInput = page.locator('gn-profile-manager-dialog input[placeholder="my-workspace"]');
     await expect(workspaceInput).toBeVisible();
     await expect(workspaceInput).toHaveValue('acme-team');
 
@@ -269,7 +269,7 @@ test.describe('migration honest results', () => {
 
   async function openMigrationViaRestore(page: Page, dialogs: DialogsPage): Promise<void> {
     await openProfileManager(page, dialogs);
-    const backupToggle = page.locator('lv-profile-manager-dialog .backup-toggle');
+    const backupToggle = page.locator('gn-profile-manager-dialog .backup-toggle');
     await expect(backupToggle).toBeVisible();
     await backupToggle.click();
     const restoreBtn = page.getByRole('button', { name: 'Restore Backup' });
@@ -277,18 +277,18 @@ test.describe('migration honest results', () => {
     await restoreBtn.click();
     // The migration dialog overlay must appear (host has zero dimensions; assert
     // on the overlay child like the existing restore-backup test does).
-    await expect(page.locator('lv-migration-dialog[open] .dialog-overlay')).toBeVisible();
+    await expect(page.locator('gn-migration-dialog[open] .dialog-overlay')).toBeVisible();
   }
 
   async function driveToComplete(page: Page): Promise<void> {
     // intro → preview
-    await page.locator('lv-migration-dialog button.btn-primary', { hasText: 'Continue' }).click();
-    await expect(page.locator('lv-migration-dialog .dialog-title')).toContainText(
+    await page.locator('gn-migration-dialog button.btn-primary', { hasText: 'Continue' }).click();
+    await expect(page.locator('gn-migration-dialog .dialog-title')).toContainText(
       'Review Migration',
     );
     // preview → execute (→ complete)
     await page
-      .locator('lv-migration-dialog button.btn-primary', { hasText: 'Start Migration' })
+      .locator('gn-migration-dialog button.btn-primary', { hasText: 'Start Migration' })
       .click();
   }
 
@@ -319,17 +319,17 @@ test.describe('migration honest results', () => {
     await driveToComplete(page);
 
     // The honest "completed with issues" view — NOT the green All Done.
-    await expect(page.locator('lv-migration-dialog')).toContainText(
+    await expect(page.locator('gn-migration-dialog')).toContainText(
       'Migration Completed With Issues',
     );
-    await expect(page.locator('lv-migration-dialog')).not.toContainText('All Done!');
+    await expect(page.locator('gn-migration-dialog')).not.toContainText('All Done!');
     // The skipped item is listed.
-    await expect(page.locator('lv-migration-dialog .error-list .error-item')).toContainText(
+    await expect(page.locator('gn-migration-dialog .error-list .error-item')).toContainText(
       'Legacy GitLab',
     );
     // And the "Review in Profile Manager" escape hatch is offered.
     await expect(
-      page.locator('lv-migration-dialog').getByRole('button', { name: 'Review in Profile Manager' }),
+      page.locator('gn-migration-dialog').getByRole('button', { name: 'Review in Profile Manager' }),
     ).toBeVisible();
   });
 
@@ -359,12 +359,12 @@ test.describe('migration honest results', () => {
     await openMigrationViaRestore(page, dialogs);
     await driveToComplete(page);
 
-    await expect(page.locator('lv-migration-dialog')).toContainText('All Done!');
-    await expect(page.locator('lv-migration-dialog')).not.toContainText(
+    await expect(page.locator('gn-migration-dialog')).toContainText('All Done!');
+    await expect(page.locator('gn-migration-dialog')).not.toContainText(
       'Migration Completed With Issues',
     );
     await expect(
-      page.locator('lv-migration-dialog').getByRole('button', { name: 'Review in Profile Manager' }),
+      page.locator('gn-migration-dialog').getByRole('button', { name: 'Review in Profile Manager' }),
     ).toHaveCount(0);
   });
 });
@@ -451,7 +451,7 @@ test.describe('single-repo unassign', () => {
 
     // The assigned-repositories section lists the one assigned repo.
     const assignedSection = page
-      .locator('lv-profile-manager-dialog .accounts-section')
+      .locator('gn-profile-manager-dialog .accounts-section')
       .filter({ hasText: 'Assigned Repositories' });
     const repoRow = assignedSection.locator('.account-item');
     await expect(repoRow).toHaveCount(1);
@@ -481,7 +481,7 @@ test.describe('single-repo unassign', () => {
     // The row disappears and a success toast confirms the unassign.
     await expect(repoRow).toHaveCount(0, { timeout: 5000 });
     await expect(
-      page.locator('lv-toast-container .toast.success .toast-message'),
+      page.locator('gn-toast-container .toast.success .toast-message'),
     ).toContainText(/Unassigned/i, { timeout: 5000 });
   });
 });
@@ -526,7 +526,7 @@ test.describe('profile switch error is surfaced', () => {
 
     await page.locator('button[title="Apply to current repository"]').first().click();
 
-    const errorToast = page.locator('lv-toast-container .toast.error .toast-message');
+    const errorToast = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(errorToast).toBeVisible({ timeout: 5000 });
     await expect(errorToast).toContainText(backendMessage);
   });
@@ -549,20 +549,20 @@ test.describe('profile switch error is surfaced', () => {
     });
 
     // Toolbar starts on the default (Work) profile.
-    await expect(page.locator('lv-context-dashboard .profile-name').first()).toHaveText('Work');
+    await expect(page.locator('gn-context-dashboard .profile-name').first()).toHaveText('Work');
 
     const backendMessage = 'Profile apply failed: git config is locked';
     await injectCommandError(page, 'apply_unified_profile', backendMessage);
 
     // Switch profile via the dashboard dropdown.
-    await page.locator('lv-context-dashboard .profile-selector-btn').click();
+    await page.locator('gn-context-dashboard .profile-selector-btn').click();
     await page
-      .locator('lv-context-dashboard .profile-dropdown .dropdown-item', { hasText: 'Personal' })
+      .locator('gn-context-dashboard .profile-dropdown .dropdown-item', { hasText: 'Personal' })
       .click();
 
     // The failure must be surfaced as a visible error toast (the repository
     // store error field has no render sink).
-    const errorToast = page.locator('lv-toast-container .toast.error .toast-message');
+    const errorToast = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(errorToast).toBeVisible({ timeout: 5000 });
     await expect(errorToast).toContainText('Failed to switch profile');
   });
@@ -576,7 +576,7 @@ test.describe('default-account badges', () => {
   // The integration card only renders in the dashboard's EXPANDED view, so each
   // test expands the dashboard first.
   async function expandDashboard(page: Page): Promise<void> {
-    const dashboard = page.locator('lv-context-dashboard');
+    const dashboard = page.locator('gn-context-dashboard');
     await expect(dashboard).toBeVisible({ timeout: 5000 });
     // The compact view's expand button toggles to the expanded layout.
     const expandBtn = dashboard.locator('.expand-btn');
@@ -608,7 +608,7 @@ test.describe('default-account badges', () => {
     });
 
     await expandDashboard(page);
-    const card = page.locator('lv-context-dashboard lv-integration-card');
+    const card = page.locator('gn-context-dashboard gn-integration-card');
     await expect(card).toBeVisible({ timeout: 5000 });
     const badge = card.locator('.default-badge');
     await expect(badge).toHaveText('Profile default');
@@ -636,7 +636,7 @@ test.describe('default-account badges', () => {
     });
 
     await expandDashboard(page);
-    const card = page.locator('lv-context-dashboard lv-integration-card');
+    const card = page.locator('gn-context-dashboard gn-integration-card');
     await expect(card).toBeVisible({ timeout: 5000 });
     const badge = card.locator('.default-badge');
     await expect(badge).toHaveText('Global default');
@@ -682,24 +682,24 @@ test.describe('GitLab delete error surfaced', () => {
 
     const app = new AppPage(page);
     await app.executeCommand('GitLab');
-    await expect(page.locator('lv-gitlab-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-gitlab-dialog gn-modal[open]')).toBeVisible();
 
     // …but the backend delete fails.
     const backendMessage = 'GitLab delete failed: account config is read-only';
     await injectCommandError(page, 'delete_global_account', backendMessage);
 
     await page
-      .locator('lv-gitlab-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ })
+      .locator('gn-gitlab-dialog button.btn-danger-outline', { hasText: /^\s*Delete\s*$/ })
       .click();
 
     // The failure must be surfaced — both as a toast and the inline error.
     await expect(
-      page.locator('lv-toast-container .toast.error .toast-message'),
+      page.locator('gn-toast-container .toast.error .toast-message'),
     ).toContainText(backendMessage, { timeout: 5000 });
-    await expect(page.locator('lv-gitlab-dialog .error')).toContainText(backendMessage);
+    await expect(page.locator('gn-gitlab-dialog .error')).toContainText(backendMessage);
 
     // And the account is NOT removed from the selector — nothing was destroyed.
-    await expect(page.locator('lv-gitlab-dialog lv-account-selector .account-name')).toHaveText(
+    await expect(page.locator('gn-gitlab-dialog gn-account-selector .account-name')).toHaveText(
       'Company GitLab',
     );
   });
@@ -717,22 +717,22 @@ test.describe('GitHub App connect honors backend status', () => {
   async function fillAndConnectGitHubApp(page: Page): Promise<void> {
     // Switch to the GitHub App auth method.
     await page
-      .locator('lv-github-dialog .auth-method-btn', { hasText: 'GitHub App' })
+      .locator('gn-github-dialog .auth-method-btn', { hasText: 'GitHub App' })
       .click();
 
-    await page.locator('lv-github-dialog input[placeholder="123456"]').fill('123456');
+    await page.locator('gn-github-dialog input[placeholder="123456"]').fill('123456');
     await page
-      .locator('lv-github-dialog textarea')
+      .locator('gn-github-dialog textarea')
       .fill('-----BEGIN PRIVATE KEY-----\nMOCKKEY\n-----END PRIVATE KEY-----');
     // With App ID + key present, the installation-ID input renders.
     const installInput = page.locator(
-      'lv-github-dialog input[placeholder="Installation ID (click Load to discover)"]',
+      'gn-github-dialog input[placeholder="Installation ID (click Load to discover)"]',
     );
     await expect(installInput).toBeVisible();
     await installInput.fill('99887766');
 
     await page
-      .locator('lv-github-dialog button.btn-primary', { hasText: 'Connect via GitHub App' })
+      .locator('gn-github-dialog button.btn-primary', { hasText: 'Connect via GitHub App' })
       .click();
   }
 
@@ -768,16 +768,16 @@ test.describe('GitHub App connect honors backend status', () => {
     await fillAndConnectGitHubApp(page);
 
     // An error is shown (inline + toast) and NO account is persisted.
-    await expect(page.locator('lv-github-dialog .error-message')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-github-dialog .error-message')).toBeVisible({ timeout: 5000 });
     await expect(
-      page.locator('lv-toast-container .toast.error'),
+      page.locator('gn-toast-container .toast.error'),
     ).toBeVisible({ timeout: 5000 });
 
     const saves = await findCommand(page, 'save_global_account');
     expect(saves.length).toBe(0);
 
     // No connected-state user view should appear.
-    await expect(page.locator('lv-github-dialog button:has-text("Disconnect")')).toHaveCount(0);
+    await expect(page.locator('gn-github-dialog button:has-text("Disconnect")')).toHaveCount(0);
   });
 
   test('a backend `connected:true` connects and persists the account', async ({ page }) => {
@@ -822,8 +822,8 @@ test.describe('GitHub App connect honors backend status', () => {
 
     // …and a success toast confirms the connection (no error message).
     await expect(
-      page.locator('lv-toast-container .toast.success'),
+      page.locator('gn-toast-container .toast.success'),
     ).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('lv-github-dialog .error-message')).toHaveCount(0);
+    await expect(page.locator('gn-github-dialog .error-message')).toHaveCount(0);
   });
 });

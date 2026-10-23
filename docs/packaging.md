@@ -71,11 +71,6 @@ script and submit them by hand: `node .github/scripts/winget-manifests.mjs
 WiX `UpgradeCode` from `tauri.conf.json`; update them together if either
 changes.
 
-The earlier `hegsie.Leviathan` submission
-([microsoft/winget-pkgs#428196](https://github.com/microsoft/winget-pkgs/pull/428196))
-was closed unmerged — a published `hegsie.Leviathan` package would never
-receive updates.
-
 ## Homebrew
 
 The `homebrew` job downloads the release DMG, computes its SHA-256, renders

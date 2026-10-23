@@ -39,7 +39,7 @@ import type { Repository } from '../types/git.types.ts';
 import { tryAcquireRefOp, resetRefOpLocks } from '../utils/ref-lock.ts';
 
 function createAppShell(): AppShell {
-  return document.createElement('lv-app-shell') as AppShell;
+  return document.createElement('gn-app-shell') as AppShell;
 }
 
 function mockRepo(path: string, name: string): Repository {
@@ -828,7 +828,7 @@ describe('app-shell remote-operation feedback', () => {
 
   describe('staging works with the right panel hidden', () => {
     it('reveals the panel that owns the listener before dispatching', async () => {
-      // `stage-all` is heard only by lv-file-status, which lives inside the
+      // `stage-all` is heard only by gn-file-status, which lives inside the
       // right panel. With Ctrl+J pressed the panel is unmounted, its listener
       // gone, and both the `s` shortcut and the palette entry silently did
       // nothing — with no other way to stage.
@@ -1137,7 +1137,7 @@ describe('app-shell remote-operation feedback', () => {
     }
 
     function toolbarButton(el: AppShell, op: string): HTMLButtonElement {
-      const toolbar = el.shadowRoot!.querySelector('lv-toolbar');
+      const toolbar = el.shadowRoot!.querySelector('gn-toolbar');
       expect(toolbar, 'the toolbar is rendered').to.not.be.null;
       const btn = toolbar!.shadowRoot!.querySelector(`.remote-btn.${op}`);
       expect(btn, `the toolbar ${op} button`).to.not.be.null;
@@ -1148,7 +1148,7 @@ describe('app-shell remote-operation feedback', () => {
       it(`the toolbar ${op} button invokes ${op} through app-shell`, async () => {
         const el = await mountWithRemote();
         try {
-          await (el.shadowRoot!.querySelector('lv-toolbar') as any).updateComplete;
+          await (el.shadowRoot!.querySelector('gn-toolbar') as any).updateComplete;
           const btn = toolbarButton(el, op);
           expect(btn.disabled, `${op} is enabled on a repo with a remote`).to.be.false;
           btn.click();
@@ -1189,7 +1189,7 @@ describe('app-shell remote-operation feedback', () => {
         await (el as any).updateComplete;
         uiStore.setState({ toasts: [] });
         el.shadowRoot!
-          .querySelector('lv-toolbar')!
+          .querySelector('gn-toolbar')!
           .dispatchEvent(new CustomEvent('remote-fetch', { bubbles: true, composed: true }));
 
         await waitUntil(
@@ -1239,7 +1239,7 @@ describe('app-shell remote-operation feedback', () => {
 
     /** The dialog's own event, dispatched from the element that listens for it. */
     async function remotesChanged(el: AppShell): Promise<void> {
-      const dialog = el.shadowRoot!.querySelector('lv-remote-dialog');
+      const dialog = el.shadowRoot!.querySelector('gn-remote-dialog');
       expect(dialog, 'the Remotes dialog is mounted for the open repository').to.exist;
       dialog!.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
     }
@@ -1247,7 +1247,7 @@ describe('app-shell remote-operation feedback', () => {
     function fetchButton(el: AppShell): HTMLButtonElement | null {
       return (
         el.shadowRoot!
-          .querySelector('lv-toolbar')!
+          .querySelector('gn-toolbar')!
           .shadowRoot!.querySelector('.remote-btn.fetch') as HTMLButtonElement | null
       );
     }

@@ -62,15 +62,15 @@ async function setSecurity(
 
 async function openSettings(page: Page) {
   await page.keyboard.press('Meta+,');
-  await expect(page.locator('lv-settings-dialog')).toBeVisible();
+  await expect(page.locator('gn-settings-dialog')).toBeVisible();
 }
 
 function checkButton(page: Page) {
-  return page.locator('lv-settings-dialog .check-update-btn');
+  return page.locator('gn-settings-dialog .check-update-btn');
 }
 
 function updateError(page: Page) {
-  return page.locator('lv-settings-dialog .update-error');
+  return page.locator('gn-settings-dialog .update-error');
 }
 
 test.describe('Settings Dialog — the updater respects the network gate', () => {
@@ -119,7 +119,7 @@ test.describe('Settings Dialog — the updater respects the network gate', () =>
     await expect
       .poll(async () => (await findCommand(page, 'check_for_update')).length)
       .toBeGreaterThan(0);
-    await expect(page.locator('lv-settings-dialog .update-status.available')).toContainText('0.9.0');
+    await expect(page.locator('gn-settings-dialog .update-status.available')).toContainText('0.9.0');
     await expect(updateError(page)).toHaveCount(0);
   });
 
@@ -132,7 +132,7 @@ test.describe('Settings Dialog — the updater respects the network gate', () =>
     await expect
       .poll(async () => (await findCommand(page, 'check_for_update')).length)
       .toBeGreaterThan(0);
-    await expect(page.locator('lv-settings-dialog .update-status.available')).toContainText('0.9.0');
+    await expect(page.locator('gn-settings-dialog .update-status.available')).toContainText('0.9.0');
     await expect(updateError(page)).toHaveCount(0);
   });
 
@@ -167,7 +167,7 @@ test.describe('Settings Dialog — the updater respects the network gate', () =>
     await injectCommandError(
       page,
       'check_for_update',
-      'Remote "https://cdn.example.net/Leviathan.AppImage" is not in your allowlist',
+      'Remote "https://cdn.example.net/Gitnado.AppImage" is not in your allowlist',
       'BLOCKED',
     );
     await setSecurity(page, { remoteAllowlist: ['github.com'] });
@@ -177,7 +177,7 @@ test.describe('Settings Dialog — the updater respects the network gate', () =>
 
     await expect(updateError(page)).toBeVisible();
     await expect(updateError(page)).toContainText('cdn.example.net');
-    await expect(page.locator('lv-settings-dialog .update-status.available')).toHaveCount(0);
+    await expect(page.locator('gn-settings-dialog .update-status.available')).toHaveCount(0);
     await expect(checkButton(page)).toBeEnabled();
   });
 

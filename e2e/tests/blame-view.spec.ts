@@ -80,7 +80,7 @@ async function openBlameView(page: import('@playwright/test').Page): Promise<voi
   // (they are re-derived per refresh, not open-time context); the open flag
   // lives in the dialog store.
   await page.evaluate(() => {
-    const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
+    const appShell = document.querySelector('gn-app-shell') as HTMLElement & {
       blameFile: string | null;
       blameCommitOid: string | null;
     };
@@ -92,10 +92,10 @@ async function openBlameView(page: import('@playwright/test').Page): Promise<voi
   await openAppDialog(page, 'blame');
 
   // Wait for the blame view to become visible
-  await page.locator('lv-blame-view').waitFor({ state: 'visible', timeout: 5000 });
+  await page.locator('gn-blame-view').waitFor({ state: 'visible', timeout: 5000 });
 
   // Wait for blame data to load and render (the groups appear after loadBlame completes)
-  await page.locator('lv-blame-view .blame-group').first().waitFor({ state: 'visible', timeout: 5000 });
+  await page.locator('gn-blame-view .blame-group').first().waitFor({ state: 'visible', timeout: 5000 });
 }
 
 test.describe('Blame View', () => {
@@ -106,13 +106,13 @@ test.describe('Blame View', () => {
   test('renders blame lines with content after being opened', async ({ page }) => {
     await openBlameView(page);
 
-    const blameLines = page.locator('lv-blame-view .blame-line');
+    const blameLines = page.locator('gn-blame-view .blame-line');
     const count = await blameLines.count();
     // We have 4 lines in the mock data
     expect(count).toBe(4);
 
     // Verify line content is rendered
-    const firstLineContent = page.locator('lv-blame-view .blame-line .line-content').first();
+    const firstLineContent = page.locator('gn-blame-view .blame-line .line-content').first();
     await expect(firstLineContent).toBeVisible();
     await expect(firstLineContent).toContainText('import');
   });
@@ -121,12 +121,12 @@ test.describe('Blame View', () => {
     await openBlameView(page);
 
     // There should be 3 groups: Alice (lines 1-2), Bob (line 3), Charlie (line 4)
-    const groups = page.locator('lv-blame-view .blame-group');
+    const groups = page.locator('gn-blame-view .blame-group');
     const groupCount = await groups.count();
     expect(groupCount).toBe(3);
 
     // Check author names are visible
-    const authorNames = page.locator('lv-blame-view .author-name');
+    const authorNames = page.locator('gn-blame-view .author-name');
     await expect(authorNames.nth(0)).toContainText('Alice');
     await expect(authorNames.nth(1)).toContainText('Bob');
     await expect(authorNames.nth(2)).toContainText('Charlie');
@@ -135,7 +135,7 @@ test.describe('Blame View', () => {
   test('shows commit hash for each group', async ({ page }) => {
     await openBlameView(page);
 
-    const commitHashes = page.locator('lv-blame-view .commit-hash');
+    const commitHashes = page.locator('gn-blame-view .commit-hash');
     await expect(commitHashes.first()).toBeVisible();
     await expect(commitHashes.nth(0)).toContainText('abc123d');
     await expect(commitHashes.nth(1)).toContainText('def456a');
@@ -145,7 +145,7 @@ test.describe('Blame View', () => {
   test('shows line numbers for each blame line', async ({ page }) => {
     await openBlameView(page);
 
-    const lineNumbers = page.locator('lv-blame-view .line-number');
+    const lineNumbers = page.locator('gn-blame-view .line-number');
     const count = await lineNumbers.count();
     expect(count).toBe(4);
 
@@ -158,10 +158,10 @@ test.describe('Blame View', () => {
   test('opens context menu on right-click of a blame line', async ({ page }) => {
     await openBlameView(page);
 
-    const firstLine = page.locator('lv-blame-view .blame-line').first();
+    const firstLine = page.locator('gn-blame-view .blame-line').first();
     await firstLine.click({ button: 'right' });
 
-    const contextMenu = page.locator('lv-blame-view .context-menu');
+    const contextMenu = page.locator('gn-blame-view .context-menu');
     await contextMenu.waitFor({ state: 'visible' });
     await expect(contextMenu).toBeVisible();
   });
@@ -169,13 +169,13 @@ test.describe('Blame View', () => {
   test('context menu contains "Show commit details" option', async ({ page }) => {
     await openBlameView(page);
 
-    const firstLine = page.locator('lv-blame-view .blame-line').first();
+    const firstLine = page.locator('gn-blame-view .blame-line').first();
     await firstLine.click({ button: 'right' });
 
-    const contextMenu = page.locator('lv-blame-view .context-menu');
+    const contextMenu = page.locator('gn-blame-view .context-menu');
     await contextMenu.waitFor({ state: 'visible' });
 
-    const showCommitOption = page.locator('lv-blame-view .context-menu-item', {
+    const showCommitOption = page.locator('gn-blame-view .context-menu-item', {
       hasText: 'Show commit details',
     });
     await expect(showCommitOption).toBeVisible();
@@ -184,7 +184,7 @@ test.describe('Blame View', () => {
   test('Escape key closes the blame view', async ({ page }) => {
     await openBlameView(page);
 
-    const blameView = page.locator('lv-blame-view');
+    const blameView = page.locator('gn-blame-view');
     await expect(blameView).toBeVisible();
 
     // Press Escape - app-shell handles Escape to close blame
@@ -214,7 +214,7 @@ test.describe('Blame View - Error Scenarios', () => {
 
     // Show the blame view (triggers get_file_blame)
     await page.evaluate(() => {
-      const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
+      const appShell = document.querySelector('gn-app-shell') as HTMLElement & {
         blameFile: string | null;
         blameCommitOid: string | null;
       };
@@ -226,11 +226,11 @@ test.describe('Blame View - Error Scenarios', () => {
     await openAppDialog(page, 'blame');
 
     // Wait for the blame view to appear in the DOM
-    await page.locator('lv-blame-view').waitFor({ state: 'attached', timeout: 5000 });
+    await page.locator('gn-blame-view').waitFor({ state: 'attached', timeout: 5000 });
 
     // The error should be displayed — either an error element in the blame view or a toast
     await expect(
-      page.locator('.error, .error-banner, .toast, lv-blame-view .error-message').first()
+      page.locator('.error, .error-banner, .toast, gn-blame-view .error-message').first()
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -242,7 +242,7 @@ test.describe('Blame View - Error Scenarios', () => {
 
     // Show the blame view
     await page.evaluate(() => {
-      const appShell = document.querySelector('lv-app-shell') as HTMLElement & {
+      const appShell = document.querySelector('gn-app-shell') as HTMLElement & {
         blameFile: string | null;
         blameCommitOid: string | null;
       };
@@ -254,14 +254,14 @@ test.describe('Blame View - Error Scenarios', () => {
     await openAppDialog(page, 'blame');
 
     // Wait for the blame view to appear
-    await page.locator('lv-blame-view').waitFor({ state: 'attached', timeout: 5000 });
+    await page.locator('gn-blame-view').waitFor({ state: 'attached', timeout: 5000 });
 
     // Should show no blame groups since there are no lines
-    await expect(page.locator('lv-blame-view .blame-group')).toHaveCount(0);
+    await expect(page.locator('gn-blame-view .blame-group')).toHaveCount(0);
 
     // Should show an empty state message or at least no blame lines
-    const emptyState = page.locator('lv-blame-view .empty, lv-blame-view .empty-state, lv-blame-view .no-data');
-    const blameLines = page.locator('lv-blame-view .blame-line');
+    const emptyState = page.locator('gn-blame-view .empty, gn-blame-view .empty-state, gn-blame-view .no-data');
+    const blameLines = page.locator('gn-blame-view .blame-line');
 
     // Either an explicit empty state element is visible, or there are simply no blame lines
     const hasEmptyState = await emptyState.count() > 0;

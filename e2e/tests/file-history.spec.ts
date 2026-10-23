@@ -10,7 +10,7 @@ import {
 } from '../fixtures/test-helpers';
 
 /**
- * E2E tests for the File History Panel (lv-file-history).
+ * E2E tests for the File History Panel (gn-file-history).
  *
  * The panel is rendered by the app shell in the main area when the
  * `fileHistory` dialog is open with a file path. It loads commits
@@ -86,14 +86,14 @@ async function showFileHistory(
 ): Promise<void> {
   await openAppDialog(page, 'fileHistory', { filePath });
 
-  await page.locator('lv-file-history').waitFor({ state: 'attached', timeout: 5000 });
+  await page.locator('gn-file-history').waitFor({ state: 'attached', timeout: 5000 });
   await waitForCommand(page, 'get_file_history');
 }
 
 /** Open context menu on the first commit item */
 async function openContextMenu(page: import('@playwright/test').Page): Promise<void> {
-  await page.locator('lv-file-history .commit-item').first().click({ button: 'right' });
-  await expect(page.locator('lv-file-history .context-menu')).toBeVisible();
+  await page.locator('gn-file-history .commit-item').first().click({ button: 'right' });
+  await expect(page.locator('gn-file-history .context-menu')).toBeVisible();
 }
 
 // --------------------------------------------------------------------------
@@ -116,55 +116,55 @@ test.describe('File History - Commit List', () => {
   });
 
   test('should show "File History" in the header', async ({ page }) => {
-    await expect(page.locator('lv-file-history .header-title')).toHaveText('File History');
+    await expect(page.locator('gn-file-history .header-title')).toHaveText('File History');
   });
 
   test('should show the file path in the header', async ({ page }) => {
-    await expect(page.locator('lv-file-history .file-path')).toHaveText('src/main.ts');
+    await expect(page.locator('gn-file-history .file-path')).toHaveText('src/main.ts');
   });
 
   test('should show commit count badge', async ({ page }) => {
-    await expect(page.locator('lv-file-history .commit-count')).toHaveText('3 commits');
+    await expect(page.locator('gn-file-history .commit-count')).toHaveText('3 commits');
   });
 
   test('should display all commit entries', async ({ page }) => {
-    await expect(page.locator('lv-file-history .commit-item')).toHaveCount(3);
+    await expect(page.locator('gn-file-history .commit-item')).toHaveCount(3);
   });
 
   test('each commit should show short OID', async ({ page }) => {
-    const oids = page.locator('lv-file-history .commit-oid');
+    const oids = page.locator('gn-file-history .commit-oid');
     await expect(oids.nth(0)).toHaveText('abc123d');
     await expect(oids.nth(1)).toHaveText('def789g');
     await expect(oids.nth(2)).toHaveText('ghi345j');
   });
 
   test('each commit should show its summary', async ({ page }) => {
-    const summaries = page.locator('lv-file-history .commit-summary');
+    const summaries = page.locator('gn-file-history .commit-summary');
     await expect(summaries.nth(0)).toHaveText('Fix bug in file processing');
     await expect(summaries.nth(1)).toHaveText('Add new feature');
     await expect(summaries.nth(2)).toHaveText('Initial implementation');
   });
 
   test('each commit should show author name', async ({ page }) => {
-    const authors = page.locator('lv-file-history .commit-author');
+    const authors = page.locator('gn-file-history .commit-author');
     await expect(authors.nth(0)).toContainText('John Doe');
     await expect(authors.nth(1)).toContainText('Jane Smith');
     await expect(authors.nth(2)).toContainText('John Doe');
   });
 
   test('each commit should show a relative date', async ({ page }) => {
-    const dates = page.locator('lv-file-history .commit-date');
+    const dates = page.locator('gn-file-history .commit-date');
     await expect(dates.nth(0)).toContainText('Today');
     await expect(dates.nth(1)).toContainText('Yesterday');
     await expect(dates.nth(2)).toContainText('week');
   });
 
   test('each commit should have a View button', async ({ page }) => {
-    await expect(page.locator('lv-file-history .view-diff-btn')).toHaveCount(3);
+    await expect(page.locator('gn-file-history .view-diff-btn')).toHaveCount(3);
   });
 
   test('should have a close button in the header', async ({ page }) => {
-    await expect(page.locator('lv-file-history .close-btn')).toBeAttached();
+    await expect(page.locator('gn-file-history .close-btn')).toBeAttached();
   });
 });
 
@@ -181,23 +181,23 @@ test.describe('File History - Selection', () => {
   });
 
   test('clicking a commit should select it with .selected class', async ({ page }) => {
-    await page.locator('lv-file-history .commit-item').first().click();
-    await expect(page.locator('lv-file-history .commit-item.selected .commit-oid')).toHaveText('abc123d');
+    await page.locator('gn-file-history .commit-item').first().click();
+    await expect(page.locator('gn-file-history .commit-item.selected .commit-oid')).toHaveText('abc123d');
   });
 
   test('clicking a different commit should change selection', async ({ page }) => {
-    await page.locator('lv-file-history .commit-item').first().click();
-    await page.locator('lv-file-history .commit-item').nth(1).click();
+    await page.locator('gn-file-history .commit-item').first().click();
+    await page.locator('gn-file-history .commit-item').nth(1).click();
 
-    await expect(page.locator('lv-file-history .commit-item.selected .commit-oid')).toHaveText('def789g');
-    await expect(page.locator('lv-file-history .commit-item.selected')).toHaveCount(1);
+    await expect(page.locator('gn-file-history .commit-item.selected .commit-oid')).toHaveText('def789g');
+    await expect(page.locator('gn-file-history .commit-item.selected')).toHaveCount(1);
   });
 
   test('clicking a commit should dispatch commit-selected event', async ({ page }) => {
     // In the real app tree, commit-selected is handled by the app shell
     // to navigate to the commit in the graph. Verify the selection happens.
-    await page.locator('lv-file-history .commit-item').first().click();
-    await expect(page.locator('lv-file-history .commit-item.selected')).toHaveCount(1);
+    await page.locator('gn-file-history .commit-item').first().click();
+    await expect(page.locator('gn-file-history .commit-item.selected')).toHaveCount(1);
   });
 });
 
@@ -216,8 +216,8 @@ test.describe('File History - Close', () => {
   test('clicking close button should remove file history panel', async ({ page }) => {
     // In the real app tree, the close event is handled by the app shell
     // which closes the fileHistory dialog, removing the component from the DOM
-    await page.locator('lv-file-history .close-btn').click();
-    await expect(page.locator('lv-file-history')).not.toBeAttached();
+    await page.locator('gn-file-history .close-btn').click();
+    await expect(page.locator('gn-file-history')).not.toBeAttached();
   });
 });
 
@@ -235,7 +235,7 @@ test.describe('File History - View Diff', () => {
 
   test('clicking View button should dispatch view-diff event with commit oid and file path', async ({ page }) => {
     // Set up event capture on the panel element before clicking
-    const panelHandle = await page.locator('lv-file-history').elementHandle();
+    const panelHandle = await page.locator('gn-file-history').elementHandle();
     await page.evaluate((el) => {
       if (!el) return;
       (window as any).__viewDiffDetail__ = null;
@@ -245,7 +245,7 @@ test.describe('File History - View Diff', () => {
     }, panelHandle);
 
     // Click the View button using Playwright's auto-piercing locator
-    await page.locator('lv-file-history .view-diff-btn').first().click();
+    await page.locator('gn-file-history .view-diff-btn').first().click();
 
     // Wait for the event to be captured
     await page.waitForFunction(() => (window as any).__viewDiffDetail__ != null);
@@ -286,7 +286,7 @@ test.describe('File History - Renamed Files', () => {
   });
 
   test('View on a pre-rename entry diffs the old path, not the current one', async ({ page }) => {
-    await page.locator('lv-file-history .view-diff-btn').nth(2).click();
+    await page.locator('gn-file-history .view-diff-btn').nth(2).click();
 
     // The diff pane header shows the historical path the diff was taken for.
     await expect(page.locator('.diff-path')).toHaveText('src/old-main.ts');
@@ -300,7 +300,7 @@ test.describe('File History - Renamed Files', () => {
   });
 
   test('View on a post-rename entry still diffs the current path', async ({ page }) => {
-    await page.locator('lv-file-history .view-diff-btn').first().click();
+    await page.locator('gn-file-history .view-diff-btn').first().click();
 
     await expect(page.locator('.diff-path')).toHaveText('src/main.ts');
     await waitForCommand(page, 'get_commit_file_diff');
@@ -311,14 +311,14 @@ test.describe('File History - Renamed Files', () => {
   });
 
   test('View blame at this commit on a pre-rename entry blames the old path', async ({ page }) => {
-    await page.locator('lv-file-history .commit-item').nth(2).click({ button: 'right' });
-    await expect(page.locator('lv-file-history .context-menu')).toBeVisible();
+    await page.locator('gn-file-history .commit-item').nth(2).click({ button: 'right' });
+    await expect(page.locator('gn-file-history .context-menu')).toBeVisible();
     await page
-      .locator('lv-file-history .context-menu-item')
+      .locator('gn-file-history .context-menu-item')
       .filter({ hasText: 'View blame' })
       .click();
 
-    await expect(page.locator('lv-blame-view')).toBeAttached();
+    await expect(page.locator('gn-blame-view')).toBeAttached();
 
     await waitForCommand(page, 'get_file_blame');
     const commands = await findCommand(page, 'get_file_blame');
@@ -328,7 +328,7 @@ test.describe('File History - Renamed Files', () => {
   });
 
   test('the historical path is shown on pre-rename entries only', async ({ page }) => {
-    const items = page.locator('lv-file-history .commit-item');
+    const items = page.locator('gn-file-history .commit-item');
     await expect(items.nth(2).locator('.commit-path')).toHaveText('src/old-main.ts');
     await expect(items.nth(0).locator('.commit-path')).toHaveCount(0);
     await expect(items.nth(1).locator('.commit-path')).toHaveCount(0);
@@ -348,41 +348,41 @@ test.describe('File History - Context Menu', () => {
   });
 
   test('right-clicking a commit should show context menu', async ({ page }) => {
-    await page.locator('lv-file-history .commit-item').first().click({ button: 'right' });
-    await expect(page.locator('lv-file-history .context-menu')).toBeVisible();
+    await page.locator('gn-file-history .commit-item').first().click({ button: 'right' });
+    await expect(page.locator('gn-file-history .context-menu')).toBeVisible();
   });
 
   test('context menu should have "View diff" option', async ({ page }) => {
     await openContextMenu(page);
     await expect(
-      page.locator('lv-file-history .context-menu-item').filter({ hasText: 'View diff' })
+      page.locator('gn-file-history .context-menu-item').filter({ hasText: 'View diff' })
     ).toBeVisible();
   });
 
   test('context menu should have "Show commit details" option', async ({ page }) => {
     await openContextMenu(page);
     await expect(
-      page.locator('lv-file-history .context-menu-item').filter({ hasText: 'Show commit details' })
+      page.locator('gn-file-history .context-menu-item').filter({ hasText: 'Show commit details' })
     ).toBeVisible();
   });
 
   test('context menu should have "View blame at this commit" option', async ({ page }) => {
     await openContextMenu(page);
     await expect(
-      page.locator('lv-file-history .context-menu-item').filter({ hasText: 'View blame' })
+      page.locator('gn-file-history .context-menu-item').filter({ hasText: 'View blame' })
     ).toBeVisible();
   });
 
   test('context menu should have "Copy commit hash" option', async ({ page }) => {
     await openContextMenu(page);
     await expect(
-      page.locator('lv-file-history .context-menu-item').filter({ hasText: 'Copy commit hash' })
+      page.locator('gn-file-history .context-menu-item').filter({ hasText: 'Copy commit hash' })
     ).toBeVisible();
   });
 
   test('context menu should have a divider separating Copy from other options', async ({ page }) => {
     await openContextMenu(page);
-    await expect(page.locator('lv-file-history .context-menu-divider')).toBeAttached();
+    await expect(page.locator('gn-file-history .context-menu-divider')).toBeAttached();
   });
 });
 
@@ -399,15 +399,15 @@ test.describe('File History - Empty State', () => {
   });
 
   test('should show "No history found for this file" when no commits exist', async ({ page }) => {
-    await expect(page.locator('lv-file-history .empty')).toHaveText('No history found for this file');
+    await expect(page.locator('gn-file-history .empty')).toHaveText('No history found for this file');
   });
 
   test('should show "0 commits" count when empty', async ({ page }) => {
-    await expect(page.locator('lv-file-history .commit-count')).toHaveText('0 commits');
+    await expect(page.locator('gn-file-history .commit-count')).toHaveText('0 commits');
   });
 
   test('should not show any commit items', async ({ page }) => {
-    await expect(page.locator('lv-file-history .commit-item')).toHaveCount(0);
+    await expect(page.locator('gn-file-history .commit-item')).toHaveCount(0);
   });
 });
 
@@ -424,7 +424,7 @@ test.describe('File History - Loading State', () => {
 
   test('should display file path provided via property', async ({ page }) => {
     await showFileHistory(page, 'src/utils/helpers.ts');
-    await expect(page.locator('lv-file-history .file-path')).toHaveText('src/utils/helpers.ts');
+    await expect(page.locator('gn-file-history .file-path')).toHaveText('src/utils/helpers.ts');
   });
 });
 
@@ -495,9 +495,9 @@ const HISTORY_DIFF = {
 
 /** Select a commit by dispatching commit-selected on the graph canvas. */
 async function selectHistoryCommit(page: import('@playwright/test').Page): Promise<void> {
-  const handle = await page.locator('lv-graph-canvas').elementHandle();
+  const handle = await page.locator('gn-graph-canvas').elementHandle();
   await page.evaluate(([el, commitData]) => {
-    if (!el) throw new Error('lv-graph-canvas not found');
+    if (!el) throw new Error('gn-graph-canvas not found');
     el.dispatchEvent(
       new CustomEvent('commit-selected', {
         detail: { commit: commitData, commits: [commitData], refs: [] },
@@ -507,7 +507,7 @@ async function selectHistoryCommit(page: import('@playwright/test').Page): Promi
     );
   }, [handle, HISTORY_COMMIT] as const);
 
-  await page.locator('lv-commit-details .commit-message').waitFor({ state: 'visible', timeout: 5000 });
+  await page.locator('gn-commit-details .commit-message').waitFor({ state: 'visible', timeout: 5000 });
 }
 
 test.describe('File History - opening over another center-pane view', () => {
@@ -533,45 +533,45 @@ test.describe('File History - opening over another center-pane view', () => {
   });
 
   test('the History button replaces an open diff instead of doing nothing', async ({ page }) => {
-    const fileRow = page.locator('lv-commit-details .file-item').first();
+    const fileRow = page.locator('gn-commit-details .file-item').first();
     await fileRow.click();
-    await expect(page.locator('lv-diff-view')).toBeVisible();
+    await expect(page.locator('gn-diff-view')).toBeVisible();
 
     await fileRow.hover();
     await fileRow.locator('button[title="View file history"]').click();
 
-    await expect(page.locator('lv-file-history')).toBeVisible();
-    await expect(page.locator('lv-diff-view')).toHaveCount(0);
+    await expect(page.locator('gn-file-history')).toBeVisible();
+    await expect(page.locator('gn-diff-view')).toHaveCount(0);
   });
 
   test('the History button replaces an open blame view', async ({ page }) => {
-    const fileRow = page.locator('lv-commit-details .file-item').first();
+    const fileRow = page.locator('gn-commit-details .file-item').first();
     await fileRow.hover();
     await fileRow.locator('button[title="View file blame"]').click();
-    await expect(page.locator('lv-blame-view')).toBeVisible();
+    await expect(page.locator('gn-blame-view')).toBeVisible();
 
     await fileRow.hover();
     await fileRow.locator('button[title="View file history"]').click();
 
-    await expect(page.locator('lv-file-history')).toBeVisible();
-    await expect(page.locator('lv-blame-view')).toHaveCount(0);
+    await expect(page.locator('gn-file-history')).toBeVisible();
+    await expect(page.locator('gn-blame-view')).toHaveCount(0);
   });
 
   test('Escape after opening history does not resurrect the diff', async ({ page }) => {
-    const fileRow = page.locator('lv-commit-details .file-item').first();
+    const fileRow = page.locator('gn-commit-details .file-item').first();
     await fileRow.click();
-    await expect(page.locator('lv-diff-view')).toBeVisible();
+    await expect(page.locator('gn-diff-view')).toBeVisible();
 
     await fileRow.hover();
     await fileRow.locator('button[title="View file history"]').click();
-    await expect(page.locator('lv-file-history')).toBeVisible();
+    await expect(page.locator('gn-file-history')).toBeVisible();
 
     await page.keyboard.press('Escape');
 
     // One Escape closes the one view that is open — it must not uncover a
     // history pane the user asked for minutes ago.
-    await expect(page.locator('lv-file-history')).toHaveCount(0);
-    await expect(page.locator('lv-diff-view')).toHaveCount(0);
+    await expect(page.locator('gn-file-history')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view')).toHaveCount(0);
   });
 
   test('picking another file closes history, and closing that diff does not bring it back', async ({
@@ -581,20 +581,20 @@ test.describe('File History - opening over another center-pane view', () => {
     // moves on to a different file. The diff outranks history, so a stale
     // history pane stays invisible until the diff closes — and then it
     // ambushes the user with the file they left behind.
-    const rows = page.locator('lv-commit-details .file-item');
+    const rows = page.locator('gn-commit-details .file-item');
     const first = rows.first();
     await first.hover();
     await first.locator('button[title="View file history"]').click();
-    await expect(page.locator('lv-file-history')).toBeVisible();
+    await expect(page.locator('gn-file-history')).toBeVisible();
 
     await rows.nth(1).click();
-    await expect(page.locator('lv-diff-view')).toBeVisible();
-    await expect(page.locator('lv-file-history')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view')).toBeVisible();
+    await expect(page.locator('gn-file-history')).toHaveCount(0);
 
     await page.keyboard.press('Escape');
 
-    await expect(page.locator('lv-diff-view')).toHaveCount(0);
-    await expect(page.locator('lv-file-history')).toHaveCount(0);
+    await expect(page.locator('gn-diff-view')).toHaveCount(0);
+    await expect(page.locator('gn-file-history')).toHaveCount(0);
   });
 });
 
@@ -619,11 +619,11 @@ test.describe('File History - Error Scenarios', () => {
     await openAppDialog(page, 'fileHistory', { filePath: 'src/main.ts' });
 
     // Wait for the file history panel to appear in the DOM
-    await page.locator('lv-file-history').waitFor({ state: 'attached', timeout: 5000 });
+    await page.locator('gn-file-history').waitFor({ state: 'attached', timeout: 5000 });
 
     // The error should be displayed — either an error element in the panel or a toast
     await expect(
-      page.locator('.error, .error-banner, .toast, lv-file-history .error-message').first()
+      page.locator('.error, .error-banner, .toast, gn-file-history .error-message').first()
     ).toBeVisible({ timeout: 5000 });
   });
 });
@@ -633,7 +633,7 @@ test.describe('File History - Error Scenarios', () => {
 // --------------------------------------------------------------------------
 test.describe('File History - Restore this version', () => {
   const restoreItem = (page: import('@playwright/test').Page) =>
-    page.locator('lv-file-history .context-menu .context-menu-item', {
+    page.locator('gn-file-history .context-menu .context-menu-item', {
       hasText: 'Restore this version',
     });
 
@@ -655,7 +655,7 @@ test.describe('File History - Restore this version', () => {
 
   test('restores the panel file from the right-clicked history entry', async ({ page }) => {
     // Second row: the file comes from the panel, the version from this commit.
-    await page.locator('lv-file-history .commit-item').nth(1).click({ button: 'right' });
+    await page.locator('gn-file-history .commit-item').nth(1).click({ button: 'right' });
     await expect(restoreItem(page)).toBeVisible();
     await restoreItem(page).click();
 
@@ -669,7 +669,7 @@ test.describe('File History - Restore this version', () => {
     expect(args.filePath).toBe('src/main.ts');
     expect(args.commit).toBe('def789ghi012345');
 
-    const toast = page.locator('lv-toast-container .toast.success .toast-message');
+    const toast = page.locator('gn-toast-container .toast.success .toast-message');
     await expect(toast).toBeVisible();
     await expect(toast).toContainText('src/main.ts');
   });
@@ -681,10 +681,10 @@ test.describe('File History - Restore this version', () => {
       "File 'src/main.ts' not found in commit def789g"
     );
 
-    await page.locator('lv-file-history .commit-item').nth(1).click({ button: 'right' });
+    await page.locator('gn-file-history .commit-item').nth(1).click({ button: 'right' });
     await restoreItem(page).click();
 
-    const toast = page.locator('lv-toast-container .toast.error .toast-message');
+    const toast = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toast).toBeVisible();
     await expect(toast).toContainText('not found in commit');
   });

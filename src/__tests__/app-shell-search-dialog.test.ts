@@ -35,7 +35,7 @@ interface PaletteCommand {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 function createAppShell(withRepo: boolean): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   (el as any).activeRepository = withRepo
     ? {
         repository: { path: '/repo/a', name: 'a' },
@@ -105,7 +105,7 @@ describe('app-shell search dialog wiring', () => {
     getCommand(el, 'search-in-files').action();
     await (el as any).updateComplete;
 
-    const dialog = el.shadowRoot!.querySelector('lv-search-dialog');
+    const dialog = el.shadowRoot!.querySelector('gn-search-dialog');
     expect(dialog === null, 'the search dialog is rendered').to.be.false;
     dialog!.dispatchEvent(
       new CustomEvent('mode-changed', {

@@ -277,7 +277,7 @@ test.describe('Stash Context Menu - Error Handling', () => {
     await expect(applyOption).toBeVisible();
     await applyOption.click();
 
-    const errorToast = page.locator('lv-toast-container .toast.error').first();
+    const errorToast = page.locator('gn-toast-container .toast.error').first();
     await expect(errorToast).toBeVisible({ timeout: 5000 });
     await expect(errorToast).toContainText('Apply failed');
   });
@@ -296,7 +296,7 @@ test.describe('Stash Context Menu - Error Handling', () => {
     await expect(popOption).toBeVisible();
     await popOption.click();
 
-    const errorToast = page.locator('lv-toast-container .toast.error').first();
+    const errorToast = page.locator('gn-toast-container .toast.error').first();
     await expect(errorToast).toBeVisible({ timeout: 5000 });
     await expect(errorToast).toContainText('Pop failed');
   });
@@ -317,7 +317,7 @@ test.describe('Stash Context Menu - Error Handling', () => {
     await expect(dropOption).toBeVisible();
     await dropOption.click();
 
-    const errorToast = page.locator('lv-toast-container .toast.error').first();
+    const errorToast = page.locator('gn-toast-container .toast.error').first();
     await expect(errorToast).toBeVisible({ timeout: 5000 });
     await expect(errorToast).toContainText('Drop failed');
   });
@@ -394,10 +394,10 @@ test.describe('Stash Context Menu - Extended Tests', () => {
     // tree and the resolution dialog is about to open. A red toast beside it
     // reads as "nothing happened" — the same reason pull, the dashboard and
     // every auto-stash path warn instead.
-    const warnToast = page.locator('lv-toast-container .toast.warning').first();
+    const warnToast = page.locator('gn-toast-container .toast.warning').first();
     await expect(warnToast).toBeVisible({ timeout: 5000 });
     await expect(warnToast).toContainText(/applied/i);
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
 
     // Apply (unlike pop) keeps the entry, so the list is unchanged.
     const stashCount = await leftPanel.getStashCount();
@@ -546,12 +546,12 @@ test.describe('Stash creation', () => {
   test('naming a stash sends the message to create_stash', async ({ page }) => {
     await leftPanel.expandStashes();
 
-    await page.locator('lv-stash-list .stash-btn').click();
+    await page.locator('gn-stash-list .stash-btn').click();
 
-    const promptInput = page.locator('lv-prompt-dialog .prompt-input');
+    const promptInput = page.locator('gn-prompt-dialog .prompt-input');
     await expect(promptInput).toBeVisible();
     await promptInput.fill('fix parser');
-    await page.locator('lv-prompt-dialog .btn-primary').click();
+    await page.locator('gn-prompt-dialog .btn-primary').click();
 
     await expect
       .poll(async () => (await findCommand(page, 'create_stash')).length)
@@ -560,18 +560,18 @@ test.describe('Stash creation', () => {
     const calls = await findCommand(page, 'create_stash');
     expect((calls[0].args as { message?: string }).message).toBe('fix parser');
 
-    await expect(page.locator('lv-toast-container .toast.success')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.success')).toBeVisible();
   });
 
   test('cancelling the prompt creates no stash', async ({ page }) => {
     await leftPanel.expandStashes();
     expect(await leftPanel.getStashCount()).toBe(3);
 
-    await page.locator('lv-stash-list .stash-btn').click();
+    await page.locator('gn-stash-list .stash-btn').click();
 
-    await expect(page.locator('lv-prompt-dialog .prompt-input')).toBeVisible();
-    await page.locator('lv-prompt-dialog .btn-secondary').click();
-    await expect(page.locator('lv-prompt-dialog .prompt-input')).toBeHidden();
+    await expect(page.locator('gn-prompt-dialog .prompt-input')).toBeVisible();
+    await page.locator('gn-prompt-dialog .btn-secondary').click();
+    await expect(page.locator('gn-prompt-dialog .prompt-input')).toBeHidden();
 
     expect(await findCommand(page, 'create_stash')).toHaveLength(0);
     expect(await leftPanel.getStashCount()).toBe(3);

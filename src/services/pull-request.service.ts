@@ -1,7 +1,7 @@
 /**
  * Shared hosting-provider pull/merge request access for the sidebar.
  *
- * The four provider dialogs (`lv-github-dialog` and friends) each own a full
+ * The four provider dialogs (`gn-github-dialog` and friends) each own a full
  * account picker, connection flow and create form. This module is deliberately
  * NOT another copy of that: it is the thin, read-only slice the sidebar needs —
  * "which provider is this repository on", "what token do we have for it", and
@@ -226,7 +226,7 @@ export async function getProviderToken(
       const account = getActiveProfilePreferredAccount('gitlab');
       if (!account) return null;
       // Refresh against the instance the ACCOUNT was created on, never the
-      // detected repo's instance — same guard as lv-gitlab-dialog.
+      // detected repo's instance — same guard as gn-gitlab-dialog.
       const stored = getAccountById(account.id);
       const instanceUrl =
         stored?.config.type === 'gitlab' ? stored.config.instanceUrl : undefined;

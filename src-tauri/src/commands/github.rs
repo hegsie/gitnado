@@ -483,7 +483,7 @@ fn should_fetch_more_issues(collected: usize, per_page: u32, fetches: u32) -> bo
 
 /// Default page size for the account repository listing.
 ///
-/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in gn-account-repo-picker.ts, which
 /// discloses it to the user ("Showing the first N …").
 const REPOSITORIES_DEFAULT_PER_PAGE: u32 = 30;
 

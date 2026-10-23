@@ -18,7 +18,7 @@ test.describe('Search Bar', () => {
     await searchButton.click();
 
     // Search bar should appear
-    const searchBar = page.locator('lv-search-bar');
+    const searchBar = page.locator('gn-search-bar');
     await expect(searchBar).toBeVisible();
 
     // Click again to close
@@ -30,7 +30,7 @@ test.describe('Search Bar', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await expect(searchInput).toBeFocused();
   });
 
@@ -38,7 +38,7 @@ test.describe('Search Bar', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('fix bug');
 
     // Wait for debounce and verify input value
@@ -49,7 +49,7 @@ test.describe('Search Bar', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('test query');
     await expect(searchInput).toHaveValue('test query');
 
@@ -61,10 +61,10 @@ test.describe('Search Bar', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('test');
 
-    const clearButton = page.locator('lv-search-bar .clear-btn, lv-search-bar button[title*="Clear"]');
+    const clearButton = page.locator('gn-search-bar .clear-btn, gn-search-bar button[title*="Clear"]');
     await expect(clearButton).toBeVisible();
   });
 
@@ -72,10 +72,10 @@ test.describe('Search Bar', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('test query');
 
-    const clearButton = page.locator('lv-search-bar .clear-btn, lv-search-bar button[title*="Clear"]');
+    const clearButton = page.locator('gn-search-bar .clear-btn, gn-search-bar button[title*="Clear"]');
     await clearButton.click();
 
     await expect(searchInput).toHaveValue('');
@@ -92,68 +92,68 @@ test.describe('Search Bar Filters', () => {
 
   test('should toggle filter panel when clicking filter button', async ({ page }) => {
     // The filter button may be identified by various selectors
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await expect(filterButton).toBeVisible();
     await filterButton.click();
 
     // Filter panel should appear with author input visible
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await expect(authorInput).toBeVisible();
   });
 
   test('should have author filter input', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await expect(authorInput).toBeVisible();
     await authorInput.fill('john@example.com');
     await expect(authorInput).toHaveValue('john@example.com');
   });
 
   test('should have date range filters', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const dateFromInput = page.locator('lv-search-bar input[type="date"]').first();
-    const dateToInput = page.locator('lv-search-bar input[type="date"]').last();
+    const dateFromInput = page.locator('gn-search-bar input[type="date"]').first();
+    const dateToInput = page.locator('gn-search-bar input[type="date"]').last();
 
     await expect(dateFromInput).toBeVisible();
     await expect(dateToInput).toBeVisible();
   });
 
   test('should have file path filter', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const filePathInput = page.locator('lv-search-bar input[placeholder*="path"], lv-search-bar input[placeholder*=".ts"]');
+    const filePathInput = page.locator('gn-search-bar input[placeholder*="path"], gn-search-bar input[placeholder*=".ts"]');
     await expect(filePathInput).toBeVisible();
     await filePathInput.fill('src/**/*.ts');
     await expect(filePathInput).toHaveValue('src/**/*.ts');
   });
 
   test('should have Apply button in filter panel', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const applyButton = page.locator('lv-search-bar button', { hasText: /apply/i });
+    const applyButton = page.locator('gn-search-bar button', { hasText: /apply/i });
     await expect(applyButton).toBeVisible();
   });
 
   test('should have Clear Filters button', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const clearFiltersButton = page.locator('lv-search-bar button', { hasText: /clear.*filter/i });
+    const clearFiltersButton = page.locator('gn-search-bar button', { hasText: /clear.*filter/i });
     await expect(clearFiltersButton).toBeVisible();
   });
 
   test('should close filter panel when clicking Apply', async ({ page }) => {
     // Open filter panel first
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const applyButton = page.locator('lv-search-bar button', { hasText: /apply/i });
+    const applyButton = page.locator('gn-search-bar button', { hasText: /apply/i });
     await expect(applyButton).toBeVisible();
 
     await applyButton.click();
@@ -162,29 +162,29 @@ test.describe('Search Bar Filters', () => {
   });
 
   test('should clear all filter values when clicking Clear Filters', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
     // Fill in filters
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await authorInput.fill('test@example.com');
 
-    const clearFiltersButton = page.locator('lv-search-bar button', { hasText: /clear.*filter/i });
+    const clearFiltersButton = page.locator('gn-search-bar button', { hasText: /clear.*filter/i });
     await clearFiltersButton.click();
 
     await expect(authorInput).toHaveValue('');
   });
 
   test('filter button should show active state when filters are set', async ({ page }) => {
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
     // Set a filter
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await authorInput.fill('test@example.com');
 
     // Apply filters
-    const applyButton = page.locator('lv-search-bar button', { hasText: /apply/i });
+    const applyButton = page.locator('gn-search-bar button', { hasText: /apply/i });
     await applyButton.click();
 
     // Filter button should have active class
@@ -200,7 +200,7 @@ test.describe('Search Bar Keyboard Shortcuts', () => {
   test('should open search with Ctrl+F', async ({ page }) => {
     await page.keyboard.press('Control+f');
 
-    const searchBar = page.locator('lv-search-bar');
+    const searchBar = page.locator('gn-search-bar');
     await expect(searchBar).toBeVisible();
   });
 
@@ -208,7 +208,7 @@ test.describe('Search Bar Keyboard Shortcuts', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('bug fix');
     await searchInput.press('Enter');
 
@@ -262,7 +262,7 @@ test.describe('Search Query Filtering', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('fix');
     await searchInput.press('Enter');
 
@@ -273,7 +273,7 @@ test.describe('Search Query Filtering', () => {
     const searchButton = page.locator('button[title*="Search commits"]');
     await searchButton.click();
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
 
     // Enter a search query
     await searchInput.fill('fix');
@@ -283,7 +283,7 @@ test.describe('Search Query Filtering', () => {
     await expect(searchInput).toHaveValue('');
 
     // The graph canvas should still be visible (full list restored)
-    const graph = page.locator('lv-graph-canvas');
+    const graph = page.locator('gn-graph-canvas');
     await expect(graph).toBeVisible();
   });
 
@@ -296,22 +296,22 @@ test.describe('Search Query Filtering', () => {
       get_commit_history: [],
     });
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('zzzznonexistentquery12345');
     await searchInput.press('Enter');
 
     await expect(searchInput).toHaveValue('zzzznonexistentquery12345');
 
     // Graph canvas should still be visible (not crashed) even with zero results
-    const graph = page.locator('lv-graph-canvas');
+    const graph = page.locator('gn-graph-canvas');
     await expect(graph).toBeVisible();
 
     // Search bar should remain visible and functional for a new search
-    const searchBar = page.locator('lv-search-bar');
+    const searchBar = page.locator('gn-search-bar');
     await expect(searchBar).toBeVisible();
 
     // Clear button should be visible since there is a query
-    const clearButton = page.locator('lv-search-bar .clear-btn, lv-search-bar button[title*="Clear"]');
+    const clearButton = page.locator('gn-search-bar .clear-btn, gn-search-bar button[title*="Clear"]');
     await expect(clearButton).toBeVisible();
   });
 
@@ -321,7 +321,7 @@ test.describe('Search Query Filtering', () => {
 
     await startCommandCapture(page);
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('dashboard');
     await searchInput.press('Enter');
 
@@ -336,16 +336,16 @@ test.describe('Search Query Filtering', () => {
     await searchButton.click();
 
     // Open filters
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await authorInput.fill('user@test.com');
 
     await startCommandCapture(page);
 
     // Apply filters
-    const applyButton = page.locator('lv-search-bar button', { hasText: /apply/i });
+    const applyButton = page.locator('gn-search-bar button', { hasText: /apply/i });
     await applyButton.click();
 
     await expect(filterButton).toHaveClass(/active/);
@@ -353,10 +353,10 @@ test.describe('Search Query Filtering', () => {
 
   /**
    * Apply a graph search filter through the same `search-change` contract
-   * lv-toolbar emits when the user clicks Apply in the filter panel.
+   * gn-toolbar emits when the user clicks Apply in the filter panel.
    *
    * NOTE: this does not type into the search bar because of a separate
-   * pre-existing defect — lv-search-bar's `search-change` is `composed`, so
+   * pre-existing defect — gn-search-bar's `search-change` is `composed`, so
    * app-shell receives both the toolbar's `{ filter }` event and the search
    * bar's own raw-filter event, and the raw one arrives last leaving
    * app-shell's searchFilter `undefined`. Emitting the toolbar's contract
@@ -369,7 +369,7 @@ test.describe('Search Query Filtering', () => {
     await page.evaluate((f) => {
       const findToolbar = (root: Document | ShadowRoot): Element | null => {
         for (const el of Array.from(root.querySelectorAll('*'))) {
-          if (el.tagName.toLowerCase() === 'lv-toolbar') return el;
+          if (el.tagName.toLowerCase() === 'gn-toolbar') return el;
           if (el.shadowRoot) {
             const found = findToolbar(el.shadowRoot);
             if (found) return found;
@@ -378,7 +378,7 @@ test.describe('Search Query Filtering', () => {
         return null;
       };
       const toolbar = findToolbar(document);
-      if (!toolbar) throw new Error('lv-toolbar not found');
+      if (!toolbar) throw new Error('gn-toolbar not found');
       toolbar.dispatchEvent(
         new CustomEvent('search-change', { detail: { filter: f }, bubbles: true, composed: true })
       );
@@ -437,7 +437,7 @@ test.describe('Search Query Filtering', () => {
     await applyGraphFilter(page, pathFilter);
 
     await expect(
-      page.locator('lv-toast-container .toast .toast-message', {
+      page.locator('gn-toast-container .toast .toast-message', {
         hasText: 'Search failed',
       })
     ).toBeVisible();
@@ -471,17 +471,17 @@ test.describe('Search Bar - Error Scenarios', () => {
     // Inject error for get_commit_history
     await injectCommandError(page, 'get_commit_history', 'Search failed');
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('fix');
     await searchInput.press('Enter');
 
     // The app should show an error indicator (the graph renders errors in an .info-panel)
     // or a toast notification rather than crashing
-    const errorIndicator = page.locator('lv-graph-canvas .info-panel, lv-toast-container .toast.error, .error-message, .error-banner').first();
+    const errorIndicator = page.locator('gn-graph-canvas .info-panel, gn-toast-container .toast.error, .error-message, .error-banner').first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
 
     // Search bar should remain visible and functional after the error
-    const searchBar = page.locator('lv-search-bar');
+    const searchBar = page.locator('gn-search-bar');
     await expect(searchBar).toBeVisible();
 
     // Search input should still contain the query so the user can retry
@@ -498,23 +498,23 @@ test.describe('Search Bar - Error Scenarios', () => {
     await searchButton.click();
 
     // Open filter panel
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
     // Enter an extremely long author value (edge case)
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await authorInput.fill('a'.repeat(500));
 
     // Apply filters - this should not crash the app
-    const applyButton = page.locator('lv-search-bar button', { hasText: /apply/i });
+    const applyButton = page.locator('gn-search-bar button', { hasText: /apply/i });
     await applyButton.click();
 
     // The search bar should still be functional (not crashed)
-    const searchBar = page.locator('lv-search-bar');
+    const searchBar = page.locator('gn-search-bar');
     await expect(searchBar).toBeVisible();
 
     // The search input should still be interactable
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('test');
     await expect(searchInput).toHaveValue('test');
   });
@@ -526,7 +526,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
    * Uses Playwright's auto-piercing locator instead of manual shadowRoot traversal.
    */
   async function getGraphNodeCount(page: import('@playwright/test').Page): Promise<number> {
-    const graphCanvas = page.locator('lv-graph-canvas');
+    const graphCanvas = page.locator('gn-graph-canvas');
     await expect(graphCanvas).toBeAttached();
     const handle = await graphCanvas.elementHandle();
     return page.evaluate(
@@ -540,7 +540,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
    * Uses Playwright's auto-piercing locator instead of manual shadowRoot traversal.
    */
   async function waitForGraphNodeCount(page: import('@playwright/test').Page, count: number): Promise<void> {
-    const graphCanvas = page.locator('lv-graph-canvas');
+    const graphCanvas = page.locator('gn-graph-canvas');
     await expect(graphCanvas).toBeAttached();
     const handle = await graphCanvas.elementHandle();
     await page.waitForFunction(
@@ -591,7 +591,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
     await setupOpenRepository(page, { commits: threeCommits });
 
     // Wait for graph to render all 3 commits
-    const graphCanvas = page.locator('lv-graph-canvas');
+    const graphCanvas = page.locator('gn-graph-canvas');
     await expect(graphCanvas).toBeVisible();
     await waitForGraphNodeCount(page, 3);
 
@@ -606,7 +606,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
       get_commit_history: fixCommits,
     });
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('fix');
     await searchInput.press('Enter');
 
@@ -619,7 +619,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
   test('applying author filter updates the graph to reflect filtered results', async ({ page }) => {
     await setupOpenRepository(page, { commits: threeCommits });
 
-    const graphCanvas = page.locator('lv-graph-canvas');
+    const graphCanvas = page.locator('gn-graph-canvas');
     await expect(graphCanvas).toBeVisible();
     await waitForGraphNodeCount(page, 3);
 
@@ -628,11 +628,11 @@ test.describe('Search Bar - UI Outcome Verification', () => {
     await searchButton.click();
 
     // Open filters
-    const filterButton = page.locator('lv-search-bar .filter-btn, lv-search-bar button[title*="Filter"]');
+    const filterButton = page.locator('gn-search-bar .filter-btn, gn-search-bar button[title*="Filter"]');
     await filterButton.click();
 
     // Set author filter
-    const authorInput = page.locator('lv-search-bar input[placeholder*="Author"]');
+    const authorInput = page.locator('gn-search-bar input[placeholder*="Author"]');
     await authorInput.fill('alice@test.com');
 
     // Mock the backend to return only Alice's commits
@@ -642,7 +642,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
     });
 
     // Apply filter
-    const applyButton = page.locator('lv-search-bar button', { hasText: /apply/i });
+    const applyButton = page.locator('gn-search-bar button', { hasText: /apply/i });
     await applyButton.click();
 
     // Filter button should show active state
@@ -657,7 +657,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
   test('search for non-existent term shows empty graph state', async ({ page }) => {
     await setupOpenRepository(page, { commits: threeCommits });
 
-    const graphCanvas = page.locator('lv-graph-canvas');
+    const graphCanvas = page.locator('gn-graph-canvas');
     await expect(graphCanvas).toBeVisible();
     await waitForGraphNodeCount(page, 3);
 
@@ -670,7 +670,7 @@ test.describe('Search Bar - UI Outcome Verification', () => {
       get_commit_history: [],
     });
 
-    const searchInput = page.locator('lv-search-bar input[type="text"]').first();
+    const searchInput = page.locator('gn-search-bar input[type="text"]').first();
     await searchInput.fill('zzzznonexistentquery12345');
     await searchInput.press('Enter');
 
@@ -694,9 +694,9 @@ test.describe('Semantic Search Fallback', () => {
    * Apply a semantic-mode filter to the graph canvas.
    *
    * NOTE: this deliberately sets the same `.searchFilter` property app-shell's
-   * template binds, instead of typing into the search bar. lv-search-bar's
+   * template binds, instead of typing into the search bar. gn-search-bar's
    * `search-change` event is `composed`, so app-shell's listener on
-   * <lv-toolbar> receives BOTH the toolbar's re-dispatched `{ filter }` event
+   * <gn-toolbar> receives BOTH the toolbar's re-dispatched `{ filter }` event
    * and the search bar's own raw-filter event; the raw one arrives last and
    * leaves app-shell's searchFilter `undefined`. That plumbing defect is out
    * of scope here — driving the canvas property directly still exercises the
@@ -704,11 +704,11 @@ test.describe('Semantic Search Fallback', () => {
    */
   async function applySemanticFilter(page: import('@playwright/test').Page, query: string): Promise<void> {
     await page.evaluate((q) => {
-      const shell = document.querySelector('lv-app-shell');
-      const canvas = shell?.shadowRoot?.querySelector('lv-graph-canvas') as unknown as {
+      const shell = document.querySelector('gn-app-shell');
+      const canvas = shell?.shadowRoot?.querySelector('gn-graph-canvas') as unknown as {
         searchFilter: Record<string, string> | null;
       } | null;
-      if (!canvas) throw new Error('lv-graph-canvas not found');
+      if (!canvas) throw new Error('gn-graph-canvas not found');
       canvas.searchFilter = {
         query: q,
         author: '',
@@ -722,7 +722,7 @@ test.describe('Semantic Search Fallback', () => {
   }
 
   test('semantic search failure shows keyword results and an unavailable toast', async ({ page }) => {
-    await expect(page.locator('lv-graph-canvas')).toBeVisible();
+    await expect(page.locator('gn-graph-canvas')).toBeVisible();
     await startCommandCaptureWithMocks(page, {
       semantic_search: { __error__: 'Embedding model not downloaded' },
       search_commits: [defaultMockData.commits[0]],
@@ -732,7 +732,7 @@ test.describe('Semantic Search Fallback', () => {
 
     // The failure must be announced, not silently read as "no matches"
     await expect(
-      page.locator('lv-toast-container .toast .toast-message', {
+      page.locator('gn-toast-container .toast .toast-message', {
         hasText: 'Semantic search is unavailable',
       })
     ).toBeVisible();
@@ -744,7 +744,7 @@ test.describe('Semantic Search Fallback', () => {
   });
 
   test('successful semantic search neither falls back nor toasts', async ({ page }) => {
-    await expect(page.locator('lv-graph-canvas')).toBeVisible();
+    await expect(page.locator('gn-graph-canvas')).toBeVisible();
     await startCommandCaptureWithMocks(page, {
       semantic_search: [
         { oid: defaultMockData.commits[0].oid, distance: 0.1, summary: 'Initial commit' },
@@ -759,7 +759,7 @@ test.describe('Semantic Search Fallback', () => {
     await waitForCommand(page, 'get_commit_total');
 
     await expect(
-      page.locator('lv-toast-container .toast .toast-message', {
+      page.locator('gn-toast-container .toast .toast-message', {
         hasText: 'Semantic search is unavailable',
       })
     ).toHaveCount(0);

@@ -50,7 +50,7 @@ test.describe('file watcher failure feedback', () => {
 
     await addRepo(page, '/tmp/huge-monorepo', 'huge-monorepo');
 
-    const toast = page.locator('lv-toast-container .toast.warning');
+    const toast = page.locator('gn-toast-container .toast.warning');
     await expect(toast).toBeVisible();
     await expect(toast.locator('.toast-message')).toContainText(
       'Auto-refresh is unavailable for "huge-monorepo"'
@@ -67,7 +67,7 @@ test.describe('file watcher failure feedback', () => {
 
     await addRepo(page, '/tmp/huge-monorepo', 'huge-monorepo');
 
-    const toast = page.locator('lv-toast-container .toast.warning');
+    const toast = page.locator('gn-toast-container .toast.warning');
     await expect(toast).toBeVisible();
 
     const retry = toast.locator('.toast-action-btn');
@@ -95,7 +95,7 @@ test.describe('file watcher failure feedback', () => {
       () => (window as unknown as { __WATCH_RETRIES__: number }).__WATCH_RETRIES__ > 0
     );
     await expect(
-      page.locator('lv-toast-container .toast.warning:not(.exiting)')
+      page.locator('gn-toast-container .toast.warning:not(.exiting)')
     ).toBeVisible();
   });
 
@@ -105,7 +105,7 @@ test.describe('file watcher failure feedback', () => {
     await addRepo(page, '/tmp/second-repo', 'second-repo');
 
     // The tab for the new repo is up, so its watcher has been started
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(2);
-    await expect(page.locator('lv-toast-container .toast.warning')).toHaveCount(0);
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(2);
+    await expect(page.locator('gn-toast-container .toast.warning')).toHaveCount(0);
   });
 });

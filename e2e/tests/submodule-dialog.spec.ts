@@ -12,7 +12,7 @@ import {
 
 async function openSubmoduleDialog(page: import('@playwright/test').Page): Promise<void> {
   await openViaCommandPalette(page, 'submodule');
-  await page.locator('lv-submodule-dialog .dialog-overlay').waitFor({ state: 'visible', timeout: 3000 });
+  await page.locator('gn-submodule-dialog .dialog-overlay').waitFor({ state: 'visible', timeout: 3000 });
 }
 
 test.describe('Submodule Dialog - List View', () => {
@@ -34,14 +34,14 @@ test.describe('Submodule Dialog - List View', () => {
   test('should open submodule dialog from command palette', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     await expect(dialog).toBeVisible();
   });
 
   test('should display list of submodules', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     await expect(dialog.locator('.submodule-name', { hasText: 'lib/utils' })).toBeVisible();
     await expect(dialog.locator('.submodule-name', { hasText: 'vendor/plugin' })).toBeVisible();
@@ -50,7 +50,7 @@ test.describe('Submodule Dialog - List View', () => {
   test('should show submodule name and path', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     await expect(dialog.locator('.submodule-name', { hasText: 'lib/utils' })).toBeVisible();
     await expect(dialog.locator('.submodule-path', { hasText: 'lib/utils' })).toBeVisible();
@@ -61,7 +61,7 @@ test.describe('Submodule Dialog - List View', () => {
   test('should show status badges for submodules', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     // Status badges use class "submodule-status" with status-specific classes
     const statusBadges = dialog.locator('.submodule-status');
@@ -75,7 +75,7 @@ test.describe('Submodule Dialog - List View', () => {
   test('should have Add Submodule button', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('button', { hasText: /Add Submodule/i });
     await expect(addButton).toBeVisible();
   });
@@ -83,7 +83,7 @@ test.describe('Submodule Dialog - List View', () => {
   test('should have Update All button when multiple submodules exist', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     const updateAllButton = dialog.locator('.bulk-actions button', { hasText: /Update All/i });
     await expect(updateAllButton).toBeVisible();
@@ -92,7 +92,7 @@ test.describe('Submodule Dialog - List View', () => {
   test('should have action buttons for each submodule', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     await expect(dialog.locator('.submodule-name', { hasText: 'lib/utils' })).toBeVisible();
 
@@ -119,7 +119,7 @@ test.describe('Submodule Dialog - Add Submodule', () => {
   test('clicking Add Submodule should show add form', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('button', { hasText: /Add Submodule/i });
     await addButton.click();
 
@@ -134,7 +134,7 @@ test.describe('Submodule Dialog - Add Submodule', () => {
   test('add form should have optional branch field', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('button', { hasText: /Add Submodule/i });
     await addButton.click();
 
@@ -146,7 +146,7 @@ test.describe('Submodule Dialog - Add Submodule', () => {
   test('add form should have Cancel button', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('button', { hasText: /Add Submodule/i });
     await addButton.click();
 
@@ -167,7 +167,7 @@ test.describe('Submodule Dialog - Empty State', () => {
   test('should show empty state when no submodules', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     const emptyState = dialog.locator('.empty-state');
     await expect(emptyState).toBeVisible();
@@ -191,7 +191,7 @@ test.describe('Submodule Dialog - Update Operations', () => {
   test('should show Initialize button for uninitialized submodules', async ({ page }) => {
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     // Uninitialized submodules get a button with title="Initialize"
     const initButton = dialog.locator('.submodule-actions button[title="Initialize"]');
@@ -209,7 +209,7 @@ test.describe('Submodule Dialog - Update Operations', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     await startCommandCaptureWithMocks(page, {
       get_submodules: [
@@ -228,7 +228,7 @@ test.describe('Submodule Dialog - Update Operations', () => {
     expect(updateCommands.length).toBeGreaterThan(0);
 
     // Verify the submodule dialog is still visible after update operation
-    await expect(page.locator('lv-submodule-dialog .dialog')).toBeVisible();
+    await expect(page.locator('gn-submodule-dialog .dialog')).toBeVisible();
   });
 });
 
@@ -245,7 +245,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('.dialog-footer button', { hasText: /Add Submodule/i });
     await addButton.click();
 
@@ -271,7 +271,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
     expect(argsStr).toContain('https://github.com/test/submod.git');
 
     // Verify the submodule dialog is still visible after adding (returns to list view)
-    await expect(page.locator('lv-submodule-dialog .dialog')).toBeVisible();
+    await expect(page.locator('gn-submodule-dialog .dialog')).toBeVisible();
   });
 
   test('update submodule should invoke update_submodules command', async ({ page }) => {
@@ -284,7 +284,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     const updateButton = dialog.locator('.submodule-actions button[title="Update"]');
     await expect(updateButton).toBeVisible();
@@ -296,7 +296,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
     expect(updateCommands.length).toBeGreaterThan(0);
 
     // Verify the submodule dialog is still visible after update operation
-    await expect(page.locator('lv-submodule-dialog .dialog')).toBeVisible();
+    await expect(page.locator('gn-submodule-dialog .dialog')).toBeVisible();
   });
 
   test('add submodule failure should show error message', async ({ page }) => {
@@ -308,7 +308,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('.dialog-footer button', { hasText: /Add Submodule/i });
     await addButton.click();
 
@@ -338,7 +338,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     const initButton = dialog.locator('.submodule-actions button[title="Initialize"]');
     await expect(initButton).toBeVisible();
@@ -350,7 +350,7 @@ test.describe('Submodule Dialog - Add Submodule E2E', () => {
     expect(initCommands.length).toBeGreaterThan(0);
 
     // Verify the submodule dialog is still visible after initialization
-    await expect(page.locator('lv-submodule-dialog .dialog')).toBeVisible();
+    await expect(page.locator('gn-submodule-dialog .dialog')).toBeVisible();
   });
 });
 
@@ -368,7 +368,7 @@ test.describe('Submodule Error Scenarios', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const addButton = dialog.locator('.dialog-footer button', { hasText: /Add Submodule/i });
     await addButton.click();
 
@@ -396,7 +396,7 @@ test.describe('Submodule Error Scenarios', () => {
 
     await openSubmoduleDialog(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
     const updateButton = dialog.locator('.submodule-actions button[title="Update"]');
     await expect(updateButton).toBeVisible();
     await updateButton.click();
@@ -419,7 +419,7 @@ test.describe('Submodule Error Scenarios', () => {
     // Mock the Tauri confirm dialog used by showConfirm() in handleRemove
     await autoConfirmDialogs(page);
 
-    const dialog = page.locator('lv-submodule-dialog .dialog');
+    const dialog = page.locator('gn-submodule-dialog .dialog');
 
     const removeButton = dialog.locator('.submodule-actions button[title="Remove"]');
     await expect(removeButton).toBeVisible();

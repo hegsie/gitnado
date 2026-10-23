@@ -1,6 +1,6 @@
 /**
  * Output log service
- * Singleton store of git command executions displayed by <lv-output-panel>.
+ * Singleton store of git command executions displayed by <gn-output-panel>.
  * Entries are recorded by the IPC layer (tauri-api.ts) for state-changing
  * commands; read queries are excluded so the log stays meaningful.
  */
@@ -121,7 +121,7 @@ export function getLogEntries(): ReadonlyArray<OutputLogEntry> {
  *
  * When `repoPath` is given, the log is scoped: entries for that repository are
  * removed AND repo-independent entries (those with no repoPath) are removed too
- * — those are the entries the scoped <lv-output-panel> actually displays, so
+ * — those are the entries the scoped <gn-output-panel> actually displays, so
  * clearing matches what the user sees. Other repositories' entries are preserved
  * so clearing repo A never destroys repo B's history.
  */
