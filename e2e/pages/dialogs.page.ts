@@ -68,7 +68,7 @@ export class CloneDialogPage extends BaseDialog {
     // accessibility tree, so a CSS id match is ambiguous while a role match is
     // not.
     this.branchInput = page.getByRole('textbox', { name: /^Branch/ });
-    this.submodulesCheckbox = page.getByRole('checkbox', { name: /Clone submodules/i });
+    this.submodulesCheckbox = page.getByRole('checkbox', { name: /Clone submodules \(fetched/i });
   }
 
   async fillBranch(branch: string): Promise<void> {
