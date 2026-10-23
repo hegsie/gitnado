@@ -149,6 +149,131 @@ impl ModelManager {
         self.models_dir.join(model_id).join("model.gguf")
     }
 
+    /// Read `(display_name, architecture, context_length)` from a downloaded model's `model_meta.json`.
+    pub fn get_downloaded_meta(&self, model_id: &str) -> Option<(String, String, u32)> {
+        let meta_path = self.models_dir.join(model_id).join("model_meta.json");
+        let meta_content = std::fs::read_to_string(meta_path).ok()?;
+        let meta: ModelMeta = serde_json::from_str(&meta_content).ok()?;
+        Some((meta.display_name, meta.architecture, meta.context_length))
+    }
+
+    /// Import a custom `.gguf` model file from disk into the local model store.
+    pub fn import_custom_model(
+        &self,
+        source_path: &std::path::Path,
+        display_name: Option<String>,
+        architecture: Option<String>,
+        context_length: Option<u32>,
+    ) -> Result<DownloadedModel, String> {
+        if !source_path.exists() {
+            return Err(format!(
+                "Model file does not exist: {}",
+                source_path.display()
+            ));
+        }
+
+        if !source_path.is_file() {
+            return Err(format!(
+                "Path is not a regular file: {}",
+                source_path.display()
+            ));
+        }
+
+        let is_gguf = source_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
+
+        if !is_gguf {
+            return Err("Only .gguf model files are supported".to_string());
+        }
+
+        let stem = source_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model")
+            .trim();
+
+        let sanitized_stem: String = stem
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .split('-')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+
+        let id = if sanitized_stem.is_empty() {
+            "custom-model".to_string()
+        } else if sanitized_stem.starts_with("custom-") {
+            sanitized_stem
+        } else {
+            format!("custom-{sanitized_stem}")
+        };
+
+        let resolved_display_name = display_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if stem.is_empty() {
+                    "Custom Model".to_string()
+                } else {
+                    stem.to_string()
+                }
+            });
+
+        let size_bytes = std::fs::metadata(source_path)
+            .map_err(|e| format!("Failed to read model file metadata: {e}"))?
+            .len();
+
+        let model_dir = self.models_dir.join(&id);
+        std::fs::create_dir_all(&model_dir)
+            .map_err(|e| format!("Failed to create model directory: {e}"))?;
+
+        let dest_path = model_dir.join("model.gguf");
+        if dest_path != source_path {
+            if dest_path.exists() {
+                let _ = std::fs::remove_file(&dest_path);
+            }
+            if std::fs::hard_link(source_path, &dest_path).is_err() {
+                std::fs::copy(source_path, &dest_path)
+                    .map_err(|e| format!("Failed to copy model file: {e}"))?;
+            }
+        }
+
+        let meta = ModelMeta {
+            id: id.clone(),
+            display_name: resolved_display_name.clone(),
+            size_bytes,
+            sha256: String::new(),
+            architecture: architecture
+                .map(|a| a.trim().to_string())
+                .filter(|a| !a.is_empty())
+                .unwrap_or_else(|| "llama".to_string()),
+            context_length: context_length.unwrap_or(8192),
+        };
+
+        let meta_json = serde_json::to_string_pretty(&meta)
+            .map_err(|e| format!("Failed to serialize model metadata: {e}"))?;
+
+        std::fs::write(model_dir.join("model_meta.json"), meta_json)
+            .map_err(|e| format!("Failed to write model metadata: {e}"))?;
+
+        Ok(DownloadedModel {
+            id,
+            display_name: resolved_display_name,
+            size_bytes,
+            path: dest_path,
+            status: ModelStatus::Downloaded,
+        })
+    }
+
     /// Download a model from HuggingFace.
     ///
     /// Emits `model-download-progress` events on the app handle during download.
@@ -497,5 +622,77 @@ mod tests {
         let models = manager.list_downloaded().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].status, ModelStatus::Error);
+    }
+
+    #[test]
+    fn test_import_custom_model_valid_gguf() {
+        let (manager, tmp) = create_test_manager();
+        let src_dir = TempDir::new().unwrap();
+        let gguf_file = src_dir.path().join("My-Coder-7B-Q4_K_M.GGUF");
+        std::fs::write(&gguf_file, b"GGUF fake model bytes").unwrap();
+
+        let imported = manager
+            .import_custom_model(
+                &gguf_file,
+                Some("My Custom Coder 7B".to_string()),
+                Some("qwen2".to_string()),
+                Some(16384),
+            )
+            .unwrap();
+
+        assert_eq!(imported.id, "custom-my-coder-7b-q4-k-m");
+        assert_eq!(imported.display_name, "My Custom Coder 7B");
+        assert_eq!(imported.size_bytes, 21);
+        assert_eq!(imported.status, ModelStatus::Downloaded);
+        assert!(manager.is_downloaded(&imported.id));
+        assert!(tmp.path().join(&imported.id).join("model.gguf").exists());
+
+        let meta = manager.get_downloaded_meta(&imported.id).unwrap();
+        assert_eq!(meta.0, "My Custom Coder 7B");
+        assert_eq!(meta.1, "qwen2");
+        assert_eq!(meta.2, 16384);
+    }
+
+    #[test]
+    fn test_import_custom_model_defaults() {
+        let (manager, _tmp) = create_test_manager();
+        let src_dir = TempDir::new().unwrap();
+        let gguf_file = src_dir.path().join("mistral-7b.gguf");
+        std::fs::write(&gguf_file, b"GGUF content").unwrap();
+
+        let imported = manager
+            .import_custom_model(&gguf_file, None, None, None)
+            .unwrap();
+
+        assert_eq!(imported.id, "custom-mistral-7b");
+        assert_eq!(imported.display_name, "mistral-7b");
+        let meta = manager.get_downloaded_meta(&imported.id).unwrap();
+        assert_eq!(meta.0, "mistral-7b");
+        assert_eq!(meta.1, "llama");
+        assert_eq!(meta.2, 8192);
+    }
+
+    #[test]
+    fn test_import_custom_model_rejects_non_gguf() {
+        let (manager, _tmp) = create_test_manager();
+        let src_dir = TempDir::new().unwrap();
+        let bin_file = src_dir.path().join("model.bin");
+        std::fs::write(&bin_file, b"not gguf").unwrap();
+
+        let err = manager
+            .import_custom_model(&bin_file, None, None, None)
+            .unwrap_err();
+        assert!(err.contains(".gguf"));
+    }
+
+    #[test]
+    fn test_import_custom_model_rejects_missing_file() {
+        let (manager, tmp) = create_test_manager();
+        let missing = tmp.path().join("nonexistent.gguf");
+
+        let err = manager
+            .import_custom_model(&missing, None, None, None)
+            .unwrap_err();
+        assert!(err.contains("does not exist"));
     }
 }

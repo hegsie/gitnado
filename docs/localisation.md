@@ -15,6 +15,7 @@ not hand-kept: `scripts/i18n-coverage.test.mjs` fails if a file gains or loses a
 call site is here, and nothing else in `src/` has one.
 
 - `src/app-shell.ts` — the Settings modal's title.
+- `src/components/dialogs/lv-clone-dialog.ts` — the recursive submodule clone option.
 - `src/components/dialogs/lv-settings-dialog.ts` — everything the dialog
   renders (section titles, setting names and descriptions, options, buttons,
   status text) plus the language picker's own error toast.

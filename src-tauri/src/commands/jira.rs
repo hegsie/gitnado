@@ -202,6 +202,77 @@ pub async fn save_jira_config(path: String, config: JiraConfig) -> Result<()> {
     Ok(())
 }
 
+/// Delete JIRA configuration for a repository
+#[command]
+pub async fn delete_jira_config(path: String) -> Result<()> {
+    debug!("Deleting JIRA config for: {}", path);
+
+    let config_path = gitnado_config_dir(&path)?.join("jira.json");
+    if config_path.exists() {
+        std::fs::remove_file(&config_path).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to delete JIRA config: {}", e))
+        })?;
+    }
+
+    info!("JIRA config deleted for {}", path);
+    Ok(())
+}
+
+/// Test JIRA connection credentials
+#[command]
+pub async fn test_jira_connection(
+    path: Option<String>,
+    config: Option<JiraConfig>,
+) -> Result<bool> {
+    let config = match config {
+        Some(c) => c,
+        None => {
+            let repo_path = path.ok_or_else(|| {
+                GitnadoError::OperationFailed(
+                    "Either config or repository path is required".to_string(),
+                )
+            })?;
+            load_jira_config(&repo_path)?
+        }
+    };
+
+    if config.base_url.trim().is_empty()
+        || config.email.trim().is_empty()
+        || config.api_token.trim().is_empty()
+    {
+        return Err(GitnadoError::OperationFailed(
+            "JIRA base URL, email, and API token are required".to_string(),
+        ));
+    }
+
+    let url = build_jira_api_url(&config.base_url, "myself");
+    let client = api_client(&config.base_url)?;
+    let response = client
+        .get(&url)
+        .header(
+            "Authorization",
+            get_jira_auth_header(&config.email, &config.api_token),
+        )
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| {
+            error!("JIRA connection test failed: {}", e);
+            GitnadoError::OperationFailed(format!("Failed to connect to JIRA: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "JIRA connection failed ({}): {}",
+            status, body
+        )));
+    }
+
+    Ok(true)
+}
+
 /// Fetch JIRA issues via JQL search
 #[command]
 pub async fn get_jira_issues(
@@ -878,5 +949,26 @@ mod tests {
         assert_eq!(loaded.email, "test@example.com");
         assert_eq!(loaded.api_token, "test-token");
         assert_eq!(loaded.project_key, Some("TEST".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_save_and_delete_jira_config() {
+        let repo = TestRepo::with_initial_commit();
+        let repo_path = repo.path_str();
+
+        let config = JiraConfig {
+            base_url: "https://test.atlassian.net".to_string(),
+            email: "test@example.com".to_string(),
+            api_token: "test-token".to_string(),
+            project_key: Some("TEST".to_string()),
+        };
+
+        save_jira_config(repo_path.clone(), config).await.unwrap();
+        let loaded = get_jira_config(repo_path.clone()).await.unwrap();
+        assert!(loaded.is_some());
+
+        delete_jira_config(repo_path.clone()).await.unwrap();
+        let after_delete = get_jira_config(repo_path).await.unwrap();
+        assert!(after_delete.is_none());
     }
 }

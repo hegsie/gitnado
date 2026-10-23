@@ -93,6 +93,13 @@ describe('lv-clone-dialog', () => {
       expect(checkbox).to.exist;
       expect(checkbox.type).to.equal('checkbox');
     });
+
+    it('renders recurse-submodules checkbox', () => {
+      const checkbox = el.shadowRoot!.querySelector('#recurse-submodules') as HTMLInputElement;
+      expect(checkbox).to.exist;
+      expect(checkbox.type).to.equal('checkbox');
+      expect(checkbox.checked).to.be.false;
+    });
   });
 
   // ── URL parsing ────────────────────────────────────────────────────────
@@ -341,6 +348,46 @@ describe('lv-clone-dialog', () => {
 
       const internal = el as unknown as { depth: number | null };
       expect(internal.depth).to.be.null;
+    });
+
+    it('toggles recurseSubmodules checkbox and passes recurseSubmodules: true to clone_repository', async () => {
+      const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+      mockInvoke = (command: string, args?: unknown) => {
+        calls.push({ command, args: args as Record<string, unknown> });
+        if (command === 'clone_repository') {
+          return Promise.resolve({ path: '/dest/repo', name: 'repo' });
+        }
+        return Promise.resolve(null);
+      };
+
+      const urlInput = el.shadowRoot!.querySelector('#url') as HTMLInputElement;
+      urlInput.value = 'https://github.com/user/repo.git';
+      urlInput.dispatchEvent(new Event('input'));
+
+      const destInput = el.shadowRoot!.querySelector('#destination') as HTMLInputElement;
+      destInput.value = '/dest';
+      destInput.dispatchEvent(new Event('input'));
+
+      const checkbox = el.shadowRoot!.querySelector('#recurse-submodules') as HTMLInputElement;
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event('change'));
+      await el.updateComplete;
+
+      const internal = el as unknown as {
+        recurseSubmodules: boolean;
+        handleClone: () => Promise<void>;
+        reset: () => void;
+      };
+      expect(internal.recurseSubmodules).to.be.true;
+
+      await internal.handleClone();
+
+      const cloneCall = calls.find((c) => c.command === 'clone_repository');
+      expect(cloneCall).to.exist;
+      expect(cloneCall!.args?.recurseSubmodules).to.be.true;
+
+      internal.reset();
+      expect(internal.recurseSubmodules).to.be.false;
     });
   });
 

@@ -92,6 +92,12 @@ tauri-plugin-window-state = "2"
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["windows-native", "linux-native"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "0.1", default-features = false, features = ["metal"] }
+candle-core = { version = "0.11", features = ["metal", "accelerate"] }
+candle-nn = { version = "0.11", features = ["metal", "accelerate"] }
+candle-transformers = { version = "0.11", features = ["metal", "accelerate"] }
+
 [dev-dependencies]
 tempfile = "3"
 # Runs the libgit2 config isolation before libtest starts a single thread.
@@ -113,7 +119,14 @@ version = "3"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-cuda = ["llama-cpp-2/cuda"]
+cuda = [
+  "llama-cpp-2/cuda",
+  "candle-core/cuda",
+  "candle-nn/cuda",
+  "candle-transformers/cuda",
+]
+rocm = ["llama-cpp-2/rocm"]
+vulkan = ["llama-cpp-2/vulkan"]
 
 [profile.release]
 panic = "abort"

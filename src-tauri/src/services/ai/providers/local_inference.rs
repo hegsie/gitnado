@@ -60,6 +60,12 @@ fn format_prompt(arch: &str, system: &str, user: &str) -> String {
              <|user|>\n{user}<|end|>\n\
              <|assistant|>\n"
         ),
+        "qwen2" | "qwen3" | "qwen" => format!(
+            "<|im_start|>system\n{system}<|im_end|>\n\
+             <|im_start|>user\n{user}<|im_end|>\n\
+             <|im_start|>assistant\n"
+        ),
+        "mistral" => format!("[INST] {system}\n\n{user} [/INST]"),
         _ => format!("{system}\n\n{user}"),
     }
 }
@@ -84,6 +90,14 @@ impl PipelineConfig {
                 enable_condensing: false,
                 condensing_tokens: 0,
                 condensing_threshold: 0,
+            },
+            ModelTier::Pro => Self {
+                per_file_tokens: 40,
+                summary_tokens: 50,
+                max_body_bullets: 12,
+                enable_condensing: true,
+                condensing_tokens: 200,
+                condensing_threshold: 4,
             },
             _ => Self {
                 per_file_tokens: 30,
@@ -1341,6 +1355,22 @@ Binary files a/assets/icon.png and b/assets/icon.png differ";
     }
 
     #[test]
+    fn test_format_prompt_qwen() {
+        for arch in ["qwen", "qwen2", "qwen3"] {
+            let result = format_prompt(arch, "sys", "usr");
+            assert!(result.contains("<|im_start|>system\nsys<|im_end|>"));
+            assert!(result.contains("<|im_start|>user\nusr<|im_end|>"));
+            assert!(result.ends_with("<|im_start|>assistant\n"));
+        }
+    }
+
+    #[test]
+    fn test_format_prompt_mistral() {
+        let result = format_prompt("mistral", "sys", "usr");
+        assert_eq!(result, "[INST] sys\n\nusr [/INST]");
+    }
+
+    #[test]
     fn test_format_prompt_fallback() {
         let result = format_prompt("unknown-arch", "sys", "usr");
         assert_eq!(result, "sys\n\nusr");
@@ -1363,6 +1393,17 @@ Binary files a/assets/icon.png and b/assets/icon.png differ";
         assert_eq!(config.max_body_bullets, 10);
         assert!(config.enable_condensing);
         assert_eq!(config.condensing_tokens, 150);
+        assert_eq!(config.condensing_threshold, 4);
+    }
+
+    #[test]
+    fn test_pipeline_config_pro() {
+        let config = PipelineConfig::for_tier(ModelTier::Pro);
+        assert_eq!(config.per_file_tokens, 40);
+        assert_eq!(config.summary_tokens, 50);
+        assert_eq!(config.max_body_bullets, 12);
+        assert!(config.enable_condensing);
+        assert_eq!(config.condensing_tokens, 200);
         assert_eq!(config.condensing_threshold, 4);
     }
 

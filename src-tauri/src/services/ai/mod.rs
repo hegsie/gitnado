@@ -784,6 +784,15 @@ impl AiService {
                 tier: entry.tier,
                 architecture: entry.architecture.clone(),
                 context_length: entry.context_length,
+            })
+            .or_else(|| {
+                local.model_manager.get_downloaded_meta(&model.id).map(
+                    |(_display_name, architecture, context_length)| providers::LoadedModelMeta {
+                        tier: local::ModelTier::Standard,
+                        architecture,
+                        context_length,
+                    },
+                )
             });
         let model_path = model.path.clone();
         let display_name = model.display_name.clone();

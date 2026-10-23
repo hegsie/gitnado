@@ -159,6 +159,7 @@ fn build_clone_command(
     depth: Option<u32>,
     filter: Option<&str>,
     single_branch: bool,
+    recurse_submodules: bool,
     token: Option<&str>,
 ) -> crate::utils::GitCommand {
     // `create_command` is what pins `LC_ALL=C`. That is not cosmetic here:
@@ -186,6 +187,10 @@ fn build_clone_command(
 
     if single_branch {
         cmd.arg("--single-branch");
+    }
+
+    if recurse_submodules {
+        cmd.arg("--recurse-submodules");
     }
 
     if bare {
@@ -635,6 +640,7 @@ pub async fn clone_repository(
     depth: Option<u32>,
     filter: Option<String>,
     single_branch: Option<bool>,
+    recurse_submodules: Option<bool>,
     timeout_secs: Option<u64>,
 ) -> Result<Repository> {
     // A cancellation requested against a previous clone must not kill this one.
@@ -671,10 +677,11 @@ pub async fn clone_repository(
 
         // Use git CLI when features unsupported by git2 are requested
         let single_branch = single_branch.unwrap_or(false);
-        let needs_cli = depth.is_some() || filter.is_some() || single_branch;
+        let recurse_submodules = recurse_submodules.unwrap_or(false);
+        let needs_cli = depth.is_some() || filter.is_some() || single_branch || recurse_submodules;
 
         if needs_cli {
-            // git2 doesn't support --depth, --filter, or --single-branch, so fall back to git CLI
+            // git2 doesn't support --depth, --filter, --single-branch, or --recurse-submodules, so fall back to git CLI
             let result = tokio::task::spawn_blocking(move || {
                 let cmd = build_clone_command(
                     &url_clone,
@@ -684,6 +691,7 @@ pub async fn clone_repository(
                     depth,
                     filter.as_deref(),
                     single_branch,
+                    recurse_submodules,
                     token_clone.as_deref(),
                 );
 
@@ -1190,7 +1198,17 @@ mod tests {
         // path clone, and this pins the argv the panel shows for a real one.
         let url = crate::test_utils::file_url("", &source.path);
 
-        let cmd = build_clone_command(&url, &checkout, false, None, Some(1), None, true, None);
+        let cmd = build_clone_command(
+            &url,
+            &checkout,
+            false,
+            None,
+            Some(1),
+            None,
+            true,
+            false,
+            None,
+        );
         run_clone_command(cmd, &checkout, &AtomicBool::new(false), None, |_| {})
             .expect("a local shallow clone succeeds");
 
@@ -1225,6 +1243,7 @@ mod tests {
             None,
             Some(1),
             Some("blob:none"),
+            false,
             false,
             None,
         );
@@ -1263,7 +1282,7 @@ mod tests {
         let checkout = dest.path().join("cancelled");
         let url = crate::test_utils::file_url("", &source.path);
 
-        let cmd = build_clone_command(&url, &checkout, false, None, None, None, false, None);
+        let cmd = build_clone_command(&url, &checkout, false, None, None, None, false, false, None);
         // Cancelled before the child is polled; whether the clone finished
         // first decides which outcome wins, and both are legitimate here.
         let cancelled = AtomicBool::new(true);
@@ -1514,6 +1533,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
             None,
         );
 
@@ -1743,6 +1763,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
             None,
         )
         .stdout(std::process::Stdio::null())
@@ -1886,6 +1907,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
             Some("ghp_s3cret"),
         );
 
@@ -1919,6 +1941,7 @@ mod tests {
             None,
             Some(1),
             None,
+            false,
             false,
             Some("ghp_s3cret"),
         );
@@ -1970,6 +1993,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
             Some("bbapp:alice:app-pass"),
         );
 
@@ -2001,6 +2025,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
             Some("oauth-tok"),
         );
 
@@ -2025,6 +2050,7 @@ mod tests {
             None,
             Some(1),
             None,
+            false,
             false,
             Some("to/ken@we:ird"),
         );
@@ -2053,6 +2079,7 @@ mod tests {
             None,
             Some(1),
             None,
+            false,
             false,
             None,
         );
@@ -2088,6 +2115,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
             Some("ghp_s3cret"),
         );
         assert_eq!(env_of(&ssh, "GITNADO_CLONE_TOKEN"), None);
@@ -2108,6 +2136,7 @@ mod tests {
             Some(5),
             Some("blob:none"),
             true,
+            false,
             None,
         );
 
@@ -2128,6 +2157,118 @@ mod tests {
                 "https://github.com/o/r.git",
                 "/tmp/x",
             ]
+        );
+    }
+
+    #[test]
+    fn test_build_clone_command_recurse_submodules_flag() {
+        let cmd_with = build_clone_command(
+            "https://github.com/o/r.git",
+            Path::new("/tmp/x"),
+            false,
+            None,
+            None,
+            None,
+            false,
+            true,
+            None,
+        );
+        let args_with = args_of(&cmd_with);
+        let recurse_idx = args_with
+            .iter()
+            .position(|a| a == "--recurse-submodules")
+            .expect("--recurse-submodules should be present when enabled");
+        let dash_dash_idx = args_with
+            .iter()
+            .position(|a| a == "--")
+            .expect("-- separator should be present");
+        assert!(
+            recurse_idx < dash_dash_idx,
+            "--recurse-submodules must appear before `--`: {:?}",
+            args_with
+        );
+
+        let cmd_without = build_clone_command(
+            "https://github.com/o/r.git",
+            Path::new("/tmp/x"),
+            false,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+        );
+        let args_without = args_of(&cmd_without);
+        assert!(
+            !args_without.iter().any(|a| a == "--recurse-submodules"),
+            "--recurse-submodules must be omitted when false: {:?}",
+            args_without
+        );
+    }
+
+    #[test]
+    fn test_cli_clone_with_recurse_submodules_populates_submodule_worktree() {
+        let sub_repo = TestRepo::with_initial_commit();
+        sub_repo.create_commit("sub commit", &[("subfile.txt", "from submodule")]);
+        let sub_url = crate::test_utils::file_url("", &sub_repo.path);
+
+        let parent_repo = TestRepo::with_initial_commit();
+        let add_sub = std::process::Command::new("git")
+            .arg("-C")
+            .arg(parent_repo.path_str())
+            .arg("-c")
+            .arg("protocol.file.allow=always")
+            .arg("submodule")
+            .arg("add")
+            .arg(&sub_url)
+            .arg("libs/sub")
+            .output()
+            .expect("git submodule add");
+        assert!(
+            add_sub.status.success(),
+            "submodule add failed: {}",
+            String::from_utf8_lossy(&add_sub.stderr)
+        );
+        let commit_sub = std::process::Command::new("git")
+            .arg("-C")
+            .arg(parent_repo.path_str())
+            .arg("commit")
+            .arg("-m")
+            .arg("Add submodule")
+            .output()
+            .expect("git commit submodule");
+        assert!(
+            commit_sub.status.success(),
+            "commit submodule failed: {}",
+            String::from_utf8_lossy(&commit_sub.stderr)
+        );
+
+        let dest = TempDir::new().expect("temp dir");
+        let checkout = dest.path().join("cloned-with-sub");
+        let parent_url = crate::test_utils::file_url("", &parent_repo.path);
+
+        let mut cmd = build_clone_command(
+            &parent_url,
+            &checkout,
+            false,
+            None,
+            None,
+            None,
+            false,
+            true,
+            None,
+        );
+        cmd.env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
+            .env("GIT_CONFIG_VALUE_0", "always");
+
+        run_clone_command(cmd, &checkout, &AtomicBool::new(false), None, |_| {})
+            .expect("recursive submodule clone should succeed");
+
+        assert!(
+            checkout.join("libs/sub/subfile.txt").exists(),
+            "submodule working tree should be populated when --recurse-submodules is enabled"
         );
     }
 

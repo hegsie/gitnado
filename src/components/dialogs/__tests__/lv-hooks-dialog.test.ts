@@ -55,6 +55,16 @@ const mockHooks: GitHook[] = [
 let lastInvokedCommand: string | null = null;
 /** When set, the mutating hook commands reject with this. */
 let failWith: { code?: string; message: string } | null = null;
+let mockExecutionLogs: Array<{
+  id: string;
+  repoPath: string;
+  hookName: string;
+  timestamp: number;
+  durationMs: number;
+  success: boolean;
+  exitCode: number | null;
+  output: string;
+}> = [];
 const invokeCalls: Array<{ command: string; args?: unknown }> = [];
 
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
@@ -72,6 +82,12 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
       const hook = mockHooks.find((h) => h.name === hookName);
       return hook ?? null;
     }
+    case 'get_hook_execution_logs':
+      return mockExecutionLogs;
+    case 'clear_hook_execution_logs':
+      if (failWith) throw failWith;
+      mockExecutionLogs = [];
+      return null;
     case 'save_hook':
       return null;
     case 'delete_hook':
@@ -100,6 +116,7 @@ describe('lv-hooks-dialog', () => {
   beforeEach(() => {
     lastInvokedCommand = null;
     failWith = null;
+    mockExecutionLogs = [];
   });
 
   it('renders when open', async () => {
@@ -385,5 +402,78 @@ describe('lv-hooks-dialog', () => {
     const errors = uiStore.getState().toasts.filter((t) => t.type === 'error');
     expect(errors.length).to.equal(1);
     expect(errors[0].message).to.contain('Read-only file system');
+  });
+
+  describe('execution logs', () => {
+    it('renders empty state when no hook execution logs exist', async () => {
+      mockExecutionLogs = [];
+      const el = await fixture<LvHooksDialog>(
+        html`<lv-hooks-dialog ?open=${true} .repoPath=${'/test/repo'}></lv-hooks-dialog>`,
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      await el.updateComplete;
+
+      const empty = el.shadowRoot!.querySelector('.execution-logs-empty');
+      expect(empty).to.not.be.null;
+      expect(empty!.textContent).to.include('No hook executions recorded yet');
+    });
+
+    it('renders hook execution logs and clears them via Clear Logs button', async () => {
+      mockExecutionLogs = [
+        {
+          id: '2',
+          repoPath: '/test/repo',
+          hookName: 'pre-push',
+          timestamp: 1700000005000,
+          durationMs: 128,
+          success: false,
+          exitCode: 1,
+          output: 'Tests failed on main',
+        },
+        {
+          id: '1',
+          repoPath: '/test/repo',
+          hookName: 'pre-commit',
+          timestamp: 1700000000000,
+          durationMs: 42,
+          success: true,
+          exitCode: 0,
+          output: 'Lint passed',
+        },
+      ];
+
+      const el = await fixture<LvHooksDialog>(
+        html`<lv-hooks-dialog ?open=${true} .repoPath=${'/test/repo'}></lv-hooks-dialog>`,
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      await el.updateComplete;
+
+      const items = el.shadowRoot!.querySelectorAll('.execution-log-item');
+      expect(items.length).to.equal(2);
+      expect(items[0].textContent).to.include('pre-push');
+      expect(items[0].textContent).to.include('128ms');
+      expect(items[0].textContent).to.include('Tests failed on main');
+      expect(items[1].textContent).to.include('pre-commit');
+      expect(items[1].textContent).to.include('42ms');
+      expect(items[1].textContent).to.include('Lint passed');
+
+      uiStore.setState({ toasts: [] });
+      invokeCalls.length = 0;
+
+      const clearBtn = el.shadowRoot!.querySelector('.clear-logs-btn') as HTMLButtonElement;
+      expect(clearBtn).to.not.be.null;
+      clearBtn.click();
+
+      await new Promise((r) => setTimeout(r, 50));
+      await el.updateComplete;
+
+      const clearCall = invokeCalls.find((c) => c.command === 'clear_hook_execution_logs');
+      expect(clearCall).to.not.be.undefined;
+      expect((clearCall!.args as { path: string }).path).to.equal('/test/repo');
+
+      const emptyAfter = el.shadowRoot!.querySelector('.execution-logs-empty');
+      expect(emptyAfter).to.not.be.null;
+      expect(uiStore.getState().toasts.some((t) => t.type === 'success')).to.be.true;
+    });
   });
 });

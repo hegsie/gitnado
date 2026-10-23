@@ -5,6 +5,7 @@
 
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, state, query } from 'lit/decorators.js';
+import { msg } from '@lit/localize';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import {
   isNetworkGateRefusal,
@@ -257,6 +258,7 @@ export class LvCloneDialog extends LitElement {
   /** Empty means "whatever the remote's HEAD points at" -- the default branch. */
   @state() private branch = '';
   @state() private cloneSubmodules = false;
+  @state() private recurseSubmodules = false;
   @state() private isCloning = false;
   /**
    * The clone SUCCEEDED and the dialog is in its brief close delay.
@@ -352,6 +354,7 @@ export class LvCloneDialog extends LitElement {
     this.depth = null;
     this.branch = '';
     this.cloneSubmodules = false;
+    this.recurseSubmodules = false;
     this.isCloning = false;
     this.isCancelling = false;
     this.isComplete = false;
@@ -572,6 +575,7 @@ export class LvCloneDialog extends LitElement {
           ...(this.depth !== null ? { depth: this.depth } : {}),
           ...(this.filter ? { filter: this.filter } : {}),
           ...(this.singleBranch ? { singleBranch: true } : {}),
+          ...(this.recurseSubmodules ? { recurseSubmodules: true } : {}),
         },
         {
           // The footer already offers "Cancel Clone" while the service is
@@ -991,6 +995,21 @@ export class LvCloneDialog extends LitElement {
             />
             <label for="clone-submodules" style="margin:0">
               Clone submodules (fetched after the clone finishes)
+            </label>
+          </div>
+
+          <div class="field" style="flex-direction:row;align-items:center;gap:8px">
+            <input
+              type="checkbox"
+              id="recurse-submodules"
+              .checked=${this.recurseSubmodules}
+              @change=${(e: Event) => {
+                this.recurseSubmodules = (e.target as HTMLInputElement).checked;
+              }}
+              ?disabled=${this.isCloning}
+            />
+            <label for="recurse-submodules" style="margin:0">
+              ${msg('Clone submodules recursively (--recurse-submodules)')}
             </label>
           </div>
 

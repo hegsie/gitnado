@@ -19,13 +19,72 @@ pub struct OnnxEmbeddingEngine {
 }
 
 impl OnnxEmbeddingEngine {
+    /// Select the best available hardware accelerator for Candle embeddings.
+    ///
+    /// Prefers Metal on macOS and CUDA when compiled with the `cuda` feature,
+    /// falling back gracefully to CPU if initialization fails.
+    pub fn select_best_device() -> Device {
+        #[cfg(target_os = "macos")]
+        {
+            match Device::new_metal(0) {
+                Ok(device) => {
+                    tracing::info!("Using Metal GPU acceleration for embeddings");
+                    return device;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Metal device unavailable for embeddings ({e}), falling back to CPU"
+                    );
+                }
+            }
+        }
+
+        #[cfg(feature = "cuda")]
+        {
+            match Device::new_cuda(0) {
+                Ok(device) => {
+                    tracing::info!("Using CUDA GPU acceleration for embeddings");
+                    return device;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "CUDA device unavailable for embeddings ({e}), falling back to CPU"
+                    );
+                }
+            }
+        }
+
+        Device::Cpu
+    }
+
+    /// Return the name of the compute device currently backing this engine.
+    pub fn device_name(&self) -> &'static str {
+        match &self.device {
+            Device::Metal(_) => "metal",
+            Device::Cuda(_) => "cuda",
+            Device::Cpu => "cpu",
+        }
+    }
+
     /// Load the model and tokenizer from a directory.
     ///
     /// The directory must contain `model.safetensors` (or `pytorch_model.bin`),
     /// `tokenizer.json`, and `config.json`.
     pub fn load(model_dir: &Path) -> Result<Self, String> {
-        let device = Device::Cpu;
+        let preferred_device = Self::select_best_device();
+        match Self::load_with_device(model_dir, preferred_device) {
+            Ok(engine) => Ok(engine),
+            Err(err) => {
+                // If loading on an accelerated device failed, retry on CPU
+                tracing::warn!(
+                    "Failed to load embedding model on preferred device ({err}), retrying on CPU"
+                );
+                Self::load_with_device(model_dir, Device::Cpu)
+            }
+        }
+    }
 
+    fn load_with_device(model_dir: &Path, device: Device) -> Result<Self, String> {
         // Load config
         let config_path = model_dir.join("config.json");
         if !config_path.exists() {
@@ -278,5 +337,13 @@ mod tests {
         let result = mean_pool_tensor(&hidden, &mask, 2).unwrap();
         assert!((result[0]).abs() < 1e-6);
         assert!((result[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_select_best_device_succeeds() {
+        let device = OnnxEmbeddingEngine::select_best_device();
+        match device {
+            Device::Metal(_) | Device::Cuda(_) | Device::Cpu => {}
+        }
     }
 }

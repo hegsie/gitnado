@@ -569,7 +569,7 @@ describe('lv-toolbar repository tabs', () => {
         // Accessible name and tooltip agree, and both name the operation
         expect(btn.getAttribute('aria-label')).to.equal(btn.title);
         expect(btn.getAttribute('aria-label')!.toLowerCase()).to.contain(op);
-        expect(btn.getAttribute('aria-keyshortcuts')).to.contain('Control+Shift+');
+        expect(btn.getAttribute('aria-keyshortcuts')).to.match(/^(Control|Meta)\+Shift\+/);
         // Native buttons: reachable and activatable from the keyboard
         expect(btn.tagName).to.equal('BUTTON');
       }

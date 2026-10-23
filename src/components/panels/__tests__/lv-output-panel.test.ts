@@ -1,15 +1,36 @@
 import { expect, fixture, html } from '@open-wc/testing';
 
+let invokeCalls: Array<{ command: string; args?: unknown }> = [];
+let failOpenTerminal = false;
+
+(globalThis as unknown as {
+  __TAURI_INTERNALS__: {
+    invoke: (command: string, args?: unknown) => Promise<unknown>;
+  };
+}).__TAURI_INTERNALS__ = {
+  invoke: async (command: string, args?: unknown) => {
+    invokeCalls.push({ command, args });
+    if (command === 'open_terminal' && failOpenTerminal) {
+      throw { code: 'TERMINAL_ERROR', message: 'Terminal launch failed' };
+    }
+    return null;
+  },
+};
+
 import '../lv-output-panel.ts';
 import type { LvOutputPanel } from '../lv-output-panel.ts';
 import {
   logGitCommand,
   clearLogEntries,
 } from '../../../services/output-log.service.ts';
+import { uiStore } from '../../../stores/ui.store.ts';
 
 describe('lv-output-panel', () => {
   beforeEach(() => {
     clearLogEntries();
+    invokeCalls = [];
+    failOpenTerminal = false;
+    uiStore.setState({ toasts: [] });
   });
 
   it('shows the empty state with no entries', async () => {
@@ -261,6 +282,61 @@ describe('lv-output-panel', () => {
       const output = el.shadowRoot!.querySelector('.entry-output.empty-output');
       expect(output, 'an expanded row is never an unexplained empty box').to.exist;
       expect(output!.textContent).to.contain('no output');
+    });
+  });
+
+  describe('filter input and Open in Terminal button', () => {
+    it('filters entries by command and output text', async () => {
+      const el = await fixture<LvOutputPanel>(html`<lv-output-panel></lv-output-panel>`);
+      logGitCommand('checkout', 'Switched to branch main', true, {
+        gitCommand: 'git checkout main',
+      });
+      logGitCommand('push', 'fatal: authentication failed', false, {
+        gitCommand: 'git push origin main',
+      });
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelectorAll('.entry').length).to.equal(2);
+
+      const filterInput = el.shadowRoot!.querySelector<HTMLInputElement>('.filter-input')!;
+      expect(filterInput).to.exist;
+
+      filterInput.value = 'authentication';
+      filterInput.dispatchEvent(new Event('input'));
+      await el.updateComplete;
+
+      const entries = el.shadowRoot!.querySelectorAll('.entry');
+      expect(entries.length).to.equal(1);
+      expect(entries[0].querySelector('.entry-command')!.textContent!.trim()).to.equal(
+        'git push origin main',
+      );
+    });
+
+    it('launches terminal when Open in Terminal button is clicked and shows toast on error', async () => {
+      const el = await fixture<LvOutputPanel>(
+        html`<lv-output-panel .repositoryPath=${'/repo/a'}></lv-output-panel>`,
+      );
+      await el.updateComplete;
+
+      const termBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('.open-terminal-btn')!;
+      expect(termBtn).to.exist;
+
+      termBtn.click();
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      const openCall = invokeCalls.find((c) => c.command === 'open_terminal');
+      expect(openCall).to.not.be.undefined;
+      expect(openCall!.args).to.deep.equal({ path: '/repo/a' });
+
+      failOpenTerminal = true;
+      termBtn.click();
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      const errorToast = uiStore.getState().toasts.find((t) => t.type === 'error');
+      expect(errorToast).to.not.be.undefined;
+      expect(errorToast!.message).to.contain('Terminal launch failed');
     });
   });
 });

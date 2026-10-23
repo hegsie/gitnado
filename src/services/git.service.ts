@@ -4813,6 +4813,16 @@ export async function createPullRequest(
   });
 }
 
+export interface PrReviewComment {
+  id: string;
+  author: string;
+  avatarUrl?: string | null;
+  body: string;
+  createdAt: string;
+  filePath?: string | null;
+  line?: number | null;
+}
+
 export async function getPullRequestReviews(
   owner: string,
   repo: string,
@@ -4823,6 +4833,42 @@ export async function getPullRequestReviews(
     owner,
     repo,
     number,
+    token,
+  });
+}
+
+export async function getGitHubPrComments(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment[]>> {
+  return invokeProviderCommand<PrReviewComment[]>("get_github_pr_comments", {
+    owner,
+    repo,
+    pullNumber,
+    token,
+  });
+}
+
+export async function addGitHubPrComment(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  body: string,
+  path?: string,
+  line?: number,
+  commitId?: string,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment>> {
+  return invokeProviderCommand<PrReviewComment>("add_github_pr_comment", {
+    owner,
+    repo,
+    pullNumber,
+    body,
+    path,
+    line,
+    commitId,
     token,
   });
 }
@@ -5435,6 +5481,44 @@ export async function createAdoPullRequest(
   });
 }
 
+export async function getAdoPrComments(
+  organization: string,
+  project: string,
+  repository: string,
+  pullRequestId: number,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment[]>> {
+  return invokeProviderCommand<PrReviewComment[]>("get_ado_pr_comments", {
+    organization,
+    project,
+    repository,
+    pullRequestId,
+    token,
+  });
+}
+
+export async function addAdoPrComment(
+  organization: string,
+  project: string,
+  repository: string,
+  pullRequestId: number,
+  content: string,
+  filePath?: string,
+  line?: number,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment>> {
+  return invokeProviderCommand<PrReviewComment>("add_ado_pr_comment", {
+    organization,
+    project,
+    repository,
+    pullRequestId,
+    content,
+    filePath,
+    line,
+    token,
+  });
+}
+
 // Azure DevOps Work Items
 
 export async function getAdoWorkItems(
@@ -5723,6 +5807,36 @@ export async function createGitLabMergeRequest(
   });
 }
 
+export async function getGitLabMrComments(
+  instanceUrl: string,
+  projectPath: string,
+  mrIid: number,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment[]>> {
+  return invokeProviderCommand<PrReviewComment[]>("get_gitlab_mr_comments", {
+    instanceUrl,
+    projectPath,
+    mrIid,
+    token,
+  });
+}
+
+export async function addGitLabMrComment(
+  instanceUrl: string,
+  projectPath: string,
+  mrIid: number,
+  body: string,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment>> {
+  return invokeProviderCommand<PrReviewComment>("add_gitlab_mr_comment", {
+    instanceUrl,
+    projectPath,
+    mrIid,
+    body,
+    token,
+  });
+}
+
 // GitLab Issues
 
 export async function listGitLabIssues(
@@ -5984,6 +6098,40 @@ export async function createBitbucketPullRequest(
     workspace,
     repoSlug,
     input,
+    token,
+  });
+}
+
+export async function getBitbucketPrComments(
+  workspace: string,
+  repoSlug: string,
+  prId: number,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment[]>> {
+  return invokeProviderCommand<PrReviewComment[]>("get_bitbucket_pr_comments", {
+    workspace,
+    repoSlug,
+    prId,
+    token,
+  });
+}
+
+export async function addBitbucketPrComment(
+  workspace: string,
+  repoSlug: string,
+  prId: number,
+  content: string,
+  filePath?: string,
+  line?: number,
+  token?: string | null,
+): Promise<CommandResult<PrReviewComment>> {
+  return invokeProviderCommand<PrReviewComment>("add_bitbucket_pr_comment", {
+    workspace,
+    repoSlug,
+    prId,
+    content,
+    filePath,
+    line,
     token,
   });
 }
@@ -7256,6 +7404,29 @@ export async function toggleHook(
   enabled: boolean,
 ): Promise<CommandResult<void>> {
   return invokeCommand<void>("toggle_hook", { path: repoPath, name, enabled });
+}
+
+export interface HookExecutionLog {
+  id: string;
+  repoPath: string;
+  hookName: string;
+  timestamp: number;
+  durationMs: number;
+  success: boolean;
+  exitCode: number | null;
+  output: string;
+}
+
+export async function getHookExecutionLogs(
+  path: string,
+): Promise<CommandResult<HookExecutionLog[]>> {
+  return invokeCommand<HookExecutionLog[]>("get_hook_execution_logs", { path });
+}
+
+export async function clearHookExecutionLogs(
+  path: string,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("clear_hook_execution_logs", { path });
 }
 
 /**
@@ -9224,6 +9395,192 @@ export async function runFsck(
     }
   }
   return result;
+}
+
+// ============================================================================
+// JIRA Integration
+// ============================================================================
+
+export interface JiraConfig {
+  baseUrl: string;
+  email: string;
+  apiToken: string;
+  projectKey?: string | null;
+}
+
+export interface JiraIssue {
+  key: string;
+  summary: string;
+  status: string;
+  issueType: string;
+  assignee: string | null;
+  priority: string | null;
+  url: string;
+}
+
+export interface JiraTransition {
+  id: string;
+  name: string;
+}
+
+export interface GenerateBranchFromIssueOptions {
+  issueKey: string;
+  summary: string;
+  prefix?: string;
+}
+
+export async function getJiraConfig(
+  path: string,
+): Promise<CommandResult<JiraConfig | null>> {
+  return invokeCommand<JiraConfig | null>("get_jira_config", { path });
+}
+
+export async function saveJiraConfig(
+  path: string,
+  config: JiraConfig,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("save_jira_config", { path, config });
+}
+
+export async function deleteJiraConfig(
+  path: string,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("delete_jira_config", { path });
+}
+
+async function checkJiraNetworkAllowed(
+  path?: string,
+  config?: JiraConfig,
+): Promise<boolean> {
+  if (!isNetworkPolicyActive()) return true;
+  let baseUrl = config?.baseUrl ?? null;
+  if (!baseUrl && path) {
+    const res = await invokeCommand<JiraConfig | null>("get_jira_config", { path });
+    if (res.success && res.data) {
+      baseUrl = res.data.baseUrl;
+    }
+  }
+  return (await checkNetworkAllowed(null, baseUrl ?? undefined, true)) === null;
+}
+
+export async function testJiraConnection(
+  pathOrConfig: string | JiraConfig,
+  config?: JiraConfig,
+): Promise<CommandResult<boolean>> {
+  if (typeof pathOrConfig === "string") {
+    if (!await checkJiraNetworkAllowed(pathOrConfig, config)) {
+      return blockedResult();
+    }
+    return invokeCommand<boolean>("test_jira_connection", {
+      path: pathOrConfig,
+      ...(config ? { config } : {}),
+    });
+  }
+  if (!await checkJiraNetworkAllowed(undefined, pathOrConfig)) {
+    return blockedResult();
+  }
+  return invokeCommand<boolean>("test_jira_connection", {
+    config: pathOrConfig,
+  });
+}
+
+export async function getJiraIssues(
+  path: string,
+  jql?: string,
+  maxResults?: number,
+): Promise<CommandResult<JiraIssue[]>> {
+  if (!await checkJiraNetworkAllowed(path)) {
+    return blockedResult();
+  }
+  return invokeCommand<JiraIssue[]>("get_jira_issues", {
+    path,
+    ...(jql !== undefined ? { jql } : {}),
+    ...(maxResults !== undefined ? { maxResults } : {}),
+  });
+}
+
+export async function getJiraIssue(
+  path: string,
+  issueKey: string,
+): Promise<CommandResult<JiraIssue>> {
+  if (!await checkJiraNetworkAllowed(path)) {
+    return blockedResult();
+  }
+  return invokeCommand<JiraIssue>("get_jira_issue", { path, issueKey });
+}
+
+export async function getJiraTransitions(
+  path: string,
+  issueKey: string,
+): Promise<CommandResult<JiraTransition[]>> {
+  if (!await checkJiraNetworkAllowed(path)) {
+    return blockedResult();
+  }
+  return invokeCommand<JiraTransition[]>("get_jira_transitions", {
+    path,
+    issueKey,
+  });
+}
+
+export async function transitionJiraIssue(
+  path: string,
+  issueKey: string,
+  transitionId: string,
+): Promise<CommandResult<void>> {
+  if (!await checkJiraNetworkAllowed(path)) {
+    return blockedResult();
+  }
+  return invokeCommand<void>("transition_jira_issue", {
+    path,
+    issueKey,
+    transitionId,
+  });
+}
+
+export async function createBranchFromJira(
+  path: string,
+  issueKey: string,
+  branchType?: string,
+): Promise<CommandResult<string>> {
+  if (!await checkJiraNetworkAllowed(path)) {
+    return blockedResult();
+  }
+  return invokeCommand<string>("create_branch_from_jira", {
+    path,
+    issueKey,
+    ...(branchType !== undefined ? { branchType } : {}),
+  });
+}
+
+export function generateBranchFromIssue(
+  options: GenerateBranchFromIssueOptions | string,
+  summaryArg?: string,
+  prefixArg?: string,
+): string {
+  const issueKey = typeof options === "string" ? options : options.issueKey;
+  const summary = typeof options === "string" ? (summaryArg ?? "") : options.summary;
+  const prefix = typeof options === "string" ? (prefixArg ?? "feature") : (options.prefix ?? "feature");
+
+  const sanitized = summary
+    .toLowerCase()
+    .replace(/[^a-z0-9\s\-_]/g, "")
+    .replace(/[\s_]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+
+  const maxLen = 50;
+  let truncated = sanitized;
+  if (truncated.length > maxLen) {
+    const cutPos = truncated.lastIndexOf("-", maxLen);
+    truncated =
+      cutPos > 10
+        ? truncated.substring(0, cutPos)
+        : truncated.substring(0, maxLen);
+  }
+  truncated = truncated.replace(/-+$/, "");
+
+  const base = truncated ? `${issueKey}-${truncated}` : issueKey;
+  return prefix ? `${prefix}/${base}` : base;
 }
 
 /**
