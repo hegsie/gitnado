@@ -109,3 +109,71 @@ export function cherryPickFailureMessage(
       : ' It was the last one in the sequence.';
   return `${head}${at}${because}.${remaining}`;
 }
+
+/**
+ * Check whether an ancestor-ordered selection can be squashed into one commit
+ * via `squash_commits(from_oid, to_oid, message)`.
+ *
+ * `squash_commits` walks `from_oid..to_oid` in git's DAG, so handing it the
+ * endpoints of a non-contiguous selection would silently squash unselected
+ * commits in the middle. Every selected commit must also be a non-merge with a
+ * single parent, and the oldest commit must have a parent to re-parent the
+ * squashed commit onto.
+ *
+ * Returns a user-facing refusal message when invalid, or `null` when valid.
+ */
+export function validateSquashSelection(commits: readonly Commit[]): string | null {
+  if (commits.length < 2) {
+    return 'Select at least 2 commits to squash';
+  }
+
+  const merge = commits.find((c) => c.parentIds.length > 1);
+  if (merge) {
+    return (
+      `${merge.shortId || merge.oid.substring(0, 7)} is a merge commit — ` +
+      'use interactive rebase to squash across merges'
+    );
+  }
+
+  for (let i = 1; i < commits.length; i += 1) {
+    const prev = commits[i - 1];
+    const curr = commits[i];
+    if (curr.parentIds[0] !== prev.oid) {
+      return 'Selected commits are not contiguous — select an unbroken chain of commits to squash';
+    }
+  }
+
+  const oldest = commits[0];
+  if (oldest.parentIds.length === 0) {
+    return (
+      `Cannot squash ${oldest.shortId || oldest.oid.substring(0, 7)} — ` +
+      'it is the root commit and has no parent'
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Combine the commit messages of an ancestor-ordered selection into a single
+ * squashed commit message, preserving each commit's full message (or summary)
+ * separated by blank lines.
+ */
+export function combinedSquashMessage(commits: readonly Commit[]): string {
+  return commits
+    .map((c) => (c.message || c.summary).trim())
+    .filter((m) => m.length > 0)
+    .join('\n\n');
+}
+
+/**
+ * The confirm body for a multi-commit squash.
+ */
+export function squashConfirmMessage(commits: readonly Commit[], branch: string): string {
+  return (
+    `Squash ${commits.length} commits on ${branch} into a single commit, oldest first:\n\n` +
+    `${numberedCommitList(commits)}\n\n` +
+    'This rewrites history on the current branch and replays any later commits on top.'
+  );
+}
+

@@ -1,0 +1,11 @@
+[advisories]
+ignore = [
+    # Transitive via candle-core 0.11.0 (zip 8.6.0) and tauri-plugin-updater 2.14.0
+    # on Windows (zip 4.6.1); neither upstream has released a zip 9.x bump yet.
+    # All three advisories affect ZipArchive::extract / ZipStreamReader::extract
+    # symlink and Unix permission handling. Gitnado does not depend on zip directly,
+    # candle-core never calls extract(), and updater bundles are signature-verified.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]

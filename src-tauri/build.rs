@@ -41,6 +41,25 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
+    // llama-cpp-sys-2's Objective-C Metal backend (`ggml-metal-device.m`) uses
+    // `@available(macOS 15.0, *)`. When Tauri sets `MACOSX_DEPLOYMENT_TARGET=11.0`
+    // from `tauri.conf.json`, Clang lowers `@available` to `___isPlatformVersionAtLeast`,
+    // which lives in the Clang Darwin compiler runtime (`libclang_rt.osx.a`).
+    if target_os == "macos" {
+        if let Ok(output) = std::process::Command::new("xcrun")
+            .args(["--sdk", "macosx", "clang", "--print-runtime-dir"])
+            .output()
+        {
+            if output.status.success() {
+                let runtime_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !runtime_dir.is_empty() {
+                    println!("cargo:rustc-link-search=native={runtime_dir}");
+                    println!("cargo:rustc-link-lib=static=clang_rt.osx");
+                }
+            }
+        }
+    }
+
     if target_os == "windows" && target_env == "msvc" {
         let manifest = PathBuf::from(env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
             .join("gitnado.exe.manifest");
