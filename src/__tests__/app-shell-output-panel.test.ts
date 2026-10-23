@@ -1,7 +1,7 @@
 /**
  * Integration test for the output panel wiring in app-shell:
  * the command palette exposes "Toggle Output Panel", and its action flips
- * the panel state that renders <lv-output-panel closable> in the center panel.
+ * the panel state that renders <gn-output-panel closable> in the center panel.
  *
  * The panel is rendered ONLY inside the active-repository layout, so the
  * toggle is repository-scoped on both menu halves and in the palette. These
@@ -57,7 +57,7 @@ function mockRepo(): Repository {
 
 /** A shell on the welcome screen (no repository) unless `withRepo` is set. */
 function createAppShell(withRepo = false): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   if (withRepo) {
     (el as any).activeRepository = { repository: mockRepo() };
   }
@@ -65,7 +65,7 @@ function createAppShell(withRepo = false): AppShell {
 }
 
 function outputPanel(el: AppShell): Element | null {
-  return el.shadowRoot!.querySelector('lv-output-panel');
+  return el.shadowRoot!.querySelector('gn-output-panel');
 }
 
 function getPaletteCommands(el: AppShell): PaletteCommandLike[] {

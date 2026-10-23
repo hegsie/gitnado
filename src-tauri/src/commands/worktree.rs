@@ -35,7 +35,7 @@ pub struct Worktree {
 fn run_git_command(repo_path: &Path, args: &[&str]) -> Result<String> {
     let output = create_command("git")
         .current_dir(repo_path)
-        // The FRONTEND parses this stderr: lv-worktree-dialog matches
+        // The FRONTEND parses this stderr: gn-worktree-dialog matches
         // /contains modified or untracked files/i to offer the --force
         // escalation, and that string is translated by git's gettext catalogue.
         // Under a localized git the regex missed, so removing a dirty worktree

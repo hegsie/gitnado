@@ -47,13 +47,13 @@ let statusEntries: unknown[] = [];
 };
 
 import { expect, fixture, html } from '@open-wc/testing';
-import '../lv-worktree-dialog.ts';
-import '../lv-submodule-dialog.ts';
-import '../lv-lfs-dialog.ts';
-import '../lv-remote-dialog.ts';
-import '../lv-workspace-manager-dialog.ts';
-import '../lv-reflog-dialog.ts';
-import '../../sidebar/lv-file-status.ts';
+import '../gn-worktree-dialog.ts';
+import '../gn-submodule-dialog.ts';
+import '../gn-lfs-dialog.ts';
+import '../gn-remote-dialog.ts';
+import '../gn-workspace-manager-dialog.ts';
+import '../gn-reflog-dialog.ts';
+import '../../sidebar/gn-file-status.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -85,7 +85,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
 
   it('worktree removal', async () => {
     const el = await fixture<any>(
-      html`<lv-worktree-dialog ?open=${true} .repositoryPath=${'/repo/a'}></lv-worktree-dialog>`,
+      html`<gn-worktree-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-worktree-dialog>`,
     );
     await el.updateComplete;
     const wt = { path: '/repo/a/wt', branch: 'feature', isMain: false, isLocked: false };
@@ -98,7 +98,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
 
   it('submodule removal', async () => {
     const el = await fixture<any>(
-      html`<lv-submodule-dialog ?open=${true} .repositoryPath=${'/repo/a'}></lv-submodule-dialog>`,
+      html`<gn-submodule-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-submodule-dialog>`,
     );
     await el.updateComplete;
     const sm = { name: 'lib', path: 'lib', url: 'u', status: 'current', headOid: 'a', branch: null, initialized: true };
@@ -111,7 +111,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
 
   it('LFS prune', async () => {
     const el = await fixture<any>(
-      html`<lv-lfs-dialog ?open=${true} .repositoryPath=${'/repo/a'}></lv-lfs-dialog>`,
+      html`<gn-lfs-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-lfs-dialog>`,
     );
     await el.updateComplete;
 
@@ -125,7 +125,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
 
   it('remote removal', async () => {
     const el = await fixture<any>(
-      html`<lv-remote-dialog ?open=${true} .repositoryPath=${'/repo/a'}></lv-remote-dialog>`,
+      html`<gn-remote-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-remote-dialog>`,
     );
     await el.updateComplete;
     const remote = { name: 'origin', url: 'https://example.com/r.git', pushUrl: null };
@@ -138,7 +138,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
 
   it('workspace deletion', async () => {
     const el = await fixture<any>(
-      html`<lv-workspace-manager-dialog ?open=${true}></lv-workspace-manager-dialog>`,
+      html`<gn-workspace-manager-dialog ?open=${true}></gn-workspace-manager-dialog>`,
     );
     await el.updateComplete;
     el.workspaces = [{ id: 'ws1', name: 'Team', repositories: [], color: null, description: '' }];
@@ -160,7 +160,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
       { path: 'other.txt', status: 'untracked', isStaged: false, isConflicted: false },
     ];
     const el = await fixture<any>(
-      html`<lv-file-status .repositoryPath=${'/repo/a'}></lv-file-status>`,
+      html`<gn-file-status .repositoryPath=${'/repo/a'}></gn-file-status>`,
     );
     await el.updateComplete;
     await new Promise((r) => setTimeout(r, 50));
@@ -179,7 +179,7 @@ describe('destructive buttons claim their guard before the confirm', () => {
     // the confirm, and a hard reset run twice discards uncommitted work against
     // a branch that has already moved.
     const el = await fixture<any>(
-      html`<lv-reflog-dialog ?open=${true} .repositoryPath=${'/repo/a'}></lv-reflog-dialog>`,
+      html`<gn-reflog-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-reflog-dialog>`,
     );
     await el.updateComplete;
     const entry = { index: 0, oid: 'abc123', shortId: 'abc123', message: 'commit', time: 0 };

@@ -59,7 +59,7 @@ async function expectVisibleFocusRing(page: Page): Promise<FocusInfo> {
 
 /** Focus starts nowhere in particular; click a dead area of the chrome first. */
 async function resetFocus(page: Page): Promise<void> {
-  await page.locator('lv-app-shell').click({ position: { x: 5, y: 5 } });
+  await page.locator('gn-app-shell').click({ position: { x: 5, y: 5 } });
 }
 
 test.describe('Accessibility — keyboard focus ring', () => {
@@ -153,13 +153,13 @@ test.describe('Accessibility — reduced motion', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await setupOpenRepository(page);
 
-    // lv-progress-indicator is always mounted by app-shell and owns one of the
+    // gn-progress-indicator is always mounted by app-shell and owns one of the
     // app's infinite spinners (.progress-icon.spinning). Probe its already
     // adopted styles so the assertion does not depend on an operation being in
     // flight.
     const result = await page.evaluate(() => {
-      const shell = document.querySelector('lv-app-shell')?.shadowRoot;
-      const root = shell?.querySelector('lv-progress-indicator')?.shadowRoot;
+      const shell = document.querySelector('gn-app-shell')?.shadowRoot;
+      const root = shell?.querySelector('gn-progress-indicator')?.shadowRoot;
       if (!root) return null;
       const probe = document.createElement('div');
       probe.className = 'progress-icon spinning';
@@ -173,7 +173,7 @@ test.describe('Accessibility — reduced motion', () => {
       return out;
     });
 
-    expect(result, 'lv-progress-indicator is not mounted').not.toBeNull();
+    expect(result, 'gn-progress-indicator is not mounted').not.toBeNull();
     expect(parseFloat(result!.duration)).toBeLessThan(0.001);
     expect(result!.iterations).toBe('1');
   });

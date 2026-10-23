@@ -75,7 +75,7 @@ describe('app-shell command palette: open the repository elsewhere', () => {
   });
 
   function shellOnRepo(path: string | null = '/repo/active'): AppShell {
-    const el = document.createElement('lv-app-shell') as AppShell;
+    const el = document.createElement('gn-app-shell') as AppShell;
     (el as any).activeRepository = path ? { repository: mockRepo(path, 'active') } : null;
     return el;
   }

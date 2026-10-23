@@ -52,7 +52,7 @@ export class CloneDialogPage extends BaseDialog {
   readonly submodulesCheckbox: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-clone-dialog');
+    super(page, 'gn-clone-dialog');
     // Use direct role selectors (Playwright pierces shadow DOM automatically)
     this.dialog = page.getByRole('dialog', { name: 'Clone Repository' });
     this.closeButton = page.getByRole('button', { name: 'Close' });
@@ -61,9 +61,9 @@ export class CloneDialogPage extends BaseDialog {
     this.pathInput = page.getByRole('textbox', { name: 'Clone to' });
     this.browseButton = page.getByRole('button', { name: /Browse/i });
     // Clone button inside the dialog - use locator within the dialog to avoid matching welcome screen button
-    this.cloneButton = page.locator('lv-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
+    this.cloneButton = page.locator('gn-clone-dialog').getByRole('button', { name: 'Clone', exact: true });
     this.progressBar = this.dialog.locator('.progress-bar, progress');
-    // Role selectors, not CSS: two lv-clone-dialog instances are mounted (the
+    // Role selectors, not CSS: two gn-clone-dialog instances are mounted (the
     // toolbar's and the shell's) and only the open one is in the
     // accessibility tree, so a CSS id match is ambiguous while a role match is
     // not.
@@ -107,7 +107,7 @@ export class InitDialogPage extends BaseDialog {
   readonly bareCheckbox: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-init-dialog');
+    super(page, 'gn-init-dialog');
     // Use direct role selectors (Playwright flattens the accessibility tree)
     this.dialog = page.getByRole('dialog', { name: 'Initialize Repository' });
     this.closeButton = page.getByRole('button', { name: 'Close' });
@@ -151,11 +151,11 @@ export class CreateBranchDialogPage extends BaseDialog {
   readonly checkoutCheckbox: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-create-branch-dialog');
+    super(page, 'gn-create-branch-dialog');
     // Use role-based selector for the Branch Name input
     this.nameInput = page.getByRole('textbox', { name: 'Branch Name' });
     // Use exact match for Create Branch button to avoid matching "Create tag" button
-    this.createButton = page.locator('lv-create-branch-dialog').getByRole('button', { name: 'Create Branch' });
+    this.createButton = page.locator('gn-create-branch-dialog').getByRole('button', { name: 'Create Branch' });
     this.checkoutCheckbox = this.dialog.locator('input[type="checkbox"]');
   }
 
@@ -186,17 +186,17 @@ export class SettingsDialogPage extends BaseDialog {
   readonly resetButton: Locator;
 
   constructor(page: Page) {
-    // Settings dialog uses lv-modal which adds role="dialog" with aria-labelledby
-    super(page, 'lv-modal:has(lv-settings-dialog)');
-    // Use locator for modal dialog (lv-modal with Settings title)
-    this.dialog = page.locator('lv-modal:has(lv-settings-dialog)');
+    // Settings dialog uses gn-modal which adds role="dialog" with aria-labelledby
+    super(page, 'gn-modal:has(gn-settings-dialog)');
+    // Use locator for modal dialog (gn-modal with Settings title)
+    this.dialog = page.locator('gn-modal:has(gn-settings-dialog)');
     // Theme select - the select element inside settings-dialog
-    this.themeSelect = page.locator('lv-settings-dialog #theme-select');
+    this.themeSelect = page.locator('gn-settings-dialog #theme-select');
     // Toggle switches for boolean settings (showAvatars, showCommitSize, wordWrap, confirmBeforeDiscard)
     // Note: vim mode toggle is in keyboard shortcuts dialog, not settings
-    this.vimModeToggle = page.locator('lv-settings-dialog lv-toggle').first();
-    this.doneButton = page.locator('lv-settings-dialog button:has-text("Done")');
-    this.resetButton = page.locator('lv-settings-dialog button:has-text("Reset to Defaults")');
+    this.vimModeToggle = page.locator('gn-settings-dialog gn-toggle').first();
+    this.doneButton = page.locator('gn-settings-dialog button:has-text("Done")');
+    this.resetButton = page.locator('gn-settings-dialog button:has-text("Reset to Defaults")');
   }
 
   async setTheme(theme: 'light' | 'dark' | 'system'): Promise<void> {
@@ -236,12 +236,12 @@ export class ProfileManagerDialogPage extends BaseDialog {
   readonly pickerAccountRows: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-profile-manager-dialog');
+    super(page, 'gn-profile-manager-dialog');
     // The dialog header contains "Profiles" text - use that to verify visibility
     // Custom element tags aren't in accessibility tree, so use text matching
-    this.dialog = page.locator('lv-profile-manager-dialog[open]');
+    this.dialog = page.locator('gn-profile-manager-dialog[open]');
     // Fallback - check for the New Profile button which is only visible in the dialog
-    this.profileList = page.locator('lv-profile-manager-dialog[open] .profile-list');
+    this.profileList = page.locator('gn-profile-manager-dialog[open] .profile-list');
     // "New Profile" button - use accessible role selector
     this.addProfileButton = page.getByRole('button', { name: 'New Profile' });
     // Profile name input (placeholder: "e.g., Work, Personal, Open Source")
@@ -264,7 +264,7 @@ export class ProfileManagerDialogPage extends BaseDialog {
     // The "Integration Accounts" section of the profile edit form (distinct from
     // the "Assigned Repositories" section, which shares the .accounts-section class).
     this.integrationAccountsSection = page
-      .locator('lv-profile-manager-dialog .accounts-section')
+      .locator('gn-profile-manager-dialog .accounts-section')
       .filter({ hasText: 'Integration Accounts' });
     this.attachAccountButton = this.integrationAccountsSection.getByRole('button', {
       name: 'Add',
@@ -272,7 +272,7 @@ export class ProfileManagerDialogPage extends BaseDialog {
     });
     this.attachedAccountItems = this.integrationAccountsSection.locator('.account-item');
     // Selectable rows shown in the account picker (select-account view).
-    this.pickerAccountRows = page.locator('lv-profile-manager-dialog .account-item.selectable');
+    this.pickerAccountRows = page.locator('gn-profile-manager-dialog .account-item.selectable');
   }
 
   async getProfileCount(): Promise<number> {
@@ -383,45 +383,45 @@ export class GitHubDialogPage extends BaseDialog {
   readonly createIssueButton: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-github-dialog');
-    // GitHub dialog uses lv-modal wrapper - check the modal's dialog role
+    super(page, 'gn-github-dialog');
+    // GitHub dialog uses gn-modal wrapper - check the modal's dialog role
     this.dialog = page.getByRole('dialog', { name: 'GitHub' });
 
     // Tabs - buttons with class .tab inside .tabs container
-    this.connectionTab = page.locator('lv-github-dialog .tab:has-text("Connection")');
-    this.pullRequestsTab = page.locator('lv-github-dialog .tab:has-text("Pull Requests")');
-    this.issuesTab = page.locator('lv-github-dialog .tab:has-text("Issues")');
-    this.releasesTab = page.locator('lv-github-dialog .tab:has-text("Releases")');
-    this.actionsTab = page.locator('lv-github-dialog .tab:has-text("Actions")');
+    this.connectionTab = page.locator('gn-github-dialog .tab:has-text("Connection")');
+    this.pullRequestsTab = page.locator('gn-github-dialog .tab:has-text("Pull Requests")');
+    this.issuesTab = page.locator('gn-github-dialog .tab:has-text("Issues")');
+    this.releasesTab = page.locator('gn-github-dialog .tab:has-text("Releases")');
+    this.actionsTab = page.locator('gn-github-dialog .tab:has-text("Actions")');
 
     // Connection
-    this.tokenInput = page.locator('lv-github-dialog input[type="password"]');
-    this.connectButton = page.locator('lv-github-dialog button:has-text("Connect to GitHub")');
-    this.connectionStatus = page.locator('lv-github-dialog .connection-status');
+    this.tokenInput = page.locator('gn-github-dialog input[type="password"]');
+    this.connectButton = page.locator('gn-github-dialog button:has-text("Connect to GitHub")');
+    this.connectionStatus = page.locator('gn-github-dialog .connection-status');
 
     // OAuth elements
-    this.authMethodToggle = page.locator('lv-github-dialog .auth-method-toggle');
-    this.oauthButton = page.locator('lv-github-dialog .auth-method-toggle button:has-text("Sign in with GitHub")');
-    this.patButton = page.locator('lv-github-dialog .auth-method-toggle button:has-text("Personal Access Token")');
-    this.oauthSignInButton = page.locator('lv-github-dialog .btn-oauth');
-    this.oauthSpinner = page.locator('lv-github-dialog .oauth-spinner');
-    this.oauthStatus = page.locator('lv-github-dialog .oauth-status');
-    this.oauthDivider = page.locator('lv-github-dialog .oauth-divider');
+    this.authMethodToggle = page.locator('gn-github-dialog .auth-method-toggle');
+    this.oauthButton = page.locator('gn-github-dialog .auth-method-toggle button:has-text("Sign in with GitHub")');
+    this.patButton = page.locator('gn-github-dialog .auth-method-toggle button:has-text("Personal Access Token")');
+    this.oauthSignInButton = page.locator('gn-github-dialog .btn-oauth');
+    this.oauthSpinner = page.locator('gn-github-dialog .oauth-spinner');
+    this.oauthStatus = page.locator('gn-github-dialog .oauth-status');
+    this.oauthDivider = page.locator('gn-github-dialog .oauth-divider');
 
     // GitHub App elements
-    this.appButton = page.locator('lv-github-dialog .auth-method-toggle button:has-text("GitHub App")');
-    this.appIdInput = page.locator('lv-github-dialog input[placeholder="123456"]');
-    this.appPrivateKeyInput = page.locator('lv-github-dialog textarea[placeholder^="Paste your private key"]');
-    this.appInstallationInput = page.locator('lv-github-dialog input[placeholder^="Installation ID"]');
-    this.connectViaAppButton = page.locator('lv-github-dialog button:has-text("Connect via GitHub App")');
+    this.appButton = page.locator('gn-github-dialog .auth-method-toggle button:has-text("GitHub App")');
+    this.appIdInput = page.locator('gn-github-dialog input[placeholder="123456"]');
+    this.appPrivateKeyInput = page.locator('gn-github-dialog textarea[placeholder^="Paste your private key"]');
+    this.appInstallationInput = page.locator('gn-github-dialog input[placeholder^="Installation ID"]');
+    this.connectViaAppButton = page.locator('gn-github-dialog button:has-text("Connect via GitHub App")');
 
     // PRs
-    this.prList = page.locator('lv-github-dialog .pr-list');
-    this.createPrButton = page.locator('lv-github-dialog button:has-text("New PR")');
+    this.prList = page.locator('gn-github-dialog .pr-list');
+    this.createPrButton = page.locator('gn-github-dialog button:has-text("New PR")');
 
     // Issues
-    this.issueList = page.locator('lv-github-dialog .issue-list');
-    this.createIssueButton = page.locator('lv-github-dialog button:has-text("New Issue")');
+    this.issueList = page.locator('gn-github-dialog .issue-list');
+    this.createIssueButton = page.locator('gn-github-dialog button:has-text("New Issue")');
   }
 
   async switchToConnectionTab(): Promise<void> {
@@ -521,32 +521,32 @@ export class GitLabDialogPage extends BaseDialog {
   readonly oauthStatus: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-gitlab-dialog');
+    super(page, 'gn-gitlab-dialog');
     // Use element locator since the modal title attribute may vary
-    this.dialog = page.locator('lv-gitlab-dialog lv-modal[open]');
+    this.dialog = page.locator('gn-gitlab-dialog gn-modal[open]');
 
     // Tabs
-    this.connectionTab = page.locator('lv-gitlab-dialog .tab:has-text("Connection")');
-    this.mergeRequestsTab = page.locator('lv-gitlab-dialog .tab:has-text("Merge Requests")');
-    this.issuesTab = page.locator('lv-gitlab-dialog .tab:has-text("Issues")');
-    this.pipelinesTab = page.locator('lv-gitlab-dialog .tab:has-text("Pipelines")');
+    this.connectionTab = page.locator('gn-gitlab-dialog .tab:has-text("Connection")');
+    this.mergeRequestsTab = page.locator('gn-gitlab-dialog .tab:has-text("Merge Requests")');
+    this.issuesTab = page.locator('gn-gitlab-dialog .tab:has-text("Issues")');
+    this.pipelinesTab = page.locator('gn-gitlab-dialog .tab:has-text("Pipelines")');
 
     // Create-issue label picker
-    this.labelChips = page.locator('lv-gitlab-dialog .label-chip');
+    this.labelChips = page.locator('gn-gitlab-dialog .label-chip');
 
     // Connection
-    this.instanceUrlInput = page.locator('lv-gitlab-dialog input[type="text"]').first();
-    this.tokenInput = page.locator('lv-gitlab-dialog input[type="password"]');
-    this.connectButton = page.locator('lv-gitlab-dialog button:has-text("Connect with Token")');
-    this.connectionStatus = page.locator('lv-gitlab-dialog .connection-status');
+    this.instanceUrlInput = page.locator('gn-gitlab-dialog input[type="text"]').first();
+    this.tokenInput = page.locator('gn-gitlab-dialog input[type="password"]');
+    this.connectButton = page.locator('gn-gitlab-dialog button:has-text("Connect with Token")');
+    this.connectionStatus = page.locator('gn-gitlab-dialog .connection-status');
 
     // OAuth
-    this.authMethodToggle = page.locator('lv-gitlab-dialog .auth-method-toggle');
-    this.oauthButton = page.locator('lv-gitlab-dialog .auth-method-toggle button:has-text("Sign in with GitLab")');
-    this.patButton = page.locator('lv-gitlab-dialog .auth-method-toggle button:has-text("Personal Access Token")');
-    this.oauthSignInButton = page.locator('lv-gitlab-dialog .btn-oauth');
-    this.oauthSpinner = page.locator('lv-gitlab-dialog .oauth-spinner');
-    this.oauthStatus = page.locator('lv-gitlab-dialog .oauth-status');
+    this.authMethodToggle = page.locator('gn-gitlab-dialog .auth-method-toggle');
+    this.oauthButton = page.locator('gn-gitlab-dialog .auth-method-toggle button:has-text("Sign in with GitLab")');
+    this.patButton = page.locator('gn-gitlab-dialog .auth-method-toggle button:has-text("Personal Access Token")');
+    this.oauthSignInButton = page.locator('gn-gitlab-dialog .btn-oauth');
+    this.oauthSpinner = page.locator('gn-gitlab-dialog .oauth-spinner');
+    this.oauthStatus = page.locator('gn-gitlab-dialog .oauth-status');
   }
 
   async switchToConnectionTab(): Promise<void> {
@@ -591,29 +591,29 @@ export class AzureDevOpsDialogPage extends BaseDialog {
   readonly oauthStatus: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-azure-devops-dialog');
+    super(page, 'gn-azure-devops-dialog');
     // Use element locator since the modal title attribute may vary
-    this.dialog = page.locator('lv-azure-devops-dialog lv-modal[open]');
+    this.dialog = page.locator('gn-azure-devops-dialog gn-modal[open]');
 
     // Tabs
-    this.connectionTab = page.locator('lv-azure-devops-dialog .tab:has-text("Connection")');
-    this.pullRequestsTab = page.locator('lv-azure-devops-dialog .tab:has-text("Pull Requests")');
-    this.workItemsTab = page.locator('lv-azure-devops-dialog .tab:has-text("Work Items")');
-    this.pipelinesTab = page.locator('lv-azure-devops-dialog .tab:has-text("Pipelines")');
+    this.connectionTab = page.locator('gn-azure-devops-dialog .tab:has-text("Connection")');
+    this.pullRequestsTab = page.locator('gn-azure-devops-dialog .tab:has-text("Pull Requests")');
+    this.workItemsTab = page.locator('gn-azure-devops-dialog .tab:has-text("Work Items")');
+    this.pipelinesTab = page.locator('gn-azure-devops-dialog .tab:has-text("Pipelines")');
 
     // Connection
-    this.organizationInput = page.locator('lv-azure-devops-dialog input[type="text"]').first();
-    this.tokenInput = page.locator('lv-azure-devops-dialog input[type="password"]');
-    this.connectButton = page.locator('lv-azure-devops-dialog .btn-primary:has-text("Connect")');
-    this.connectionStatus = page.locator('lv-azure-devops-dialog .connection-status');
+    this.organizationInput = page.locator('gn-azure-devops-dialog input[type="text"]').first();
+    this.tokenInput = page.locator('gn-azure-devops-dialog input[type="password"]');
+    this.connectButton = page.locator('gn-azure-devops-dialog .btn-primary:has-text("Connect")');
+    this.connectionStatus = page.locator('gn-azure-devops-dialog .connection-status');
 
     // OAuth
-    this.authMethodToggle = page.locator('lv-azure-devops-dialog .auth-method-toggle');
-    this.oauthButton = page.locator('lv-azure-devops-dialog .auth-method-toggle button:has-text("Sign in with Microsoft")');
-    this.patButton = page.locator('lv-azure-devops-dialog .auth-method-toggle button:has-text("Personal Access Token")');
-    this.oauthSignInButton = page.locator('lv-azure-devops-dialog .btn-oauth');
-    this.oauthSpinner = page.locator('lv-azure-devops-dialog .oauth-spinner');
-    this.oauthStatus = page.locator('lv-azure-devops-dialog .oauth-status');
+    this.authMethodToggle = page.locator('gn-azure-devops-dialog .auth-method-toggle');
+    this.oauthButton = page.locator('gn-azure-devops-dialog .auth-method-toggle button:has-text("Sign in with Microsoft")');
+    this.patButton = page.locator('gn-azure-devops-dialog .auth-method-toggle button:has-text("Personal Access Token")');
+    this.oauthSignInButton = page.locator('gn-azure-devops-dialog .btn-oauth');
+    this.oauthSpinner = page.locator('gn-azure-devops-dialog .oauth-spinner');
+    this.oauthStatus = page.locator('gn-azure-devops-dialog .oauth-status');
   }
 
   async switchToConnectionTab(): Promise<void> {
@@ -659,30 +659,30 @@ export class BitbucketDialogPage extends BaseDialog {
   readonly oauthStatus: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-bitbucket-dialog');
+    super(page, 'gn-bitbucket-dialog');
     // Use element locator since the modal title attribute may vary
-    this.dialog = page.locator('lv-bitbucket-dialog lv-modal[open]');
+    this.dialog = page.locator('gn-bitbucket-dialog gn-modal[open]');
 
     // Tabs
-    this.connectionTab = page.locator('lv-bitbucket-dialog .tab:has-text("Connection")');
-    this.pullRequestsTab = page.locator('lv-bitbucket-dialog .tab:has-text("Pull Requests")');
-    this.issuesTab = page.locator('lv-bitbucket-dialog .tab:has-text("Issues")');
-    this.pipelinesTab = page.locator('lv-bitbucket-dialog .tab:has-text("Pipelines")');
+    this.connectionTab = page.locator('gn-bitbucket-dialog .tab:has-text("Connection")');
+    this.pullRequestsTab = page.locator('gn-bitbucket-dialog .tab:has-text("Pull Requests")');
+    this.issuesTab = page.locator('gn-bitbucket-dialog .tab:has-text("Issues")');
+    this.pipelinesTab = page.locator('gn-bitbucket-dialog .tab:has-text("Pipelines")');
 
     // Connection
-    this.usernameInput = page.locator('lv-bitbucket-dialog input[type="text"]').first();
-    this.appPasswordInput = page.locator('lv-bitbucket-dialog input[type="password"]');
-    this.connectButton = page.locator('lv-bitbucket-dialog button:has-text("Connect with App Password")');
-    this.connectionStatus = page.locator('lv-bitbucket-dialog .connection-status');
+    this.usernameInput = page.locator('gn-bitbucket-dialog input[type="text"]').first();
+    this.appPasswordInput = page.locator('gn-bitbucket-dialog input[type="password"]');
+    this.connectButton = page.locator('gn-bitbucket-dialog button:has-text("Connect with App Password")');
+    this.connectionStatus = page.locator('gn-bitbucket-dialog .connection-status');
 
     // OAuth
-    this.authMethodToggle = page.locator('lv-bitbucket-dialog .auth-method-toggle');
-    this.oauthButton = page.locator('lv-bitbucket-dialog .auth-method-toggle button:has-text("Sign in with Bitbucket")');
-    this.appPasswordButton = page.locator('lv-bitbucket-dialog .auth-method-toggle button:has-text("App Password")');
-    this.oauthSignInButton = page.locator('lv-bitbucket-dialog .btn-oauth');
-    this.oauthCancelButton = page.locator('lv-bitbucket-dialog .oauth-cancel');
-    this.oauthSpinner = page.locator('lv-bitbucket-dialog .oauth-spinner');
-    this.oauthStatus = page.locator('lv-bitbucket-dialog .oauth-status');
+    this.authMethodToggle = page.locator('gn-bitbucket-dialog .auth-method-toggle');
+    this.oauthButton = page.locator('gn-bitbucket-dialog .auth-method-toggle button:has-text("Sign in with Bitbucket")');
+    this.appPasswordButton = page.locator('gn-bitbucket-dialog .auth-method-toggle button:has-text("App Password")');
+    this.oauthSignInButton = page.locator('gn-bitbucket-dialog .btn-oauth');
+    this.oauthCancelButton = page.locator('gn-bitbucket-dialog .oauth-cancel');
+    this.oauthSpinner = page.locator('gn-bitbucket-dialog .oauth-spinner');
+    this.oauthStatus = page.locator('gn-bitbucket-dialog .oauth-status');
   }
 
   async switchToConnectionTab(): Promise<void> {
@@ -698,7 +698,7 @@ export class BitbucketDialogPage extends BaseDialog {
   async waitUntilReady(): Promise<void> {
     await this.authMethodToggle
       .page()
-      .locator('lv-bitbucket-dialog[data-ready]')
+      .locator('gn-bitbucket-dialog[data-ready]')
       .waitFor({ state: 'attached', timeout: 10000 });
   }
 
@@ -726,19 +726,19 @@ export class KeyboardShortcutsDialogPage extends BaseDialog {
 
   constructor(page: Page) {
     // Keyboard shortcuts dialog has [open] attribute when visible
-    super(page, 'lv-keyboard-shortcuts-dialog[open]');
+    super(page, 'gn-keyboard-shortcuts-dialog[open]');
     // The dialog is the component with [open] attribute
-    this.dialog = page.locator('lv-keyboard-shortcuts-dialog[open]');
+    this.dialog = page.locator('gn-keyboard-shortcuts-dialog[open]');
     // Shortcuts are in .content > .category > .shortcuts-list with .shortcut-row items
-    this.shortcutList = page.locator('lv-keyboard-shortcuts-dialog[open] .content');
-    // Vim toggle is the lv-toggle switch in the footer
+    this.shortcutList = page.locator('gn-keyboard-shortcuts-dialog[open] .content');
+    // Vim toggle is the gn-toggle switch in the footer
     this.vimModeToggle = page
-      .locator('lv-keyboard-shortcuts-dialog[open]')
+      .locator('gn-keyboard-shortcuts-dialog[open]')
       .getByRole('switch', { name: 'Vim-style navigation' });
   }
 
   async getShortcutCount(): Promise<number> {
-    return this.page.locator('lv-keyboard-shortcuts-dialog[open] .shortcut-row').count();
+    return this.page.locator('gn-keyboard-shortcuts-dialog[open] .shortcut-row').count();
   }
 
   async toggleVimMode(): Promise<void> {
@@ -759,7 +759,7 @@ export class CommandPalettePage {
   constructor(page: Page) {
     this.page = page;
     // Command palette uses [open] attribute when visible
-    this.palette = page.locator('lv-command-palette[open]');
+    this.palette = page.locator('gn-command-palette[open]');
     // Input has class .search-input
     this.input = this.palette.locator('.search-input');
     // Results are in .results div with .command items
@@ -769,12 +769,12 @@ export class CommandPalettePage {
 
   async open(): Promise<void> {
     await this.page.keyboard.press('Meta+p');
-    await this.page.locator('lv-command-palette[open]').waitFor({ state: 'visible' });
+    await this.page.locator('gn-command-palette[open]').waitFor({ state: 'visible' });
   }
 
   async close(): Promise<void> {
     await this.page.keyboard.press('Escape');
-    await this.page.locator('lv-command-palette[open]').waitFor({ state: 'hidden' });
+    await this.page.locator('gn-command-palette[open]').waitFor({ state: 'hidden' });
   }
 
   async isVisible(): Promise<boolean> {
@@ -820,19 +820,19 @@ export class ConfigDialogPage extends BaseDialog {
   readonly errorBanner: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-config-dialog');
-    this.identityTab = page.locator('lv-config-dialog .tab', { hasText: 'Identity' });
-    this.settingsTab = page.locator('lv-config-dialog .tab', { hasText: 'Settings' });
-    this.aliasesTab = page.locator('lv-config-dialog .tab', { hasText: 'Aliases' });
-    this.nameInput = page.locator('lv-config-dialog .form-group input').first();
-    this.emailInput = page.locator('lv-config-dialog .form-group input').nth(1);
-    this.scopeRepositoryBtn = page.locator('lv-config-dialog .scope-btn', { hasText: 'Repository' });
-    this.scopeGlobalBtn = page.locator('lv-config-dialog .scope-btn', { hasText: 'Global' });
-    this.saveButton = page.locator('lv-config-dialog .btn-primary');
-    this.settingsList = page.locator('lv-config-dialog .settings-list');
-    this.aliasList = page.locator('lv-config-dialog .alias-list');
-    this.addAliasForm = page.locator('lv-config-dialog .add-alias-form');
-    this.errorBanner = page.locator('lv-config-dialog .error-banner');
+    super(page, 'gn-config-dialog');
+    this.identityTab = page.locator('gn-config-dialog .tab', { hasText: 'Identity' });
+    this.settingsTab = page.locator('gn-config-dialog .tab', { hasText: 'Settings' });
+    this.aliasesTab = page.locator('gn-config-dialog .tab', { hasText: 'Aliases' });
+    this.nameInput = page.locator('gn-config-dialog .form-group input').first();
+    this.emailInput = page.locator('gn-config-dialog .form-group input').nth(1);
+    this.scopeRepositoryBtn = page.locator('gn-config-dialog .scope-btn', { hasText: 'Repository' });
+    this.scopeGlobalBtn = page.locator('gn-config-dialog .scope-btn', { hasText: 'Global' });
+    this.saveButton = page.locator('gn-config-dialog .btn-primary');
+    this.settingsList = page.locator('gn-config-dialog .settings-list');
+    this.aliasList = page.locator('gn-config-dialog .alias-list');
+    this.addAliasForm = page.locator('gn-config-dialog .add-alias-form');
+    this.errorBanner = page.locator('gn-config-dialog .error-banner');
   }
 
   async switchToIdentity(): Promise<void> {
@@ -879,9 +879,9 @@ export class ReflogDialogPage extends BaseDialog {
   readonly currentBadge: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-reflog-dialog');
-    this.entries = page.locator('lv-reflog-dialog .entry');
-    this.currentBadge = page.locator('lv-reflog-dialog .current-badge');
+    super(page, 'gn-reflog-dialog');
+    this.entries = page.locator('gn-reflog-dialog .entry');
+    this.currentBadge = page.locator('gn-reflog-dialog .current-badge');
   }
 
   getEntry(index: number): Locator {
@@ -921,13 +921,13 @@ export class RemoteDialogPage extends BaseDialog {
   readonly deleteButton: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-remote-dialog');
-    this.remoteList = page.locator('lv-remote-dialog .remote-list, lv-remote-dialog .remote-item');
-    this.nameInput = page.locator('lv-remote-dialog input').first();
-    this.urlInput = page.locator('lv-remote-dialog input').nth(1);
-    this.addButton = page.locator('lv-remote-dialog .btn-primary, lv-remote-dialog button', { hasText: 'Add' });
-    this.editButton = page.locator('lv-remote-dialog button', { hasText: 'Edit' });
-    this.deleteButton = page.locator('lv-remote-dialog button', { hasText: 'Delete' });
+    super(page, 'gn-remote-dialog');
+    this.remoteList = page.locator('gn-remote-dialog .remote-list, gn-remote-dialog .remote-item');
+    this.nameInput = page.locator('gn-remote-dialog input').first();
+    this.urlInput = page.locator('gn-remote-dialog input').nth(1);
+    this.addButton = page.locator('gn-remote-dialog .btn-primary, gn-remote-dialog button', { hasText: 'Add' });
+    this.editButton = page.locator('gn-remote-dialog button', { hasText: 'Edit' });
+    this.deleteButton = page.locator('gn-remote-dialog button', { hasText: 'Delete' });
   }
 
   async addRemote(name: string, url: string): Promise<void> {
@@ -949,7 +949,7 @@ export class RemoteDialogPage extends BaseDialog {
   }
 
   async getRemoteCount(): Promise<number> {
-    return this.page.locator('lv-remote-dialog .remote-item').count();
+    return this.page.locator('gn-remote-dialog .remote-item').count();
   }
 }
 
@@ -965,13 +965,13 @@ export class SubmoduleDialogPage extends BaseDialog {
   readonly removeButton: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-submodule-dialog');
-    this.submoduleList = page.locator('lv-submodule-dialog .submodule-list, lv-submodule-dialog .submodule-item');
-    this.urlInput = page.locator('lv-submodule-dialog input').first();
-    this.pathInput = page.locator('lv-submodule-dialog input').nth(1);
-    this.addButton = page.locator('lv-submodule-dialog .btn-primary, lv-submodule-dialog button', { hasText: 'Add' });
-    this.updateButton = page.locator('lv-submodule-dialog button', { hasText: 'Update' });
-    this.removeButton = page.locator('lv-submodule-dialog button', { hasText: 'Remove' });
+    super(page, 'gn-submodule-dialog');
+    this.submoduleList = page.locator('gn-submodule-dialog .submodule-list, gn-submodule-dialog .submodule-item');
+    this.urlInput = page.locator('gn-submodule-dialog input').first();
+    this.pathInput = page.locator('gn-submodule-dialog input').nth(1);
+    this.addButton = page.locator('gn-submodule-dialog .btn-primary, gn-submodule-dialog button', { hasText: 'Add' });
+    this.updateButton = page.locator('gn-submodule-dialog button', { hasText: 'Update' });
+    this.removeButton = page.locator('gn-submodule-dialog button', { hasText: 'Remove' });
   }
 
   async addSubmodule(url: string, path: string): Promise<void> {
@@ -991,7 +991,7 @@ export class SubmoduleDialogPage extends BaseDialog {
   }
 
   async getSubmoduleCount(): Promise<number> {
-    return this.page.locator('lv-submodule-dialog .submodule-item').count();
+    return this.page.locator('gn-submodule-dialog .submodule-item').count();
   }
 }
 
@@ -1008,14 +1008,14 @@ export class RepositoryHealthDialogPage extends BaseDialog {
   readonly recommendations: Locator;
 
   constructor(page: Page) {
-    super(page, 'lv-repository-health-dialog');
-    this.statCards = page.locator('lv-repository-health-dialog .stat-card');
-    this.gcButton = page.locator('lv-repository-health-dialog button', { hasText: 'Run GC' });
-    this.aggressiveGcButton = page.locator('lv-repository-health-dialog button', { hasText: 'Aggressive' });
-    this.fsckButton = page.locator('lv-repository-health-dialog button', { hasText: 'Check' });
-    this.pruneButton = page.locator('lv-repository-health-dialog button', { hasText: 'Prune' });
-    this.doneButton = page.locator('lv-repository-health-dialog button', { hasText: 'Done' });
-    this.recommendations = page.locator('lv-repository-health-dialog .recommendation');
+    super(page, 'gn-repository-health-dialog');
+    this.statCards = page.locator('gn-repository-health-dialog .stat-card');
+    this.gcButton = page.locator('gn-repository-health-dialog button', { hasText: 'Run GC' });
+    this.aggressiveGcButton = page.locator('gn-repository-health-dialog button', { hasText: 'Aggressive' });
+    this.fsckButton = page.locator('gn-repository-health-dialog button', { hasText: 'Check' });
+    this.pruneButton = page.locator('gn-repository-health-dialog button', { hasText: 'Prune' });
+    this.doneButton = page.locator('gn-repository-health-dialog button', { hasText: 'Done' });
+    this.recommendations = page.locator('gn-repository-health-dialog .recommendation');
   }
 
   async runGc(): Promise<void> {

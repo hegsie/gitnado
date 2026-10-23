@@ -149,7 +149,7 @@ test.describe('Profile Manager Dialog - Basic Operations', () => {
     await page.keyboard.press('Escape');
 
     // Dialog should be closed - check the dialog element itself
-    await expect(page.locator('lv-profile-manager-dialog[open]')).not.toBeVisible();
+    await expect(page.locator('gn-profile-manager-dialog[open]')).not.toBeVisible();
   });
 });
 
@@ -288,7 +288,7 @@ test.describe('Profile Manager Dialog - Integration Accounts', () => {
     await expect(dialogs.profileManager.attachedAccountItems).toHaveCount(0);
 
     await dialogs.profileManager.attachAccountButton.click();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Attach Account'
     );
 
@@ -381,7 +381,7 @@ test.describe('Profile Manager Dialog - Integration Accounts', () => {
       .first()
       .locator('.account-actions .action-btn:not(.delete)')
       .click();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Edit Account'
     );
 
@@ -398,7 +398,7 @@ test.describe('Profile Manager Dialog - Integration Accounts', () => {
 
     // After deletion the dialog returns to the profile editor and the now-deleted
     // account no longer appears in the attached list.
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Edit Profile'
     );
     await expect(dialogs.profileManager.attachedAccountItems).toHaveCount(0);
@@ -416,13 +416,13 @@ test.describe('Profile Manager Dialog - Integration Accounts', () => {
       .first()
       .locator('.account-actions .action-btn:not(.delete)')
       .click();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Edit Account'
     );
 
     // The account edit form exposes a URL patterns textarea pre-filled with the
     // account's existing patterns (Work GitHub matches github.com/company/*).
-    const patternsTextarea = page.locator('lv-profile-manager-dialog textarea');
+    const patternsTextarea = page.locator('gn-profile-manager-dialog textarea');
     await expect(patternsTextarea).toBeVisible();
     await expect(patternsTextarea).toHaveValue('github.com/company/*');
 
@@ -476,14 +476,14 @@ test.describe('Profile Manager Dialog - Attach with no accounts', () => {
 
     await page.locator('.profile-item').first().click();
     await dialogs.profileManager.attachAccountButton.click();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Attach Account'
     );
 
     // No existing accounts to pick, but connect-new buttons are present
     await expect(dialogs.profileManager.pickerAccountRows).toHaveCount(0);
     const githubBtn = page
-      .locator('lv-profile-manager-dialog')
+      .locator('gn-profile-manager-dialog')
       .getByRole('button', { name: 'GitHub', exact: true });
     await expect(githubBtn).toBeVisible();
 
@@ -492,7 +492,7 @@ test.describe('Profile Manager Dialog - Attach with no accounts', () => {
     // The GitHub dialog opens on top; the profile manager stays mounted underneath
     // (demoted) so it can be revealed again when the GitHub dialog closes.
     await expect(dialogs.github.dialog).toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(1);
+    await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(1);
   });
 
   test('connecting a new account auto-attaches it to the profile', async ({ page }) => {
@@ -503,25 +503,25 @@ test.describe('Profile Manager Dialog - Attach with no accounts', () => {
 
     await page.locator('.profile-item').first().click();
     await dialogs.profileManager.attachAccountButton.click();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Attach Account'
     );
 
     // Connect a new GitHub account → GitHub dialog opens on top, profile manager
     // stays mounted underneath (demoted).
     await page
-      .locator('lv-profile-manager-dialog')
+      .locator('gn-profile-manager-dialog')
       .getByRole('button', { name: 'GitHub', exact: true })
       .click();
     await expect(dialogs.github.dialog).toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(1);
+    await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(1);
 
     // Opened from the profile manager → the dialog shows a Back arrow, not a close ×
     await expect(
-      page.locator('lv-github-dialog').getByRole('button', { name: 'Back' })
+      page.locator('gn-github-dialog').getByRole('button', { name: 'Back' })
     ).toBeVisible();
     await expect(
-      page.locator('lv-github-dialog').getByRole('button', { name: 'Close' })
+      page.locator('gn-github-dialog').getByRole('button', { name: 'Close' })
     ).toHaveCount(0);
 
     // Simulate the account being connected while in the GitHub dialog: the next
@@ -548,10 +548,10 @@ test.describe('Profile Manager Dialog - Attach with no accounts', () => {
 
     // Going back from the GitHub dialog reveals the profile manager and auto-attaches
     // the account that was just connected — landing back on the edit form.
-    await page.locator('lv-github-dialog').getByRole('button', { name: 'Back' }).click();
+    await page.locator('gn-github-dialog').getByRole('button', { name: 'Back' }).click();
 
-    await expect(page.locator('lv-profile-manager-dialog[open][demoted]')).toHaveCount(0);
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog[open][demoted]')).toHaveCount(0);
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Edit Profile'
     );
     await expect(dialogs.profileManager.attachedAccountItems.first()).toContainText(
@@ -609,7 +609,7 @@ test.describe('Global Accounts Management', () => {
     await dialogs.commandPalette.executeFirst();
 
     // Look for accounts info in profile cards (e.g., "1 default account")
-    const profileManager = page.locator('lv-profile-manager-dialog');
+    const profileManager = page.locator('gn-profile-manager-dialog');
     await expect(profileManager.getByText(/account/i).first()).toBeVisible();
   });
 
@@ -622,7 +622,7 @@ test.describe('Global Accounts Management', () => {
     await expect(page.getByRole('button', { name: 'New Profile' })).toBeVisible();
 
     // Profile cards show "1 default account" in the meta section
-    const profileManager = page.locator('lv-profile-manager-dialog');
+    const profileManager = page.locator('gn-profile-manager-dialog');
     await expect(profileManager.getByText(/default account/i)).toBeVisible();
   });
 });
@@ -764,8 +764,8 @@ test.describe('GitHub Dialog - Account Selector', () => {
 
     await expect(dialogs.github.dialog).toBeVisible();
 
-    // lv-account-selector is rendered when accounts exist in the store
-    const accountSelector = page.locator('lv-account-selector');
+    // gn-account-selector is rendered when accounts exist in the store
+    const accountSelector = page.locator('gn-account-selector');
     await expect(accountSelector).toBeVisible();
   });
 
@@ -784,7 +784,7 @@ test.describe('GitHub Dialog - Account Selector', () => {
     await dialogs.commandPalette.executeFirst();
 
     // Click the account selector button to open dropdown
-    const selectorBtn = page.locator('lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-account-selector .selector-btn');
     await expect(selectorBtn).toBeVisible();
     await selectorBtn.click();
 
@@ -799,7 +799,7 @@ test.describe('GitHub Dialog - Account Selector', () => {
     await dialogs.commandPalette.executeFirst();
 
     // Click the account selector button to open dropdown
-    const selectorBtn = page.locator('lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-account-selector .selector-btn');
     await expect(selectorBtn).toBeVisible();
     await selectorBtn.click();
 
@@ -831,7 +831,7 @@ test.describe('GitHub Dialog - Connection States', () => {
     await dialogs.commandPalette.executeFirst();
 
     // Dialog should have sign-in options (button may appear multiple times, use first)
-    const githubDialog = page.locator('lv-github-dialog');
+    const githubDialog = page.locator('gn-github-dialog');
     await expect(githubDialog.getByRole('button', { name: /sign in with github/i }).first()).toBeVisible();
   });
 
@@ -864,7 +864,7 @@ test.describe('GitHub Dialog - Connection States', () => {
     await dialogs.commandPalette.executeFirst();
 
     // The account selector shows the account name and cached username from the store
-    const githubDialog = page.locator('lv-github-dialog');
+    const githubDialog = page.locator('gn-github-dialog');
     // Account selector shows cached username @johndoe-work
     await expect(githubDialog.getByText(/johndoe-work/).first()).toBeVisible();
   });
@@ -884,7 +884,7 @@ test.describe('GitHub Dialog - Connection States', () => {
     await dialogs.commandPalette.executeFirst();
 
     // Connection tab should have sign-in options (for re-auth or switching accounts)
-    const githubDialog = page.locator('lv-github-dialog');
+    const githubDialog = page.locator('gn-github-dialog');
     // The dialog should have connection options available
     await expect(githubDialog.getByRole('button', { name: 'Connection' })).toBeVisible();
   });
@@ -1546,16 +1546,16 @@ test.describe('Profiles & Accounts discoverability (no repository open)', () => 
   });
 
   test('welcome screen exposes a Profiles & Accounts action that opens the manager', async ({ page }) => {
-    const action = page.locator('lv-welcome button.action-btn', { hasText: 'Profiles & Accounts' });
+    const action = page.locator('gn-welcome button.action-btn', { hasText: 'Profiles & Accounts' });
     await expect(action).toBeVisible();
     await action.click();
 
     // Manager opens even with no repository, and shows the explainer + title.
     await expect(dialogs.profileManager.addProfileButton).toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Profiles & Accounts',
     );
-    await expect(page.locator('lv-profile-manager-dialog .view-explainer')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .view-explainer')).toContainText(
       'Profiles set your git identity per repository',
     );
   });
@@ -1564,7 +1564,7 @@ test.describe('Profiles & Accounts discoverability (no repository open)', () => 
     await page.keyboard.press('Meta+,');
     await expect(dialogs.settings.dialog).toBeVisible();
 
-    const openBtn = page.locator('lv-settings-dialog button', {
+    const openBtn = page.locator('gn-settings-dialog button', {
       hasText: 'Open Profiles & Accounts',
     });
     await expect(openBtn).toBeVisible();
@@ -1573,7 +1573,7 @@ test.describe('Profiles & Accounts discoverability (no repository open)', () => 
     // Settings closes and the manager opens.
     await expect(dialogs.settings.dialog).not.toBeVisible();
     await expect(dialogs.profileManager.addProfileButton).toBeVisible();
-    await expect(page.locator('lv-profile-manager-dialog .dialog-title')).toContainText(
+    await expect(page.locator('gn-profile-manager-dialog .dialog-title')).toContainText(
       'Profiles & Accounts',
     );
   });
@@ -1608,7 +1608,7 @@ test.describe('Profiles & Accounts discoverability (no repository open)', () => 
     await dialogs.github.connectButton.click();
 
     // Error is surfaced to the user (not silent), still with no repository open.
-    await expect(page.locator('lv-github-dialog .error-message')).toBeVisible();
-    await expect(page.locator('lv-github-dialog .error-message')).toContainText('Bad credentials');
+    await expect(page.locator('gn-github-dialog .error-message')).toBeVisible();
+    await expect(page.locator('gn-github-dialog .error-message')).toContainText('Bad credentials');
   });
 });

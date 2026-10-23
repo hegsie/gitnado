@@ -64,7 +64,7 @@ describe('app-shell command palette: open file in editor', () => {
   });
 
   function shellOnRepo(): AppShell {
-    const el = document.createElement('lv-app-shell') as AppShell;
+    const el = document.createElement('gn-app-shell') as AppShell;
     (el as any).activeRepository = { repository: mockRepo('/repo/one', 'one') };
     return el;
   }

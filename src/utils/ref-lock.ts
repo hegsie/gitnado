@@ -6,9 +6,9 @@ import { showToast } from '../services/notification.service.ts';
  *
  * Two disjoint locks used to guard the same commands: app-shell held
  * `refOperationsInFlight` for the graph ref menu, the commit context menu and
- * the command palette, while `lv-branch-list`, `lv-tag-list` and
- * `lv-stash-list` each held their own component-local `operationInProgress`.
- * Nothing passed a busy signal between them — `<lv-left-panel>` is rendered
+ * the command palette, while `gn-branch-list`, `gn-tag-list` and
+ * `gn-stash-list` each held their own component-local `operationInProgress`.
+ * Nothing passed a busy signal between them — `<gn-left-panel>` is rendered
  * with no props at all — so a hard reset started from the graph and a
  * double-clicked sidebar checkout ran concurrently against the same working
  * tree. There is no per-repo lock in the backend (every command opens its own
@@ -121,7 +121,7 @@ export function resetRefOpLocks(): void {
  * plain form inputs must stay live: `busy` reflects ANY operation anywhere in
  * the repo, so gating them greys out the most obvious way to leave a dialog —
  * or freezes a textarea mid-keystroke — for a reason that has nothing to do
- * with the dialog. lv-clean-dialog and lv-repository-health-dialog already
+ * with the dialog. gn-clean-dialog and gn-repository-health-dialog already
  * carry that decision in comments; applying the controller uniformly to every
  * binding in a footer walked straight back into it.
  */

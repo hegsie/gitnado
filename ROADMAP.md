@@ -37,7 +37,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
   - Commit message templates with variables
   - Auto-populate from .gitmessage
   - Conventional commits support
-  - Signed-off-by and Co-authored-by commit trailers (`src/components/sidebar/lv-commit-panel.ts`)
+  - Signed-off-by and Co-authored-by commit trailers (`src/components/sidebar/gn-commit-panel.ts`)
   - Quick amend/reword/fixup/squash from history
 
 - ✅ **Auto-stashing**
@@ -161,7 +161,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
   - Visual hook configuration (pre-commit, commit-msg, pre-push)
   - Hook templates (lint, format, test)
   - Enable/disable hooks per repository
-  - Hook execution logs and debugging (`lv-hooks-dialog.ts` Execution Log tab & `lv-output-panel.ts` with search filter and terminal launcher)
+  - Hook execution logs and debugging (`gn-hooks-dialog.ts` Execution Log tab & `gn-output-panel.ts` with search filter and terminal launcher)
 
 ---
 
@@ -178,7 +178,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 - ✅ Focus indicators — global `:focus-visible` styles in shared stylesheet, keyboard-only outlines via `:focus:not(:focus-visible)` suppression
 - ✅ Skip link — "Skip to main content" link appears on Tab, jumps past toolbar
 - ✅ Focus trap in modals — Tab cycles within dialog, focus restored on close
-- ✅ Accessibility audit — addressed WCAG 2.4.7 (Focus Visible), 4.1.3 (Status Messages), 2.4.3 (Focus Order), `prefers-reduced-motion`, high-contrast/`forced-colors` support (including commit graph contrast), and `lv-toggle` accessible switch semantics (`role="switch"`, `aria-checked`, `aria-label`/`aria-labelledby`), verified by `src/styles/__tests__/a11y-styles.test.ts` and `src/components/dialogs/__tests__/lv-settings-dialog-contrast.test.ts`
+- ✅ Accessibility audit — addressed WCAG 2.4.7 (Focus Visible), 4.1.3 (Status Messages), 2.4.3 (Focus Order), `prefers-reduced-motion`, high-contrast/`forced-colors` support (including commit graph contrast), and `gn-toggle` accessible switch semantics (`role="switch"`, `aria-checked`, `aria-label`/`aria-labelledby`), verified by `src/styles/__tests__/a11y-styles.test.ts` and `src/components/dialogs/__tests__/gn-settings-dialog-contrast.test.ts`
 
 #### Security Hardening
 
@@ -197,9 +197,9 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 - ✅ **Auto-fetch** — configurable intervals, fetch on focus, remote change indicators, rate limiting, pause/resume
 - ✅ **Native application menu bar** — full native OS menu bar (File, Edit, View, Repository, Branch, Tools, Window, Help) wired between Rust (`src-tauri/src/menu.rs`) and the frontend (`src/services/app-menu.service.ts`)
 - ✅ **Localisation (i18n)** — `@lit/localize` runtime localization with English and French locales (`src/i18n/`)
-- ✅ **Jira integration UI** — full Jira dialog (`src/components/dialogs/lv-jira-dialog.ts`, `src-tauri/src/commands/jira.rs`) with connection setup & testing, JQL issue filtering, status transitions, and one-click branch creation from Jira issues
+- ✅ **Jira integration UI** — full Jira dialog (`src/components/dialogs/gn-jira-dialog.ts`, `src-tauri/src/commands/jira.rs`) with connection setup & testing, JQL issue filtering, status transitions, and one-click branch creation from Jira issues
 - ✅ **Inline PR/MR review comments** — view and post general and file/line-scoped review comments directly inside the GitHub, GitLab, Azure DevOps, and Bitbucket integration dialogs (`get_*_pr_comments`, `add_*_pr_comment`)
-- ✅ **Git Output panel & terminal launcher** — searchable/filterable Git command & hook output panel (`src/components/panels/lv-output-panel.ts`) with one-click external terminal launcher
+- ✅ **Git Output panel & terminal launcher** — searchable/filterable Git command & hook output panel (`src/components/panels/gn-output-panel.ts`) with one-click external terminal launcher
 
 ---
 
@@ -215,7 +215,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
   - Shallow clone with configurable `--depth` (clone dialog)
   - Partial clone with `--filter` (blob:none, tree:0) via clone dialog dropdown
   - Single-branch clone option
-  - Recursive submodule clone (`--recurse-submodules`) option in `lv-clone-dialog.ts` and `clone_repository`
+  - Recursive submodule clone (`--recurse-submodules`) option in `gn-clone-dialog.ts` and `clone_repository`
   - Deepen shallow clones incrementally (`git fetch --deepen`)
   - Convert shallow to full clone (`git fetch --unshallow`)
   - Repository metadata: `isShallow`, `isPartialClone`, `cloneFilter` exposed in Repository struct
@@ -242,7 +242,7 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 - ✅ **Package manager delivery** — winget, Homebrew cask (Apple Silicon tap), and Scoop manifest published automatically on each release; community-maintained AUR package. Future candidates: Chocolatey, Flathub, Snapcraft
 
-- ✅ **Rename to Gitnado (0.9.0)** — new name, icon and identifiers; existing Leviathan installs migrate settings, keychain entries and per-repo rules on first launch (see [docs/upgrading-from-leviathan.md](docs/upgrading-from-leviathan.md))
+- ✅ **Rename to Gitnado (0.9.0)** — new name, icon and identifiers
 
 ---
 
@@ -346,10 +346,10 @@ By Q2 2027, Gitnado's primary advantage is that **it costs $0 in API credits** a
 
 Recently shipped milestones (as of 2026-10-23):
 
-- ✅ **Jira integration UI** — `lv-jira-dialog.ts` wired into the toolbar and command palette with connection management, JQL issue search, status transitions, and branch creation from Jira issues.
+- ✅ **Jira integration UI** — `gn-jira-dialog.ts` wired into the toolbar and command palette with connection management, JQL issue search, status transitions, and branch creation from Jira issues.
 - ✅ **Inline PR/MR review comments** — GitHub, GitLab, Azure DevOps, and Bitbucket dialogs support viewing and posting general and line-level diff review comments.
-- ✅ **Recursive submodule clone (`--recurse-submodules`)** — `clone_repository` and `lv-clone-dialog.ts` support cloning submodules recursively (enabled by default).
-- ✅ **Hook execution logs & Output panel filter/terminal launcher** — `lv-hooks-dialog.ts` records and displays historical hook execution logs, and `lv-output-panel.ts` provides output search/filtering and a quick external terminal launcher.
+- ✅ **Recursive submodule clone (`--recurse-submodules`)** — `clone_repository` and `gn-clone-dialog.ts` support cloning submodules recursively (enabled by default).
+- ✅ **Hook execution logs & Output panel filter/terminal launcher** — `gn-hooks-dialog.ts` records and displays historical hook execution logs, and `gn-output-panel.ts` provides output search/filtering and a quick external terminal launcher.
 - ✅ **Local AI `Pro` tier, custom `.gguf` import & token streaming** — `Pro` (32GB+ RAM / 12GB+ VRAM) model tier (Qwen 2.5 Coder 14B), local `.gguf` model import from disk (`import_custom_model`), and real-time `ai-stream-token` streaming during commit message generation.
 
 Remaining future work:

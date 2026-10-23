@@ -22,7 +22,7 @@ async function rightClickOnCommitRow(
   rowIndex: number = 0,
   button: 'left' | 'right' = 'right'
 ) {
-  const graphCanvas = page.locator('lv-graph-canvas');
+  const graphCanvas = page.locator('gn-graph-canvas');
   await expect(graphCanvas).toBeVisible();
 
   // Wait for the inner <canvas> element to have non-zero dimensions.
@@ -55,7 +55,7 @@ async function rightClickOnCommitRow(
  * Read the oid of the commit laid out at a given graph row.
  */
 async function oidAtRow(page: import('@playwright/test').Page, rowIndex: number): Promise<string> {
-  const graphHandle = await page.locator('lv-graph-canvas').elementHandle();
+  const graphHandle = await page.locator('gn-graph-canvas').elementHandle();
   const oid = await page.evaluate(
     ([el, row]) => {
       const canvas = el as HTMLElement & { sortedNodesByRow?: Array<{ oid: string }> };
@@ -106,7 +106,7 @@ test.describe('Commit Context Menu', () => {
     const secondOid = await oidAtRow(page, 1);
     expect(secondOid).not.toBe(firstOid);
 
-    const graphHandle = await page.locator('lv-graph-canvas').elementHandle();
+    const graphHandle = await page.locator('gn-graph-canvas').elementHandle();
     await page.waitForFunction(
       ([el, expectedOid]) => {
         const canvas = el as HTMLElement & { selectedNode?: { oid: string } | null };
@@ -212,8 +212,8 @@ test.describe('Context Menus - repository switch', () => {
   test.beforeEach(async ({ page }) => {
     await setupOpenRepository(page);
     await addBackgroundRepo(page, '/work/other-repo', 'other-repo');
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(2);
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute('title', '/tmp/test-repo');
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(2);
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute('title', '/tmp/test-repo');
   });
 
   test('Ctrl+digit tab switch closes an open commit context menu', async ({ page }) => {
@@ -224,7 +224,7 @@ test.describe('Context Menus - repository switch', () => {
 
     // Keyboard switch — no click, so handleDocumentClick never runs.
     await page.keyboard.press('Control+2');
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute(
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute(
       'title',
       '/work/other-repo'
     );
@@ -235,7 +235,7 @@ test.describe('Context Menus - repository switch', () => {
   test('Ctrl+digit tab switch closes an open ref context menu', async ({ page }) => {
     // Ref labels live on the canvas, so drive the real component event the
     // graph dispatches on a ref-label right-click rather than guessing pixels.
-    const graphHandle = await page.locator('lv-graph-canvas').elementHandle();
+    const graphHandle = await page.locator('gn-graph-canvas').elementHandle();
     await page.evaluate((el) => {
       el!.dispatchEvent(
         new CustomEvent('ref-context-menu', {
@@ -257,7 +257,7 @@ test.describe('Context Menus - repository switch', () => {
     await expect(contextMenu.locator('.context-menu-summary')).toHaveText('main');
 
     await page.keyboard.press('Control+2');
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute(
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute(
       'title',
       '/work/other-repo'
     );
@@ -266,18 +266,18 @@ test.describe('Context Menus - repository switch', () => {
   });
 
   test('Ctrl+digit tab switch closes an open sidebar branch context menu', async ({ page }) => {
-    // lv-left-panel keeps ONE lv-branch-list across tabs and only rebinds
+    // gn-left-panel keeps ONE gn-branch-list across tabs and only rebinds
     // `.repositoryPath`, so a leaked menu ends up over the NEW repo's rows
     // while Delete/Rename still resolve the repo at click time.
-    const branchRow = page.locator('lv-branch-list .branch-item').first();
+    const branchRow = page.locator('gn-branch-list .branch-item').first();
     await expect(branchRow).toBeVisible();
     await branchRow.click({ button: 'right' });
 
-    const contextMenu = page.locator('lv-branch-list .context-menu');
+    const contextMenu = page.locator('gn-branch-list .context-menu');
     await expect(contextMenu).toBeVisible();
 
     await page.keyboard.press('Control+2');
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute(
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute(
       'title',
       '/work/other-repo'
     );
@@ -665,7 +665,7 @@ test.describe('Operation Banner', () => {
     await resolveBtn.click();
 
     // Conflict resolution dialog should be visible
-    const conflictDialog = page.locator('lv-conflict-resolution-dialog[open]');
+    const conflictDialog = page.locator('gn-conflict-resolution-dialog[open]');
     await expect(conflictDialog).toBeVisible();
   });
 });
@@ -759,7 +759,7 @@ test.describe('Commit Context Menu - Specific Items', () => {
     await createBranchItem.click();
 
     // Create branch dialog should open
-    const createBranchDialog = page.locator('lv-create-branch-dialog lv-modal[open]');
+    const createBranchDialog = page.locator('gn-create-branch-dialog gn-modal[open]');
     await expect(createBranchDialog).toBeVisible({ timeout: 3000 });
   });
 
@@ -800,7 +800,7 @@ test.describe('Context Menus - Error Scenarios', () => {
     await cherryPickItem.click();
 
     // Cherry-pick opens a dialog; click the primary button to trigger the command
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/i,
     });
     // Confirm the cherry-pick dialog to trigger the error
@@ -860,8 +860,8 @@ test.describe('Context Menus - Error Scenarios', () => {
       }
     });
 
-    // Error toast should appear inside lv-toast-container
-    await expect(page.locator('lv-toast-container .toast.error').first()).toBeVisible({ timeout: 5000 });
+    // Error toast should appear inside gn-toast-container
+    await expect(page.locator('gn-toast-container .toast.error').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('UI should update after successful context menu checkout', async ({ page }) => {
@@ -911,7 +911,7 @@ test.describe('Context Menus - Error Scenarios', () => {
 
     // After checkout, the branch list should show feature/test as the active (current) branch
     await expect(
-      page.locator('lv-branch-list .branch-item.active').first()
+      page.locator('gn-branch-list .branch-item.active').first()
     ).toBeVisible({ timeout: 5000 });
   });
 

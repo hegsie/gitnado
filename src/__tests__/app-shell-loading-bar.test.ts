@@ -32,7 +32,7 @@ import '../app-shell.ts';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 async function shellWithLoading(loading: boolean): Promise<AppShell> {
-  const el = await fixture<AppShell>(html`<lv-app-shell></lv-app-shell>`);
+  const el = await fixture<AppShell>(html`<gn-app-shell></gn-app-shell>`);
   (el as any).globalLoading = loading;
   await el.updateComplete;
   return el;

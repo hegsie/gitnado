@@ -1,5 +1,5 @@
 /**
  * Toolbar component exports
  */
-export { LvToolbar } from './lv-toolbar.ts';
-export { LvSearchBar, type SearchFilter } from './lv-search-bar.ts';
+export { GnToolbar } from './gn-toolbar.ts';
+export { GnSearchBar, type SearchFilter } from './gn-search-bar.ts';

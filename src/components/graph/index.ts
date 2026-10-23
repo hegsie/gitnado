@@ -1,4 +1,4 @@
 /**
  * Graph component exports
  */
-export { LvGraphCanvas } from './lv-graph-canvas.ts';
+export { GnGraphCanvas } from './gn-graph-canvas.ts';

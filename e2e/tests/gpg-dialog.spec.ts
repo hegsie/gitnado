@@ -9,7 +9,7 @@ import {
 } from '../fixtures/test-helpers';
 
 /**
- * E2E tests for the GPG signing dialog (lv-gpg-dialog) when the repository
+ * E2E tests for the GPG signing dialog (gn-gpg-dialog) when the repository
  * signs with SSH (gpg.format=ssh).
  *
  * Git then signs with a key from ~/.ssh and never consults the GPG keyring,
@@ -52,7 +52,7 @@ const SSH_CONFIG = {
 
 async function openGpgDialog(page: Page): Promise<void> {
   await openViaCommandPalette(page, 'GPG Signing Settings');
-  await page.locator('lv-gpg-dialog .dialog').waitFor({ state: 'visible', timeout: 5000 });
+  await page.locator('gn-gpg-dialog .dialog').waitFor({ state: 'visible', timeout: 5000 });
 }
 
 test.describe('GPG Dialog - SSH signing', () => {
@@ -69,13 +69,13 @@ test.describe('GPG Dialog - SSH signing', () => {
     });
     await openGpgDialog(page);
 
-    const item = page.locator('lv-gpg-dialog .key-item');
+    const item = page.locator('gn-gpg-dialog .key-item');
     await expect(item).toHaveCount(1);
     await expect(item).toContainText('me@example.com');
 
     await item.click();
 
-    await expect(page.locator('lv-gpg-dialog .message.success')).toBeVisible();
+    await expect(page.locator('gn-gpg-dialog .message.success')).toBeVisible();
     const calls = await findCommand(page, 'set_signing_key');
     expect(calls).toHaveLength(1);
     // The public-key path, never a GPG key id: git reads the file at sign time.
@@ -90,13 +90,13 @@ test.describe('GPG Dialog - SSH signing', () => {
     });
     await openGpgDialog(page);
 
-    await expect(page.locator('lv-gpg-dialog .command-block code')).toHaveText(
+    await expect(page.locator('gn-gpg-dialog .command-block code')).toHaveText(
       'ssh-keygen -t ed25519 -C "your@email.com"'
     );
-    await expect(page.locator('lv-gpg-dialog')).not.toContainText('No GPG keys found');
+    await expect(page.locator('gn-gpg-dialog')).not.toContainText('No GPG keys found');
     // Back would lead into the GPG key-generation guide; Refresh is the way out.
     await expect(
-      page.locator('lv-gpg-dialog .dialog-footer.wizard .btn-secondary')
+      page.locator('gn-gpg-dialog .dialog-footer.wizard .btn-secondary')
     ).toHaveText('Refresh');
   });
 
@@ -111,10 +111,10 @@ test.describe('GPG Dialog - SSH signing', () => {
     });
     await openGpgDialog(page);
 
-    const item = page.locator('lv-gpg-dialog .key-item');
+    const item = page.locator('gn-gpg-dialog .key-item');
     await expect(item).toHaveCount(1);
     await expect(item).toContainText('me@example.com');
-    await expect(page.locator('lv-gpg-dialog .unusable-keys')).toContainText(
+    await expect(page.locator('gn-gpg-dialog .unusable-keys')).toContainText(
       'id_ecdsa cannot sign'
     );
 
@@ -133,6 +133,6 @@ test.describe('GPG Dialog - SSH signing', () => {
     await injectCommandError(page, 'get_ssh_keys', 'permission denied');
     await openGpgDialog(page);
 
-    await expect(page.locator('lv-gpg-dialog .message.error')).toContainText('permission denied');
+    await expect(page.locator('gn-gpg-dialog .message.error')).toContainText('permission denied');
   });
 });

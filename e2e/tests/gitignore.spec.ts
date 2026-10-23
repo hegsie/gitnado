@@ -56,7 +56,7 @@ const COMMON_ATTRIBUTES = [
 
 async function openIgnoreDialog(page: Page): Promise<void> {
   await openViaCommandPalette(page, 'Edit .gitignore');
-  await page.locator('lv-gitignore-dialog lv-modal[open]').waitFor({ state: 'visible', timeout: 3000 });
+  await page.locator('gn-gitignore-dialog gn-modal[open]').waitFor({ state: 'visible', timeout: 3000 });
 }
 
 test.describe('Add to .gitignore from the file context menu', () => {
@@ -96,9 +96,9 @@ test.describe('Add to .gitignore from the file context menu', () => {
     expect(command).toBeTruthy();
     expect((command.args as { patterns: string[] }).patterns).toEqual(['/src/new-file.ts']);
 
-    await expect(page.locator('lv-file-status li.file-item[title="src/new-file.ts"]')).toHaveCount(0);
-    await expect(page.locator('lv-file-status li.file-item[title=".gitignore"]')).toBeVisible();
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible();
+    await expect(page.locator('gn-file-status li.file-item[title="src/new-file.ts"]')).toHaveCount(0);
+    await expect(page.locator('gn-file-status li.file-item[title=".gitignore"]')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible();
   });
 
   test('offers the extension rule and writes the glob', async ({ page }) => {
@@ -129,8 +129,8 @@ test.describe('Add to .gitignore from the file context menu', () => {
     await injectCommandError(page, 'add_to_gitignore', 'Permission denied');
     await page.locator('.context-menu-item', { hasText: 'Add to .gitignore' }).click();
 
-    await expect(page.locator('lv-toast-container .toast.error').first()).toBeVisible();
-    await expect(page.locator('lv-file-status li.file-item[title="src/new-file.ts"]')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.error').first()).toBeVisible();
+    await expect(page.locator('gn-file-status li.file-item[title="src/new-file.ts"]')).toBeVisible();
   });
 });
 
@@ -163,14 +163,14 @@ test.describe('Ignore rules dialog', () => {
   test('opens from the command palette and lists the rules', async ({ page }) => {
     await openIgnoreDialog(page);
 
-    const dialog = page.locator('lv-gitignore-dialog');
+    const dialog = page.locator('gn-gitignore-dialog');
     await expect(dialog.locator('.rule-text', { hasText: '# build output' })).toBeVisible();
     await expect(dialog.locator('.rule-text', { hasText: 'dist/' })).toBeVisible();
   });
 
   test('adds a rule and applies a template', async ({ page }) => {
     await openIgnoreDialog(page);
-    const dialog = page.locator('lv-gitignore-dialog');
+    const dialog = page.locator('gn-gitignore-dialog');
 
     await dialog.locator('input[aria-label="Ignore pattern"]').fill('*.log');
     await dialog.locator('button', { hasText: 'Add' }).first().click();
@@ -202,7 +202,7 @@ test.describe('Ignore rules dialog', () => {
     ];
     await injectCommandMock(page, { get_gitignore: DUPLICATES });
     await openIgnoreDialog(page);
-    const dialog = page.locator('lv-gitignore-dialog');
+    const dialog = page.locator('gn-gitignore-dialog');
 
     const rows = dialog.locator('.rule-item:not(.blank)');
     await expect(rows).toHaveCount(4);
@@ -221,12 +221,12 @@ test.describe('Ignore rules dialog', () => {
 
     await expect(rows).toHaveCount(3);
     await expect(dialog.locator('.rule-text', { hasText: '# generated' })).toHaveCount(1);
-    await expect(page.locator('lv-toast-container .toast.success').first()).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.success').first()).toBeVisible();
   });
 
   test('explains why a path is ignored', async ({ page }) => {
     await openIgnoreDialog(page);
-    const dialog = page.locator('lv-gitignore-dialog');
+    const dialog = page.locator('gn-gitignore-dialog');
 
     await dialog.locator('input[aria-label="Path to check"]').fill('dist/app.js');
     await dialog.locator('button', { hasText: 'Check' }).click();
@@ -239,7 +239,7 @@ test.describe('Ignore rules dialog', () => {
 
   test('renders attribute chips and removes a rule', async ({ page }) => {
     await openIgnoreDialog(page);
-    const dialog = page.locator('lv-gitignore-dialog');
+    const dialog = page.locator('gn-gitignore-dialog');
 
     await dialog.locator('.tab', { hasText: '.gitattributes' }).click();
 
@@ -271,7 +271,7 @@ test.describe('Ignore rules dialog in a repo with neither file', () => {
 
   test('shows the empty state with a way forward, not a dead end', async ({ page }) => {
     await openIgnoreDialog(page);
-    const dialog = page.locator('lv-gitignore-dialog');
+    const dialog = page.locator('gn-gitignore-dialog');
 
     await expect(dialog.locator('.empty-state')).toContainText('No ignore rules yet');
     await expect(dialog.locator('select[aria-label="Gitignore template"]')).toBeVisible();

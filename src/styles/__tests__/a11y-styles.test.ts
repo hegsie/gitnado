@@ -23,8 +23,8 @@ let cbId = 0;
 import { expect, fixture, html } from '@open-wc/testing';
 import { LitElement, html as litHtml } from 'lit';
 import { sharedStyles, focusRingStyles, reducedMotionStyles } from '../shared-styles.ts';
-import '../../components/sidebar/lv-branch-list.ts';
-import '../../components/common/lv-progress-indicator.ts';
+import '../../components/sidebar/gn-branch-list.ts';
+import '../../components/common/gn-progress-indicator.ts';
 
 function sheetsOf(root: ShadowRoot): CSSStyleSheet[] {
   return [...(root.adoptedStyleSheets ?? []), ...Array.from(root.styleSheets ?? [])];
@@ -100,11 +100,11 @@ describe('shared accessibility styles', () => {
   });
 
   describe('focus ring', () => {
-    it('drives the ring from the --lv-focus-ring custom properties', () => {
+    it('drives the ring from the --gn-focus-ring custom properties', () => {
       const text = focusRingStyles.cssText;
-      expect(text).to.contain('--lv-focus-ring-color');
-      expect(text).to.contain('--lv-focus-ring-width');
-      expect(text).to.contain('--lv-focus-ring-offset');
+      expect(text).to.contain('--gn-focus-ring-color');
+      expect(text).to.contain('--gn-focus-ring-width');
+      expect(text).to.contain('--gn-focus-ring-offset');
     });
 
     it('composes the fragment into sharedStyles', () => {
@@ -141,16 +141,16 @@ describe('shared accessibility styles', () => {
     it('hugs form fields with a zero offset', async () => {
       const el = await fixture<A11yStylesProbe>(html`<a11y-styles-probe></a11y-styles-probe>`);
       const input = el.shadowRoot?.querySelector('.probe-input') as HTMLElement;
-      expect(getComputedStyle(input).getPropertyValue('--lv-focus-ring-offset').trim()).to.equal('0px');
+      expect(getComputedStyle(input).getPropertyValue('--gn-focus-ring-offset').trim()).to.equal('0px');
     });
 
     it('insets the ring on full-bleed list rows so a scroll container cannot clip it', async () => {
-      const el = await fixture<LitElement>(html`<lv-branch-list></lv-branch-list>`);
+      const el = await fixture<LitElement>(html`<gn-branch-list></gn-branch-list>`);
       const rule = styleRules(el.shadowRoot as ShadowRoot).find(
         (r) => r.selectorText === '.group-header'
       );
-      expect(rule, 'lv-branch-list has no .group-header rule').to.exist;
-      expect(rule?.style.getPropertyValue('--lv-focus-ring-offset').trim()).to.equal('-2px');
+      expect(rule, 'gn-branch-list has no .group-header rule').to.exist;
+      expect(rule?.style.getPropertyValue('--gn-focus-ring-offset').trim()).to.equal('-2px');
     });
   });
 
@@ -160,7 +160,7 @@ describe('shared accessibility styles', () => {
   // component paints a static full-width fill instead of nothing.
   describe('indeterminate progress with motion reduced', () => {
     it('keeps the progress indicator fill visible', async () => {
-      const el = await fixture<LitElement>(html`<lv-progress-indicator></lv-progress-indicator>`);
+      const el = await fixture<LitElement>(html`<gn-progress-indicator></gn-progress-indicator>`);
       const overrides = reducedMotionRules(el.shadowRoot as ShadowRoot)
         .flatMap((media) => Array.from(media.cssRules))
         .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)

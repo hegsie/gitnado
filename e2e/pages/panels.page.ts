@@ -29,14 +29,14 @@ export class LeftPanelPage {
 
   constructor(page: Page) {
     this.page = page;
-    this.panel = page.locator('lv-left-panel');
+    this.panel = page.locator('gn-left-panel');
 
     // Section headers - used to expand/collapse sections
     this.stashesHeader = page.getByText('Stashes').first();
     this.tagsHeader = page.getByText('Tags').first();
 
     // Branch list - use role-based selectors that work with shadow DOM
-    this.branchList = page.locator('lv-branch-list');
+    this.branchList = page.locator('gn-branch-list');
     // Local branches are branch-item elements inside .local-section
     this.localBranches = this.branchList.locator('.local-section li.branch-item');
     // Remote branches are branch-item elements inside .group (remote groups)
@@ -44,14 +44,14 @@ export class LeftPanelPage {
     this.currentBranch = this.branchList.locator('li.branch-item.active').first();
 
     // Stash list - the component itself
-    this.stashList = page.locator('lv-stash-list');
+    this.stashList = page.locator('gn-stash-list');
     // Stash items are rendered with stash-item class
     this.stashItems = this.stashList.locator('.stash-item');
     // The inline `git stash show` preview, revealed by clicking a stash row
     this.stashDetails = this.stashList.locator('.stash-details');
 
     // Tag list - the component itself
-    this.tagList = page.locator('lv-tag-list');
+    this.tagList = page.locator('gn-tag-list');
     // Tag items are rendered with tag-item class
     this.tagItems = this.tagList.locator('.tag-item');
   }
@@ -222,7 +222,7 @@ export class RightPanelPage {
 
   constructor(page: Page) {
     this.page = page;
-    this.panel = page.locator('lv-right-panel');
+    this.panel = page.locator('gn-right-panel');
 
     // Tabs - use getByRole for buttons with tab-like behavior
     this.changesTab = page.getByRole('button', { name: /^Changes/ });
@@ -230,31 +230,31 @@ export class RightPanelPage {
     this.analyticsTab = page.getByRole('button', { name: 'Analytics' });
 
     // Analytics panel
-    this.analyticsPanel = page.locator('lv-analytics-panel');
+    this.analyticsPanel = page.locator('gn-analytics-panel');
 
     // File status - use accessible selectors
-    this.fileStatus = page.locator('lv-file-status');
+    this.fileStatus = page.locator('gn-file-status');
     // Staged section - look for the section containing "Staged" text
-    this.stagedSection = page.locator('lv-file-status').filter({ hasText: 'Staged' });
+    this.stagedSection = page.locator('gn-file-status').filter({ hasText: 'Staged' });
     // Unstaged section contains "Changes" header (not to be confused with tab)
-    this.unstagedSection = page.locator('lv-file-status');
-    // Files are listitem elements within lv-file-status (to avoid matching left panel branches)
-    this.stagedFiles = page.locator('lv-file-status').getByRole('listitem');
-    this.unstagedFiles = page.locator('lv-file-status').getByRole('listitem');
+    this.unstagedSection = page.locator('gn-file-status');
+    // Files are listitem elements within gn-file-status (to avoid matching left panel branches)
+    this.stagedFiles = page.locator('gn-file-status').getByRole('listitem');
+    this.unstagedFiles = page.locator('gn-file-status').getByRole('listitem');
 
     // Stage/unstage buttons - use accessible roles with exact match to avoid ambiguity
     this.stageAllButton = page.getByRole('button', { name: 'Stage all files', exact: true });
     this.unstageAllButton = page.getByRole('button', { name: 'Unstage all files', exact: true });
 
     // Commit panel - use getByRole for accessible elements
-    this.commitPanel = page.locator('lv-commit-panel');
+    this.commitPanel = page.locator('gn-commit-panel');
     this.commitMessage = page.getByRole('textbox', { name: /Summary/i });
     this.commitButton = page.getByRole('button', { name: 'Commit', exact: true });
     // AI generate button - use class selector for reliability (text varies: "Generate with AI" or "Configure AI")
-    this.aiGenerateButton = page.locator('lv-commit-panel .generate-btn');
+    this.aiGenerateButton = page.locator('gn-commit-panel .generate-btn');
 
-    // Commit details - lv-commit-details component
-    this.commitDetails = page.locator('lv-commit-details');
+    // Commit details - gn-commit-details component
+    this.commitDetails = page.locator('gn-commit-details');
     this.commitSha = this.commitDetails.locator('.commit-sha');
     this.commitAuthor = this.commitDetails.locator('.commit-author');
     this.commitDate = this.commitDetails.locator('.commit-date');
@@ -286,16 +286,16 @@ export class RightPanelPage {
    * Get an unstaged file by path
    */
   getUnstagedFile(path: string): Locator {
-    // File items are <li> elements with title="<path>" within lv-file-status
-    return this.page.locator(`lv-file-status li.file-item[title="${path}"]`);
+    // File items are <li> elements with title="<path>" within gn-file-status
+    return this.page.locator(`gn-file-status li.file-item[title="${path}"]`);
   }
 
   /**
    * Get a staged file by path
    */
   getStagedFile(path: string): Locator {
-    // File items are <li> elements with title="<path>" within lv-file-status
-    return this.page.locator(`lv-file-status li.file-item[title="${path}"]`);
+    // File items are <li> elements with title="<path>" within gn-file-status
+    return this.page.locator(`gn-file-status li.file-item[title="${path}"]`);
   }
 
   /**
@@ -348,7 +348,7 @@ export class RightPanelPage {
   }
 
   /**
-   * Wait for lv-file-status to finish loading before reading its counts.
+   * Wait for gn-file-status to finish loading before reading its counts.
    *
    * The count readers below cannot distinguish "genuinely zero" from "the
    * section has not rendered yet" — both look like an absent section — so they
@@ -360,7 +360,7 @@ export class RightPanelPage {
    * site at once instead of adding a wait to each of the ~57 of them.
    */
   private async waitForFileStatusSettled(): Promise<void> {
-    const panel = this.page.locator('lv-file-status');
+    const panel = this.page.locator('gn-file-status');
     if ((await panel.count()) === 0) return;
     await panel.locator('.loading').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {
       // Never rendered a loading state at all — nothing to wait for.
@@ -375,7 +375,7 @@ export class RightPanelPage {
     // The section structure is: .section-header > .section-title "Staged" + .section-count "N"
     await this.waitForFileStatusSettled();
     try {
-      const stagedSection = this.page.locator('lv-file-status .section-header:has-text("Staged")');
+      const stagedSection = this.page.locator('gn-file-status .section-header:has-text("Staged")');
       const isVisible = await stagedSection.isVisible({ timeout: 1000 });
       if (!isVisible) return 0;
 
@@ -395,7 +395,7 @@ export class RightPanelPage {
     // When there are no files, the section might not exist
     await this.waitForFileStatusSettled();
     try {
-      const changesSection = this.page.locator('lv-file-status .section-header:has-text("Changes")');
+      const changesSection = this.page.locator('gn-file-status .section-header:has-text("Changes")');
       const isVisible = await changesSection.isVisible({ timeout: 1000 });
       if (!isVisible) return 0;
 
@@ -441,9 +441,9 @@ export class GraphPanelPage {
 
   constructor(page: Page) {
     this.page = page;
-    this.canvas = page.locator('lv-graph-canvas');
-    this.diffOverlay = page.locator('lv-diff-view');
-    this.blameOverlay = page.locator('lv-blame-view');
+    this.canvas = page.locator('gn-graph-canvas');
+    this.diffOverlay = page.locator('gn-diff-view');
+    this.blameOverlay = page.locator('gn-blame-view');
   }
 
   /**

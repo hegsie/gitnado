@@ -52,7 +52,7 @@ const BLAME_RESULT = {
 };
 
 async function runSearch(page: import('@playwright/test').Page, query: string): Promise<void> {
-  const dialog = page.locator('lv-search-dialog[open]');
+  const dialog = page.locator('gn-search-dialog[open]');
   await dialog.waitFor({ state: 'attached' });
   await dialog.locator('.query-input').fill(query);
   await dialog.locator('.query-input').press('Enter');
@@ -68,11 +68,11 @@ test.describe('Search dialog', () => {
     await openViaCommandPalette(page, 'Search in files');
     await runSearch(page, 'token');
 
-    const row = page.locator('lv-search-dialog[open] .result-item').first();
+    const row = page.locator('gn-search-dialog[open] .result-item').first();
     await expect(row).toBeVisible();
     await expect(row).toContainText(':42');
     await expect(row).toContainText('const token = getToken();');
-    await expect(page.locator('lv-search-dialog[open] .result-file')).toContainText('src/main.ts');
+    await expect(page.locator('gn-search-dialog[open] .result-file')).toContainText('src/main.ts');
 
     const calls = await findCommand(page, 'search_in_files');
     expect(calls.length).toBeGreaterThan(0);
@@ -87,17 +87,17 @@ test.describe('Search dialog', () => {
     await openViaCommandPalette(page, 'Search in files');
     await runSearch(page, 'token');
 
-    await page.locator('lv-search-dialog[open] .result-item').first().click();
+    await page.locator('gn-search-dialog[open] .result-item').first().click();
 
-    await expect(page.locator('lv-search-dialog[open]')).toHaveCount(0);
-    await expect(page.locator('lv-blame-view')).toBeVisible();
+    await expect(page.locator('gn-search-dialog[open]')).toHaveCount(0);
+    await expect(page.locator('gn-blame-view')).toBeVisible();
     // The blame header shows only the file name (compact header), with the
     // full path as a hover tooltip rather than in the visible text — this is
     // the component's long-standing, deliberate rendering (getFileName()),
     // not a regression, so verify each half of the intended display in the
     // place it actually appears.
-    await expect(page.locator('lv-blame-view .file-path')).toHaveText('main.ts');
-    await expect(page.locator('lv-blame-view .file-path')).toHaveAttribute('title', 'src/main.ts');
+    await expect(page.locator('gn-blame-view .file-path')).toHaveText('main.ts');
+    await expect(page.locator('gn-blame-view .file-path')).toHaveAttribute('title', 'src/main.ts');
   });
 
   test('a backend failure is shown inside the dialog', async ({ page }) => {
@@ -106,7 +106,7 @@ test.describe('Search dialog', () => {
     await openViaCommandPalette(page, 'Search in files');
     await runSearch(page, 'to(ken');
 
-    const dialog = page.locator('lv-search-dialog[open]');
+    const dialog = page.locator('gn-search-dialog[open]');
     await expect(dialog.locator('.error')).toBeVisible();
     await expect(dialog.locator('.error')).toContainText('fatal: invalid regex');
     await expect(dialog).toHaveCount(1);
@@ -117,7 +117,7 @@ test.describe('Search dialog', () => {
     await openViaCommandPalette(page, 'Search in current diff');
     await runSearch(page, 'token');
 
-    await expect(page.locator('lv-search-dialog[open] .empty')).toContainText('No matches found');
+    await expect(page.locator('gn-search-dialog[open] .empty')).toContainText('No matches found');
   });
 
   test('finding commits that changed text reveals the commit', async ({ page }) => {
@@ -136,11 +136,11 @@ test.describe('Search dialog', () => {
     await openViaCommandPalette(page, 'Find commits that changed text');
     await runSearch(page, 'token');
 
-    const row = page.locator('lv-search-dialog[open] .result-item').first();
+    const row = page.locator('gn-search-dialog[open] .result-item').first();
     await expect(row).toContainText('abc123d');
     await row.click();
 
-    await expect(page.locator('lv-search-dialog[open]')).toHaveCount(0);
-    await expect(page.locator('lv-commit-details .commit-message')).toContainText('Initial commit');
+    await expect(page.locator('gn-search-dialog[open]')).toHaveCount(0);
+    await expect(page.locator('gn-commit-details .commit-message')).toContainText('Initial commit');
   });
 });

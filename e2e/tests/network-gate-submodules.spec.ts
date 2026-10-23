@@ -79,12 +79,12 @@ function submoduleRows(submodules: MockSubmodule[]) {
 async function openSubmoduleDialog(page: Page): Promise<void> {
   await openViaCommandPalette(page, 'submodule');
   await page
-    .locator('lv-submodule-dialog .dialog-overlay')
+    .locator('gn-submodule-dialog .dialog-overlay')
     .waitFor({ state: 'visible', timeout: 3000 });
 }
 
 function dialog(page: Page) {
-  return page.locator('lv-submodule-dialog .dialog');
+  return page.locator('gn-submodule-dialog .dialog');
 }
 
 function updateAllButton(page: Page) {

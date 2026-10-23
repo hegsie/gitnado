@@ -8,8 +8,6 @@
 
 A modern, cross-platform Git GUI client built with Tauri, Lit, and Rust. **Website: [gitnado.dev](https://gitnado.dev)**
 
-> **Formerly Leviathan.** The project was renamed to Gitnado in 0.9.0. Existing installs keep their settings, credentials and repository rules — see [Upgrading from Leviathan](docs/upgrading-from-leviathan.md).
-
 Gitnado aims to be a fast, privacy-first alternative to existing Git clients like GitHub Desktop, GitKraken, and Sourcetree. It runs entirely offline with no telemetry, account requirements, or cloud dependencies.
 
 ## Table of Contents
@@ -236,7 +234,7 @@ Pre-built binaries are available from the [Releases](https://github.com/hegsie/g
 | macOS (Apple Silicon) | `.dmg` |
 | Windows | `.msi` or `.exe` |
 | Linux | `.deb` or `.AppImage` |
-| Arch Linux | [AUR](https://aur.archlinux.org/packages/leviathan-bin) (community, still under the old name) |
+| Arch Linux | [AUR](https://aur.archlinux.org/packages/gitnado-bin) (community) |
 
 ### Package Managers
 
@@ -263,15 +261,15 @@ brew install --cask hegsie/gitnado/gitnado
 
 ### Arch Linux (AUR)
 
-A community package is available on the AUR as [`leviathan-bin`](https://aur.archlinux.org/packages/leviathan-bin), repackaged from the official `.deb` release. It still carries the project's previous name (Leviathan) and will be renamed by its maintainer:
+A community package is available on the AUR as [`gitnado-bin`](https://aur.archlinux.org/packages/gitnado-bin), repackaged from the official `.deb` release:
 
 ```bash
 # Using an AUR helper
-yay -S leviathan-bin
+yay -S gitnado-bin
 
 # Or manually
-git clone https://aur.archlinux.org/leviathan-bin.git
-cd leviathan-bin
+git clone https://aur.archlinux.org/gitnado-bin.git
+cd gitnado-bin
 makepkg -si
 ```
 

@@ -27,7 +27,7 @@ async function dropNonRepository(page: Page): Promise<void> {
   await page.evaluate((path) => {
     window.dispatchEvent(new CustomEvent('repository-scan-offer', { detail: { path } }));
   }, DROPPED);
-  await expect(page.locator('lv-scan-repositories-dialog .offer-actions')).toBeVisible();
+  await expect(page.locator('gn-scan-repositories-dialog .offer-actions')).toBeVisible();
 }
 
 async function dropAgainAsRepository(page: Page): Promise<void> {
@@ -57,11 +57,11 @@ test.describe('Scan dialog - the folder becomes a repository', () => {
     await dropNonRepository(page);
 
     await page
-      .locator('lv-scan-repositories-dialog .offer-actions button', {
+      .locator('gn-scan-repositories-dialog .offer-actions button', {
         hasText: 'Scan it for repositories',
       })
       .click();
-    const results = page.locator('lv-scan-repositories-dialog .result-item');
+    const results = page.locator('gn-scan-repositories-dialog .result-item');
     await expect(results).toHaveCount(2);
     await results.first().locator('input[type="checkbox"]').check();
 
@@ -72,7 +72,7 @@ test.describe('Scan dialog - the folder becomes a repository', () => {
     await expect(results).toHaveCount(2);
     await expect(results.first().locator('input[type="checkbox"]')).toBeChecked();
     await expect(
-      page.locator('lv-scan-repositories-dialog .btn-primary', { hasText: 'Open selected' })
+      page.locator('gn-scan-repositories-dialog .btn-primary', { hasText: 'Open selected' })
     ).toBeVisible();
   });
 
@@ -84,7 +84,7 @@ test.describe('Scan dialog - the folder becomes a repository', () => {
     // "This folder is not a Git repository" is false now, and its Initialize
     // action would hand a real repository to `init`. (The dialog element stays
     // mounted in the shell; what goes is the modal it renders.)
-    await expect(page.locator('lv-scan-repositories-dialog .offer-actions')).toBeHidden();
+    await expect(page.locator('gn-scan-repositories-dialog .offer-actions')).toBeHidden();
   });
 
   test('closes the empty-results screen, whose only action is Initialize', async ({ page }) => {
@@ -100,16 +100,16 @@ test.describe('Scan dialog - the folder becomes a repository', () => {
     await dropNonRepository(page);
 
     await page
-      .locator('lv-scan-repositories-dialog .offer-actions button', {
+      .locator('gn-scan-repositories-dialog .offer-actions button', {
         hasText: 'Scan it for repositories',
       })
       .click();
-    await expect(page.locator('lv-scan-repositories-dialog .explanation')).toContainText(
+    await expect(page.locator('gn-scan-repositories-dialog .explanation')).toContainText(
       'No Git repositories were found'
     );
 
     await dropAgainAsRepository(page);
 
-    await expect(page.locator('lv-scan-repositories-dialog .explanation')).toBeHidden();
+    await expect(page.locator('gn-scan-repositories-dialog .explanation')).toBeHidden();
   });
 });

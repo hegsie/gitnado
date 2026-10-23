@@ -53,7 +53,7 @@ async function setAllowlist(page: Page, allowlist: string[]): Promise<void> {
 }
 
 function fetchButton(page: Page) {
-  return page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i });
+  return page.locator('gn-context-dashboard').getByRole('button', { name: /Fetch/i });
 }
 
 async function mockAliasOrigin(page: Page): Promise<void> {
@@ -121,16 +121,16 @@ test.describe('the credentials dialog tests an scp remote that names no login', 
 
     await openViaCommandPalette(page, 'Credential Management');
     await page
-      .locator('lv-credentials-dialog lv-modal[open]')
+      .locator('gn-credentials-dialog gn-modal[open]')
       .waitFor({ state: 'visible', timeout: 5000 });
-    await page.locator('lv-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
-    await expect(page.locator('lv-credentials-dialog .remote-item')).toHaveCount(1);
-    await page.locator('lv-credentials-dialog .form-actions .btn-primary').click();
+    await page.locator('gn-credentials-dialog .tab', { hasText: 'Test Credentials' }).click();
+    await expect(page.locator('gn-credentials-dialog .remote-item')).toHaveCount(1);
+    await page.locator('gn-credentials-dialog .form-actions .btn-primary').click();
 
     // The gate used to refuse the test outright — the button flipped back and
     // a toast named a remote the allowlist did name — so the panel below never
     // appeared at all.
-    const result = page.locator('lv-credentials-dialog .test-result');
+    const result = page.locator('gn-credentials-dialog .test-result');
     await expect(result).toBeVisible();
     await expect(result).toContainText('Credentials Working');
     await expect(result).toContainText('Protocol: ssh');

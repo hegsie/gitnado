@@ -76,7 +76,7 @@ describe('app-shell application menu routing', () => {
   });
 
   function shell(path: string | null = '/repo/active'): AppShell {
-    const el = document.createElement('lv-app-shell') as AppShell;
+    const el = document.createElement('gn-app-shell') as AppShell;
     if (path) {
       (el as any).activeRepository = { repository: mockRepo(path, 'active') };
     }
@@ -160,7 +160,7 @@ describe('app-shell application menu routing', () => {
     await waitUntil(() => dialogs.isOpen('commandPalette'), 'the palette to open');
 
     expect(dialogs.isOpen('commandPalette'), 'the palette opens').to.be.true;
-    // Matches the "Switch to <branch>" label lv-command-palette gives every
+    // Matches the "Switch to <branch>" label gn-command-palette gives every
     // branch entry, which is what pre-filters it to the branches.
     expect((el as any).commandPaletteQuery).to.equal('Switch to ');
   });

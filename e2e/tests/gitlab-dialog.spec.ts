@@ -214,7 +214,7 @@ test.describe('GitLab Dialog - Extended Scenarios', () => {
     await expect(dialogs.gitlab.dialog).toBeVisible();
 
     // Verify the error is shown within the dialog
-    const errorText = page.locator('lv-gitlab-dialog .error');
+    const errorText = page.locator('gn-gitlab-dialog .error');
     await expect(errorText).toBeVisible({ timeout: 5000 });
   });
 });
@@ -373,9 +373,9 @@ test.describe('GitLab Dialog - Capped list disclosure', () => {
     await expect(dialogs.gitlab.dialog).toBeVisible();
     await dialogs.gitlab.mergeRequestsTab.click();
 
-    await expect(page.locator('lv-gitlab-dialog .mr-item')).toHaveCount(30);
+    await expect(page.locator('gn-gitlab-dialog .mr-item')).toHaveCount(30);
 
-    const hint = page.locator('lv-gitlab-dialog .capped-list-hint');
+    const hint = page.locator('gn-gitlab-dialog .capped-list-hint');
     await expect(hint).toContainText('more may exist');
     await expect(hint).toContainText('30');
 
@@ -398,7 +398,7 @@ test.describe('GitLab Dialog - Capped list disclosure', () => {
     await expect(dialogs.gitlab.dialog).toBeVisible();
     await dialogs.gitlab.mergeRequestsTab.click();
 
-    await expect(page.locator('lv-gitlab-dialog .mr-item')).toHaveCount(1);
-    await expect(page.locator('lv-gitlab-dialog .capped-list-hint')).toHaveCount(0);
+    await expect(page.locator('gn-gitlab-dialog .mr-item')).toHaveCount(1);
+    await expect(page.locator('gn-gitlab-dialog .capped-list-hint')).toHaveCount(0);
   });
 });

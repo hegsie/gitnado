@@ -93,7 +93,7 @@ function mockRepo(): Repository {
  * read through a method the test can stand in for.
  */
 function shellOnRepo(): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   (el as any).activeRepository = {
     repository: mockRepo(),
     currentBranch: { name: 'main', shorthand: 'main', isHead: true },

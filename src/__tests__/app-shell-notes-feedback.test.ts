@@ -1,7 +1,7 @@
 /**
  * Feedback for note writes made in the commit details panel.
  *
- * lv-commit-details owns the notes UI but has no toast of its own, so — like
+ * gn-commit-details owns the notes UI but has no toast of its own, so — like
  * `copy-sha` before it — it announces a successful write with a bubbling
  * `notes-changed` event and app-shell turns that into the confirmation the
  * user sees. This covers both halves: the handler's wording, and the binding
@@ -69,7 +69,7 @@ describe('app-shell note-change feedback', () => {
 
   for (const [action, message] of cases) {
     it(`confirms a note that was ${action}`, () => {
-      const el = document.createElement('lv-app-shell') as AppShell;
+      const el = document.createElement('gn-app-shell') as AppShell;
       (el as any).handleNotesChanged(notesChangedEvent(action));
 
       expect(toastMessages()).to.deep.equal([message]);
@@ -78,7 +78,7 @@ describe('app-shell note-change feedback', () => {
   }
 
   it('is wired to the panel: an event from the details panel reaches the handler', async () => {
-    const el = document.createElement('lv-app-shell') as AppShell;
+    const el = document.createElement('gn-app-shell') as AppShell;
     repositoryStore.getState().addRepository(mockRepo('/repo/one', 'one'), { activate: true });
     document.body.appendChild(el);
 
@@ -88,13 +88,13 @@ describe('app-shell note-change feedback', () => {
       await el.updateComplete;
       // The details panel lives inside the right panel's shadow root.
       await waitUntil(
-        () => el.shadowRoot!.querySelector('lv-right-panel') !== null,
+        () => el.shadowRoot!.querySelector('gn-right-panel') !== null,
         'the right panel renders for an open repository',
       );
-      const rightPanel = el.shadowRoot!.querySelector('lv-right-panel');
+      const rightPanel = el.shadowRoot!.querySelector('gn-right-panel');
       await (rightPanel as unknown as { updateComplete: Promise<unknown> }).updateComplete;
 
-      const details = rightPanel!.shadowRoot!.querySelector('lv-commit-details');
+      const details = rightPanel!.shadowRoot!.querySelector('gn-commit-details');
       expect(details, 'the commit details panel renders').to.exist;
 
       // Session restore may have toasted on mount; only the note matters here.

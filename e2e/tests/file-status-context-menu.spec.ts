@@ -297,7 +297,7 @@ test.describe('File Status Context Menu - Error Handling', () => {
     await expect(stageOption).toBeVisible();
     await stageOption.click();
 
-    const errorToast = page.locator('lv-toast-container .toast.error').first();
+    const errorToast = page.locator('gn-toast-container .toast.error').first();
     await expect(errorToast).toBeVisible({ timeout: 5000 });
     await expect(errorToast).toContainText('permission denied');
   });
@@ -493,7 +493,7 @@ test.describe('File Status Context Menu - Extended Tests', () => {
 /**
  * "File history" and "Blame" on a working-tree row.
  *
- * lv-file-status raises the same `show-file-history` / `show-blame` events the
+ * gn-file-status raises the same `show-file-history` / `show-blame` events the
  * commit file list raises, and app-shell's right-panel listener turns them into
  * the centre-pane panels — so these tests assert the panel actually opens on
  * the clicked path, not merely that a command fired.
@@ -564,9 +564,9 @@ test.describe('File Status Context Menu - History and Blame', () => {
     await expect(historyItem).toBeVisible();
     await historyItem.click();
 
-    await expect(page.locator('lv-file-history')).toBeVisible();
-    await expect(page.locator('lv-file-history .file-path')).toHaveText('src/tracked.ts');
-    await expect(page.locator('lv-file-history .commit-item')).toHaveCount(1);
+    await expect(page.locator('gn-file-history')).toBeVisible();
+    await expect(page.locator('gn-file-history .file-path')).toHaveText('src/tracked.ts');
+    await expect(page.locator('gn-file-history .commit-item')).toHaveCount(1);
 
     const calls = await findCommand(page, 'get_file_history');
     expect(calls.length).toBeGreaterThan(0);
@@ -580,8 +580,8 @@ test.describe('File Status Context Menu - History and Blame', () => {
     await expect(blameItem).toBeVisible();
     await blameItem.click();
 
-    await expect(page.locator('lv-blame-view')).toBeVisible();
-    await expect(page.locator('lv-blame-view .blame-line')).toHaveCount(1);
+    await expect(page.locator('gn-blame-view')).toBeVisible();
+    await expect(page.locator('gn-blame-view .blame-line')).toHaveCount(1);
 
     const calls = await findCommand(page, 'get_file_blame');
     expect(calls.length).toBeGreaterThan(0);
@@ -633,8 +633,8 @@ test.describe('File Status Context Menu - History and Blame', () => {
     await historyItem.click({ force: true });
 
     // No panel opens, and the refusal is spoken rather than silent.
-    await expect(page.locator('lv-toast-container .toast')).toContainText('no history');
-    await expect(page.locator('lv-file-history')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast')).toContainText('no history');
+    await expect(page.locator('gn-file-history')).toHaveCount(0);
   });
 
   test('a deleted file offers history but not blame', async ({ page }) => {
@@ -651,7 +651,7 @@ test.describe('File Status Context Menu - History and Blame', () => {
     await page.locator('.context-menu-item', { hasText: 'File history' }).click();
 
     await expect(
-      page.locator('lv-file-history .error, lv-file-history .error-message, lv-toast-container .toast').first(),
+      page.locator('gn-file-history .error, gn-file-history .error-message, gn-toast-container .toast').first(),
     ).toBeVisible();
   });
 });

@@ -94,7 +94,7 @@ test.describe('Branch with Multiple Branches', () => {
     await expect(mainBranch).toBeVisible();
 
     // main should be marked as the active (HEAD) branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toContainText('main');
   });
 
@@ -210,7 +210,7 @@ test.describe('Create Branch Dialog', () => {
     await contextMenuItem.click();
 
     // The create branch dialog's modal should be visible
-    await expect(page.locator('lv-create-branch-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-create-branch-dialog gn-modal[open]')).toBeVisible();
   });
 
   test('should allow entering branch name', async ({ page }) => {
@@ -221,7 +221,7 @@ test.describe('Create Branch Dialog', () => {
     await contextMenuItem.click();
 
     // Wait for modal to be visible
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     await dialogs.createBranch.fillName('feature/my-new-feature');
     await expect(dialogs.createBranch.nameInput).toHaveValue('feature/my-new-feature');
@@ -233,7 +233,7 @@ test.describe('Create Branch Dialog', () => {
     await contextMenuItem.waitFor({ state: 'visible' });
     await contextMenuItem.click();
 
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     await expect(dialogs.createBranch.createButton).toBeVisible();
   });
@@ -244,10 +244,10 @@ test.describe('Create Branch Dialog', () => {
     await contextMenuItem.waitFor({ state: 'visible' });
     await contextMenuItem.click();
 
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     await page.keyboard.press('Escape');
-    await expect(page.locator('lv-create-branch-dialog lv-modal[open]')).not.toBeVisible();
+    await expect(page.locator('gn-create-branch-dialog gn-modal[open]')).not.toBeVisible();
   });
 });
 
@@ -352,7 +352,7 @@ test.describe('Branch Checkout via Context Menu', () => {
     expect((commands[0].args as { refName?: string })?.refName).toBe('develop');
 
     // Verify branch list: develop should now be the active branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toContainText('develop');
 
     // Verify branch list: main should no longer be active
@@ -361,7 +361,7 @@ test.describe('Branch Checkout via Context Menu', () => {
     await expect(mainBranch).not.toHaveClass(/active/);
 
     // Verify only one branch is active (the newly checked out one)
-    const allActive = page.locator('lv-branch-list .branch-item.active');
+    const allActive = page.locator('gn-branch-list .branch-item.active');
     await expect(allActive).toHaveCount(1);
   });
 
@@ -385,7 +385,7 @@ test.describe('Branch Checkout via Context Menu', () => {
     );
 
     // Verify branch list: feature/checkout-test should now be the active branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toHaveAttribute('title', 'feature/checkout-test');
 
     // Verify branch list: main should no longer be active
@@ -393,7 +393,7 @@ test.describe('Branch Checkout via Context Menu', () => {
     await expect(mainBranch).not.toHaveClass(/active/);
 
     // Verify only one branch is active (the newly checked out one)
-    const allActiveAfterCheckout = page.locator('lv-branch-list .branch-item.active');
+    const allActiveAfterCheckout = page.locator('gn-branch-list .branch-item.active');
     await expect(allActiveAfterCheckout).toHaveCount(1);
   });
 
@@ -486,7 +486,7 @@ test.describe('Branch Context Menu - Remote Branch Checkout', () => {
     );
 
     // Verify branch list: the active branch should reflect the checked-out remote branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toHaveAttribute('title', 'feature/remote-feature');
 
     // Verify branch list: main should no longer be the active branch
@@ -497,7 +497,7 @@ test.describe('Branch Context Menu - Remote Branch Checkout', () => {
     await expect(leftPanel.getBranch('feature/remote-feature')).toBeVisible();
 
     // Verify only one branch is active (the newly checked out one)
-    const allActiveAfterRemoteCheckout = page.locator('lv-branch-list .branch-item.active');
+    const allActiveAfterRemoteCheckout = page.locator('gn-branch-list .branch-item.active');
     await expect(allActiveAfterRemoteCheckout).toHaveCount(1);
   });
 
@@ -528,7 +528,7 @@ test.describe('Branch Context Menu - Remote Branch Checkout', () => {
     );
 
     // Verify UI: the active branch should now reflect the checked-out copilot branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toHaveAttribute('title', 'copilot/ai-generated-branch');
 
     // Verify UI: main should no longer be the active branch
@@ -554,12 +554,12 @@ test.describe('Branch Context Menu - Remote Branch Checkout', () => {
     await checkoutMenuItem.click();
 
     // Verify error toast appears with the error message
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('Failed to create local tracking branch');
 
     // Verify main is still the active branch (checkout failed, HEAD unchanged)
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toContainText('main');
   });
 });
@@ -623,7 +623,7 @@ test.describe('Branch Checkout - Error Handling', () => {
     await checkoutMenuItem.click();
 
     // Verify the toast is shown in the DOM (toast container renders error toasts)
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('Checkout failed');
   });
@@ -725,7 +725,7 @@ test.describe('Branch Delete via Context Menu', () => {
     await deleteItem.click();
 
     // Verify error toast appears with the specific error message
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('Cannot delete branch: it is the current HEAD');
 
@@ -768,14 +768,14 @@ test.describe('Branch Create via Context Menu', () => {
     await createMenuItem.waitFor({ state: 'visible' });
     await createMenuItem.click();
 
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     // Fill in branch name and submit
     await dialogs.createBranch.fillName('feature/new-branch');
     await dialogs.createBranch.createButton.click();
 
     // Verify the dialog closes after successful creation
-    await expect(page.locator('lv-create-branch-dialog lv-modal[open]')).not.toBeVisible();
+    await expect(page.locator('gn-create-branch-dialog gn-modal[open]')).not.toBeVisible();
 
     // Verify the new branch appears in the branch list
     await expect(leftPanel.getBranch('feature/new-branch')).toBeVisible();
@@ -791,7 +791,7 @@ test.describe('Branch Create via Context Menu', () => {
       await createMenuItem.waitFor({ state: 'visible' });
       await createMenuItem.click();
 
-      await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+      await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
       await dialogs.createBranch.fillName('feature/created-branch');
       await dialogs.createBranch.createButton.click();
@@ -810,7 +810,7 @@ test.describe('Branch Create via Context Menu', () => {
     await createMenuItem.waitFor({ state: 'visible' });
     await createMenuItem.click();
 
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     // Fill in branch name and attempt to create
     await dialogs.createBranch.fillName('feature/existing');
@@ -818,13 +818,13 @@ test.describe('Branch Create via Context Menu', () => {
 
     // Verify error is shown (toast or inline error within dialog)
     const errorIndicator = page.locator(
-      'lv-toast-container .toast.error .toast-message, lv-create-branch-dialog .error-message, lv-create-branch-dialog .error'
+      'gn-toast-container .toast.error .toast-message, gn-create-branch-dialog .error-message, gn-create-branch-dialog .error'
     );
     await expect(errorIndicator).toBeVisible();
     await expect(errorIndicator).toContainText('already exists');
 
     // Verify the dialog remains open (not dismissed on error)
-    await expect(page.locator('lv-create-branch-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-create-branch-dialog gn-modal[open]')).toBeVisible();
 
     // Verify the branch was NOT added to the branch list
     await expect(leftPanel.getBranch('feature/existing')).not.toBeVisible();
@@ -875,7 +875,7 @@ test.describe('Branch Checkout - HEAD Indicator Update', () => {
     expect((checkoutCommands[0].args as { refName?: string })?.refName).toBe('develop');
 
     // Verify the branch list reflects the new HEAD: develop should now be the active branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toContainText('develop');
 
     // Verify main is no longer active
@@ -883,7 +883,7 @@ test.describe('Branch Checkout - HEAD Indicator Update', () => {
     await expect(mainBranch).not.toHaveClass(/active/);
 
     // Verify only one branch is active (the newly checked out one)
-    const allActiveAfterCheckout = page.locator('lv-branch-list .branch-item.active');
+    const allActiveAfterCheckout = page.locator('gn-branch-list .branch-item.active');
     await expect(allActiveAfterCheckout).toHaveCount(1);
   });
 
@@ -905,7 +905,7 @@ test.describe('Branch Checkout - HEAD Indicator Update', () => {
     expect(branchCommands.length).toBeGreaterThan(0);
 
     // Verify the DOM shows develop as the active (HEAD) branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toContainText('develop');
   });
 });
@@ -974,7 +974,7 @@ test.describe('Remote Branch Checkout - Creates Local Tracking Branch', () => {
     );
 
     // Verify branch list: new local branch feature-x should appear and be the active (HEAD) branch
-    const activeBranch = page.locator('lv-branch-list .branch-item.active');
+    const activeBranch = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranch).toContainText('feature-x');
 
     // Verify branch list: the new local branch should be in the branch list
@@ -985,7 +985,7 @@ test.describe('Remote Branch Checkout - Creates Local Tracking Branch', () => {
     await expect(mainBranch).not.toHaveClass(/active/);
 
     // Verify only one branch is active (the newly checked out one)
-    const allActiveAfterCheckout = page.locator('lv-branch-list .branch-item.active');
+    const allActiveAfterCheckout = page.locator('gn-branch-list .branch-item.active');
     await expect(allActiveAfterCheckout).toHaveCount(1);
   });
 });
@@ -1025,7 +1025,7 @@ test.describe('Detached HEAD State', () => {
 
   test('should not show any branch as active when HEAD is detached', async ({ page }) => {
     // No branch should have the active class
-    const activeBranches = page.locator('lv-branch-list .branch-item.active');
+    const activeBranches = page.locator('gn-branch-list .branch-item.active');
     await expect(activeBranches).toHaveCount(0);
   });
 
@@ -1110,14 +1110,14 @@ test.describe('Branches - UI Outcome Verification', () => {
     await createMenuItem.click();
 
     // Wait for dialog to open
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     // Fill in branch name and submit
     await dialogs.createBranch.fillName('feature/brand-new');
     await dialogs.createBranch.createButton.click();
 
     // Verify the dialog closes
-    await expect(page.locator('lv-create-branch-dialog lv-modal[open]')).not.toBeVisible();
+    await expect(page.locator('gn-create-branch-dialog gn-modal[open]')).not.toBeVisible();
 
     // Verify the new branch appears in the branch list
     await expect(leftPanel.getBranch('feature/brand-new')).toBeVisible();
@@ -1134,7 +1134,7 @@ test.describe('Branches - UI Outcome Verification', () => {
     await createMenuItem.click();
 
     // Wait for dialog to open
-    await page.locator('lv-create-branch-dialog lv-modal[open]').waitFor({ state: 'visible' });
+    await page.locator('gn-create-branch-dialog gn-modal[open]').waitFor({ state: 'visible' });
 
     // Fill in branch name and attempt to create
     await dialogs.createBranch.fillName('develop');
@@ -1142,7 +1142,7 @@ test.describe('Branches - UI Outcome Verification', () => {
 
     // Verify error is shown (either toast or error banner within dialog)
     const errorIndicator = page.locator(
-      'lv-toast-container .toast.error .toast-message, lv-create-branch-dialog .error-message, lv-create-branch-dialog .error'
+      'gn-toast-container .toast.error .toast-message, gn-create-branch-dialog .error-message, gn-create-branch-dialog .error'
     );
     await expect(errorIndicator).toBeVisible();
   });
@@ -1161,7 +1161,7 @@ test.describe('Branches - UI Outcome Verification', () => {
     await deleteItem.click();
 
     // Verify error toast is shown
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible();
     await expect(toastMessage).toContainText('Cannot delete current branch');
 
@@ -1170,7 +1170,7 @@ test.describe('Branches - UI Outcome Verification', () => {
   });
 });
 
-// Branch rename is covered by unit tests in lv-branch-list.test.ts (prompt dialog open/cancel/confirm).
+// Branch rename is covered by unit tests in gn-branch-list.test.ts (prompt dialog open/cancel/confirm).
 // E2E tests for the async prompt dialog via context menu are unreliable due to Lit rendering timing
 // across multiple shadow DOM levels, so they are intentionally omitted here.
 
@@ -1219,7 +1219,7 @@ test.describe('Drag-Drop Merge Error Toast', () => {
     await mergeMenuItem.click();
 
     // Verify the error toast appears
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toBeVisible({ timeout: 10000 });
     await expect(toastMessage).toContainText('Merge failed');
   });
@@ -1303,7 +1303,7 @@ test.describe('Merge Conflict Prediction', () => {
     expect((previews[0].args as { sourceRef?: string }).sourceRef).toBe('feature-drag');
 
     // Confirming still merges — the prediction warns, it does not block.
-    const toastMessage = page.locator('lv-toast-container .toast.success .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.success .toast-message');
     await expect(toastMessage).toBeVisible({ timeout: 10000 });
     await expect(toastMessage).toContainText('Merged feature-drag');
   });
@@ -1352,7 +1352,7 @@ test.describe('Merge Conflict Prediction', () => {
     expect(message).toContain('Merge "feature-drag" into the current branch?');
     expect(message).not.toContain('would conflict');
 
-    const toastMessage = page.locator('lv-toast-container .toast.success .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.success .toast-message');
     await expect(toastMessage).toBeVisible({ timeout: 10000 });
     await expect(toastMessage).toContainText('Merged feature-drag');
   });

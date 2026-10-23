@@ -3,10 +3,6 @@
  * Application entry point
  */
 
-// Must come first: adopts pre-rename localStorage keys before any store
-// module reads storage.
-import './utils/legacy-storage-bootstrap.ts';
-
 // Import styles
 import './styles/tokens.css';
 

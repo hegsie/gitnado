@@ -37,7 +37,7 @@ import {
   type MenuShellHandlers,
 } from '../app-menu.service.ts';
 import { keyboardService, registerDefaultShortcuts } from '../keyboard.service.ts';
-import type { PaletteCommand } from '../../components/dialogs/lv-command-palette.ts';
+import type { PaletteCommand } from '../../components/dialogs/gn-command-palette.ts';
 
 function noop(): void {
   /* stub action */

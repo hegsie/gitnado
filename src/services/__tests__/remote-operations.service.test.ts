@@ -523,7 +523,7 @@ describe('remote operations runner', () => {
 
     beforeEach(() => {
       // `merge-conflict` is bound on the app-shell ELEMENT, not on window.
-      shell = document.createElement('lv-app-shell');
+      shell = document.createElement('gn-app-shell');
       document.body.appendChild(shell);
     });
 
@@ -715,7 +715,7 @@ describe('remote operations runner', () => {
       // `remotes` is repo-scoped: app-shell sweeps the repo-scoped dialogs
       // shut when the last tab goes, INSIDE the store subscription — which
       // ran before this press, not after. So opening it here only set a flag
-      // nothing would clear, and `lv-remote-dialog` was reconstructed `?open`
+      // nothing would clear, and `gn-remote-dialog` was reconstructed `?open`
       // over the next repository the user opened.
       await runFetch(REPO);
       const toast = uiStore.getState().toasts.at(-1);

@@ -14,11 +14,11 @@ import {
  * E2E tests for Worktree Dialog and Clean Dialog
  *
  * Worktree dialog: opened via command palette "Manage worktrees"
- *   - Element: `lv-worktree-dialog` with `.dialog` inside
+ *   - Element: `gn-worktree-dialog` with `.dialog` inside
  *   - Two modes: 'list' (shows existing worktrees) and 'add' (form to create new)
  *
  * Clean dialog: opened via command palette "Clean working directory"
- *   - Element: `lv-clean-dialog[open]` with `.dialog` inside
+ *   - Element: `gn-clean-dialog[open]` with `.dialog` inside
  *   - Shows untracked files with checkboxes, select all, and delete button
  */
 
@@ -29,7 +29,7 @@ import {
 /** Open the worktree dialog via the command palette */
 async function openWorktreeDialog(page: import('@playwright/test').Page) {
   await openViaCommandPalette(page, 'worktrees');
-  await page.locator('lv-worktree-dialog .dialog').waitFor({ state: 'visible' });
+  await page.locator('gn-worktree-dialog .dialog').waitFor({ state: 'visible' });
 }
 
 test.describe('Worktree Dialog - List View', () => {
@@ -88,21 +88,21 @@ test.describe('Worktree Dialog - List View', () => {
   test('dialog opens and shows Worktrees title', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const title = page.locator('lv-worktree-dialog .dialog-title');
+    const title = page.locator('gn-worktree-dialog .dialog-title');
     await expect(title).toContainText('Worktrees');
   });
 
   test('lists existing worktrees', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const worktreeItems = page.locator('lv-worktree-dialog .worktree-item');
+    const worktreeItems = page.locator('gn-worktree-dialog .worktree-item');
     await expect(worktreeItems).toHaveCount(3);
   });
 
   test('main worktree shows "main" badge', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const mainBadge = page.locator('lv-worktree-dialog .main-badge');
+    const mainBadge = page.locator('gn-worktree-dialog .main-badge');
     await expect(mainBadge).toBeVisible();
     await expect(mainBadge).toContainText('main');
   });
@@ -110,7 +110,7 @@ test.describe('Worktree Dialog - List View', () => {
   test('locked worktree shows "locked" badge', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const lockedBadge = page.locator('lv-worktree-dialog .locked-badge');
+    const lockedBadge = page.locator('gn-worktree-dialog .locked-badge');
     await expect(lockedBadge).toBeVisible();
     await expect(lockedBadge).toContainText('locked');
   });
@@ -119,11 +119,11 @@ test.describe('Worktree Dialog - List View', () => {
     await openWorktreeDialog(page);
 
     // Check branch names are displayed
-    const branchNames = page.locator('lv-worktree-dialog .worktree-branch');
+    const branchNames = page.locator('gn-worktree-dialog .worktree-branch');
     await expect(branchNames.first()).toContainText('main');
 
     // Check paths are displayed
-    const paths = page.locator('lv-worktree-dialog .worktree-path');
+    const paths = page.locator('gn-worktree-dialog .worktree-path');
     await expect(paths.first()).toContainText('/tmp/test-repo');
   });
 
@@ -131,7 +131,7 @@ test.describe('Worktree Dialog - List View', () => {
     await openWorktreeDialog(page);
 
     // Main worktree's remove button should be disabled
-    const mainItem = page.locator('lv-worktree-dialog .worktree-item.main');
+    const mainItem = page.locator('gn-worktree-dialog .worktree-item.main');
     const removeBtn = mainItem.locator('.action-btn.danger');
     await expect(removeBtn).toBeDisabled();
   });
@@ -140,7 +140,7 @@ test.describe('Worktree Dialog - List View', () => {
     await openWorktreeDialog(page);
 
     // Locked worktree's remove button should be disabled
-    const lockedItem = page.locator('lv-worktree-dialog .worktree-item.locked');
+    const lockedItem = page.locator('gn-worktree-dialog .worktree-item.locked');
     const removeBtn = lockedItem.locator('.action-btn.danger');
     await expect(removeBtn).toBeDisabled();
   });
@@ -178,7 +178,7 @@ test.describe('Worktree Dialog - List View', () => {
     await startCommandCapture(page);
     await openWorktreeDialog(page);
 
-    const openWorktree = page.locator('lv-worktree-dialog .worktree-item').nth(1);
+    const openWorktree = page.locator('gn-worktree-dialog .worktree-item').nth(1);
     const removeBtn = openWorktree.locator('.action-btn.danger');
     await expect(removeBtn).toBeDisabled();
 
@@ -191,7 +191,7 @@ test.describe('Worktree Dialog - List View', () => {
     await openWorktreeDialog(page);
 
     // Find the non-main, non-locked worktree's lock button
-    const featureItem = page.locator('lv-worktree-dialog .worktree-item').nth(1);
+    const featureItem = page.locator('gn-worktree-dialog .worktree-item').nth(1);
     const lockBtn = featureItem.locator('.action-btn').first(); // Lock button
     await lockBtn.click();
 
@@ -206,7 +206,7 @@ test.describe('Worktree Dialog - List View', () => {
     await openWorktreeDialog(page);
 
     // Locked worktree has an unlock button
-    const lockedItem = page.locator('lv-worktree-dialog .worktree-item.locked');
+    const lockedItem = page.locator('gn-worktree-dialog .worktree-item.locked');
     const unlockBtn = lockedItem.locator('.action-btn').first(); // Unlock button
     await unlockBtn.click();
 
@@ -219,26 +219,26 @@ test.describe('Worktree Dialog - List View', () => {
   test('Add Worktree button switches to add form', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const addBtn = page.locator('lv-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
+    const addBtn = page.locator('gn-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
     await expect(addBtn).toBeVisible();
     await addBtn.click();
 
     // Should switch to add mode with form title
-    const title = page.locator('lv-worktree-dialog .dialog-title');
+    const title = page.locator('gn-worktree-dialog .dialog-title');
     await expect(title).toContainText('Add Worktree');
 
     // Form should be visible with path input
-    const pathInput = page.locator('lv-worktree-dialog .form-input');
+    const pathInput = page.locator('gn-worktree-dialog .form-input');
     await expect(pathInput.first()).toBeVisible();
   });
 
   test('Close button closes the dialog', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const closeBtn = page.locator('lv-worktree-dialog .btn-secondary', { hasText: 'Close' });
+    const closeBtn = page.locator('gn-worktree-dialog .btn-secondary', { hasText: 'Close' });
     await closeBtn.click();
 
-    const dialog = page.locator('lv-worktree-dialog .dialog');
+    const dialog = page.locator('gn-worktree-dialog .dialog');
     await expect(dialog).not.toBeVisible();
   });
 });
@@ -279,30 +279,30 @@ test.describe('Worktree Dialog - Add Form', () => {
     await openWorktreeDialog(page);
 
     // Click Add Worktree
-    const addBtn = page.locator('lv-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
+    const addBtn = page.locator('gn-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
     await addBtn.click();
 
     // Path input
-    const pathInput = page.locator('lv-worktree-dialog .form-input');
+    const pathInput = page.locator('gn-worktree-dialog .form-input');
     await expect(pathInput.first()).toBeVisible();
 
     // Branch select
-    const branchSelect = page.locator('lv-worktree-dialog .form-select');
+    const branchSelect = page.locator('gn-worktree-dialog .form-select');
     await expect(branchSelect).toBeVisible();
   });
 
   test('create new branch checkbox toggles branch name input', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const addBtn = page.locator('lv-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
+    const addBtn = page.locator('gn-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
     await addBtn.click();
 
     // Check "Create new branch"
-    const checkbox = page.locator('lv-worktree-dialog .form-checkbox input[type="checkbox"]');
+    const checkbox = page.locator('gn-worktree-dialog .form-checkbox input[type="checkbox"]');
     await checkbox.check();
 
     // New branch name input should appear instead of select
-    const branchNameInput = page.locator('lv-worktree-dialog .form-input').nth(1);
+    const branchNameInput = page.locator('gn-worktree-dialog .form-input').nth(1);
     await expect(branchNameInput).toBeVisible();
   });
 
@@ -311,19 +311,19 @@ test.describe('Worktree Dialog - Add Form', () => {
     await openWorktreeDialog(page);
 
     // Switch to add mode
-    const addModeBtn = page.locator('lv-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
+    const addModeBtn = page.locator('gn-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
     await addModeBtn.click();
 
     // Fill path
-    const pathInput = page.locator('lv-worktree-dialog .form-input').first();
+    const pathInput = page.locator('gn-worktree-dialog .form-input').first();
     await pathInput.fill('/tmp/new-worktree');
 
     // Select branch
-    const branchSelect = page.locator('lv-worktree-dialog .form-select');
+    const branchSelect = page.locator('gn-worktree-dialog .form-select');
     await branchSelect.selectOption({ index: 1 }); // Select first real branch
 
     // Click Add Worktree submit button
-    const submitBtn = page.locator('lv-worktree-dialog .dialog-footer-right .btn-primary', { hasText: 'Add Worktree' });
+    const submitBtn = page.locator('gn-worktree-dialog .dialog-footer-right .btn-primary', { hasText: 'Add Worktree' });
     await submitBtn.click();
 
     await waitForCommand(page, 'add_worktree');
@@ -339,26 +339,26 @@ test.describe('Worktree Dialog - Add Form', () => {
   test('Add Worktree button is disabled without path', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const addModeBtn = page.locator('lv-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
+    const addModeBtn = page.locator('gn-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
     await addModeBtn.click();
 
     // Submit button should be disabled (no path)
-    const submitBtn = page.locator('lv-worktree-dialog .dialog-footer-right .btn-primary', { hasText: 'Add Worktree' });
+    const submitBtn = page.locator('gn-worktree-dialog .dialog-footer-right .btn-primary', { hasText: 'Add Worktree' });
     await expect(submitBtn).toBeDisabled();
   });
 
   test('Cancel in add form returns to list view', async ({ page }) => {
     await openWorktreeDialog(page);
 
-    const addBtn = page.locator('lv-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
+    const addBtn = page.locator('gn-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
     await addBtn.click();
 
     // Cancel should return to list
-    const cancelBtn = page.locator('lv-worktree-dialog .btn-secondary', { hasText: 'Cancel' });
+    const cancelBtn = page.locator('gn-worktree-dialog .btn-secondary', { hasText: 'Cancel' });
     await cancelBtn.click();
 
     // Should be back in list mode
-    const title = page.locator('lv-worktree-dialog .dialog-title');
+    const title = page.locator('gn-worktree-dialog .dialog-title');
     await expect(title).toContainText('Worktrees');
   });
 });
@@ -391,20 +391,20 @@ test.describe('Worktree Dialog - Error Handling', () => {
     await openWorktreeDialog(page);
 
     // Switch to add mode
-    const addBtn = page.locator('lv-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
+    const addBtn = page.locator('gn-worktree-dialog .dialog-footer .btn-primary', { hasText: 'Add Worktree' });
     await addBtn.click();
 
     // Fill form
-    const pathInput = page.locator('lv-worktree-dialog .form-input').first();
+    const pathInput = page.locator('gn-worktree-dialog .form-input').first();
     await pathInput.fill('/tmp/existing-path');
-    const branchSelect = page.locator('lv-worktree-dialog .form-select');
+    const branchSelect = page.locator('gn-worktree-dialog .form-select');
     await branchSelect.selectOption({ index: 1 });
 
     // Submit
-    const submitBtn = page.locator('lv-worktree-dialog .dialog-footer-right .btn-primary');
+    const submitBtn = page.locator('gn-worktree-dialog .dialog-footer-right .btn-primary');
     await submitBtn.click();
 
-    const errorMessage = page.locator('lv-worktree-dialog .message.error');
+    const errorMessage = page.locator('gn-worktree-dialog .message.error');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Path already exists');
   });
@@ -417,7 +417,7 @@ test.describe('Worktree Dialog - Error Handling', () => {
 /** Open the clean dialog via the command palette */
 async function openCleanDialog(page: import('@playwright/test').Page) {
   await openViaCommandPalette(page, 'Clean working');
-  await page.locator('lv-clean-dialog[open] .dialog').waitFor({ state: 'visible' });
+  await page.locator('gn-clean-dialog[open] .dialog').waitFor({ state: 'visible' });
 }
 
 test.describe('Clean Dialog - File List', () => {
@@ -446,11 +446,11 @@ test.describe('Clean Dialog - File List', () => {
   test('dialog opens with title and warning banner', async ({ page }) => {
     await openCleanDialog(page);
 
-    const title = page.locator('lv-clean-dialog .title');
+    const title = page.locator('gn-clean-dialog .title');
     await expect(title).toContainText('Clean Working Directory');
 
     // Warning banner should be visible
-    const warning = page.locator('lv-clean-dialog .warning-banner');
+    const warning = page.locator('gn-clean-dialog .warning-banner');
     await expect(warning).toBeVisible();
     await expect(warning).toContainText('permanently delete');
     await expect(warning).toContainText('cannot be undone');
@@ -459,11 +459,11 @@ test.describe('Clean Dialog - File List', () => {
   test('lists all cleanable files with checkboxes', async ({ page }) => {
     await openCleanDialog(page);
 
-    const fileItems = page.locator('lv-clean-dialog .file-item');
+    const fileItems = page.locator('gn-clean-dialog .file-item');
     await expect(fileItems).toHaveCount(4);
 
     // Each should have a checkbox
-    const checkboxes = page.locator('lv-clean-dialog .file-checkbox');
+    const checkboxes = page.locator('gn-clean-dialog .file-checkbox');
     await expect(checkboxes).toHaveCount(4);
   });
 
@@ -471,7 +471,7 @@ test.describe('Clean Dialog - File List', () => {
     await openCleanDialog(page);
 
     // All checkboxes should be checked by default
-    const checkboxes = page.locator('lv-clean-dialog .file-checkbox');
+    const checkboxes = page.locator('gn-clean-dialog .file-checkbox');
     const count = await checkboxes.count();
     for (let i = 0; i < count; i++) {
       await expect(checkboxes.nth(i)).toBeChecked();
@@ -482,12 +482,12 @@ test.describe('Clean Dialog - File List', () => {
     await openCleanDialog(page);
 
     // Directory badges
-    const dirBadges = page.locator('lv-clean-dialog .file-badge.directory');
+    const dirBadges = page.locator('gn-clean-dialog .file-badge.directory');
     await expect(dirBadges.first()).toBeVisible();
     await expect(dirBadges.first()).toContainText('dir');
 
     // Ignored badge
-    const ignoredBadge = page.locator('lv-clean-dialog .file-badge.ignored');
+    const ignoredBadge = page.locator('gn-clean-dialog .file-badge.ignored');
     await expect(ignoredBadge).toBeVisible();
     await expect(ignoredBadge).toContainText('ignored');
   });
@@ -495,7 +495,7 @@ test.describe('Clean Dialog - File List', () => {
   test('shows file sizes', async ({ page }) => {
     await openCleanDialog(page);
 
-    const fileSizes = page.locator('lv-clean-dialog .file-size');
+    const fileSizes = page.locator('gn-clean-dialog .file-size');
     // At least the non-directory files should show sizes
     await expect(fileSizes.first()).toBeVisible();
   });
@@ -504,14 +504,14 @@ test.describe('Clean Dialog - File List', () => {
     await openCleanDialog(page);
 
     // Select all checkbox
-    const selectAll = page.locator('lv-clean-dialog .select-all input[type="checkbox"]');
+    const selectAll = page.locator('gn-clean-dialog .select-all input[type="checkbox"]');
     await expect(selectAll).toBeVisible();
 
     // Uncheck all
     await selectAll.click();
 
     // All individual checkboxes should now be unchecked
-    const checkboxes = page.locator('lv-clean-dialog .file-checkbox');
+    const checkboxes = page.locator('gn-clean-dialog .file-checkbox');
     const count = await checkboxes.count();
     for (let i = 0; i < count; i++) {
       await expect(checkboxes.nth(i)).not.toBeChecked();
@@ -528,7 +528,7 @@ test.describe('Clean Dialog - File List', () => {
   test('individual checkbox toggles selection', async ({ page }) => {
     await openCleanDialog(page);
 
-    const firstCheckbox = page.locator('lv-clean-dialog .file-checkbox').first();
+    const firstCheckbox = page.locator('gn-clean-dialog .file-checkbox').first();
 
     // Uncheck first file
     await firstCheckbox.click();
@@ -542,14 +542,14 @@ test.describe('Clean Dialog - File List', () => {
   test('footer shows selection count', async ({ page }) => {
     await openCleanDialog(page);
 
-    const footerLeft = page.locator('lv-clean-dialog .footer-left');
+    const footerLeft = page.locator('gn-clean-dialog .footer-left');
     await expect(footerLeft).toContainText('4 selected');
   });
 
   test('Delete Selected button is enabled when files are selected', async ({ page }) => {
     await openCleanDialog(page);
 
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await expect(deleteBtn).toBeEnabled();
     await expect(deleteBtn).toContainText('Delete Selected');
   });
@@ -558,10 +558,10 @@ test.describe('Clean Dialog - File List', () => {
     await openCleanDialog(page);
 
     // Uncheck all
-    const selectAll = page.locator('lv-clean-dialog .select-all input[type="checkbox"]');
+    const selectAll = page.locator('gn-clean-dialog .select-all input[type="checkbox"]');
     await selectAll.click();
 
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await expect(deleteBtn).toBeDisabled();
   });
 });
@@ -590,9 +590,9 @@ test.describe('Clean Dialog - Operations', () => {
     await injectCommandMock(page, { 'plugin:dialog|message': 'Cancel' });
     await openCleanDialog(page);
 
-    await page.locator('lv-clean-dialog .btn-danger').click();
+    await page.locator('gn-clean-dialog .btn-danger').click();
 
-    await expect(page.locator('lv-clean-dialog[open] .dialog')).toBeVisible();
+    await expect(page.locator('gn-clean-dialog[open] .dialog')).toBeVisible();
     expect(await findCommand(page, 'clean_files')).toHaveLength(0);
   });
 
@@ -600,7 +600,7 @@ test.describe('Clean Dialog - Operations', () => {
     await startCommandCapture(page);
     await openCleanDialog(page);
 
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await deleteBtn.click();
 
     await waitForCommand(page, 'clean_files');
@@ -617,21 +617,21 @@ test.describe('Clean Dialog - Operations', () => {
   test('successful clean closes dialog', async ({ page }) => {
     await openCleanDialog(page);
 
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await deleteBtn.click();
 
     // Dialog should close after successful clean
-    const dialog = page.locator('lv-clean-dialog[open] .dialog');
+    const dialog = page.locator('gn-clean-dialog[open] .dialog');
     await expect(dialog).not.toBeVisible();
   });
 
   test('Cancel button closes the dialog', async ({ page }) => {
     await openCleanDialog(page);
 
-    const cancelBtn = page.locator('lv-clean-dialog .btn-secondary', { hasText: 'Cancel' });
+    const cancelBtn = page.locator('gn-clean-dialog .btn-secondary', { hasText: 'Cancel' });
     await cancelBtn.click();
 
-    const dialog = page.locator('lv-clean-dialog[open] .dialog');
+    const dialog = page.locator('gn-clean-dialog[open] .dialog');
     await expect(dialog).not.toBeVisible();
   });
 
@@ -640,7 +640,7 @@ test.describe('Clean Dialog - Operations', () => {
 
     await page.keyboard.press('Escape');
 
-    const dialog = page.locator('lv-clean-dialog[open] .dialog');
+    const dialog = page.locator('gn-clean-dialog[open] .dialog');
     await expect(dialog).not.toBeVisible();
   });
 });
@@ -660,7 +660,7 @@ test.describe('Clean Dialog - Options', () => {
   test('shows Include ignored files and Include directories checkboxes', async ({ page }) => {
     await openCleanDialog(page);
 
-    const options = page.locator('lv-clean-dialog .options .option');
+    const options = page.locator('gn-clean-dialog .options .option');
     await expect(options).toHaveCount(2);
 
     await expect(options.first()).toContainText('Include ignored files');
@@ -670,14 +670,14 @@ test.describe('Clean Dialog - Options', () => {
   test('Include directories is checked by default', async ({ page }) => {
     await openCleanDialog(page);
 
-    const dirCheckbox = page.locator('lv-clean-dialog .options .option input').nth(1);
+    const dirCheckbox = page.locator('gn-clean-dialog .options .option input').nth(1);
     await expect(dirCheckbox).toBeChecked();
   });
 
   test('Include ignored files is unchecked by default', async ({ page }) => {
     await openCleanDialog(page);
 
-    const ignoredCheckbox = page.locator('lv-clean-dialog .options .option input').first();
+    const ignoredCheckbox = page.locator('gn-clean-dialog .options .option input').first();
     await expect(ignoredCheckbox).not.toBeChecked();
   });
 
@@ -686,7 +686,7 @@ test.describe('Clean Dialog - Options', () => {
     await openCleanDialog(page);
 
     // Toggle "Include ignored files"
-    const ignoredCheckbox = page.locator('lv-clean-dialog .options .option input').first();
+    const ignoredCheckbox = page.locator('gn-clean-dialog .options .option input').first();
     await ignoredCheckbox.click();
 
     // Wait until at least 2 invocations of get_cleanable_files (initial load + after toggle)
@@ -709,12 +709,12 @@ test.describe('Clean Dialog - Empty State', () => {
   test('shows empty state when no untracked files exist', async ({ page }) => {
     await openCleanDialog(page);
 
-    const emptyState = page.locator('lv-clean-dialog .empty');
+    const emptyState = page.locator('gn-clean-dialog .empty');
     await expect(emptyState).toBeVisible();
     await expect(emptyState).toContainText('Working directory is clean');
 
     // Delete button should be disabled
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await expect(deleteBtn).toBeDisabled();
   });
 });
@@ -735,11 +735,11 @@ test.describe('Clean Dialog - Error Handling', () => {
 
     await openCleanDialog(page);
 
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await deleteBtn.click();
 
     // The clean dialog catches errors and keeps the dialog open
-    const dialog = page.locator('lv-clean-dialog[open] .dialog');
+    const dialog = page.locator('gn-clean-dialog[open] .dialog');
     await expect(dialog).toBeVisible();
   });
 });
@@ -773,21 +773,21 @@ test.describe('Worktree Error Scenarios', () => {
     await openWorktreeDialog(page);
 
     // Switch to add mode
-    const addBtn = page.locator('lv-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
+    const addBtn = page.locator('gn-worktree-dialog .btn-primary', { hasText: 'Add Worktree' });
     await addBtn.click();
 
     // Fill form
-    const pathInput = page.locator('lv-worktree-dialog .form-input').first();
+    const pathInput = page.locator('gn-worktree-dialog .form-input').first();
     await pathInput.fill('/tmp/existing-path');
-    const branchSelect = page.locator('lv-worktree-dialog .form-select');
+    const branchSelect = page.locator('gn-worktree-dialog .form-select');
     await branchSelect.selectOption({ index: 1 });
 
     // Submit
-    const submitBtn = page.locator('lv-worktree-dialog .dialog-footer-right .btn-primary');
+    const submitBtn = page.locator('gn-worktree-dialog .dialog-footer-right .btn-primary');
     await submitBtn.click();
 
     // The worktree dialog shows errors in .message.error
-    const errorMessage = page.locator('lv-worktree-dialog .message.error');
+    const errorMessage = page.locator('gn-worktree-dialog .message.error');
     await expect(errorMessage).toBeVisible({ timeout: 5000 });
   });
 
@@ -803,12 +803,12 @@ test.describe('Worktree Error Scenarios', () => {
 
     await openCleanDialog(page);
 
-    const deleteBtn = page.locator('lv-clean-dialog .btn-danger');
+    const deleteBtn = page.locator('gn-clean-dialog .btn-danger');
     await deleteBtn.click();
 
     // The clean dialog uses showToast for errors which creates a toast notification
     // The dialog should remain open on error
-    const dialog = page.locator('lv-clean-dialog[open] .dialog');
+    const dialog = page.locator('gn-clean-dialog[open] .dialog');
     await expect(dialog).toBeVisible({ timeout: 5000 });
   });
 });

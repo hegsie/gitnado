@@ -37,7 +37,7 @@ import {
   REPOSITORY_SCAN_OFFER_EVENT,
   REPOSITORY_SCAN_RESOLVED_EVENT,
 } from '../services/window-drop.service.ts';
-import type { LvScanRepositoriesDialog } from '../components/dialogs/lv-scan-repositories-dialog.ts';
+import type { GnScanRepositoriesDialog } from '../components/dialogs/gn-scan-repositories-dialog.ts';
 import type { RepositoryScanResult } from '../services/repo-scan.service.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -59,20 +59,20 @@ function scanResult(over: Partial<RepositoryScanResult> = {}): RepositoryScanRes
 }
 
 async function mountShell(): Promise<AppShell> {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   document.body.appendChild(el);
   await el.updateComplete;
   return el;
 }
 
-function scanDialog(el: AppShell): LvScanRepositoriesDialog {
-  const dialog = el.shadowRoot!.querySelector('lv-scan-repositories-dialog');
+function scanDialog(el: AppShell): GnScanRepositoriesDialog {
+  const dialog = el.shadowRoot!.querySelector('gn-scan-repositories-dialog');
   if (!dialog) throw new Error('the shell renders no scan dialog');
   return dialog;
 }
 
 /** Drop a folder that is not a repository, as the drop service does. */
-async function openOffer(el: AppShell): Promise<LvScanRepositoriesDialog> {
+async function openOffer(el: AppShell): Promise<GnScanRepositoriesDialog> {
   window.dispatchEvent(
     new CustomEvent<{ path: string }>(REPOSITORY_SCAN_OFFER_EVENT, { detail: { path: DROPPED } }),
   );
@@ -84,8 +84,8 @@ async function openOffer(el: AppShell): Promise<LvScanRepositoriesDialog> {
 
 /** Take the offer, and wait for the phase the mocked scan produces. */
 async function scanFromOffer(
-  dialog: LvScanRepositoriesDialog,
-  ready: (dialog: LvScanRepositoriesDialog) => boolean,
+  dialog: GnScanRepositoriesDialog,
+  ready: (dialog: GnScanRepositoriesDialog) => boolean,
 ): Promise<void> {
   const scanButton = [
     ...dialog.shadowRoot!.querySelectorAll<HTMLButtonElement>('.offer-actions button'),

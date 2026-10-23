@@ -68,7 +68,7 @@ let openCalls: Array<{ commitish?: string; summary?: string }> = [];
  * shell — an own property shadows it with something the test can observe.
  */
 function createAppShell(withRepo = true): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const shell = el as any;
   shell.activeRepository = withRepo ? mockOpenRepository : null;

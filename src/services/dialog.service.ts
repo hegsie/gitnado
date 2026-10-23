@@ -154,7 +154,7 @@ export async function showAsk(
 }
 
 /**
- * Show a themed prompt dialog using the lv-prompt-dialog singleton.
+ * Show a themed prompt dialog using the gn-prompt-dialog singleton.
  * Returns the entered string, or null if cancelled.
  */
 export async function showPrompt(
@@ -174,13 +174,13 @@ export async function showPrompt(
   // that is the hand-enumerated list that goes stale. showConfirm does the same.
   try {
     // Lazy-import to avoid circular dependencies; side-effect import registers the element
-    await import('../components/dialogs/lv-prompt-dialog.ts');
+    await import('../components/dialogs/gn-prompt-dialog.ts');
 
-    type PromptDialog = import('../components/dialogs/lv-prompt-dialog.ts').LvPromptDialog;
+    type PromptDialog = import('../components/dialogs/gn-prompt-dialog.ts').GnPromptDialog;
 
-    let dialog = document.querySelector<PromptDialog>('lv-prompt-dialog');
+    let dialog = document.querySelector<PromptDialog>('gn-prompt-dialog');
     if (!dialog) {
-      dialog = document.createElement('lv-prompt-dialog') as PromptDialog;
+      dialog = document.createElement('gn-prompt-dialog') as PromptDialog;
       document.body.appendChild(dialog);
       await dialog.updateComplete;
     }

@@ -31,7 +31,7 @@ const PR_FIXTURE = {
   baseRef: 'main',
   draft: false,
   mergeable: true,
-  htmlUrl: 'https://github.com/octo/leviathan/pull/42',
+  htmlUrl: 'https://github.com/octo/gitnado/pull/42',
   additions: 10,
   deletions: 2,
   changedFiles: 1,
@@ -46,18 +46,18 @@ async function openWithGitHub(
   await page.goto('/');
   await page.waitForLoadState('domcontentloaded');
   await startCommandCaptureWithMocks(page, {
-    detect_github_repo: { owner: 'octo', repo: 'leviathan', remoteName: 'origin' },
+    detect_github_repo: { owner: 'octo', repo: 'gitnado', remoteName: 'origin' },
     ...overrides,
   });
   await initializeRepositoryStore(page);
 }
 
 function prSectionHeader(page: Page) {
-  return page.locator('lv-left-panel .section-header').filter({ hasText: 'Pull Requests' });
+  return page.locator('gn-left-panel .section-header').filter({ hasText: 'Pull Requests' });
 }
 
 function prList(page: Page) {
-  return page.locator('lv-pull-request-list');
+  return page.locator('gn-pull-request-list');
 }
 
 test.describe('Pull Requests sidebar section', () => {
@@ -312,12 +312,12 @@ test.describe('Branch context menu - Create pull request', () => {
     await openWithGitHub(page, { get_keyring_token: 'gh-token' });
 
     // "main" is the default mock's checked-out branch and has an upstream.
-    const branchRow = page.locator('lv-branch-list .branch-item').first();
+    const branchRow = page.locator('gn-branch-list .branch-item').first();
     await expect(branchRow).toBeVisible();
     await branchRow.click({ button: 'right' });
 
     const entry = page
-      .locator('lv-branch-list .context-menu-item')
+      .locator('gn-branch-list .context-menu-item')
       .filter({ hasText: 'Create pull request' });
     await expect(entry).toBeVisible();
     await expect(entry).toBeEnabled();
@@ -326,7 +326,7 @@ test.describe('Branch context menu - Create pull request', () => {
     const dialogs = new DialogsPage(page);
     await expect(dialogs.github.dialog).toBeVisible();
     // The create form is showing, with the branch as the head.
-    const head = page.locator('lv-github-dialog input[placeholder="feature-branch"]');
+    const head = page.locator('gn-github-dialog input[placeholder="feature-branch"]');
     await expect(head).toBeVisible();
     await expect(head).toHaveValue('main');
   });
@@ -338,14 +338,14 @@ test.describe('Branch context menu - Create pull request', () => {
     // upstream. It renders inside its "feature" prefix group, so the row shows
     // the stripped name.
     const branchRow = page
-      .locator('lv-branch-list .branch-item')
+      .locator('gn-branch-list .branch-item')
       .filter({ has: page.locator('.branch-name', { hasText: /^test$/ }) })
       .first();
     await expect(branchRow).toBeVisible();
     await branchRow.click({ button: 'right' });
 
     const entry = page
-      .locator('lv-branch-list .context-menu-item')
+      .locator('gn-branch-list .context-menu-item')
       .filter({ hasText: 'Create pull request' });
     await expect(entry).toBeVisible();
     await expect(entry).toBeDisabled();
@@ -359,12 +359,12 @@ test.describe('Branch context menu - Create pull request', () => {
     await startCommandCaptureWithMocks(page, {});
     await initializeRepositoryStore(page);
 
-    const branchRow = page.locator('lv-branch-list .branch-item').first();
+    const branchRow = page.locator('gn-branch-list .branch-item').first();
     await expect(branchRow).toBeVisible();
     await branchRow.click({ button: 'right' });
 
     const entry = page
-      .locator('lv-branch-list .context-menu-item')
+      .locator('gn-branch-list .context-menu-item')
       .filter({ hasText: 'Create pull request' });
     await expect(entry).toBeDisabled();
     await expect(entry).toHaveAttribute('title', /No GitHub, GitLab, Bitbucket or Azure DevOps/);

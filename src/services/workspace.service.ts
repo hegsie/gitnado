@@ -29,7 +29,7 @@ export async function saveWorkspace(workspace: Workspace): Promise<CommandResult
 }
 
 export async function deleteWorkspace(workspaceId: string): Promise<CommandResult<void>> {
-  // Deliberately silent: the sole caller (lv-workspace-manager-dialog) names
+  // Deliberately silent: the sole caller (gn-workspace-manager-dialog) names
   // which workspace went, and toasting here too stacked two success messages
   // for one click.
   return invokeCommand<void>('delete_workspace', { workspaceId });

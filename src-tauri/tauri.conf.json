@@ -77,7 +77,7 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["gitnado", "leviathan"]
+        "schemes": ["gitnado"]
       }
     }
   }

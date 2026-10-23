@@ -63,7 +63,7 @@ test.describe('offline mode refuses an OAuth sign-in before it starts', () => {
     await dialogs.github.oauthSignInButton.click();
 
     // The refusal names the setting and where to change it...
-    const message = page.locator('.toast.error, lv-github-dialog .error-message').first();
+    const message = page.locator('.toast.error, gn-github-dialog .error-message').first();
     await expect(message).toContainText(/offline mode/i);
     await expect(message).toContainText(/Settings > Security/i);
 

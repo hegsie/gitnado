@@ -58,7 +58,7 @@ import { dialogs } from '../stores/dialog.store.ts';
 import { uiStore } from '../stores/index.ts';
 
 async function shell(): Promise<AppShell> {
-  const el = await fixture<AppShell>(html`<lv-app-shell></lv-app-shell>`);
+  const el = await fixture<AppShell>(html`<gn-app-shell></gn-app-shell>`);
   await el.updateComplete;
   // The listeners are registered over async IPC in connectedCallback.
   await waitForListener('model-download-error');

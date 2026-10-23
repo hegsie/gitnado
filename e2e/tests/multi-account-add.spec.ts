@@ -77,7 +77,7 @@ test.describe('Multi-Account - Adding Second Account', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // The account selector should show the existing account
-    const selector = page.locator('lv-github-dialog lv-account-selector');
+    const selector = page.locator('gn-github-dialog gn-account-selector');
     await expect(selector).toBeVisible();
 
     // Should display the account name
@@ -90,11 +90,11 @@ test.describe('Multi-Account - Adding Second Account', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Click the selector to open dropdown
-    const selectorBtn = page.locator('lv-github-dialog lv-account-selector .selector-btn');
+    const selectorBtn = page.locator('gn-github-dialog gn-account-selector .selector-btn');
     await selectorBtn.click();
 
     // Should show "Add Account" action in the dropdown
-    const addAccountBtn = page.locator('lv-github-dialog lv-account-selector .dropdown-action.primary');
+    const addAccountBtn = page.locator('gn-github-dialog gn-account-selector .dropdown-action.primary');
     await expect(addAccountBtn).toBeVisible();
     await expect(addAccountBtn).toContainText('Add Account');
   });
@@ -105,12 +105,12 @@ test.describe('Multi-Account - Adding Second Account', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // The connection tab should have a token input (for PAT method)
-    const connectionTab = page.locator('lv-github-dialog .tab:has-text("Connection")');
+    const connectionTab = page.locator('gn-github-dialog .tab:has-text("Connection")');
     await connectionTab.click();
 
     // Token input may or may not be visible depending on auth method, but the
     // connection tab should be reachable
-    const connectionTabContent = page.locator('lv-github-dialog .tab-content');
+    const connectionTabContent = page.locator('gn-github-dialog .tab-content');
     await expect(connectionTabContent).toBeVisible();
   });
 
@@ -120,11 +120,11 @@ test.describe('Multi-Account - Adding Second Account', () => {
     await expect(dialogs.github.dialog).toBeVisible();
 
     // Switch to connection tab
-    const connectionTab = page.locator('lv-github-dialog .tab:has-text("Connection")');
+    const connectionTab = page.locator('gn-github-dialog .tab:has-text("Connection")');
     await connectionTab.click();
 
     // Either the auth toggle or the OAuth button should exist in the connection UI
-    const tabContent = page.locator('lv-github-dialog .tab-content');
+    const tabContent = page.locator('gn-github-dialog .tab-content');
     await expect(tabContent).toBeVisible();
   });
 });

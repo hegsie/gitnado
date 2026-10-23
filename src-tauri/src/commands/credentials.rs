@@ -961,11 +961,6 @@ pub async fn erase_credentials(path: String, host: String, protocol: String) -> 
 
 const INTEGRATION_SERVICE: &str = "gitnado-integrations";
 
-/// Service name from before the 0.9.0 rename. A token found under it is
-/// re-stored under `INTEGRATION_SERVICE` and the old entry removed, so existing
-/// integration sign-ins survive the upgrade.
-const LEGACY_INTEGRATION_SERVICE: &str = "leviathan-integrations";
-
 /// Build the macOS `security add-generic-password` argument list (M3).
 ///
 /// `-A` (allow any application) is included only in **debug** builds for
@@ -1208,50 +1203,6 @@ fn remove_keyring_token(service: &str, key: &str) -> Result<()> {
     }
 }
 
-/// Read `key` under `service`, falling back to `legacy_service`. A legacy hit is
-/// re-stored under `service` and, once that write succeeded, removed from
-/// `legacy_service` — so the fallback is taken once per key. The backend is
-/// passed in so the logic is unit-tested.
-fn read_with_legacy_fallback(
-    service: &str,
-    legacy_service: &str,
-    key: &str,
-    read: impl Fn(&str, &str) -> Result<Option<String>>,
-    write: impl Fn(&str, &str, &str) -> Result<()>,
-    remove: impl Fn(&str, &str) -> Result<()>,
-) -> Result<Option<String>> {
-    if let Some(value) = read(service, key)? {
-        return Ok(Some(value));
-    }
-    let Some(value) = read(legacy_service, key)? else {
-        return Ok(None);
-    };
-    // A failed re-store is not a reason to throw away the token that WAS read.
-    // `?` here meant an upgrading user whose keyring accepts reads but refuses
-    // writes — a keychain that re-locks after a read, an entry-count limit, a
-    // re-locked SecretService collection — got an error instead of the
-    // credential sitting right there, and a working connected account read as
-    // broken. The legacy entry stays put, so the next launch adopts it
-    // properly. `credentials_service::get_with_legacy_fallback` does the same.
-    if let Err(e) = write(service, key, &value) {
-        tracing::warn!(
-            "Found a legacy keyring token for {} but could not re-store it under {}: {}",
-            key,
-            service,
-            e
-        );
-        return Ok(Some(value));
-    }
-    if let Err(e) = remove(legacy_service, key) {
-        tracing::warn!(
-            "Adopted legacy keyring token for {} but could not remove the old entry: {}",
-            key,
-            e
-        );
-    }
-    Ok(Some(value))
-}
-
 /// Store an integration token in the system keyring.
 #[command]
 pub async fn store_keyring_token(key: String, value: String) -> Result<()> {
@@ -1260,26 +1211,16 @@ pub async fn store_keyring_token(key: String, value: String) -> Result<()> {
     Ok(())
 }
 
-/// Retrieve an integration token from the system keyring, adopting one stored
-/// under the pre-rename service name if that is where it lives.
+/// Retrieve an integration token from the system keyring.
 #[command]
 pub async fn get_keyring_token(key: String) -> Result<Option<String>> {
-    read_with_legacy_fallback(
-        INTEGRATION_SERVICE,
-        LEGACY_INTEGRATION_SERVICE,
-        &key,
-        read_keyring_token,
-        write_keyring_token,
-        remove_keyring_token,
-    )
+    read_keyring_token(INTEGRATION_SERVICE, &key)
 }
 
-/// Delete an integration token from the system keyring, under both the current
-/// and the pre-rename service name.
+/// Delete an integration token from the system keyring.
 #[command]
 pub async fn delete_keyring_token(key: String) -> Result<()> {
     remove_keyring_token(INTEGRATION_SERVICE, &key)?;
-    remove_keyring_token(LEGACY_INTEGRATION_SERVICE, &key)?;
     tracing::debug!("Deleted keyring token for key: {}", key);
     Ok(())
 }
@@ -2738,119 +2679,6 @@ mod tests {
     async fn test_set_credential_helper_rejects_injected_helper() {
         let result = set_credential_helper(None, "osxkeychain\nevil".to_string(), None, None).await;
         assert!(result.is_err(), "injected helper must be rejected");
-    }
-    // --- legacy service-name fallback -------------------------------------
-
-    type FakeKeyring =
-        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<(String, String), String>>>;
-
-    fn read_fallback(store: &FakeKeyring, key: &str, write_fails: bool) -> Result<Option<String>> {
-        let r = store.clone();
-        let w = store.clone();
-        let d = store.clone();
-        read_with_legacy_fallback(
-            "gitnado-integrations",
-            "leviathan-integrations",
-            key,
-            move |s, k| Ok(r.borrow().get(&(s.to_string(), k.to_string())).cloned()),
-            move |s, k, v| {
-                if write_fails {
-                    return Err(GitnadoError::OperationFailed("write failed".into()));
-                }
-                w.borrow_mut()
-                    .insert((s.to_string(), k.to_string()), v.to_string());
-                Ok(())
-            },
-            move |s, k| {
-                d.borrow_mut().remove(&(s.to_string(), k.to_string()));
-                Ok(())
-            },
-        )
-    }
-
-    #[test]
-    fn token_fallback_prefers_current_service() {
-        let store: FakeKeyring = Default::default();
-        store.borrow_mut().insert(
-            ("gitnado-integrations".into(), "github".into()),
-            "new".into(),
-        );
-        store.borrow_mut().insert(
-            ("leviathan-integrations".into(), "github".into()),
-            "old".into(),
-        );
-        assert_eq!(
-            read_fallback(&store, "github", false).unwrap().as_deref(),
-            Some("new")
-        );
-        assert_eq!(store.borrow().len(), 2, "nothing is touched");
-    }
-
-    #[test]
-    fn token_fallback_adopts_legacy_token_once() {
-        let store: FakeKeyring = Default::default();
-        store.borrow_mut().insert(
-            ("leviathan-integrations".into(), "gitlab".into()),
-            "tok".into(),
-        );
-
-        assert_eq!(
-            read_fallback(&store, "gitlab", false).unwrap().as_deref(),
-            Some("tok")
-        );
-        {
-            let s = store.borrow();
-            assert_eq!(
-                s.get(&("gitnado-integrations".into(), "gitlab".into()))
-                    .map(String::as_str),
-                Some("tok")
-            );
-            assert!(!s.contains_key(&("leviathan-integrations".into(), "gitlab".into())));
-        }
-        // Second read is served from the current service.
-        assert_eq!(
-            read_fallback(&store, "gitlab", false).unwrap().as_deref(),
-            Some("tok")
-        );
-    }
-
-    /// A failed re-store must not throw away the token that WAS read.
-    ///
-    /// `?` on the write propagated the failure, so an upgrading user whose
-    /// keyring accepts reads but refuses writes — a keychain that re-locks
-    /// after a read, an entry-count limit, a re-locked SecretService
-    /// collection — got an error from `get_keyring_token` instead of the token
-    /// sitting right there under the old service name, and a perfectly good
-    /// connected account read as broken. The sibling adopter
-    /// `credentials_service::get_with_legacy_fallback` warns and returns the
-    /// value; these two are written for the same situation and must agree.
-    ///
-    /// The legacy entry stays put, so the next launch adopts it properly.
-    #[test]
-    fn token_fallback_returns_the_adopted_token_when_the_re_store_fails() {
-        let store: FakeKeyring = Default::default();
-        store.borrow_mut().insert(
-            ("leviathan-integrations".into(), "jira".into()),
-            "tok".into(),
-        );
-        assert_eq!(
-            read_fallback(&store, "jira", true).unwrap().as_deref(),
-            Some("tok"),
-            "the token was read; a failed re-store is no reason to lose it"
-        );
-        assert!(
-            store
-                .borrow()
-                .contains_key(&("leviathan-integrations".into(), "jira".into())),
-            "the only copy must not be removed after a failed write"
-        );
-    }
-
-    #[test]
-    fn token_fallback_none_when_absent_everywhere() {
-        let store: FakeKeyring = Default::default();
-        assert_eq!(read_fallback(&store, "bitbucket", false).unwrap(), None);
-        assert!(store.borrow().is_empty());
     }
 }
 

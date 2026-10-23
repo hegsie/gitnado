@@ -38,7 +38,7 @@ When adding or modifying component operations (handlers, service calls, dialog a
 
 ### Event Dispatch Consistency
 - **All sibling handlers must follow the same pattern.** If `handleAdd()` dispatches a `foo-changed` event, then `handleRemove()`, `handleUpdate()`, and any other handlers in the same component that modify the same state MUST also dispatch `foo-changed`. Never leave a handler without an event dispatch when its siblings have one.
-- **Every dispatched event must have at least one listener.** Before dispatching a new CustomEvent, verify that a parent component (typically `app-shell.ts` or `lv-left-panel.ts`) has a corresponding `@event-name` handler. Orphaned events are dead code.
+- **Every dispatched event must have at least one listener.** Before dispatching a new CustomEvent, verify that a parent component (typically `app-shell.ts` or `gn-left-panel.ts`) has a corresponding `@event-name` handler. Orphaned events are dead code.
 - **State-modifying operations in `app-shell.ts` must call `handleRefresh()`**, not just `graphCanvas?.refresh?.()`. The `handleRefresh()` method updates the repository store, refreshes the graph, refreshes the search index, and dispatches `repository-refresh` for other listeners.
 
 ### User Feedback Consistency

@@ -16,9 +16,9 @@ import {
  *
  * The Azure DevOps dialog is opened via the command palette ("Azure DevOps Integration").
  * It has tabs: Connection, Pull Requests, Work Items, Pipelines.
- * It uses `lv-modal[open]` internally and is accessed via `AzureDevOpsDialogPage`.
+ * It uses `gn-modal[open]` internally and is accessed via `AzureDevOpsDialogPage`.
  *
- * The dialog element is `lv-azure-devops-dialog` with an internal `lv-modal[open]`.
+ * The dialog element is `gn-azure-devops-dialog` with an internal `gn-modal[open]`.
  */
 
 test.describe('Azure DevOps Dialog - Display', () => {
@@ -542,7 +542,7 @@ test.describe('Azure DevOps Dialog - Extended Scenarios', () => {
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
 
     // Verify the error is shown within the dialog
-    await expect(page.locator('lv-azure-devops-dialog .error, lv-azure-devops-dialog .error-message, .toast.error').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('gn-azure-devops-dialog .error, gn-azure-devops-dialog .error-message, .toast.error').first()).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -779,9 +779,9 @@ test.describe('Azure DevOps Dialog - Capped list disclosure', () => {
     await waitForCommand(page, 'list_ado_pipeline_runs');
     const runCalls = await findCommand(page, 'list_ado_pipeline_runs');
     const requestedTop = (runCalls[0].args as { top: number }).top;
-    await expect(page.locator('lv-azure-devops-dialog .pipeline-item')).toHaveCount(requestedTop);
+    await expect(page.locator('gn-azure-devops-dialog .pipeline-item')).toHaveCount(requestedTop);
 
-    const hint = page.locator('lv-azure-devops-dialog .capped-list-hint');
+    const hint = page.locator('gn-azure-devops-dialog .capped-list-hint');
     await expect(hint).toContainText('more may exist');
     await expect(hint).toContainText(String(requestedTop));
 
@@ -834,9 +834,9 @@ test.describe('Azure DevOps Dialog - Capped list disclosure', () => {
     // list and the dialog has no number to disclose.
     const requestedTop = (prCalls[0].args as { top: number }).top;
     expect(requestedTop).toBeGreaterThan(0);
-    await expect(page.locator('lv-azure-devops-dialog .pr-item')).toHaveCount(requestedTop);
+    await expect(page.locator('gn-azure-devops-dialog .pr-item')).toHaveCount(requestedTop);
 
-    const hint = page.locator('lv-azure-devops-dialog .capped-list-hint');
+    const hint = page.locator('gn-azure-devops-dialog .capped-list-hint');
     await expect(hint).toContainText('more may exist');
     await expect(hint).toContainText(String(requestedTop));
 
@@ -852,7 +852,7 @@ test.describe('Azure DevOps Dialog - Capped list disclosure', () => {
 
     // Switching the filter must move the link with it, otherwise the "full list"
     // link lands on a different list than the one on screen.
-    await page.locator('lv-azure-devops-dialog .filter-select').selectOption('abandoned');
+    await page.locator('gn-azure-devops-dialog .filter-select').selectOption('abandoned');
     await expect(hint.locator('a')).toHaveAttribute(
       'href',
       'https://dev.azure.com/testorg/testproject/_git/testrepo/pullrequests?_a=abandoned',
@@ -905,12 +905,12 @@ test.describe('Azure DevOps Dialog - Capped list disclosure', () => {
     await app.executeCommand('Azure DevOps');
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
     await dialogs.azureDevOps.pullRequestsTab.click();
-    await expect(page.locator('lv-azure-devops-dialog .pr-item')).toHaveCount(1);
+    await expect(page.locator('gn-azure-devops-dialog .pr-item')).toHaveCount(1);
 
-    await page.locator('lv-azure-devops-dialog .filter-select').selectOption('all');
-    await expect(page.locator('lv-azure-devops-dialog .pr-item')).toHaveCount(3);
-    await expect(page.locator('lv-azure-devops-dialog .pr-list')).toContainText('completed PR');
-    await expect(page.locator('lv-azure-devops-dialog .pr-list')).toContainText('abandoned PR');
+    await page.locator('gn-azure-devops-dialog .filter-select').selectOption('all');
+    await expect(page.locator('gn-azure-devops-dialog .pr-item')).toHaveCount(3);
+    await expect(page.locator('gn-azure-devops-dialog .pr-list')).toContainText('completed PR');
+    await expect(page.locator('gn-azure-devops-dialog .pr-list')).toContainText('abandoned PR');
 
     const prCalls = await findCommand(page, 'list_ado_pull_requests');
     expect((prCalls[prCalls.length - 1].args as { status?: string }).status).toBe('all');
@@ -951,9 +951,9 @@ test.describe('Azure DevOps Dialog - Capped list disclosure', () => {
     const workItemCalls = await findCommand(page, 'query_ado_work_items');
     const requestedLimit = (workItemCalls[0].args as { limit: number }).limit;
     expect(requestedLimit).toBeGreaterThan(0);
-    await expect(page.locator('lv-azure-devops-dialog .work-item')).toHaveCount(requestedLimit);
+    await expect(page.locator('gn-azure-devops-dialog .work-item')).toHaveCount(requestedLimit);
 
-    const hint = page.locator('lv-azure-devops-dialog .capped-list-hint');
+    const hint = page.locator('gn-azure-devops-dialog .capped-list-hint');
     await expect(hint).toContainText(String(requestedLimit));
   });
 
@@ -967,11 +967,11 @@ test.describe('Azure DevOps Dialog - Capped list disclosure', () => {
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
 
     await dialogs.azureDevOps.pullRequestsTab.click();
-    await expect(page.locator('lv-azure-devops-dialog .pr-item')).toHaveCount(1);
-    await expect(page.locator('lv-azure-devops-dialog .capped-list-hint')).toHaveCount(0);
+    await expect(page.locator('gn-azure-devops-dialog .pr-item')).toHaveCount(1);
+    await expect(page.locator('gn-azure-devops-dialog .capped-list-hint')).toHaveCount(0);
 
     await dialogs.azureDevOps.pipelinesTab.click();
-    await expect(page.locator('lv-azure-devops-dialog .pipeline-item')).toHaveCount(1);
-    await expect(page.locator('lv-azure-devops-dialog .capped-list-hint')).toHaveCount(0);
+    await expect(page.locator('gn-azure-devops-dialog .pipeline-item')).toHaveCount(1);
+    await expect(page.locator('gn-azure-devops-dialog .capped-list-hint')).toHaveCount(0);
   });
 });

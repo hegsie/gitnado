@@ -3,7 +3,7 @@
  * Exports all dashboard-related components for the repository context dashboard
  */
 
-export { LvContextDashboard } from './lv-context-dashboard.ts';
-export { LvProfileCard } from './lv-profile-card.ts';
-export { LvIntegrationCard } from './lv-integration-card.ts';
-export { LvRepositoryCard } from './lv-repository-card.ts';
+export { GnContextDashboard } from './gn-context-dashboard.ts';
+export { GnProfileCard } from './gn-profile-card.ts';
+export { GnIntegrationCard } from './gn-integration-card.ts';
+export { GnRepositoryCard } from './gn-repository-card.ts';

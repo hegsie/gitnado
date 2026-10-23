@@ -6584,11 +6584,11 @@ export async function setupRemoteOperationListeners(): Promise<void> {
         // `merge-conflict` is bound on the app-shell ELEMENT, not on window —
         // a window dispatch would be orphaned. The handler pins the dialog to
         // repositoryPath and refreshes that repo, so no extra refresh here.
-        // The tag is `lv-app-shell` (see the @customElement in app-shell.ts);
+        // The tag is `gn-app-shell` (see the @customElement in app-shell.ts);
         // querying "app-shell" found nothing in the real UI, so every late
         // conflict fell through to the plain refresh below and left the
         // repository mid-merge with no dialog.
-        const shell = conflict ? document.querySelector("lv-app-shell") : null;
+        const shell = conflict ? document.querySelector("gn-app-shell") : null;
         if (shell) {
           shell.dispatchEvent(
             new CustomEvent("merge-conflict", {

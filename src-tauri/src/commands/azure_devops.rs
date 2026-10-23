@@ -209,7 +209,7 @@ fn ado_pr_status_param(status: Option<&str>) -> Option<String> {
 
 /// Default page size for the pull-request listing.
 ///
-/// Kept in sync with PULL_REQUESTS_PAGE_SIZE in lv-azure-devops-dialog.ts, which
+/// Kept in sync with PULL_REQUESTS_PAGE_SIZE in gn-azure-devops-dialog.ts, which
 /// discloses it to the user.
 const PULL_REQUESTS_DEFAULT_TOP: u32 = 100;
 
@@ -1156,7 +1156,7 @@ pub async fn get_ado_work_items(
 /// caller receives exactly this many, more may exist — the dialog surfaces a
 /// "capped" hint.
 ///
-/// Kept in sync with WORK_ITEMS_PAGE_SIZE in lv-azure-devops-dialog.ts, which
+/// Kept in sync with WORK_ITEMS_PAGE_SIZE in gn-azure-devops-dialog.ts, which
 /// discloses it to the user.
 const WORK_ITEMS_DEFAULT_LIMIT: u32 = 50;
 
@@ -1706,7 +1706,7 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
 
 /// Default page size for the account repository listing.
 ///
-/// Kept in sync with REPO_PICKER_PAGE_SIZE in lv-account-repo-picker.ts, which
+/// Kept in sync with REPO_PICKER_PAGE_SIZE in gn-account-repo-picker.ts, which
 /// discloses it to the user.
 const REPOSITORIES_DEFAULT_PER_PAGE: u32 = 30;
 

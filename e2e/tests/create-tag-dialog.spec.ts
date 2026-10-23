@@ -14,10 +14,10 @@ import {
  */
 async function openCreateTagDialog(page: import('@playwright/test').Page) {
   await openViaCommandPalette(page, 'Create tag');
-  const modal = page.locator('lv-create-tag-dialog lv-modal[open]');
+  const modal = page.locator('gn-create-tag-dialog gn-modal[open]');
   await modal.waitFor({ state: 'visible' });
-  // Scope to the lv-create-tag-dialog that has the open modal
-  const dialog = page.locator('lv-create-tag-dialog').filter({ has: page.locator('lv-modal[open]') });
+  // Scope to the gn-create-tag-dialog that has the open modal
+  const dialog = page.locator('gn-create-tag-dialog').filter({ has: page.locator('gn-modal[open]') });
   // Wait for the dialog to be INTERACTIVE, not merely visible. The modal
   // becomes visible as soon as its `open` property is set, which can precede
   // the component settling; filling in that window produced an intermittent
@@ -37,15 +37,15 @@ async function openCreateTagDialogWithRef(
   page: import('@playwright/test').Page,
   targetRef: string
 ) {
-  // The app-shell's lv-create-tag-dialog is the first one; use .first() to target it
-  const dialogEl = page.locator('lv-create-tag-dialog').first();
+  // The app-shell's gn-create-tag-dialog is the first one; use .first() to target it
+  const dialogEl = page.locator('gn-create-tag-dialog').first();
   await dialogEl.evaluate(
     (el, ref) => (el as HTMLElement & { open: (t?: string) => void }).open(ref),
     targetRef
   );
-  const modal = page.locator('lv-create-tag-dialog lv-modal[open]');
+  const modal = page.locator('gn-create-tag-dialog gn-modal[open]');
   await modal.waitFor({ state: 'visible' });
-  return page.locator('lv-create-tag-dialog').filter({ has: page.locator('lv-modal[open]') });
+  return page.locator('gn-create-tag-dialog').filter({ has: page.locator('gn-modal[open]') });
 }
 
 test.describe('Create Tag Dialog', () => {
@@ -199,7 +199,7 @@ test.describe('Create Tag Dialog', () => {
 
     // Verify the dialog closes after successful tag creation
     await expect(
-      page.locator('lv-create-tag-dialog lv-modal[open]')
+      page.locator('gn-create-tag-dialog gn-modal[open]')
     ).not.toBeVisible({ timeout: 3000 });
   });
 
@@ -251,7 +251,7 @@ test.describe('Create Tag Dialog', () => {
     const createBtn = dialog.locator('button.btn-primary', { hasText: /Create Tag/ });
     await createBtn.click();
 
-    const modal = page.locator('lv-create-tag-dialog lv-modal[open]');
+    const modal = page.locator('gn-create-tag-dialog gn-modal[open]');
     await expect(modal).not.toBeVisible();
   });
 
@@ -265,7 +265,7 @@ test.describe('Create Tag Dialog', () => {
     const cancelBtn = dialog.locator('button.btn-secondary', { hasText: /Cancel/ });
     await cancelBtn.click();
 
-    const modal = page.locator('lv-create-tag-dialog lv-modal[open]');
+    const modal = page.locator('gn-create-tag-dialog gn-modal[open]');
     await expect(modal).not.toBeVisible();
 
     const commands = await findCommand(page, 'create_tag');
@@ -296,7 +296,7 @@ test.describe('Create Tag Dialog', () => {
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Tag already exists: v1.0.0');
 
-    const modal = page.locator('lv-create-tag-dialog lv-modal[open]');
+    const modal = page.locator('gn-create-tag-dialog gn-modal[open]');
     await expect(modal).toBeVisible();
   });
 

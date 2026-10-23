@@ -182,11 +182,10 @@ export async function initOAuthListener(): Promise<void> {
 }
 
 /**
- * OAuth callback deep-link prefixes. `leviathan://` is the scheme from before
- * the 0.9.0 rename; it stays registered (see `deep-link.desktop.schemes` in
- * tauri.conf.json) so a callback configured against the old name still lands.
+ * OAuth callback deep-link prefixes (see `deep-link.desktop.schemes` in
+ * tauri.conf.json).
  */
-export const OAUTH_DEEP_LINK_PREFIXES = ['gitnado://oauth/', 'leviathan://oauth/'] as const;
+export const OAUTH_DEEP_LINK_PREFIXES = ['gitnado://oauth/'] as const;
 
 /**
  * The provider segment of an OAuth callback deep link

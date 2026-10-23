@@ -29,15 +29,15 @@ function storedScheme(page: Page): Promise<{ scheme: string; auto: boolean }> {
 
 async function openSettings(page: Page): Promise<void> {
   await page.keyboard.press('Meta+,');
-  await expect(page.locator('lv-settings-dialog')).toBeVisible();
+  await expect(page.locator('gn-settings-dialog')).toBeVisible();
 }
 
 function schemeSelect(page: Page) {
-  return page.locator('lv-settings-dialog select[aria-label="Graph color scheme"]');
+  return page.locator('gn-settings-dialog select[aria-label="Graph color scheme"]');
 }
 
 function autoNote(page: Page) {
-  return page.locator('lv-settings-dialog [data-testid="graph-scheme-auto-note"]');
+  return page.locator('gn-settings-dialog [data-testid="graph-scheme-auto-note"]');
 }
 
 test.describe('Forced colors', () => {

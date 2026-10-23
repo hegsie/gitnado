@@ -71,13 +71,13 @@ test.describe('Commit Panel - Amend Mode', () => {
   });
 
   test('should have Amend checkbox or toggle', async ({ page }) => {
-    const amendToggle = page.locator('lv-commit-panel').locator('label', { hasText: /amend/i });
+    const amendToggle = page.locator('gn-commit-panel').locator('label', { hasText: /amend/i });
     const toggleCount = await amendToggle.count();
     expect(toggleCount).toBeGreaterThan(0);
   });
 
   test('amend mode should populate message from last commit', async ({ page }) => {
-    const amendToggle = page.locator('lv-commit-panel label', { hasText: /amend/i }).first();
+    const amendToggle = page.locator('gn-commit-panel label', { hasText: /amend/i }).first();
 
     await expect(amendToggle).toBeVisible();
     await amendToggle.click();
@@ -95,29 +95,29 @@ test.describe('Commit Panel - Conventional Commits', () => {
   });
 
   test('should have conventional commits toggle', async ({ page }) => {
-    const conventionalToggle = page.locator('lv-commit-panel').locator('button, input, label', { hasText: /conventional/i });
+    const conventionalToggle = page.locator('gn-commit-panel').locator('button, input, label', { hasText: /conventional/i });
     const toggleCount = await conventionalToggle.count();
     expect(toggleCount).toBeGreaterThan(0);
   });
 
   test('conventional mode should show type selector', async ({ page }) => {
-    const conventionalToggle = page.locator('lv-commit-panel label', { hasText: /conventional/i }).first();
+    const conventionalToggle = page.locator('gn-commit-panel label', { hasText: /conventional/i }).first();
 
     await expect(conventionalToggle).toBeVisible();
     await conventionalToggle.click();
 
-    const typeSelector = page.locator('lv-commit-panel').locator('select.type-select');
+    const typeSelector = page.locator('gn-commit-panel').locator('select.type-select');
     await expect(typeSelector.first()).toBeVisible();
   });
 
   test('should have common commit types available', async ({ page }) => {
-    const conventionalToggle = page.locator('lv-commit-panel label', { hasText: /conventional/i }).first();
+    const conventionalToggle = page.locator('gn-commit-panel label', { hasText: /conventional/i }).first();
 
     await expect(conventionalToggle).toBeVisible();
     await conventionalToggle.click();
 
     // Verify the type select is visible and has options
-    const typeSelect = page.locator('lv-commit-panel select.type-select');
+    const typeSelect = page.locator('gn-commit-panel select.type-select');
     await expect(typeSelect).toBeVisible();
 
     // Verify common types are present by checking the select's options
@@ -128,12 +128,12 @@ test.describe('Commit Panel - Conventional Commits', () => {
   });
 
   test('should have scope input field', async ({ page }) => {
-    const conventionalToggle = page.locator('lv-commit-panel label', { hasText: /conventional/i }).first();
+    const conventionalToggle = page.locator('gn-commit-panel label', { hasText: /conventional/i }).first();
 
     await expect(conventionalToggle).toBeVisible();
     await conventionalToggle.click();
 
-    const scopeInput = page.locator('lv-commit-panel input.scope-input');
+    const scopeInput = page.locator('gn-commit-panel input.scope-input');
     await expect(scopeInput.first()).toBeVisible();
   });
 });
@@ -155,29 +155,29 @@ test.describe('Commit Panel - Templates', () => {
     });
 
     // Force the commit panel to reload templates using Playwright locator (auto-pierces shadow DOM)
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.loadTemplates === 'function') {
         await el.loadTemplates();
         await el.updateComplete;
       }
     });
     // Wait for templates to load and render
-    await page.locator('lv-commit-panel select.template-select').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('gn-commit-panel select.template-select').waitFor({ state: 'visible', timeout: 5000 });
   });
 
   test('should have template selector or button', async ({ page }) => {
-    const templateSelector = page.locator('lv-commit-panel select.template-select');
+    const templateSelector = page.locator('gn-commit-panel select.template-select');
     await expect(templateSelector).toBeVisible();
   });
 
   test('should have save template option', async ({ page }) => {
     // Save template button is the icon-btn next to the template selector
-    const saveTemplateButton = page.locator('lv-commit-panel .icon-btn[title="Save as template"]');
+    const saveTemplateButton = page.locator('gn-commit-panel .icon-btn[title="Save as template"]');
     await expect(saveTemplateButton).toBeVisible();
   });
 
   test('selecting template should populate message', async ({ page }) => {
-    const templateSelector = page.locator('lv-commit-panel select.template-select');
+    const templateSelector = page.locator('gn-commit-panel select.template-select');
     await expect(templateSelector).toBeVisible();
 
     // Select the "Bug Fix" template
@@ -201,7 +201,7 @@ test.describe('Commit Panel - AI Generation', () => {
   });
 
   test('AI button should have tooltip', async ({ page }) => {
-    const generateBtn = page.locator('lv-commit-panel .generate-btn');
+    const generateBtn = page.locator('gn-commit-panel .generate-btn');
     await expect(generateBtn).toBeVisible();
     const title = await generateBtn.getAttribute('title');
     expect(title).not.toBeNull();
@@ -220,7 +220,7 @@ test.describe('Commit Panel - Character Limit', () => {
   test('should show character count', async ({ page }) => {
     await rightPanel.commitMessage.fill('Test message');
 
-    const charCount = page.locator('lv-commit-panel .char-count');
+    const charCount = page.locator('gn-commit-panel .char-count');
     await expect(charCount).toBeVisible();
     await expect(charCount).toContainText('12/72');
   });
@@ -229,7 +229,7 @@ test.describe('Commit Panel - Character Limit', () => {
     const longMessage = 'A'.repeat(70);
     await rightPanel.commitMessage.fill(longMessage);
 
-    const charCount = page.locator('lv-commit-panel .char-count');
+    const charCount = page.locator('gn-commit-panel .char-count');
     await expect(charCount).toBeVisible();
     await expect(charCount).toContainText('70/72');
   });
@@ -238,7 +238,7 @@ test.describe('Commit Panel - Character Limit', () => {
     const veryLongMessage = 'A'.repeat(80);
     await rightPanel.commitMessage.fill(veryLongMessage);
 
-    const charCount = page.locator('lv-commit-panel .char-count');
+    const charCount = page.locator('gn-commit-panel .char-count');
     await expect(charCount).toBeVisible();
     await expect(charCount).toContainText('80/72');
   });
@@ -280,7 +280,7 @@ test.describe('Commit Panel - Keyboard Shortcuts', () => {
     await rightPanel.commitMessage.fill('Test message');
 
     // Click elsewhere to blur the textarea (the Commit panel header)
-    await page.locator('lv-commit-panel .header').click();
+    await page.locator('gn-commit-panel .header').click();
 
     // Verify the textarea lost focus
     await expect(rightPanel.commitMessage).not.toBeFocused();
@@ -304,7 +304,7 @@ test.describe('Commit Panel - Empty State', () => {
   });
 
   test('should show clean working tree message when no files staged', async ({ page }) => {
-    const cleanState = page.locator('lv-file-status .clean-state');
+    const cleanState = page.locator('gn-file-status .clean-state');
     await expect(cleanState).toBeVisible();
     await expect(cleanState.locator('.title')).toHaveText('Working tree clean');
   });
@@ -343,7 +343,7 @@ test.describe('Commit Panel - Staged Files Display', () => {
   });
 
   test('staged files should show status indicators', async ({ page }) => {
-    const statusIndicators = page.locator('lv-file-status .status, lv-file-status .status-icon, lv-file-status [class*="status"]');
+    const statusIndicators = page.locator('gn-file-status .status, gn-file-status .status-icon, gn-file-status [class*="status"]');
     const indicatorCount = await statusIndicators.count();
     expect(indicatorCount).toBeGreaterThan(0);
   });
@@ -368,7 +368,7 @@ test.describe('Commit Panel - Commit E2E', () => {
 
     await expect(rightPanel.commitMessage).toHaveValue('');
 
-    const successMessage = page.locator('lv-commit-panel .success');
+    const successMessage = page.locator('gn-commit-panel .success');
     await expect(successMessage).toBeVisible();
     await expect(successMessage).toContainText('commit-s');
   });
@@ -413,7 +413,7 @@ test.describe('Commit Panel - Commit E2E', () => {
     await rightPanel.commitMessage.fill('test: failing commit');
     await rightPanel.commitButton.click();
 
-    const errorMessage = page.locator('lv-commit-panel .error');
+    const errorMessage = page.locator('gn-commit-panel .error');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Commit hook failed');
 
@@ -438,7 +438,7 @@ test.describe('Commit Panel - Commit E2E', () => {
       ],
     });
 
-    const amendToggle = page.locator('lv-commit-panel label', { hasText: /amend/i }).first();
+    const amendToggle = page.locator('gn-commit-panel label', { hasText: /amend/i }).first();
     await expect(amendToggle).toBeVisible();
     await amendToggle.click();
 
@@ -458,7 +458,7 @@ test.describe('Commit Panel - Commit E2E', () => {
     });
 
     // Force the commit panel to re-check AI availability using Playwright locator (auto-pierces shadow DOM)
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
@@ -466,7 +466,7 @@ test.describe('Commit Panel - Commit E2E', () => {
     });
 
     // Wait for the button text to change to "Generate with AI"
-    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+    await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     await startCommandCaptureWithMocks(page, {
       generate_commit_message: { summary: 'feat: auto-generated message', body: null },
@@ -506,7 +506,7 @@ test.describe('Commit Panel - Commit E2E', () => {
       ],
     });
 
-    const amendToggle = page.locator('lv-commit-panel label', { hasText: /amend/i }).first();
+    const amendToggle = page.locator('gn-commit-panel label', { hasText: /amend/i }).first();
     await amendToggle.click();
 
     await expect(rightPanel.commitMessage).toHaveValue(/old message/);
@@ -548,16 +548,16 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Force the commit panel to reload templates
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.loadTemplates === 'function') {
         await el.loadTemplates();
         await el.updateComplete;
       }
     });
-    await page.locator('lv-commit-panel select.template-select').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('gn-commit-panel select.template-select').waitFor({ state: 'visible', timeout: 5000 });
 
     // Select the Feature Template
-    const templateSelector = page.locator('lv-commit-panel select.template-select');
+    const templateSelector = page.locator('gn-commit-panel select.template-select');
     await templateSelector.selectOption({ value: 'tpl-feat' });
 
     // Verify the message textarea is populated with the exact template content
@@ -577,7 +577,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Force the commit panel to re-check AI availability
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
@@ -585,7 +585,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Wait for the button text to indicate AI is available
-    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+    await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     // Mock the AI response with a specific message
     await injectCommandMock(page, {
@@ -612,14 +612,14 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Force the commit panel to re-check AI availability
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
       }
     });
 
-    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+    await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     // Inject error for generate_commit_message
     await injectCommandError(page, 'generate_commit_message', 'AI service unavailable: rate limit exceeded');
@@ -630,7 +630,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     await rightPanel.aiGenerateButton.click();
 
     // Verify error feedback is shown - either inline error in commit panel or a toast notification
-    const inlineError = page.locator('lv-commit-panel .error');
+    const inlineError = page.locator('gn-commit-panel .error');
     const toast = page.locator('.toast.error, .toast-error, .toast');
 
     await expect(inlineError.or(toast).first()).toBeVisible({ timeout: 5000 });
@@ -660,13 +660,13 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
 
     // The panel checks availability while still online — the state a user is
     // in when they turn offline mode on with the panel already open.
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
       }
     });
-    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+    await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     await page.evaluate(() => {
       (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
@@ -681,7 +681,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     await rightPanel.aiGenerateButton.click();
 
     // The refusal names the setting and the provider, so the user can act on it.
-    const inlineError = page.locator('lv-commit-panel .error');
+    const inlineError = page.locator('gn-commit-panel .error');
     await expect(inlineError).toBeVisible();
     await expect(inlineError).toContainText(/Offline mode/i);
     await expect(inlineError).toContainText(/OpenAI/i);
@@ -711,13 +711,13 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
       (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
     });
 
-    await page.locator('lv-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
       }
     });
-    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+    await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     await startCommandCaptureWithMocks(page, {
       generate_commit_message: { summary: 'feat: local model message', body: null },
@@ -729,7 +729,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
 
     await waitForCommand(page, 'generate_commit_message');
     await expect(rightPanel.commitMessage).toHaveValue(/local model message/);
-    await expect(page.locator('lv-commit-panel .error')).toHaveCount(0);
+    await expect(page.locator('gn-commit-panel .error')).toHaveCount(0);
   });
 
   test('offline mode leaves the local fallback working with no provider selected', async ({ page }) => {
@@ -760,7 +760,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
       ).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
     });
 
-    await page.locator('lv-commit-panel').evaluate(
+    await page.locator('gn-commit-panel').evaluate(
       async (el: Element & {
         checkAiAvailability?: () => Promise<void>;
         updateComplete?: Promise<unknown>;
@@ -772,7 +772,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
       }
     );
     // The affordance stays available rather than being hidden as "no AI".
-    await expect(page.locator('lv-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
+    await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     await startCommandCaptureWithMocks(page, {
       generate_commit_message: { summary: 'feat: fallback model message', body: null },
@@ -784,7 +784,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
 
     await waitForCommand(page, 'generate_commit_message');
     await expect(rightPanel.commitMessage).toHaveValue(/fallback model message/);
-    await expect(page.locator('lv-commit-panel .error')).toHaveCount(0);
+    await expect(page.locator('gn-commit-panel .error')).toHaveCount(0);
   });
 });
 
@@ -821,10 +821,10 @@ test.describe('Commit Panel - Trailers', () => {
     });
 
     await rightPanel.commitMessage.fill('feat: signed work');
-    await page.locator('lv-commit-panel .signoff-toggle input').check();
+    await page.locator('gn-commit-panel .signoff-toggle input').check();
 
     // The panel says exactly what will be added before the commit is made.
-    const preview = page.locator('lv-commit-panel .trailers-preview');
+    const preview = page.locator('gn-commit-panel .trailers-preview');
     await expect(preview).toBeVisible();
     await expect(preview).toContainText('Signed-off-by: Test User <test@example.com>');
 
@@ -846,15 +846,15 @@ test.describe('Commit Panel - Trailers', () => {
       create_commit: { oid: 'unsigned-1', shortId: 'unsign1', summary: 'feat: unsigned' },
     });
 
-    const body = page.locator('lv-commit-panel .description-input');
+    const body = page.locator('gn-commit-panel .description-input');
     await rightPanel.commitMessage.fill('feat: hand written');
     await body.fill('A body the user wrote.\n\nRefs: #42');
 
-    const signOff = page.locator('lv-commit-panel .signoff-toggle input');
+    const signOff = page.locator('gn-commit-panel .signoff-toggle input');
     await signOff.check();
-    await expect(page.locator('lv-commit-panel .trailers-preview')).toBeVisible();
+    await expect(page.locator('gn-commit-panel .trailers-preview')).toBeVisible();
     await signOff.uncheck();
-    await expect(page.locator('lv-commit-panel .trailers-preview')).toHaveCount(0);
+    await expect(page.locator('gn-commit-panel .trailers-preview')).toHaveCount(0);
 
     await rightPanel.commitButton.click();
     await waitForCommand(page, 'create_commit');
@@ -880,20 +880,20 @@ test.describe('Commit Panel - Trailers', () => {
     });
 
     await rightPanel.commitMessage.fill('feat: paired work');
-    await page.locator('lv-commit-panel .coauthor-btn').click();
+    await page.locator('gn-commit-panel .coauthor-btn').click();
 
-    const suggestion = page.locator('lv-commit-panel .coauthor-suggestion', {
+    const suggestion = page.locator('gn-commit-panel .coauthor-suggestion', {
       hasText: 'grace@example.com',
     });
     await expect(suggestion).toBeVisible();
     // The committer themselves is never offered as their own co-author.
     await expect(
-      page.locator('lv-commit-panel .coauthor-suggestion', { hasText: 'test@example.com' })
+      page.locator('gn-commit-panel .coauthor-suggestion', { hasText: 'test@example.com' })
     ).toHaveCount(0);
 
     await suggestion.click();
 
-    const preview = page.locator('lv-commit-panel .trailers-preview');
+    const preview = page.locator('gn-commit-panel .trailers-preview');
     await expect(preview).toContainText('Co-authored-by: Grace Hopper <grace@example.com>');
 
     await rightPanel.commitButton.click();
@@ -910,36 +910,36 @@ test.describe('Commit Panel - Trailers', () => {
     await setupOpenRepository(page, withStagedFiles(stagedFile));
 
     await rightPanel.commitMessage.fill('feat: manual co-author');
-    await page.locator('lv-commit-panel .coauthor-btn').click();
+    await page.locator('gn-commit-panel .coauthor-btn').click();
 
-    const input = page.locator('lv-commit-panel .coauthor-input');
-    const add = page.locator('lv-commit-panel .coauthor-add-btn');
+    const input = page.locator('gn-commit-panel .coauthor-input');
+    const add = page.locator('gn-commit-panel .coauthor-add-btn');
 
     // A malformed entry is refused with an explanation, not silently dropped.
     await input.fill('grace@example.com');
     await add.click();
-    await expect(page.locator('lv-commit-panel .coauthor-error')).toContainText(
+    await expect(page.locator('gn-commit-panel .coauthor-error')).toContainText(
       'not a valid co-author'
     );
 
     await input.fill('Grace Hopper <grace@example.com>');
     await add.click();
-    await expect(page.locator('lv-commit-panel .trailer-line')).toHaveCount(1);
+    await expect(page.locator('gn-commit-panel .trailer-line')).toHaveCount(1);
 
     // Adding the same person again is a no-op that says so.
     await input.fill('G. Hopper <GRACE@example.com>');
     await add.click();
-    await expect(page.locator('lv-commit-panel .coauthor-error')).toContainText(
+    await expect(page.locator('gn-commit-panel .coauthor-error')).toContainText(
       'already a co-author'
     );
-    await expect(page.locator('lv-commit-panel .trailer-line')).toHaveCount(1);
+    await expect(page.locator('gn-commit-panel .trailer-line')).toHaveCount(1);
 
     // Close the dropdown, which floats over the preview beneath it.
-    await page.locator('lv-commit-panel .coauthor-btn').click();
-    await expect(page.locator('lv-commit-panel .coauthor-dropdown')).toHaveCount(0);
+    await page.locator('gn-commit-panel .coauthor-btn').click();
+    await expect(page.locator('gn-commit-panel .coauthor-dropdown')).toHaveCount(0);
 
-    await page.locator('lv-commit-panel .trailer-remove').click();
-    await expect(page.locator('lv-commit-panel .trailers-preview')).toHaveCount(0);
+    await page.locator('gn-commit-panel .trailer-remove').click();
+    await expect(page.locator('gn-commit-panel .trailers-preview')).toHaveCount(0);
   });
 
   test('amending a commit that already has trailers does not duplicate them', async ({ page }) => {
@@ -959,14 +959,14 @@ test.describe('Commit Panel - Trailers', () => {
       create_commit: { oid: 'amend-1', shortId: 'amend1', summary: 'fix: already signed' },
     });
 
-    await page.locator('lv-commit-panel label', { hasText: /amend/i }).first().click();
+    await page.locator('gn-commit-panel label', { hasText: /amend/i }).first().click();
 
     // The existing footer is shown as panel state instead of being re-appended.
-    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeChecked();
-    const preview = page.locator('lv-commit-panel .trailers-preview');
+    await expect(page.locator('gn-commit-panel .signoff-toggle input')).toBeChecked();
+    const preview = page.locator('gn-commit-panel .trailers-preview');
     await expect(preview).toContainText('Signed-off-by: Test User <test@example.com>');
     await expect(preview).toContainText('Co-authored-by: Grace Hopper <grace@example.com>');
-    await expect(page.locator('lv-commit-panel .description-input')).toHaveValue('Body.');
+    await expect(page.locator('gn-commit-panel .description-input')).toHaveValue('Body.');
 
     await rightPanel.commitButton.click();
     await waitForCommand(page, 'create_commit');
@@ -990,7 +990,7 @@ test.describe('Commit Panel - Trailers', () => {
     });
 
     // Reload the identity the way applying a profile would.
-    await page.locator('lv-commit-panel').evaluate(async (el) => {
+    await page.locator('gn-commit-panel').evaluate(async (el) => {
       const panel = el as HTMLElement & {
         loadAuthorName: () => Promise<void>;
         updateComplete: Promise<unknown>;
@@ -999,14 +999,14 @@ test.describe('Commit Panel - Trailers', () => {
       await panel.updateComplete;
     });
 
-    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeDisabled();
-    const hint = page.locator('lv-commit-panel .trailer-hint');
+    await expect(page.locator('gn-commit-panel .signoff-toggle input')).toBeDisabled();
+    const hint = page.locator('gn-commit-panel .trailer-hint');
     await expect(hint).toBeVisible();
     await expect(hint).toContainText('No git identity configured');
 
     // The warning leads somewhere: it opens the Git Configuration dialog.
     await hint.locator('button').click();
-    await expect(page.locator('lv-config-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-config-dialog gn-modal[open]')).toBeVisible();
   });
 
   test('configuring an identity from the hint re-enables Sign off', async ({ page }) => {
@@ -1037,7 +1037,7 @@ test.describe('Commit Panel - Trailers', () => {
     });
 
     // Reload the identity the way applying a profile would.
-    await page.locator('lv-commit-panel').evaluate(async (el) => {
+    await page.locator('gn-commit-panel').evaluate(async (el) => {
       const panel = el as HTMLElement & {
         loadAuthorName: () => Promise<void>;
         updateComplete: Promise<unknown>;
@@ -1046,31 +1046,31 @@ test.describe('Commit Panel - Trailers', () => {
       await panel.updateComplete;
     });
 
-    const hint = page.locator('lv-commit-panel .trailer-hint');
+    const hint = page.locator('gn-commit-panel .trailer-hint');
     await expect(hint).toBeVisible();
-    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeDisabled();
+    await expect(page.locator('gn-commit-panel .signoff-toggle input')).toBeDisabled();
 
     await hint.locator('button').click();
-    await expect(page.locator('lv-config-dialog lv-modal[open]')).toBeVisible();
+    await expect(page.locator('gn-config-dialog gn-modal[open]')).toBeVisible();
 
-    const fields = page.locator('lv-config-dialog .form-group input');
+    const fields = page.locator('gn-config-dialog .form-group input');
     await fields.nth(0).fill('Ada Lovelace');
     await fields.nth(1).fill('ada@example.com');
-    await page.locator('lv-config-dialog .btn-primary').click();
+    await page.locator('gn-config-dialog .btn-primary').click();
 
     // The panel the user came from recovers straight away — no commit, fetch
     // or tab switch needed to clear the dead end.
-    await expect(page.locator('lv-commit-panel .trailer-hint')).toHaveCount(0);
-    await expect(page.locator('lv-commit-panel .signoff-toggle input')).toBeEnabled();
+    await expect(page.locator('gn-commit-panel .trailer-hint')).toHaveCount(0);
+    await expect(page.locator('gn-commit-panel .signoff-toggle input')).toBeEnabled();
 
     // ...and it is still gone once the dialog is closed.
-    await page.locator('lv-config-dialog lv-modal').getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator('lv-config-dialog lv-modal[open]')).toHaveCount(0);
-    await expect(page.locator('lv-commit-panel .trailer-hint')).toHaveCount(0);
+    await page.locator('gn-config-dialog gn-modal').getByRole('button', { name: 'Close' }).click();
+    await expect(page.locator('gn-config-dialog gn-modal[open]')).toHaveCount(0);
+    await expect(page.locator('gn-commit-panel .trailer-hint')).toHaveCount(0);
 
     // Sign off now works: it writes the identity that was just configured.
-    await page.locator('lv-commit-panel .signoff-toggle input').check();
-    await expect(page.locator('lv-commit-panel .trailers-preview')).toContainText(
+    await page.locator('gn-commit-panel .signoff-toggle input').check();
+    await expect(page.locator('gn-commit-panel .trailers-preview')).toContainText(
       'Signed-off-by: Ada Lovelace <ada@example.com>',
     );
   });

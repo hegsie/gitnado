@@ -77,11 +77,11 @@ function openRemotelessRepo(): void {
  * A shell watching `REPO`, with `REPO` active.
  *
  * The right panel is marked visible so the badge hydration the same handler
- * schedules stays out of the way: `lv-file-status` owns it while the panel is
+ * schedules stays out of the way: `gn-file-status` owns it while the panel is
  * mounted, and this test is about the remotes read.
  */
 function shellWatchingRepo(): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   (el as any).activeRepository = repositoryStore.getState().getActiveRepository();
   (el as any).rightPanelVisible = true;
   (el as any).watchedRepoPaths = new Set([REPO]);

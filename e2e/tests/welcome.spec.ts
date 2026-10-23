@@ -150,7 +150,7 @@ test.describe('Welcome Screen with Recent Repositories', () => {
     await app.recentItems.first().click();
 
     // A moved or deleted repo must tell the user — repositoryStore.error is never rendered
-    const toastMessage = page.locator('lv-toast-container .toast.error .toast-message');
+    const toastMessage = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toastMessage).toContainText('failed to open repository', { timeout: 5000 });
     await expect(app.welcomeScreen).toBeVisible();
   });
@@ -284,7 +284,7 @@ test.describe('Clone Dialog - Error Handling', () => {
     await dialogs.clone.clone();
 
     // Verify error message is displayed in the dialog
-    const errorMessage = page.locator('lv-clone-dialog .error-message');
+    const errorMessage = page.locator('gn-clone-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Repository not found');
   });
@@ -319,7 +319,7 @@ test.describe('Clone Dialog - Error Handling', () => {
     await injectCommandError(page, 'clone_repository', 'Repository not found');
     await dialogs.clone.clone();
 
-    const errorMessage = page.locator('lv-clone-dialog .error-message');
+    const errorMessage = page.locator('gn-clone-dialog .error-message');
     await expect(errorMessage).toBeVisible();
 
     // Edit the URL field -- error should clear
@@ -336,7 +336,7 @@ test.describe('Clone Dialog - Error Handling', () => {
 
     await dialogs.clone.clone();
 
-    const errorMessage = page.locator('lv-clone-dialog .error-message');
+    const errorMessage = page.locator('gn-clone-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Failed to connect');
   });
@@ -459,7 +459,7 @@ test.describe('Init Dialog - Command Verification', () => {
 
     await dialogs.init.init();
 
-    const errorMessage = page.locator('lv-init-dialog .error-message');
+    const errorMessage = page.locator('gn-init-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Invalid initial branch name: bad name');
     await expect(dialogs.init.dialog).toBeVisible();
@@ -488,7 +488,7 @@ test.describe('Init Dialog - Error Handling', () => {
     await dialogs.init.init();
 
     // Verify error message is displayed in the dialog
-    const errorMessage = page.locator('lv-init-dialog .error-message');
+    const errorMessage = page.locator('gn-init-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Permission denied');
   });
@@ -508,7 +508,7 @@ test.describe('Init Dialog - Error Handling', () => {
     await injectCommandError(page, 'init_repository', 'Directory already exists');
     await dialogs.init.init();
 
-    const errorMessage = page.locator('lv-init-dialog .error-message');
+    const errorMessage = page.locator('gn-init-dialog .error-message');
     await expect(errorMessage).toBeVisible();
 
     // Edit the path field -- error should clear
@@ -524,7 +524,7 @@ test.describe('Init Dialog - Error Handling', () => {
 
     await dialogs.init.init();
 
-    const errorMessage = page.locator('lv-init-dialog .error-message');
+    const errorMessage = page.locator('gn-init-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('already contains');
   });
@@ -789,7 +789,7 @@ test.describe('Session restore', () => {
     const app = new AppPage(page);
     await app.goto();
 
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(1);
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(1);
     await expect(app.welcomeScreen).not.toBeVisible();
   });
 
@@ -802,7 +802,7 @@ test.describe('Session restore', () => {
     await app.goto();
 
     await expect(app.welcomeScreen).toBeVisible();
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(0);
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(0);
     // Nothing failed to restore, so nothing is reported as an error either.
     await expect(page.locator('.toast')).toHaveCount(0);
     // The remembered tabs survive: the toggle is reversible, not a wipe.
@@ -824,7 +824,7 @@ test.describe('Session restore', () => {
     });
     await page.reload();
 
-    await expect(page.locator('lv-toolbar .tab')).toHaveCount(1);
+    await expect(page.locator('gn-toolbar .tab')).toHaveCount(1);
   });
 });
 
@@ -894,7 +894,7 @@ test.describe('Welcome Screen - scan for repositories', () => {
 
     await app.scanButton.click();
 
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.result-item')).toHaveCount(2);
     await expect(dialog.locator('.results-toolbar')).toContainText('2 repositories');
 
@@ -923,7 +923,7 @@ test.describe('Welcome Screen - scan for repositories', () => {
 
     await app.scanButton.click();
 
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.explanation')).toContainText('No Git repositories were found');
     await expect(dialog.locator('.notice')).toContainText('40');
     await expect(dialog.locator('.result-item')).toHaveCount(0);
@@ -935,7 +935,7 @@ test.describe('Welcome Screen - scan for repositories', () => {
 
     await app.scanButton.click();
 
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.error-message')).toContainText('no longer exists');
 
     // A failed scan used to be a dead end: Close was the only way out, and the
@@ -955,7 +955,7 @@ test.describe('Welcome Screen - scan for repositories', () => {
 
     // The element is always mounted in the shell; a cancelled picker must
     // leave it closed (and so invisible), not open it on an empty folder.
-    await expect(page.locator('lv-scan-repositories-dialog .body')).not.toBeVisible();
+    await expect(page.locator('gn-scan-repositories-dialog .body')).not.toBeVisible();
   });
 });
 
@@ -985,7 +985,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     await emitDragEvent(page, 'tauri://drag-enter', ['/code/alpha']);
 
     await expect(app.welcomeScreen.locator('.drop-overlay')).toBeVisible();
-    await expect(page.locator('lv-app-shell .window-drop-overlay')).toHaveCount(0);
+    await expect(page.locator('gn-app-shell .window-drop-overlay')).toHaveCount(0);
   });
 
   test('opens a dropped repository', async ({ page }) => {
@@ -1028,7 +1028,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
 
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
     // The drop affordance goes away as soon as the drop lands.
     await expect(app.welcomeScreen.locator('.drop-overlay')).toHaveCount(0);
@@ -1055,7 +1055,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     });
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
     await dialog.getByRole('button', { name: 'Scan it for repositories' }).click();
     await expect(dialog.locator('.result-item')).toHaveCount(2);
@@ -1092,7 +1092,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     });
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
 
     // The user does exactly what the offer asked for — creates a repository in
@@ -1137,7 +1137,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     });
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects']);
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
     await dialog.getByRole('button', { name: 'Scan it for repositories' }).click();
     await expect(dialog.locator('.result-item')).toHaveCount(2);
@@ -1168,7 +1168,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
 
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await dialog.getByRole('button', { name: 'Initialize a repository here' }).click();
 
     // The init dialog takes over, pre-filled with the dropped folder.
@@ -1240,7 +1240,7 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
     await expect(page.locator('.toast').nth(1)).toContainText('beta is not a Git repository');
 
     // Each button says which folder it takes — and takes that one.
-    const dialog = page.locator('lv-scan-repositories-dialog');
+    const dialog = page.locator('gn-scan-repositories-dialog');
     await page.getByRole('button', { name: 'Scan alpha' }).click();
     await expect(dialog.locator('.explanation')).toContainText('not a Git repository');
     await expect(dialog.locator('.folder-path')).toHaveText('/work/alpha');
@@ -1256,17 +1256,17 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
  *
  * `startRepositoryDropListener` is bound for the whole window, so a folder
  * dropped here really is accepted — it opens in a new tab. But the affordance
- * was bound only to `<lv-welcome .dragActive>`, so the identical drag showed a
+ * was bound only to `<gn-welcome .dragActive>`, so the identical drag showed a
  * dashed "Drop a folder to open it" frame on one screen and absolutely nothing
  * on the other: the same window behaving differently in its two states.
  */
 test.describe('Dropping a folder while a repository is open', () => {
-  const dropOverlay = (page: Page) => page.locator('lv-app-shell .window-drop-overlay');
+  const dropOverlay = (page: Page) => page.locator('gn-app-shell .window-drop-overlay');
 
   test.beforeEach(async ({ page }) => {
     await setupOpenRepository(page);
     // The welcome screen is gone — this is the other state.
-    await expect(page.locator('lv-welcome')).toHaveCount(0);
+    await expect(page.locator('gn-welcome')).toHaveCount(0);
   });
 
   test('shows the drop affordance the welcome screen shows', async ({ page }) => {
@@ -1300,7 +1300,7 @@ test.describe('Dropping a folder while a repository is open', () => {
     await emitDragEvent(page, 'tauri://drag-drop', ['/code/alpha']);
 
     // The drop lands as a second tab…
-    await expect(page.locator('lv-toolbar .tab', { hasText: 'alpha' })).toBeVisible({
+    await expect(page.locator('gn-toolbar .tab', { hasText: 'alpha' })).toBeVisible({
       timeout: 10000,
     });
     // …and the affordance goes away with the drag that raised it.
@@ -1328,11 +1328,11 @@ test.describe('Language setting', () => {
   /** Open Settings with the keyboard shortcut — it works without a repository */
   async function openSettings(page: Page): Promise<void> {
     await page.keyboard.press('Meta+,');
-    await expect(page.locator('lv-settings-dialog')).toBeVisible();
+    await expect(page.locator('gn-settings-dialog')).toBeVisible();
   }
 
   function languageSelect(page: Page) {
-    return page.locator('lv-settings-dialog #language-select');
+    return page.locator('gn-settings-dialog #language-select');
   }
 
   test('offers every locale the app ships', async ({ page }) => {
@@ -1354,7 +1354,7 @@ test.describe('Language setting', () => {
     await languageSelect(page).selectOption('fr');
 
     // The dialog the user is looking at...
-    await expect(page.locator('lv-settings-dialog .section-title').first()).toHaveText('Apparence');
+    await expect(page.locator('gn-settings-dialog .section-title').first()).toHaveText('Apparence');
     // ...and the welcome screen behind it, both in the new language.
     await expect(app.welcomeTagline).toHaveText('Un client Git puissant et open source');
     // The Open/Clone/Init actions, in order — the page object finds them by
@@ -1373,7 +1373,7 @@ test.describe('Language setting', () => {
     await expect(app.welcomeTagline).toHaveText('Un client Git puissant et open source');
 
     await languageSelect(page).selectOption('en');
-    await expect(page.locator('lv-settings-dialog .section-title').first()).toHaveText('Appearance');
+    await expect(page.locator('gn-settings-dialog .section-title').first()).toHaveText('Appearance');
     await expect(app.welcomeTagline).toHaveText('A powerful, open-source Git client');
   });
 
@@ -1408,7 +1408,7 @@ test.describe('Language setting with an unsupported persisted locale', () => {
 
     await expect(app.welcomeTagline).toHaveText('A powerful, open-source Git client');
     await page.keyboard.press('Meta+,');
-    await expect(page.locator('lv-settings-dialog #language-select')).toHaveValue('en');
+    await expect(page.locator('gn-settings-dialog #language-select')).toHaveValue('en');
   });
 });
 
@@ -1443,7 +1443,7 @@ test.describe('Initialize a repository here - with a repository already open', (
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
 
-    const scanDialog = page.locator('lv-scan-repositories-dialog');
+    const scanDialog = page.locator('gn-scan-repositories-dialog');
     await scanDialog.getByRole('button', { name: 'Initialize a repository here' }).click();
 
     // Exactly one init dialog is on screen, even though the toolbar mounts one
@@ -1470,7 +1470,7 @@ test.describe('Initialize a repository here - with a repository already open', (
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
     await page
-      .locator('lv-scan-repositories-dialog')
+      .locator('gn-scan-repositories-dialog')
       .getByRole('button', { name: 'Initialize a repository here' })
       .click();
     await expect(app.initDialog).toBeVisible();
@@ -1518,6 +1518,6 @@ test.describe('Language on a French-locale machine', () => {
 
     await expect(app.welcomeTagline).toHaveText('A powerful, open-source Git client');
     await page.keyboard.press('Meta+,');
-    await expect(page.locator('lv-settings-dialog #language-select')).toHaveValue('en');
+    await expect(page.locator('gn-settings-dialog #language-select')).toHaveValue('en');
   });
 });

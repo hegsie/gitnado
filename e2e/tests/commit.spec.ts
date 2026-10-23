@@ -216,7 +216,7 @@ test.describe('Commit - Error Handling', () => {
     await rightPanel.commitButton.click();
 
     // Verify error feedback is visible
-    const errorFeedback = page.locator('lv-commit-panel .error').or(page.locator('.toast.error'));
+    const errorFeedback = page.locator('gn-commit-panel .error').or(page.locator('.toast.error'));
     await expect(errorFeedback.first()).toBeVisible({ timeout: 5000 });
     await expect(errorFeedback.first()).toContainText(/Commit failed|empty tree/i);
 
@@ -249,7 +249,7 @@ test.describe('Commit - Error Handling', () => {
     await rightPanel.commitButton.click();
 
     // Verify error feedback is visible in the commit panel
-    const inlineError = page.locator('lv-commit-panel .error');
+    const inlineError = page.locator('gn-commit-panel .error');
     const toast = page.locator('.toast.error, .toast-error, .toast');
     await expect(inlineError.or(toast).first()).toBeVisible({ timeout: 5000 });
 
@@ -345,7 +345,7 @@ test.describe('Commit - UI Outcome Verification', () => {
 
     // Wait for commit to complete (staged files should clear)
     await page.waitForFunction(() => {
-      const stagedHeader = document.querySelector('lv-file-status .section-header');
+      const stagedHeader = document.querySelector('gn-file-status .section-header');
       // Either the staged section is gone or the count reads 0
       if (!stagedHeader) return true;
       const countEl = stagedHeader.querySelector('.section-count');
@@ -361,8 +361,8 @@ test.describe('Commit - UI Outcome Verification', () => {
   });
 
   test('should populate previous commit message when amend is toggled on', async ({ page }) => {
-    // The amend checkbox is inside lv-commit-panel
-    const amendCheckbox = page.locator('lv-commit-panel .amend-toggle input[type="checkbox"]');
+    // The amend checkbox is inside gn-commit-panel
+    const amendCheckbox = page.locator('gn-commit-panel .amend-toggle input[type="checkbox"]');
     await expect(amendCheckbox).toBeVisible();
 
     // Toggle amend on

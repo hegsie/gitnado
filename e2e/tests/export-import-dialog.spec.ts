@@ -12,7 +12,7 @@ import {
 /**
  * The archive / patch / bundle backend was fully built and fully wrapped in
  * git.service.ts, but nothing in the UI ever reached it. These specs drive the
- * new lv-export-import-dialog end-to-end from the surfaces a user actually
+ * new gn-export-import-dialog end-to-end from the surfaces a user actually
  * has: the command palette, the commit context menu and the ref context menu.
  */
 
@@ -39,10 +39,10 @@ async function setupMocks(page: Page, extra: Record<string, unknown> = {}): Prom
   });
 }
 
-const dialog = 'lv-export-import-dialog';
+const dialog = 'gn-export-import-dialog';
 
 async function rightClickOnCommitRow(page: Page, rowIndex = 0): Promise<void> {
-  const graphCanvas = page.locator('lv-graph-canvas');
+  const graphCanvas = page.locator('gn-graph-canvas');
   await expect(graphCanvas).toBeVisible();
   const innerCanvas = graphCanvas.locator('canvas[role="img"]');
   await expect(innerCanvas).toBeAttached();
@@ -68,7 +68,7 @@ async function rightClickOnCommitRow(page: Page, rowIndex = 0): Promise<void> {
  * the same `ref-context-menu` event the canvas hit-test dispatches.
  */
 async function openRefContextMenu(page: Page, refName: string): Promise<void> {
-  const graphCanvas = page.locator('lv-graph-canvas');
+  const graphCanvas = page.locator('gn-graph-canvas');
   await expect(graphCanvas).toBeVisible();
   const handle = await graphCanvas.elementHandle();
   await page.evaluate(
@@ -100,7 +100,7 @@ test.describe('Export / Import dialog', () => {
     await setupMocks(page);
     await openViaCommandPalette(page, 'Export archive');
 
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
     await expect(page.locator(`${dialog} [data-testid="archive-file-count"]`)).toHaveText(
       `${ARCHIVE_FILES.length} files`,
     );
@@ -112,27 +112,27 @@ test.describe('Export / Import dialog', () => {
       .toBeGreaterThan(0);
     const [call] = await findCommand(page, 'create_archive');
     expect((call.args as { treeRef?: string }).treeRef).toBe('HEAD');
-    await expect(page.locator('lv-toast-container').getByText(/Archive written to/)).toBeVisible();
+    await expect(page.locator('gn-toast-container').getByText(/Archive written to/)).toBeVisible();
   });
 
   test('shows an archive failure inside the dialog instead of dead-ending', async ({ page }) => {
     await setupMocks(page);
     await injectCommandError(page, 'create_archive', 'fatal: not a valid object name');
     await openViaCommandPalette(page, 'Export archive');
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
 
     await page.locator(`${dialog} [data-testid="archive-export"]`).click();
 
     await expect(page.locator(`${dialog} [data-testid="dialog-error"]`)).toContainText(
       'not a valid object name',
     );
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
   });
 
   test('checks a patch and then applies it, refreshing the repository', async ({ page }) => {
     await setupMocks(page);
     await openViaCommandPalette(page, 'Apply patch file');
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
 
     await page.locator(`${dialog} [data-testid="patch-choose-file"]`).click();
     await expect(page.locator(`${dialog} [data-testid="chosen-patch-file"]`)).toHaveText(
@@ -140,8 +140,8 @@ test.describe('Export / Import dialog', () => {
     );
 
     await page.locator(`${dialog} [data-testid="patch-check"]`).click();
-    await expect(page.locator('lv-toast-container').getByText(/applies cleanly/)).toBeVisible();
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator('gn-toast-container').getByText(/applies cleanly/)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
 
     const refreshed = await waitForRepositoryChanged(page, async () => {
       await page.locator(`${dialog} [data-testid="patch-apply"]`).click();
@@ -150,13 +150,13 @@ test.describe('Export / Import dialog', () => {
 
     const applies = await findCommand(page, 'apply_patch');
     expect(applies.some((c) => !(c.args as { checkOnly?: boolean }).checkOnly)).toBe(true);
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeHidden();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeHidden();
   });
 
   test('imports a bundle and refreshes the repository', async ({ page }) => {
     await setupMocks(page, { 'plugin:dialog|open': '/tmp/x.bundle' });
     await openViaCommandPalette(page, 'Import bundle');
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
 
     await page.locator(`${dialog} [data-testid="bundle-choose-file"]`).click();
     await expect(page.locator(dialog).getByText('refs/heads/imported-branch')).toBeVisible();
@@ -173,7 +173,7 @@ test.describe('Export / Import dialog', () => {
       (c, i) => i > unbundleAt && c.command === 'open_repository',
     );
     expect(refreshAt, 'the repository is re-read after the import').toBeGreaterThan(unbundleAt);
-    await expect(page.locator('lv-toast-container').getByText(/Imported 2 refs/)).toBeVisible();
+    await expect(page.locator('gn-toast-container').getByText(/Imported 2 refs/)).toBeVisible();
   });
 
   test('opens the Patch tab with the right-clicked commit pre-checked', async ({ page }) => {
@@ -185,7 +185,7 @@ test.describe('Export / Import dialog', () => {
     const oid = await menu.locator('.context-menu-oid').textContent();
     await menu.getByText('Create patch…').click();
 
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
     const checked = page.locator(`${dialog} input[type="checkbox"]:checked`);
     await expect(checked).toHaveCount(1);
     await expect(await checked.getAttribute('data-oid')).toContain((oid ?? '').trim());
@@ -199,7 +199,7 @@ test.describe('Export / Import dialog', () => {
     await expect(menu).toBeVisible();
     await menu.getByText('Export archive…').click();
 
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
     // The deep link, not the HEAD default the palette entry would have shown.
     await expect(page.locator(`${dialog} #archive-ref`)).toHaveValue('feature/test');
     await expect
@@ -282,18 +282,18 @@ test.describe('Export / Import dialog - repository pinning', () => {
     await setupMocks(page);
     await mockBranchesPerRepo(page, { [OTHER_REPO]: OTHER_BRANCHES });
     await openViaCommandPalette(page, 'Export archive');
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
     await expect(page.locator(`${dialog} #archive-ref option[value="feature/test"]`)).toHaveCount(1);
 
     await addRepo(page, OTHER_REPO, 'other-repo');
 
     // The other repo is active AND its branches have replaced the sidebar's —
     // so the dialog's bound `branches` really did change underneath it.
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute('title', OTHER_REPO);
-    await expect(page.locator('lv-branch-list .branch-item.active')).toContainText('other-main');
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute('title', OTHER_REPO);
+    await expect(page.locator('gn-branch-list .branch-item.active')).toContainText('other-main');
 
     // …and the dialog still offers the repository it was opened for.
-    await expect(page.locator(`${dialog} lv-modal[open]`)).toBeVisible();
+    await expect(page.locator(`${dialog} gn-modal[open]`)).toBeVisible();
     await expect(page.locator(`${dialog} #archive-ref option[value="feature/test"]`)).toHaveCount(1);
     await expect(page.locator(`${dialog} #archive-ref option[value="other-main"]`)).toHaveCount(0);
   });

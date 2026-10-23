@@ -92,7 +92,7 @@ test('scans exactly the files lit-localize is configured to extract from', () =>
   const files = listSourceFiles();
   assert.ok(files.length > 0, 'found source files');
   assert.ok(
-    files.some((f) => f.endsWith('components/dialogs/lv-settings-dialog.ts')),
+    files.some((f) => f.endsWith('components/dialogs/gn-settings-dialog.ts')),
     'includes the settings dialog'
   );
   for (const file of files) {

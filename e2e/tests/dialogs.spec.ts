@@ -106,7 +106,7 @@ test.describe('Profile Manager Dialog', () => {
 
     // Either the profile list or the empty state text must be visible
     await expect(
-      page.locator('lv-profile-manager-dialog[open] .profile-list, lv-profile-manager-dialog[open] :text("No profiles yet")').first()
+      page.locator('gn-profile-manager-dialog[open] .profile-list, gn-profile-manager-dialog[open] :text("No profiles yet")').first()
     ).toBeVisible({ timeout: 3000 });
   });
 
@@ -249,7 +249,7 @@ test.describe('Dialog Backdrop', () => {
     // Click the overlay behind the dialog to close it
     // The overlay covers the full viewport but Playwright considers it "hidden"
     // because it's behind the dialog in stacking order. Use force: true to click it.
-    const overlay = page.locator('lv-modal[open] .overlay');
+    const overlay = page.locator('gn-modal[open] .overlay');
     await overlay.click({ position: { x: 5, y: 5 }, force: true });
     await expect(dialogs.settings.dialog).not.toBeVisible();
   });
@@ -297,7 +297,7 @@ test.describe('Multiple Dialogs', () => {
     await page.keyboard.press('Meta+,');
     await expect(dialogs.settings.dialog).toBeVisible();
 
-    // Close settings via Escape (lv-modal handles this)
+    // Close settings via Escape (gn-modal handles this)
     await page.keyboard.press('Escape');
     await expect(dialogs.settings.dialog).not.toBeVisible();
 
@@ -526,7 +526,7 @@ test.describe('Dialogs - Error Scenarios', () => {
     // Addressed by id, not by position: the Appearance section has gained
     // selects over time (a language picker now renders above these), and a
     // positional locator quietly starts driving a different setting.
-    const fontSizeSelect = page.locator('lv-settings-dialog #font-size-select');
+    const fontSizeSelect = page.locator('gn-settings-dialog #font-size-select');
     await expect(fontSizeSelect).toBeVisible();
     await fontSizeSelect.selectOption('large');
     await expect(fontSizeSelect).toHaveValue('large');
@@ -568,7 +568,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
     // ...the dialog repaints from the store...
     await expect(dialogs.settings.themeSelect).toHaveValue('dark');
     // ...and the user is told it happened.
-    await expect(page.locator('lv-toast-container .toast.success')).toBeVisible();
+    await expect(page.locator('gn-toast-container .toast.success')).toBeVisible();
   });
 
   test('cancelling the reset keeps the current settings', async ({ page }) => {
@@ -601,7 +601,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
       () => (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.theme
     );
     expect(theme).toBe('light');
-    await expect(page.locator('lv-toast-container .toast')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast')).toHaveCount(0);
   });
 });
 
@@ -625,7 +625,7 @@ test.describe('Command Palette - open file in editor', () => {
     // executeSelected closes the palette, so the toast is unobstructed.
     await expect(dialogs.commandPalette.palette).not.toBeVisible();
     await expect(
-      page.locator('lv-toast-container .toast.error .toast-message').first()
+      page.locator('gn-toast-container .toast.error .toast-message').first()
     ).toContainText('src/main.rs');
   });
 
@@ -640,7 +640,7 @@ test.describe('Command Palette - open file in editor', () => {
     await dialogs.commandPalette.selectResultByText('src/main.rs');
 
     await expect(dialogs.commandPalette.palette).not.toBeVisible();
-    await expect(page.locator('lv-toast-container .toast.error')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast.error')).toHaveCount(0);
   });
 });
 
@@ -669,12 +669,12 @@ type SettingsStoreWindow = {
 };
 
 test.describe('Settings Dialog - Show Avatars privacy gate', () => {
-  const avatarRow = 'lv-settings-dialog .setting-row:has(.setting-name:text-is("Show Avatars"))';
-  const offlineRow = 'lv-settings-dialog .setting-row:has(.setting-name:text-is("Offline Mode"))';
-  // The switch is an <lv-toggle>; its shadow `button[role="switch"]` is what
+  const avatarRow = 'gn-settings-dialog .setting-row:has(.setting-name:text-is("Show Avatars"))';
+  const offlineRow = 'gn-settings-dialog .setting-row:has(.setting-name:text-is("Offline Mode"))';
+  // The switch is an <gn-toggle>; its shadow `button[role="switch"]` is what
   // carries the checked/disabled state (Playwright pierces the shadow root).
-  const avatarToggle = `${avatarRow} lv-toggle button[role="switch"]`;
-  const offlineToggle = `${offlineRow} lv-toggle button[role="switch"]`;
+  const avatarToggle = `${avatarRow} gn-toggle button[role="switch"]`;
+  const offlineToggle = `${offlineRow} gn-toggle button[role="switch"]`;
   const avatarReason = `${avatarRow} .setting-unavailable-reason`;
 
   test.beforeEach(async ({ page }) => {

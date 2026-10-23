@@ -127,7 +127,7 @@ function setupDefaultMocks(): void {
  * but the instance is real and its methods call real services.
  */
 function createAppShell(): AppShell {
-  const el = document.createElement('lv-app-shell') as AppShell;
+  const el = document.createElement('gn-app-shell') as AppShell;
   // Set internal state that handlers depend on
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const shell = el as any;

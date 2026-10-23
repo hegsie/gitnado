@@ -28,10 +28,10 @@ async function selectCommit(
     timestamp: number;
   }
 ): Promise<void> {
-  const graphCanvas = page.locator('lv-graph-canvas');
+  const graphCanvas = page.locator('gn-graph-canvas');
   const handle = await graphCanvas.elementHandle();
   await page.evaluate(([el, commitData]) => {
-    if (!el) throw new Error('lv-graph-canvas not found');
+    if (!el) throw new Error('gn-graph-canvas not found');
     el.dispatchEvent(
       new CustomEvent('commit-selected', {
         detail: { commit: commitData, commits: [commitData], refs: [] },
@@ -42,7 +42,7 @@ async function selectCommit(
   }, [handle, commit] as const);
 
   // Wait for the commit details component to receive the commit and render
-  await page.locator('lv-commit-details .commit-message').waitFor({ state: 'visible', timeout: 5000 });
+  await page.locator('gn-commit-details .commit-message').waitFor({ state: 'visible', timeout: 5000 });
 }
 
 /** Default commit used for most tests */
@@ -401,7 +401,7 @@ test.describe('Commit Details - UI Outcome Verification', () => {
     await expect(rightPanel.commitFilesChanged.first()).toHaveClass(/selected/);
 
     // Verify the diff view becomes visible with the mocked content
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     await expect(diffView).toBeVisible({ timeout: 5000 });
     await expect(diffView.locator('.line.code-addition')).toHaveCount(1);
     await expect(diffView.locator('.line.code-deletion')).toHaveCount(1);
@@ -487,7 +487,7 @@ test.describe('Commit Details - Restore file from commit', () => {
   ];
 
   const restoreItem = (page: import('@playwright/test').Page) =>
-    page.locator('lv-commit-details .context-menu .context-menu-item', {
+    page.locator('gn-commit-details .context-menu .context-menu-item', {
       hasText: 'Restore this version',
     });
 
@@ -532,7 +532,7 @@ test.describe('Commit Details - Restore file from commit', () => {
     expect(args.filePath).toBe('src/main.ts');
     expect(args.commit).toBe('abc123def456');
 
-    const toast = page.locator('lv-toast-container .toast.success .toast-message');
+    const toast = page.locator('gn-toast-container .toast.success .toast-message');
     await expect(toast).toBeVisible();
     await expect(toast).toContainText('src/main.ts');
   });
@@ -562,7 +562,7 @@ test.describe('Commit Details - Restore file from commit', () => {
       .poll(async () => (await findCommand(page, 'plugin:dialog|message')).length)
       .toBeGreaterThan(0);
     expect(await findCommand(page, 'checkout_file_from_commit')).toHaveLength(0);
-    await expect(page.locator('lv-toast-container .toast')).toHaveCount(0);
+    await expect(page.locator('gn-toast-container .toast')).toHaveCount(0);
   });
 
   test('shows an error toast when the restore fails', async ({ page }) => {
@@ -571,7 +571,7 @@ test.describe('Commit Details - Restore file from commit', () => {
     await rightPanel.commitFilesChanged.first().click({ button: 'right' });
     await restoreItem(page).click();
 
-    const toast = page.locator('lv-toast-container .toast.error .toast-message');
+    const toast = page.locator('gn-toast-container .toast.error .toast-message');
     await expect(toast).toBeVisible();
     await expect(toast).toContainText('File not found in commit');
   });
@@ -634,7 +634,7 @@ test.describe('Commit Details - Renamed Files', () => {
 
     await rightPanel.commitFilesChanged.first().click();
 
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     await expect(diffView).toBeVisible({ timeout: 5000 });
 
     // Only the edited pair renders — a whole-file add would show every line as
@@ -674,7 +674,7 @@ test.describe('Commit Details - Renamed Files', () => {
     await rightPanel.switchToDetails();
     await rightPanel.commitFilesChanged.first().click();
 
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     await expect(diffView.locator('.empty')).toHaveText('No changes in this file');
     await expect(diffView.locator('.line.code-addition')).toHaveCount(0);
   });
@@ -690,7 +690,7 @@ test.describe('Commit Details - Renamed Files', () => {
     await rightPanel.switchToDetails();
     await rightPanel.commitFilesChanged.first().click();
 
-    const diffView = page.locator('lv-diff-view');
+    const diffView = page.locator('gn-diff-view');
     await expect(diffView.locator('.error')).toContainText('File not found in commit');
   });
 });

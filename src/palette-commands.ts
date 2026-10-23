@@ -1,14 +1,14 @@
 import type { Commit } from './types/git.types.ts';
 import type { IntegrationType } from './types/integration-accounts.types.ts';
 import type { OpenRepository } from './stores/index.ts';
-import type { PaletteCommand } from './components/dialogs/lv-command-palette.ts';
-import type { SearchDialogMode } from './components/dialogs/lv-search-dialog.ts';
-import type { LvGraphCanvas } from './components/graph/lv-graph-canvas.ts';
-import type { LvCreateTagDialog } from './components/dialogs/lv-create-tag-dialog.ts';
-import type { LvCreateBranchDialog } from './components/dialogs/lv-create-branch-dialog.ts';
-import type { LvExportImportDialog } from './components/dialogs/lv-export-import-dialog.ts';
-import type { LvDescribeDialog } from './components/dialogs/lv-describe-dialog.ts';
-import type { LvCompareBranchesDialog } from './components/dialogs/lv-compare-branches-dialog.ts';
+import type { PaletteCommand } from './components/dialogs/gn-command-palette.ts';
+import type { SearchDialogMode } from './components/dialogs/gn-search-dialog.ts';
+import type { GnGraphCanvas } from './components/graph/gn-graph-canvas.ts';
+import type { GnCreateTagDialog } from './components/dialogs/gn-create-tag-dialog.ts';
+import type { GnCreateBranchDialog } from './components/dialogs/gn-create-branch-dialog.ts';
+import type { GnExportImportDialog } from './components/dialogs/gn-export-import-dialog.ts';
+import type { GnDescribeDialog } from './components/dialogs/gn-describe-dialog.ts';
+import type { GnCompareBranchesDialog } from './components/dialogs/gn-compare-branches-dialog.ts';
 import { dialogs } from './stores/dialog.store.ts';
 import { uiStore } from './stores/index.ts';
 import { showToast } from './services/notification.service.ts';
@@ -33,12 +33,12 @@ export interface PaletteCommandHost {
   readonly selectedCommit: Commit | null;
   readonly shadowRoot: ShadowRoot | null;
 
-  readonly graphCanvas?: LvGraphCanvas;
-  readonly createTagDialog?: LvCreateTagDialog;
-  readonly createBranchDialog?: LvCreateBranchDialog;
-  readonly exportImportDialog?: LvExportImportDialog;
-  readonly describeDialog?: LvDescribeDialog;
-  readonly compareBranchesDialog?: LvCompareBranchesDialog;
+  readonly graphCanvas?: GnGraphCanvas;
+  readonly createTagDialog?: GnCreateTagDialog;
+  readonly createBranchDialog?: GnCreateBranchDialog;
+  readonly exportImportDialog?: GnExportImportDialog;
+  readonly describeDialog?: GnDescribeDialog;
+  readonly compareBranchesDialog?: GnCompareBranchesDialog;
 
   /** Wrap an action so it toasts "open a repository first" when there is none. */
   requiresRepository(action: () => void): () => void;
@@ -227,8 +227,8 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       category: 'action',
       icon: 'tag',
       action: shell.requiresRepository(() => {
-        const dialog = shell.shadowRoot?.querySelector('lv-changelog-dialog');
-        if (dialog) (dialog as import('./components/dialogs/lv-changelog-dialog.ts').LvChangelogDialog).open();
+        const dialog = shell.shadowRoot?.querySelector('gn-changelog-dialog');
+        if (dialog) (dialog as import('./components/dialogs/gn-changelog-dialog.ts').GnChangelogDialog).open();
       }),
     },
     {
@@ -274,7 +274,7 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
             'warning'
           );
           if (confirmed) {
-            // The other caller of reset_to_reflog — lv-reflog-dialog — claims
+            // The other caller of reset_to_reflog — gn-reflog-dialog — claims
             // the shared working-tree lock; this palette route to the same
             // command was missed by that sweep. The expected_oid pin guards
             // against a STALE index, not against a checkout moving the branch
@@ -490,7 +490,7 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
     // section header button acts on, so the palette, the s/u shortcuts and the
     // button can never disagree. The label stays unqualified because the path
     // filter is a transient state and this table is built once (see
-    // app-shell's getPaletteCommands memoisation); lv-file-status reports the
+    // app-shell's getPaletteCommands memoisation); gn-file-status reports the
     // narrowed scope in a toast when a filter was in force.
     {
       id: 'stage-all',

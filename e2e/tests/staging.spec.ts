@@ -134,7 +134,7 @@ test.describe('Commit Panel', () => {
 
   test('should show character count for summary', async ({ page }) => {
     await rightPanel.commitMessage.fill('short message');
-    const charCount = page.locator('lv-commit-panel .char-count');
+    const charCount = page.locator('gn-commit-panel .char-count');
     await expect(charCount).toContainText('13/72');
   });
 });
@@ -184,7 +184,7 @@ test.describe('Empty Working Directory', () => {
   });
 
   test('should show clean working tree message', async ({ page }) => {
-    const cleanState = page.locator('lv-file-status .clean-state');
+    const cleanState = page.locator('gn-file-status .clean-state');
     await expect(cleanState).toBeVisible();
     await expect(cleanState.locator('.title')).toHaveText('Working tree clean');
     await expect(cleanState.locator('.subtitle')).toHaveText('No changes to commit');
@@ -377,7 +377,7 @@ test.describe('Staging Error Handling', () => {
     await rightPanel.commitMessage.fill('test: failing commit');
     await rightPanel.commitButton.click();
 
-    const errorMessage = page.locator('lv-commit-panel .error');
+    const errorMessage = page.locator('gn-commit-panel .error');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('Commit hook failed');
   });
@@ -399,7 +399,7 @@ test.describe('Staging Error Handling', () => {
       window.dispatchEvent(new CustomEvent('status-refresh'));
     });
 
-    const errorElement = page.locator('lv-file-status .error');
+    const errorElement = page.locator('gn-file-status .error');
     await expect(errorElement).toBeVisible();
     await expect(errorElement).toContainText('Repository is corrupt');
   });
@@ -451,7 +451,7 @@ test.describe('Staging to Commit Flow', () => {
     await rightPanel.commitMessage.fill('test: commit message');
     await rightPanel.commitButton.click();
 
-    const successMessage = page.locator('lv-commit-panel .success');
+    const successMessage = page.locator('gn-commit-panel .success');
     await expect(successMessage).toBeVisible();
     await expect(successMessage).toContainText('abc123d');
   });
@@ -575,7 +575,7 @@ test.describe('Staging to Commit Flow', () => {
     // Fill summary
     await rightPanel.commitMessage.fill('feat: summary line');
     // Fill description
-    const descriptionInput = page.locator('lv-commit-panel .description-input');
+    const descriptionInput = page.locator('gn-commit-panel .description-input');
     await descriptionInput.fill('This is the body of the commit.\nWith multiple lines.');
     await rightPanel.commitButton.click();
     await waitForCommand(page, 'create_commit');
@@ -691,7 +691,7 @@ test.describe('Staging - UI Outcome Verification', () => {
     await waitForCommand(page, 'get_status');
 
     // Clean working tree message should appear (auto-retrying assertion handles DOM update timing)
-    const cleanState = page.locator('lv-file-status .clean-state');
+    const cleanState = page.locator('gn-file-status .clean-state');
     await expect(cleanState).toBeVisible();
 
     // After successful commit, staged file list should be empty
@@ -727,7 +727,7 @@ test.describe('Staging Error Toasts and UI Outcome Verification', () => {
 
     // Error toast or error indicator should appear
     const errorIndicator = page.locator(
-      'lv-toast-container .toast.error, .toast.error, lv-file-status .error, .error-banner'
+      'gn-toast-container .toast.error, .toast.error, gn-file-status .error, .error-banner'
     ).first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
 
@@ -759,7 +759,7 @@ test.describe('Staging Error Toasts and UI Outcome Verification', () => {
 
     // Error toast or error indicator should appear
     const errorIndicator = page.locator(
-      'lv-toast-container .toast.error, .toast.error, lv-file-status .error, .error-banner'
+      'gn-toast-container .toast.error, .toast.error, gn-file-status .error, .error-banner'
     ).first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
 
@@ -873,7 +873,7 @@ test.describe('Staging - Error Handling', () => {
 
     // Error toast/banner should appear
     const errorIndicator = page
-      .locator('.toast.error, .error-banner, .error-message, lv-toast-container .toast')
+      .locator('.toast.error, .error-banner, .error-message, gn-toast-container .toast')
       .first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
 
@@ -911,7 +911,7 @@ test.describe('Staging - Error Handling', () => {
 
     // Error toast/banner should appear
     const errorIndicator = page
-      .locator('.toast.error, .error-banner, .error-message, lv-toast-container .toast')
+      .locator('.toast.error, .error-banner, .error-message, gn-toast-container .toast')
       .first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
 
@@ -952,7 +952,7 @@ test.describe('Staging - Error Handling', () => {
 
     // Error toast/banner should appear
     const errorIndicator = page
-      .locator('.toast.error, .error-banner, .error-message, lv-toast-container .toast')
+      .locator('.toast.error, .error-banner, .error-message, gn-toast-container .toast')
       .first();
     await expect(errorIndicator).toBeVisible({ timeout: 5000 });
 
@@ -968,7 +968,7 @@ test.describe('Staging - Error Handling', () => {
 test.describe('Changes filter', () => {
   let rightPanel: RightPanelPage;
 
-  const filterInput = (page: Page) => page.locator('lv-file-status .filter-input');
+  const filterInput = (page: Page) => page.locator('gn-file-status .filter-input');
 
   test.beforeEach(async ({ page }) => {
     rightPanel = new RightPanelPage(page);
@@ -995,11 +995,11 @@ test.describe('Changes filter', () => {
 
     // The count stays honest about the real total
     const changesCount = page.locator(
-      'lv-file-status .section-header:has-text("Changes") .section-count'
+      'gn-file-status .section-header:has-text("Changes") .section-count'
     );
     await expect(changesCount).toHaveText('2 of 4');
 
-    await page.locator('lv-file-status .filter-clear').click();
+    await page.locator('gn-file-status .filter-clear').click();
 
     await expect(rightPanel.getUnstagedFile('README.md')).toBeVisible();
     await expect(rightPanel.getUnstagedFile('newfile.ts')).toBeVisible();
@@ -1021,11 +1021,11 @@ test.describe('Changes filter', () => {
   }) => {
     await filterInput(page).fill('does-not-exist');
 
-    const empty = page.locator('lv-file-status .no-match-state');
+    const empty = page.locator('gn-file-status .no-match-state');
     await expect(empty).toBeVisible();
     await expect(empty).toContainText('No files match');
     await expect(empty).toContainText('does-not-exist');
-    await expect(page.locator('lv-file-status li.file-item')).toHaveCount(0);
+    await expect(page.locator('gn-file-status li.file-item')).toHaveCount(0);
 
     await empty.locator('.no-match-clear').click();
 
@@ -1071,7 +1071,7 @@ test.describe('Changes filter', () => {
 
     // Its label says ALL, so the result has to say what "all" meant.
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'Staged 1 of 4 files' }),
+      page.locator('gn-toast-container .toast', { hasText: 'Staged 1 of 4 files' }),
     ).toBeVisible();
   });
 
@@ -1088,7 +1088,7 @@ test.describe('Changes filter', () => {
     const args = (await findCommand(page, 'stage_files'))[0].args as { paths: string[] };
     expect(args.paths).toEqual(['src/utils/helper.ts']);
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'Staged 1 of 4 files' }),
+      page.locator('gn-toast-container .toast', { hasText: 'Staged 1 of 4 files' }),
     ).toBeVisible();
   });
 
@@ -1096,28 +1096,28 @@ test.describe('Changes filter', () => {
     page,
   }) => {
     await filterInput(page).fill('does-not-exist');
-    await expect(page.locator('lv-file-status .no-match-state')).toBeVisible();
+    await expect(page.locator('gn-file-status .no-match-state')).toBeVisible();
     await filterInput(page).blur();
 
     await startCommandCapture(page);
     await page.keyboard.press('s');
 
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'Nothing to stage' }),
+      page.locator('gn-toast-container .toast', { hasText: 'Nothing to stage' }),
     ).toBeVisible();
     expect(await findCommand(page, 'stage_files')).toHaveLength(0);
   });
 
   test('a filter that matches nothing makes the palette entry say so too', async ({ page }) => {
     await filterInput(page).fill('does-not-exist');
-    await expect(page.locator('lv-file-status .no-match-state')).toBeVisible();
+    await expect(page.locator('gn-file-status .no-match-state')).toBeVisible();
 
     await startCommandCapture(page);
     await openViaCommandPalette(page, 'Stage all changes');
 
     // "Stage all changes" must not look like it worked when it staged nothing.
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'Nothing to stage' }),
+      page.locator('gn-toast-container .toast', { hasText: 'Nothing to stage' }),
     ).toBeVisible();
     expect(await findCommand(page, 'stage_files')).toHaveLength(0);
   });
@@ -1149,13 +1149,13 @@ test.describe('Changes filter', () => {
     expect(args.paths).toEqual(['src/utils/helper.ts']);
 
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: '1 conflicted file skipped' }),
+      page.locator('gn-toast-container .toast', { hasText: '1 conflicted file skipped' }),
     ).toBeVisible();
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'Staged 1 of 4 files' }),
+      page.locator('gn-toast-container .toast', { hasText: 'Staged 1 of 4 files' }),
     ).toBeVisible();
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'Staged 2 of 4 files' }),
+      page.locator('gn-toast-container .toast', { hasText: 'Staged 2 of 4 files' }),
     ).toHaveCount(0);
   });
 
@@ -1186,20 +1186,20 @@ test.describe('Changes filter', () => {
     expect(args.paths).toEqual(['src/utils/helper.ts']);
 
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: '1 conflicted file skipped' }),
+      page.locator('gn-toast-container .toast', { hasText: '1 conflicted file skipped' }),
     ).toBeVisible();
     await expect(
-      page.locator('lv-toast-container .toast', { hasText: 'is hiding the rest' }),
+      page.locator('gn-toast-container .toast', { hasText: 'is hiding the rest' }),
     ).toHaveCount(0);
   });
 
   test('the filter works in tree view, keeping only ancestors of matches', async ({ page }) => {
-    await page.locator('lv-file-status .view-toggle').click();
-    await expect(page.locator('lv-file-status .folder-item')).not.toHaveCount(0);
+    await page.locator('gn-file-status .view-toggle').click();
+    await expect(page.locator('gn-file-status .folder-item')).not.toHaveCount(0);
 
     await filterInput(page).fill('helper');
 
-    const folderNames = page.locator('lv-file-status .folder-item .folder-name');
+    const folderNames = page.locator('gn-file-status .folder-item .folder-name');
     await expect(folderNames).toHaveText(['src', 'utils']);
     await expect(rightPanel.getUnstagedFile('src/utils/helper.ts')).toBeVisible();
     await expect(rightPanel.getUnstagedFile('src/main.ts')).toHaveCount(0);

@@ -35,7 +35,7 @@ const rule = {
   create(context) {
     const filename = context.filename ?? context.getFilename();
     // The shared modal wrapper registers on behalf of its hosts.
-    if (filename.endsWith('lv-modal.ts')) return {};
+    if (filename.endsWith('gn-modal.ts')) return {};
 
     let addsDocumentKeydown = false;
     let handlesEscape = false;

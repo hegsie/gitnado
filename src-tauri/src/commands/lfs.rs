@@ -494,7 +494,7 @@ fn build_lfs_command(
 /// `subdir` becomes `git -C <subdir>` rather than the process's working
 /// directory, because the working directory is what the Output panel files the
 /// row under: a run made from `<repo>/<subdir>` is attributed to a path no
-/// panel renders (`lv-output-panel` keeps only rows whose repository is the
+/// panel renders (`gn-output-panel` keeps only rows whose repository is the
 /// open one), so the user is left with the generic IPC row and never sees the
 /// invocation. `-C` is a global option applied before git reads anything, so
 /// the run itself is unchanged and the rendered line stays honest.
@@ -1763,10 +1763,7 @@ mod tests {
     fn the_materialised_lfsconfig_temp_file_is_named_for_this_app() {
         // A committed `.lfsconfig` is written to a private temp file, and the
         // prefix is all that identifies one left behind in the system temp
-        // directory. It has to carry the CURRENT app name: `leviathan` is the
-        // pre-0.9.0 one, kept deliberately only where an EXISTING on-disk or
-        // keyring name has to keep being found (see `app_paths`), which a
-        // freshly created temp file never is.
+        // directory. It has to carry the current app name (`gitnado-lfsconfig-`).
         let repo = TestRepo::with_initial_commit();
         repo.create_commit("committed .lfsconfig", &[(".lfsconfig", HOSTILE_LFSCONFIG)]);
         std::fs::remove_file(repo.path.join(".lfsconfig")).unwrap();
@@ -1987,7 +1984,7 @@ mod tests {
     fn a_nested_untrack_is_reported_against_the_repository_the_user_has_open() {
         // The rule lives in `assets/.gitattributes`, so the removal has to
         // happen there. Running it FROM that directory filed the row under
-        // `<repo>/assets`, and `lv-output-panel` renders only rows whose
+        // `<repo>/assets`, and `gn-output-panel` renders only rows whose
         // repository is the open one — so the invocation that rewrote the
         // user's `.gitattributes` appeared in no panel at all, and the pending
         // operation could not claim it either (the repository axis is compared

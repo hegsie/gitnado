@@ -502,7 +502,7 @@ fn update_nested_submodules(
         // global option git applies before it reads anything, so .gitmodules
         // resolution and the token scoping are exactly what running inside the
         // submodule gave — but the Output panel attributes a run to its
-        // working directory, and `lv-output-panel` renders only rows whose
+        // working directory, and `gn-output-panel` renders only rows whose
         // repository is the open one. Reported against the SUBMODULE's
         // directory, a nested update appeared in no panel at all: when one
         // failed the user got error text and no invocation to go with it, and
@@ -1426,7 +1426,7 @@ mod tests {
     }
 
     /// The Output panel renders only rows whose repo path is the OPEN
-    /// repository (`lv-output-panel.ts`), so a nested update reported against
+    /// repository (`gn-output-panel.ts`), so a nested update reported against
     /// the submodule's own directory appeared in no panel at all: a nested
     /// `git submodule update` that failed showed the user error text and no
     /// invocation to go with it — and only under an allowlist, because with no

@@ -100,7 +100,7 @@ test.describe('Clone Dialog - branch and submodule options', () => {
     );
     await dialogs.clone.clone();
 
-    const errorMessage = page.locator('lv-clone-dialog .error-message');
+    const errorMessage = page.locator('gn-clone-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('no-such-branch');
     await expect(dialogs.clone.dialog).toBeVisible();
@@ -165,7 +165,7 @@ test.describe('Clone Dialog - branch and submodule options', () => {
     await expect(warning).toBeVisible();
     await expect(warning).toContainText('authentication required');
     // The clone itself succeeded, so nothing says it failed.
-    await expect(page.locator('lv-clone-dialog .error-message')).toHaveCount(0);
+    await expect(page.locator('gn-clone-dialog .error-message')).toHaveCount(0);
 
     // And the repository the user asked for is open regardless.
     const opened = await page.evaluate(() => {

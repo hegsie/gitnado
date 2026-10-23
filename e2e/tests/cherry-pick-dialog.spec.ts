@@ -20,7 +20,7 @@ const MOCK_COMMIT = {
 };
 
 async function openCherryPickDialog(page: import('@playwright/test').Page) {
-  const dialog = page.locator('lv-cherry-pick-dialog');
+  const dialog = page.locator('gn-cherry-pick-dialog');
   const dialogHandle = await dialog.elementHandle();
   await page.evaluate(([el, commit]) => {
     const d = el as HTMLElement & { open: (c: unknown) => void } | null;
@@ -29,7 +29,7 @@ async function openCherryPickDialog(page: import('@playwright/test').Page) {
     }
   }, [dialogHandle, MOCK_COMMIT] as const);
 
-  await page.locator('lv-cherry-pick-dialog lv-modal[open]').waitFor({ state: 'visible' });
+  await page.locator('gn-cherry-pick-dialog gn-modal[open]').waitFor({ state: 'visible' });
 }
 
 test.describe('Cherry-Pick Dialog', () => {
@@ -40,7 +40,7 @@ test.describe('Cherry-Pick Dialog', () => {
   test('dialog opens with commit info pre-filled', async ({ page }) => {
     await openCherryPickDialog(page);
 
-    const dialog = page.locator('lv-cherry-pick-dialog');
+    const dialog = page.locator('gn-cherry-pick-dialog');
 
     const commitSha = dialog.locator('.commit-sha');
     await expect(commitSha).toContainText('abc123d');
@@ -58,7 +58,7 @@ test.describe('Cherry-Pick Dialog', () => {
   test('dialog shows current branch as cherry-pick target', async ({ page }) => {
     await openCherryPickDialog(page);
 
-    const targetBranch = page.locator('lv-cherry-pick-dialog .target-branch');
+    const targetBranch = page.locator('gn-cherry-pick-dialog .target-branch');
     await expect(targetBranch).toBeVisible();
     await expect(targetBranch).toContainText('main');
   });
@@ -67,7 +67,7 @@ test.describe('Cherry-Pick Dialog', () => {
     await startCommandCapture(page);
     await openCherryPickDialog(page);
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
     await cherryPickBtn.click();
@@ -81,7 +81,7 @@ test.describe('Cherry-Pick Dialog', () => {
     expect(args.commitOid).toBe('abc123def456789012345678901234567890abcd');
 
     // Verify the dialog closes after successful cherry-pick
-    await expect(page.locator('lv-cherry-pick-dialog lv-modal[open]')).not.toBeVisible({ timeout: 3000 });
+    await expect(page.locator('gn-cherry-pick-dialog gn-modal[open]')).not.toBeVisible({ timeout: 3000 });
   });
 
   test('successful cherry-pick fires cherry-pick-complete event and closes dialog', async ({
@@ -100,7 +100,7 @@ test.describe('Cherry-Pick Dialog', () => {
       });
     });
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
     await cherryPickBtn.click();
@@ -108,7 +108,7 @@ test.describe('Cherry-Pick Dialog', () => {
     const eventReceived = await eventPromise;
     expect(eventReceived).toBe(true);
 
-    const modal = page.locator('lv-cherry-pick-dialog lv-modal[open]');
+    const modal = page.locator('gn-cherry-pick-dialog gn-modal[open]');
     await expect(modal).not.toBeVisible();
   });
 
@@ -116,12 +116,12 @@ test.describe('Cherry-Pick Dialog', () => {
     await startCommandCapture(page);
     await openCherryPickDialog(page);
 
-    const cancelBtn = page.locator('lv-cherry-pick-dialog button.btn-secondary', {
+    const cancelBtn = page.locator('gn-cherry-pick-dialog button.btn-secondary', {
       hasText: /Cancel/,
     });
     await cancelBtn.click();
 
-    const modal = page.locator('lv-cherry-pick-dialog lv-modal[open]');
+    const modal = page.locator('gn-cherry-pick-dialog gn-modal[open]');
     await expect(modal).not.toBeVisible();
 
     const commands = await findCommand(page, 'cherry_pick');
@@ -133,16 +133,16 @@ test.describe('Cherry-Pick Dialog', () => {
 
     await openCherryPickDialog(page);
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
     await cherryPickBtn.click();
 
-    const errorMessage = page.locator('lv-cherry-pick-dialog .error-message');
+    const errorMessage = page.locator('gn-cherry-pick-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('uncommitted changes');
 
-    const modal = page.locator('lv-cherry-pick-dialog lv-modal[open]');
+    const modal = page.locator('gn-cherry-pick-dialog gn-modal[open]');
     await expect(modal).toBeVisible();
   });
 
@@ -150,10 +150,10 @@ test.describe('Cherry-Pick Dialog', () => {
     await startCommandCapture(page);
     await openCherryPickDialog(page);
 
-    const noCommitCheckbox = page.locator('lv-cherry-pick-dialog #no-commit');
+    const noCommitCheckbox = page.locator('gn-cherry-pick-dialog #no-commit');
     await noCommitCheckbox.check();
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
     await cherryPickBtn.click();
@@ -167,7 +167,7 @@ test.describe('Cherry-Pick Dialog', () => {
     expect(args.noCommit).toBe(true);
 
     // Verify the dialog closes after successful cherry-pick with no-commit option
-    await expect(page.locator('lv-cherry-pick-dialog lv-modal[open]')).not.toBeVisible({ timeout: 3000 });
+    await expect(page.locator('gn-cherry-pick-dialog gn-modal[open]')).not.toBeVisible({ timeout: 3000 });
   });
 
   test('Cherry-Pick button is disabled while executing', async ({ page }) => {
@@ -194,7 +194,7 @@ test.describe('Cherry-Pick Dialog', () => {
       };
     });
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
 
@@ -202,7 +202,7 @@ test.describe('Cherry-Pick Dialog', () => {
 
     // After clicking, the button text changes to "Cherry-picking..." (lowercase p),
     // so re-locate without the hasText filter to avoid case mismatch
-    const executingBtn = page.locator('lv-cherry-pick-dialog button.btn-primary');
+    const executingBtn = page.locator('gn-cherry-pick-dialog button.btn-primary');
 
     await expect(executingBtn).toBeDisabled();
     await expect(executingBtn).toContainText('Cherry-picking...');
@@ -221,22 +221,22 @@ test.describe('Cherry-Pick Dialog - Error Scenarios', () => {
 
     await openCherryPickDialog(page);
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
     await cherryPickBtn.click();
 
     // Verify error feedback appears (inline error message in dialog)
-    const errorMessage = page.locator('lv-cherry-pick-dialog .error-message');
+    const errorMessage = page.locator('gn-cherry-pick-dialog .error-message');
     await expect(errorMessage).toBeVisible();
     await expect(errorMessage).toContainText('uncommitted changes');
 
     // Verify the dialog remains open so the user can see the error
-    const modal = page.locator('lv-cherry-pick-dialog lv-modal[open]');
+    const modal = page.locator('gn-cherry-pick-dialog gn-modal[open]');
     await expect(modal).toBeVisible();
 
     // Verify the commit info is still displayed (dialog state preserved)
-    const commitSha = page.locator('lv-cherry-pick-dialog .commit-sha');
+    const commitSha = page.locator('gn-cherry-pick-dialog .commit-sha');
     await expect(commitSha).toContainText('abc123d');
 
     // Verify the cherry-pick button is re-enabled after error (not stuck in loading state)
@@ -255,7 +255,7 @@ test.describe('Cherry-pick Dialog - UI Outcome Verification', () => {
     await openCherryPickDialog(page);
 
     // Verify the dialog is open
-    const modal = page.locator('lv-cherry-pick-dialog lv-modal[open]');
+    const modal = page.locator('gn-cherry-pick-dialog gn-modal[open]');
     await expect(modal).toBeVisible();
 
     // Listen for cherry-pick-complete event
@@ -266,7 +266,7 @@ test.describe('Cherry-pick Dialog - UI Outcome Verification', () => {
       });
     });
 
-    const cherryPickBtn = page.locator('lv-cherry-pick-dialog button.btn-primary', {
+    const cherryPickBtn = page.locator('gn-cherry-pick-dialog button.btn-primary', {
       hasText: /Cherry-Pick/,
     });
     await cherryPickBtn.click();

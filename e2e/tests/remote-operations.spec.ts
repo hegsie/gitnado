@@ -24,7 +24,7 @@ import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectC
  * toolbar.spec.ts.
  */
 function dashboardButton(page: import('@playwright/test').Page, name: RegExp) {
-  return page.locator('lv-context-dashboard').getByRole('button', { name });
+  return page.locator('gn-context-dashboard').getByRole('button', { name });
 }
 
 /**
@@ -157,7 +157,7 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     // must not be read as "no remote". The button going grey is that answer
     // landing, so settling on it here is what stops the presses below from
     // racing the round trip.
-    await expect(page.locator('lv-toolbar').getByRole('button', { name: /Fetch/i })).toBeDisabled();
+    await expect(page.locator('gn-toolbar').getByRole('button', { name: /Fetch/i })).toBeDisabled();
   });
 
   test('all three are disabled and say why', async ({ page }) => {
@@ -172,7 +172,7 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     // The one place these tests reach across to the toolbar: the finding was
     // precisely that the two surfaces disagreed about the same repository.
     for (const name of [/Fetch/i, /Pull/i, /Push/i]) {
-      await expect(page.locator('lv-toolbar').getByRole('button', { name })).toBeDisabled();
+      await expect(page.locator('gn-toolbar').getByRole('button', { name })).toBeDisabled();
       await expect(dashboardButton(page, name)).toBeDisabled();
     }
   });
@@ -246,7 +246,7 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     await expect(toast).toContainText('No remote configured');
     await toast.locator('.toast-action-btn').click();
 
-    await expect(page.locator('lv-remote-dialog')).toBeVisible();
+    await expect(page.locator('gn-remote-dialog')).toBeVisible();
   });
 
   /**
@@ -273,7 +273,7 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
       paths: [],
     });
 
-    await expect(page.locator('lv-toolbar').getByRole('button', { name: /Fetch/i })).toBeEnabled();
+    await expect(page.locator('gn-toolbar').getByRole('button', { name: /Fetch/i })).toBeEnabled();
     await expect(dashboardButton(page, /Fetch/i)).toBeEnabled();
     // And the three surfaces that have no button to grey out let it through.
     await page.keyboard.press('Control+Shift+F');
@@ -315,7 +315,7 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
     // A second repository, with no remote either, becomes the active tab
     // while the first refusal is still on screen.
     await addRepo(page, '/tmp/other-repo', 'other-repo');
-    await expect(page.locator('lv-toolbar .tab.active')).toHaveAttribute(
+    await expect(page.locator('gn-toolbar .tab.active')).toHaveAttribute(
       'title',
       '/tmp/other-repo'
     );
@@ -329,7 +329,7 @@ test.describe('Fetch, Pull and Push with no remote configured', () => {
 
     // The remedy beside it belongs to the repository it names.
     await warnings.nth(1).locator('.toast-action-btn').click();
-    await expect(page.locator('lv-remote-dialog')).toBeVisible();
+    await expect(page.locator('gn-remote-dialog')).toBeVisible();
   });
 });
 
@@ -628,7 +628,7 @@ test.describe('Context Dashboard', () => {
     app = new AppPage(page);
     await setupOpenRepository(page);
 
-    const contextDashboard = page.locator('lv-context-dashboard');
+    const contextDashboard = page.locator('gn-context-dashboard');
     await expect(contextDashboard).toBeVisible();
   });
 
@@ -1007,7 +1007,7 @@ test.describe('Pull Operation', () => {
     });
 
     // Repository state should show 'merge' (conflict state)
-    const conflictFile = page.locator('lv-file-status').getByRole('listitem', { name: /CONFLICT/ });
+    const conflictFile = page.locator('gn-file-status').getByRole('listitem', { name: /CONFLICT/ });
     await expect(conflictFile).toBeVisible();
   });
 });
@@ -1193,7 +1193,7 @@ test.describe('Remote Operations - UI Outcome Verification', () => {
  * matches two elements. The toolbar copies are covered in toolbar.spec.ts.
  */
 function remoteButton(page: Page, label: 'Fetch' | 'Pull' | 'Push') {
-  return page.locator('lv-context-dashboard').locator(`.remote-btn[title^="${label}"]`);
+  return page.locator('gn-context-dashboard').locator(`.remote-btn[title^="${label}"]`);
 }
 
 test.describe('Shared remote-operation runner', () => {
@@ -1282,10 +1282,10 @@ test.describe('Cancelling a remote operation', () => {
     await dashboardButton(page, /Fetch/i).click();
     await waitForCommand(page, 'fetch');
 
-    const row = page.locator('lv-progress-indicator .progress-item');
+    const row = page.locator('gn-progress-indicator .progress-item');
     await expect(row).toBeVisible();
     await expect(row).toContainText(/fetch/i);
-    await expect(page.locator('lv-progress-indicator .cancel-btn')).toBeVisible();
+    await expect(page.locator('gn-progress-indicator .cancel-btn')).toBeVisible();
 
     // And the backend was told which row it belongs to, so a cancel can find it.
     expect(await operationIdOf(page, 'fetch')).toBeTruthy();
@@ -1301,14 +1301,14 @@ test.describe('Cancelling a remote operation', () => {
     await waitForCommand(page, 'fetch');
 
     const operationId = await operationIdOf(page, 'fetch');
-    await page.locator('lv-progress-indicator .cancel-btn').click();
+    await page.locator('gn-progress-indicator .cancel-btn').click();
 
     await waitForCommand(page, 'cancel_operation');
     const [cancel] = await findCommand(page, 'cancel_operation');
     expect((cancel.args as { operationId?: string }).operationId).toBe(operationId);
 
     // The row goes away immediately — the user's click has visibly taken effect.
-    await expect(page.locator('lv-progress-indicator .progress-item')).toHaveCount(0);
+    await expect(page.locator('gn-progress-indicator .progress-item')).toHaveCount(0);
   });
 
   test('a running push is cancellable too', async ({ page }) => {
@@ -1318,10 +1318,10 @@ test.describe('Cancelling a remote operation', () => {
     await dashboardButton(page, /Push/i).click();
     await waitForCommand(page, 'push');
 
-    await expect(page.locator('lv-progress-indicator .cancel-btn')).toBeVisible();
+    await expect(page.locator('gn-progress-indicator .cancel-btn')).toBeVisible();
 
     const operationId = await operationIdOf(page, 'push');
-    await page.locator('lv-progress-indicator .cancel-btn').click();
+    await page.locator('gn-progress-indicator .cancel-btn').click();
     await waitForCommand(page, 'cancel_operation');
 
     const [cancel] = await findCommand(page, 'cancel_operation');
@@ -1345,7 +1345,7 @@ test.describe('Cancelling a remote operation', () => {
       receivedBytes: 1024 * 1024,
     });
 
-    const row = page.locator('lv-progress-indicator .progress-item');
+    const row = page.locator('gn-progress-indicator .progress-item');
     await expect(row).toContainText('Fetching from origin');
     await expect(row).toContainText('40%');
     await expect(row).toContainText('400 / 1,000 objects');
@@ -1407,17 +1407,17 @@ test.describe('remotes added and removed through the Remotes dialog', () => {
   }
 
   function toolbarFetch(page: Page) {
-    return page.locator('lv-toolbar').getByRole('button', { name: /Fetch/i });
+    return page.locator('gn-toolbar').getByRole('button', { name: /Fetch/i });
   }
 
   async function openRemotesDialog(page: Page): Promise<void> {
     await openViaCommandPalette(page, 'Manage remotes');
-    await page.locator('lv-remote-dialog').waitFor({ state: 'visible' });
+    await page.locator('gn-remote-dialog').waitFor({ state: 'visible' });
   }
 
   async function closeRemotesDialog(page: Page): Promise<void> {
-    await page.locator('lv-remote-dialog .close-btn').click();
-    await expect(page.locator('lv-remote-dialog')).toBeHidden();
+    await page.locator('gn-remote-dialog .close-btn').click();
+    await expect(page.locator('gn-remote-dialog')).toBeHidden();
   }
 
   test('adding the first remote makes Fetch work, with no reopening', async ({ page }) => {
@@ -1428,7 +1428,7 @@ test.describe('remotes added and removed through the Remotes dialog', () => {
     await expect(toolbarFetch(page), 'nowhere to fetch from, to begin with').toBeDisabled();
 
     await openRemotesDialog(page);
-    const dialog = page.locator('lv-remote-dialog');
+    const dialog = page.locator('gn-remote-dialog');
     await dialog.getByRole('button', { name: /add remote/i }).click();
     await dialog.locator('input').first().fill('origin');
     await dialog.locator('input').nth(1).fill('https://example.test/o/r.git');
@@ -1439,7 +1439,7 @@ test.describe('remotes added and removed through the Remotes dialog', () => {
     await expect(toolbarFetch(page), 'the surfaces agree the remote exists').toBeEnabled();
     await expect(toolbarFetch(page)).toHaveAttribute('title', /Fetch from remote/);
     await expect(
-      page.locator('lv-context-dashboard').getByRole('button', { name: /Fetch/i }),
+      page.locator('gn-context-dashboard').getByRole('button', { name: /Fetch/i }),
     ).toBeEnabled();
 
     // And the shortcut, which has no button to grey out, really fetches now.
@@ -1460,7 +1460,7 @@ test.describe('remotes added and removed through the Remotes dialog', () => {
     await expect(toolbarFetch(page)).toBeEnabled();
 
     await openRemotesDialog(page);
-    const dialog = page.locator('lv-remote-dialog');
+    const dialog = page.locator('gn-remote-dialog');
     await dialog
       .locator('button[title*="Delete"], button[title*="Remove"], button[aria-label*="delete"]')
       .first()
