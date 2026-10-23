@@ -186,8 +186,11 @@ import { confirmDeleteTag, offerRemoteTagDelete } from './utils/tag-delete.ts';
 import {
   cherryPickConfirmMessage,
   cherryPickFailureMessage,
+  combinedSquashMessage,
   orderCommitsForApply,
   shortCommitLabel,
+  squashConfirmMessage,
+  validateSquashSelection,
 } from './utils/commit-selection.ts';
 import {
   tryAcquireRefOp,
@@ -2854,6 +2857,20 @@ export class AppShell extends LitElement {
         </button>
         <button
           class="context-menu-item"
+          data-testid="multi-squash"
+          ?disabled=${this.isRefOperationInFlight()}
+          @click=${this.handleSquashSelection}
+          title="Squash the ${count} selected contiguous commits into a single commit"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+            <line x1="15" y1="3" x2="15" y2="21"></line>
+          </svg>
+          Squash ${count} commits
+        </button>
+        <button
+          class="context-menu-item"
           data-testid="multi-create-patch"
           @click=${this.handleCreatePatchFromSelection}
           title="Write one .patch file per selected commit, numbered oldest first"
@@ -2968,6 +2985,51 @@ export class AppShell extends LitElement {
 
     showToast(`Cherry-picked ${applied.length} commits onto ${branch}`, 'success');
     this.refreshConflictDialogRepo(repoPath);
+  }
+
+  /**
+   * Squash a contiguous graph multi-selection into a single commit on the
+   * current branch, replaying any later commits on top.
+   */
+  private handleSquashSelection(): Promise<void> {
+    const commits = this.menuSelection;
+    const repoPath = this.activeRepository?.repository.path;
+    if (commits.length < 2 || !repoPath) return Promise.resolve();
+
+    this.contextMenu = { ...this.contextMenu, visible: false };
+    return this.runRefExclusive(repoPath, () => this.squashSelectedCommits(repoPath, commits));
+  }
+
+  private async squashSelectedCommits(repoPath: string, commits: Commit[]): Promise<void> {
+    const refusal = validateSquashSelection(commits);
+    if (refusal) {
+      showToast(refusal, 'warning', 8000);
+      return;
+    }
+
+    const branch = this.activeRepository?.currentBranch?.shorthand ?? 'HEAD';
+    const confirmed = await showConfirm(
+      `Squash ${commits.length} commits`,
+      squashConfirmMessage(commits, branch),
+      'warning',
+    );
+    if (!confirmed) return;
+
+    const oldest = commits[0];
+    const newest = commits[commits.length - 1];
+    const fromOid = oldest.parentIds[0];
+    const message = combinedSquashMessage(commits);
+
+    const result = await gitService.squashCommits(repoPath, fromOid, newest.oid, message);
+    if (result.success) {
+      const count = result.data?.squashedCount ?? commits.length;
+      const newShort = (result.data?.newOid ?? newest.oid).substring(0, 7);
+      showToast(`Squashed ${count} commits into ${newShort}`, 'success');
+      this.refreshConflictDialogRepo(repoPath);
+      window.dispatchEvent(new CustomEvent('status-refresh'));
+    } else {
+      showErrorWithSuggestion(result.error?.message || '', 'Failed to squash commits');
+    }
   }
 
   /**
@@ -3981,6 +4043,51 @@ export class AppShell extends LitElement {
     this.refContextMenu = { ...this.refContextMenu, visible: false };
     if (refName) {
       this.exportImportDialog?.open({ tab: 'archive', ref: refName });
+    }
+  }
+
+  /**
+   * Immediately fold staged changes into the selected commit and replay any
+   * later commits on top (atomic direct fixup via `fixup_commit`), as opposed
+   * to `handleFixupCommit` below which records a `fixup! <summary>` marker
+   * commit for a later interactive rebase.
+   */
+  private handleFoldStagedIntoCommit(): Promise<void> {
+    const repoPath = this.activeRepository?.repository.path;
+    if (!repoPath) return Promise.resolve();
+    return this.runRefExclusive(repoPath, () => this.foldStagedIntoCommit());
+  }
+
+  private async foldStagedIntoCommit(): Promise<void> {
+    const commit = this.contextMenu.commit;
+    if (!commit || !this.activeRepository) return;
+
+    this.contextMenu = { ...this.contextMenu, visible: false };
+
+    const repoPath = this.activeRepository.repository.path;
+
+    const statusResult = await gitService.getStatus(repoPath);
+    if (!statusResult.success || !statusResult.data) {
+      showToast('Failed to check status', 'error');
+      return;
+    }
+
+    const hasStagedChanges = statusResult.data.some((f) => f.isStaged);
+    if (!hasStagedChanges) {
+      showToast('No staged changes to fold into commit', 'error');
+      return;
+    }
+
+    const result = await gitService.fixupCommit(repoPath, commit.oid);
+    if (result.success) {
+      showToast(`Folded staged changes into ${commit.shortId}`, 'success');
+      this.refreshConflictDialogRepo(repoPath);
+      window.dispatchEvent(new CustomEvent('status-refresh'));
+    } else {
+      showErrorWithSuggestion(
+        result.error?.message || '',
+        'Failed to fold staged changes into commit',
+      );
     }
   }
 
@@ -6236,6 +6343,14 @@ export class AppShell extends LitElement {
                 Reword
               </button>
               <div class="context-menu-divider"></div>
+              <button class="context-menu-item" data-testid="fold-staged-into-commit" ?disabled=${this.isRefOperationInFlight()} @click=${this.handleFoldStagedIntoCommit} title="Immediately fold staged changes into this commit and replay later commits">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="16 16 12 12 8 16"></polyline>
+                  <line x1="12" y1="12" x2="12" y2="21"></line>
+                  <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+                </svg>
+                Fold staged into this
+              </button>
               <button class="context-menu-item" ?disabled=${this.isRefOperationInFlight()} @click=${this.handleFixupCommit} title="Create fixup commit for this commit (requires staged changes)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>

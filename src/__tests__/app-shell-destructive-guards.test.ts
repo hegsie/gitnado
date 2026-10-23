@@ -1145,12 +1145,14 @@ describe('app-shell destructive guards', () => {
     // stale-enumeration pattern that produced the earlier holes.
     const handlers: Array<[string, () => unknown[]]> = [
       ['revert', () => []],
+      ['fold staged', () => []],
       ['fixup', () => []],
       ['squash', () => []],
       ['reset (hard)', () => ['hard']],
     ];
     const methods: Record<string, string> = {
       revert: 'handleRevertCommit',
+      'fold staged': 'handleFoldStagedIntoCommit',
       fixup: 'handleFixupCommit',
       squash: 'handleSquashCommit',
       'reset (hard)': 'handleResetToCommit',

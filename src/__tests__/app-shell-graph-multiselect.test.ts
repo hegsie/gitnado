@@ -262,6 +262,7 @@ describe('app-shell graph multi-selection', () => {
         selectAndOpenMenu(el, [newest, oldest], newest);
         const labels = labelsOf(await menuItems(el));
         expect(labels).to.include('Cherry-pick 2 commits');
+        expect(labels).to.include('Squash 2 commits');
         expect(labels).to.include('Create patch from 2 commits');
         expect(labels).to.include('Compare these commits');
         const count = (el as any).renderRoot.querySelector('[data-testid="multi-commit-count"]');
@@ -298,8 +299,10 @@ describe('app-shell graph multi-selection', () => {
         (el as any).refOpsVersion = ((el as any).refOpsVersion ?? 0) + 1;
         const items = await menuItems(el);
         const pick = items.find((b) => b.dataset.testid === 'multi-cherry-pick');
+        const squash = items.find((b) => b.dataset.testid === 'multi-squash');
         const patch = items.find((b) => b.dataset.testid === 'multi-create-patch');
         expect(pick?.disabled, 'a batch pick mutates the working tree').to.equal(true);
+        expect(squash?.disabled, 'a batch squash mutates the working tree').to.equal(true);
         expect(patch?.disabled, 'writing patch files does not').to.equal(false);
       } finally {
         el.remove();
@@ -491,6 +494,161 @@ describe('app-shell graph multi-selection', () => {
       (el as any).handleCompareSelection();
 
       expect(opened).to.be.null;
+    });
+  });
+
+  describe('batch squash (squash_commits)', () => {
+    it('squashes a contiguous chain from oldest parent to newest commit with combined message', async () => {
+      mockResponses['squash_commits'] = () => ({
+        newOid: 'eee5555'.padEnd(40, '0'),
+        squashedCount: 2,
+        success: true,
+      });
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [newest, middle], newest);
+
+      await (el as any).handleSquashSelection();
+
+      const squashCalls = calls('squash_commits');
+      expect(squashCalls).to.have.length(1);
+      expect(squashCalls[0].args).to.deep.equal({
+        path: REPO_PATH,
+        fromOid: oldest.oid,
+        toOid: newest.oid,
+        message: 'Second commit\n\nThird commit',
+      });
+      expect(lastToast()?.type).to.equal('success');
+      expect(lastToast()?.message).to.contain('Squashed 2 commits into eee5555');
+      expect(calls('open_repository').length).to.be.greaterThan(0);
+    });
+
+    it('confirms first, naming the count and ordered commits', async () => {
+      mockResponses['squash_commits'] = () => ({
+        newOid: 'eee5555'.padEnd(40, '0'),
+        squashedCount: 2,
+        success: true,
+      });
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [newest, middle], newest);
+
+      await (el as any).handleSquashSelection();
+
+      const confirms = calls('plugin:dialog|message');
+      expect(confirms).to.have.length(1);
+      const message = String(confirms[0].args.message);
+      expect(message).to.contain('Squash 2 commits on main');
+      expect(message).to.contain('1. bbb2222 Second commit');
+      expect(message).to.contain('2. ccc3333 Third commit');
+    });
+
+    it('does nothing when confirm is declined', async () => {
+      mockResponses['plugin:dialog|message'] = () => 'Cancel';
+      mockResponses['plugin:dialog|confirm'] = () => false;
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [newest, middle], newest);
+
+      await (el as any).handleSquashSelection();
+
+      expect(calls('squash_commits')).to.have.length(0);
+    });
+
+    it('refuses a non-contiguous selection so middle commits are not silently squashed', async () => {
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [newest, oldest], newest);
+
+      await (el as any).handleSquashSelection();
+
+      expect(calls('squash_commits')).to.have.length(0);
+      expect(toastMessages().join(' ')).to.contain('not contiguous');
+    });
+
+    it('refuses when the oldest selected commit is the root commit with no parent', async () => {
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [newest, middle, oldest], middle);
+
+      await (el as any).handleSquashSelection();
+
+      expect(calls('squash_commits')).to.have.length(0);
+      expect(toastMessages().join(' ')).to.contain('root commit');
+    });
+
+    it('refuses a selection containing a merge commit', async () => {
+      const merge = makeCommit('ddd4444', 'Merge branch', [newest.oid, middle.oid]);
+      const el = shellOnRepo();
+      (el as any).loadedGraphCommits = () => [merge, ...loadedCommits];
+      selectAndOpenMenu(el, [merge, newest], merge);
+
+      await (el as any).handleSquashSelection();
+
+      expect(calls('squash_commits')).to.have.length(0);
+      expect(toastMessages().join(' ')).to.contain('merge commit');
+    });
+
+    it('surfaces backend error when squash_commits fails', async () => {
+      mockResponses['squash_commits'] = () =>
+        new Error('Working directory has uncommitted changes');
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [newest, middle], newest);
+
+      await (el as any).handleSquashSelection();
+
+      expect(calls('squash_commits')).to.have.length(1);
+      const errToast = uiStore.getState().toasts.find((t) => t.type === 'error');
+      expect(errToast).to.not.be.undefined;
+      expect(errToast?.message).to.contain('uncommitted changes');
+    });
+  });
+
+  describe('fold staged changes into commit (fixup_commit)', () => {
+    it('folds staged changes directly into the target commit and refreshes', async () => {
+      mockResponses['get_status'] = () => [{ path: 'file.ts', isStaged: true }];
+      mockResponses['fixup_commit'] = () => ({
+        newOid: 'fff6666'.padEnd(40, '0'),
+        squashedCount: 1,
+        success: true,
+      });
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [middle], middle);
+
+      await (el as any).handleFoldStagedIntoCommit();
+
+      const fixupCalls = calls('fixup_commit');
+      expect(fixupCalls).to.have.length(1);
+      expect(fixupCalls[0].args).to.deep.equal({
+        path: REPO_PATH,
+        targetOid: middle.oid,
+        amendMessage: undefined,
+      });
+      expect(lastToast()?.type).to.equal('success');
+      expect(lastToast()?.message).to.contain(`Folded staged changes into ${middle.shortId}`);
+      expect(calls('open_repository').length).to.be.greaterThan(0);
+    });
+
+    it('refuses when there are no staged changes', async () => {
+      mockResponses['get_status'] = () => [{ path: 'file.ts', isStaged: false }];
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [middle], middle);
+
+      await (el as any).handleFoldStagedIntoCommit();
+
+      expect(calls('fixup_commit')).to.have.length(0);
+      expect(lastToast()?.type).to.equal('error');
+      expect(lastToast()?.message).to.contain('No staged changes to fold into commit');
+    });
+
+    it('surfaces backend error when fixup_commit fails', async () => {
+      mockResponses['get_status'] = () => [{ path: 'file.ts', isStaged: true }];
+      mockResponses['fixup_commit'] = () =>
+        new Error('Cannot fixup: you have unstaged changes');
+      const el = shellOnRepo();
+      selectAndOpenMenu(el, [middle], middle);
+
+      await (el as any).handleFoldStagedIntoCommit();
+
+      expect(calls('fixup_commit')).to.have.length(1);
+      const errToast = uiStore.getState().toasts.find((t) => t.type === 'error');
+      expect(errToast).to.not.be.undefined;
+      expect(errToast?.message).to.contain('unstaged changes');
     });
   });
 });
