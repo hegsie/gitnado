@@ -72,7 +72,7 @@ test.describe('Keyboard Shortcuts', () => {
           }),
         { message: 'focus must stay inside the dialog the command opened', timeout: 5000 }
       )
-      .toContain('LV-CREATE-TAG-DIALOG');
+      .toContain('GN-CREATE-TAG-DIALOG');
   });
 
   test('single-key shortcuts still work after closing the command palette', async ({ page }) => {

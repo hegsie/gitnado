@@ -2325,8 +2325,8 @@ export class AppShell extends LitElement {
     if (depth > 10) return false;
     for (const el of root.querySelectorAll('*')) {
       const tag = el.tagName;
-      if (tag === 'LV-MODAL' && el.hasAttribute('open')) return true;
-      if (tag.startsWith('LV-') && tag.endsWith('-DIALOG') && el.hasAttribute('open')) return true;
+      if (tag === 'GN-MODAL' && el.hasAttribute('open')) return true;
+      if (tag.startsWith('GN-') && tag.endsWith('-DIALOG') && el.hasAttribute('open')) return true;
       const shadow = el.shadowRoot;
       if (shadow && !seen.has(shadow)) {
         seen.add(shadow);
