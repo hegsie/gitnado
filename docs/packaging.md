@@ -10,7 +10,7 @@ manually from the Actions tab (workflow dispatch) with a release tag such as
 
 | Channel | Platform | Automation | One-time setup required |
 |---------|----------|------------|-------------------------|
-| winget | Windows | PR against `microsoft/winget-pkgs` (first release: new-package PR via Komac) | `WINGET_TOKEN` secret, fork of winget-pkgs |
+| winget | Windows | PR against `microsoft/winget-pkgs` via Komac | `WINGET_TOKEN` secret, fork of winget-pkgs |
 | Homebrew | macOS (Apple Silicon) | Push to `hegsie/homebrew-gitnado` tap | Tap repository, `HOMEBREW_TAP_TOKEN` secret |
 | Scoop | Windows | Commit to `packaging/scoop/gitnado.json` on `main` | None |
 | AUR | Arch Linux | Community-maintained (`gitnado-bin`) | — |
@@ -20,27 +20,26 @@ before every channel is set up.
 
 ## winget
 
-The `winget` job uses
-[winget-releaser](https://github.com/vedantmgoyal9/winget-releaser) to open a
-version-update PR against
+The `winget` job opens a PR against
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) with the
-`.exe` (NSIS) and `.msi` installers. Package identifier: `hegsie.Gitnado`.
+`.exe` (NSIS) and `.msi` installers for every release, using manifests rendered
+from the templates in this repository. Package identifier: `hegsie.Gitnado`.
 
 One-time setup:
 
 1. Fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) under
-   the `hegsie` account (the action pushes manifest branches to this fork).
+   the `hegsie` account (Komac pushes manifest branches to this fork).
 2. Create a **classic** personal access token with the `public_repo` and
-   `workflow` scopes (fine-grained tokens are not supported by
-   winget-releaser) and add it as the `WINGET_TOKEN` repository secret.
+   `workflow` scopes and add it as the `WINGET_TOKEN` repository secret.
    `workflow` is needed because syncing the fork merges upstream commits that
    touch winget-pkgs' own `.github/workflows` files; without it GitHub
    rejects the sync with "refusing to allow a Personal Access Token to create
    or update workflow ... without `workflow` scope" (the v1.0.0 release hit
    this).
-3. Nothing else: the job checks whether `manifests/h/hegsie/Gitnado` exists in
-   winget-pkgs. If it does not (the very first release), it renders the three
-   manifests from the templates in [`packaging/winget/`](../packaging/winget/)
+3. Nothing else. For each release the job first checks whether
+   `manifests/h/hegsie/Gitnado/<version>` is already in winget-pkgs and skips
+   with a notice if it is, so re-running an already-merged release does not
+   open a duplicate PR. Otherwise it renders the three manifests from the templates in [`packaging/winget/`](../packaging/winget/)
    with [`.github/scripts/winget-manifests.mjs`](../.github/scripts/winget-manifests.mjs)
    (installer hashes from the downloaded assets, the MSI `ProductCode` from
    `komac analyze`, the release date from the GitHub release), syncs the
@@ -48,10 +47,15 @@ One-time setup:
    commit, and an out-of-date fork makes GitHub refuse with a misleading
    "permissions to execute CreateRef" error), and submits the directory with
    [Komac](https://github.com/russellbanks/Komac) `submit --yes`, which opens
-   the "New package" PR. `komac new` is not used
-   because it always prompts for install modes and cannot run unattended.
-   Once that PR is merged, every later release takes the update path via
-   winget-releaser.
+   the "New package" or "New version" PR. `komac new` and `komac update` are
+   not used: both regenerate the manifests themselves, and `komac new` always
+   prompts for install modes. Releases up to 1.0.0 used
+   [winget-releaser](https://github.com/vedantmgoyal9/winget-releaser) for
+   updates, but it regenerates the manifests too and re-added the
+   `DisplayVersion` and old schema that moderators had rejected, so each
+   update PR needed a manual fix. Older versions are not pruned from
+   winget-pkgs automatically (winget-releaser's `max-versions-to-keep` did
+   that); remove them with `komac remove` if the list grows long.
 
 Users install with `winget install hegsie.Gitnado`.
 

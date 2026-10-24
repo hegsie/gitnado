@@ -389,3 +389,26 @@ test("publish-packages.yml renders the manifests with this script and submits th
     "komac new prompts and cannot run in CI",
   );
 });
+
+test("publish-packages.yml submits every release from the templates, never via winget-releaser", () => {
+  // winget-releaser regenerates the manifests and re-adds the DisplayVersion
+  // and old schema that winget-pkgs moderators rejected.
+  assert.doesNotMatch(WORKFLOW, /uses:\s*vedantmgoyal9\/winget-releaser/);
+  // The render-and-submit steps run for updates too, gated only on whether
+  // this exact version is already in winget-pkgs (so re-runs don't duplicate).
+  assert.match(
+    WORKFLOW,
+    /path="manifests\/h\/\$\{WINGET_ID\/\/\.\/\\\/\}\/\$\{VERSION\}"/,
+  );
+  const winget = WORKFLOW.slice(
+    WORKFLOW.indexOf("  winget:\n"),
+    WORKFLOW.indexOf("  homebrew:\n"),
+  );
+  const gates = winget.match(/^\s+if: .*$/gm).map((line) => line.trim());
+  assert.deepEqual(gates, [
+    "if: needs.preflight.outputs.has-winget-token == 'true'",
+    "if: steps.exists.outputs.exists == 'false'",
+    "if: steps.exists.outputs.exists == 'false'",
+    "if: steps.exists.outputs.exists == 'false'",
+  ]);
+});

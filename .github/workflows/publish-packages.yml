@@ -89,28 +89,25 @@ jobs:
       TAG: ${{ needs.preflight.outputs.tag }}
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      # winget-releaser can only update a package that already exists in
-      # winget-pkgs. Until the first Gitnado version is merged there, submit
-      # manifests rendered from packaging/winget/ with Komac (the same tool the
-      # action uses); after that, every release goes through the update path.
-      - name: Check whether the package exists in winget-pkgs
+      # Every release, first or not, is rendered from packaging/winget/ and
+      # submitted with Komac. winget-releaser was used for updates until 1.0.0,
+      # but it rebuilds the manifests itself and re-adds what winget-pkgs
+      # moderators asked us to drop (a DisplayVersion equal to PackageVersion,
+      # an older schema), so each update needed a manual fix
+      # (microsoft/winget-pkgs#433064, microsoft/winget-pkgs#460809).
+      # Skip when this version is already in winget-pkgs, so a re-run of an
+      # already-merged release does not open a duplicate PR.
+      - name: Check whether this version is already in winget-pkgs
         id: exists
         run: |
-          path="manifests/h/${WINGET_ID//./\/}"
+          path="manifests/h/${WINGET_ID//./\/}/${VERSION}"
           code=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://api.github.com/repos/microsoft/winget-pkgs/contents/${path}")
           echo "exists=$([ "$code" = "200" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "winget-pkgs/${path}: HTTP ${code}"
-
-      - name: Update existing package
-        if: steps.exists.outputs.exists == 'true'
-        uses: vedantmgoyal9/winget-releaser@v2
-        with:
-          identifier: hegsie.Gitnado
-          installers-regex: '\.(exe|msi)$'
-          release-tag: ${{ needs.preflight.outputs.tag }}
-          max-versions-to-keep: 5
-          token: ${{ secrets.WINGET_TOKEN }}
+          if [ "$code" = "200" ]; then
+            echo "::notice::${WINGET_ID} ${VERSION} is already in winget-pkgs; nothing to submit."
+          fi
 
       - name: Checkout repository
         if: steps.exists.outputs.exists == 'false'
@@ -120,12 +117,13 @@ jobs:
         if: steps.exists.outputs.exists == 'false'
         uses: cargo-bins/cargo-binstall@main
 
-      # `komac new` always prompts (install modes and more) and has no flag to
-      # preset those answers, so it cannot run in CI. Render the manifests from
-      # packaging/winget/ instead and hand them to `komac submit`, which is
-      # non-interactive: hashes come from the downloaded installers and the
-      # MSI ProductCode (new on every build) from `komac analyze`.
-      - name: Create package (first submission)
+      # `komac new` and `komac update` regenerate the manifests themselves, and
+      # `komac new` always prompts, so neither suits CI. Render the manifests
+      # from packaging/winget/ instead and hand them to `komac submit`, which is
+      # non-interactive and opens either a new-package or a new-version PR:
+      # hashes come from the downloaded installers and the MSI ProductCode (new
+      # on every build) from `komac analyze`.
+      - name: Submit manifests
         if: steps.exists.outputs.exists == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
@@ -150,7 +148,8 @@ jobs:
           # Komac creates the PR branch on the fork from upstream's latest
           # commit; if the fork has fallen behind, GitHub refuses with a
           # misleading "permissions to execute CreateRef" error (Komac #1142),
-          # so bring the fork's default branch up to date first.
+          # so bring the fork's default branch up to date first. The token
+          # needs the `workflow` scope for this (docs/packaging.md).
           komac sync
           komac submit --yes "${manifests}"
 
