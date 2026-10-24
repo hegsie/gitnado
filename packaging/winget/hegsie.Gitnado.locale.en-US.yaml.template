@@ -1,6 +1,6 @@
 # Rendered by .github/scripts/winget-manifests.mjs and submitted to
 # microsoft/winget-pkgs by .github/workflows/publish-packages.yml.
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
 
 PackageIdentifier: hegsie.Gitnado
 PackageVersion: {{VERSION}}
@@ -28,4 +28,4 @@ Tags:
 - version-control
 ReleaseNotesUrl: https://github.com/hegsie/gitnado/releases/tag/v{{VERSION}}
 ManifestType: defaultLocale
-ManifestVersion: 1.12.0
+ManifestVersion: 1.28.0
