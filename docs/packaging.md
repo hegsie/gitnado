@@ -30,9 +30,14 @@ One-time setup:
 
 1. Fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) under
    the `hegsie` account (the action pushes manifest branches to this fork).
-2. Create a **classic** personal access token with the `public_repo` scope
-   (fine-grained tokens are not supported by winget-releaser) and add it as
-   the `WINGET_TOKEN` repository secret.
+2. Create a **classic** personal access token with the `public_repo` and
+   `workflow` scopes (fine-grained tokens are not supported by
+   winget-releaser) and add it as the `WINGET_TOKEN` repository secret.
+   `workflow` is needed because syncing the fork merges upstream commits that
+   touch winget-pkgs' own `.github/workflows` files; without it GitHub
+   rejects the sync with "refusing to allow a Personal Access Token to create
+   or update workflow ... without `workflow` scope" (the v1.0.0 release hit
+   this).
 3. Nothing else: the job checks whether `manifests/h/hegsie/Gitnado` exists in
    winget-pkgs. If it does not (the very first release), it renders the three
    manifests from the templates in [`packaging/winget/`](../packaging/winget/)
@@ -61,7 +66,9 @@ submission). If the executable check still flags a
 app needs a desktop session helps the moderator. The `AppsAndFeaturesEntries`
 deliberately omit `DisplayVersion`: moderators reject a value equal to
 `PackageVersion` (the 0.9.1 review, microsoft/winget-pkgs#433064), and winget
-uses `PackageVersion` when it is absent.
+uses `PackageVersion` when it is absent. The templates use manifest schema
+1.28.0, which the 0.9.1 moderator review asked for; bump all three files
+together when winget-pkgs moves to a newer schema.
 If the Komac step ever fails, render the manifests locally with the same
 script and submit them by hand: `node .github/scripts/winget-manifests.mjs
 --version <v> --exe <exe> --msi <msi> --msi-analysis <komac analyze output>

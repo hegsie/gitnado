@@ -140,7 +140,7 @@ test("renderManifests produces the three winget manifests with no placeholders l
     );
     assert.equal(topLevel(content, "PackageIdentifier"), "hegsie.Gitnado");
     assert.equal(topLevel(content, "PackageVersion"), "0.9.0");
-    assert.equal(topLevel(content, "ManifestVersion"), "1.12.0");
+    assert.equal(topLevel(content, "ManifestVersion"), "1.28.0");
   }
 
   const installer = manifests["hegsie.Gitnado.installer.yaml"];
