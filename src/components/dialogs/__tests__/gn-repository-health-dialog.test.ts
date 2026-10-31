@@ -48,6 +48,7 @@ import {
   releaseMaintenance,
   resetMaintenanceLocks,
 } from '../../../utils/maintenance-confirms.ts';
+import { uiStore } from '../../../stores/ui.store.ts';
 import type { GnRepositoryHealthDialog } from '../gn-repository-health-dialog.ts';
 
 const REPO_PATH = '/test/repo';
@@ -284,5 +285,23 @@ describe('gn-repository-health-dialog maintenance lock', () => {
     // Slot released in the finally, so the palette can claim it afterwards.
     expect(tryAcquireMaintenance(REPO_PATH), 'slot free after the run').to.be.true;
     releaseMaintenance(REPO_PATH);
+  });
+
+  it('renders error state instead of fabricated healthy stats when loading stats fails', async () => {
+    uiStore.setState({ toasts: [] });
+    mockInvoke = async (command: string) => {
+      if (command === 'get_repository_stats' || command === 'get_pack_info') {
+        throw { code: 'COMMAND_ERROR', message: 'Corrupt git repository' };
+      }
+      return null;
+    };
+
+    const el = await render();
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    expect(el.shadowRoot!.textContent).to.include('Failed to load health information');
+    expect(el.shadowRoot!.textContent).to.not.include('Repository is healthy');
+    expect(uiStore.getState().toasts.some((t) => t.type === 'error')).to.be.true;
   });
 });

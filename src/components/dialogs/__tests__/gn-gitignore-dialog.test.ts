@@ -458,4 +458,36 @@ describe('gn-gitignore-dialog', () => {
       el.shadowRoot!.querySelector('input[aria-label="Attribute pattern"]'),
     ).to.not.be.null;
   });
+
+  it('resets transient checkResult and inline edit state when reopened', async () => {
+    gitattributes = [
+      {
+        pattern: '*.psd',
+        attributes: [{ name: 'binary', value: 'set' }],
+        lineNumber: 1,
+        rawLine: '*.psd binary',
+      },
+    ];
+    const el = await openDialog();
+    const internal = el as unknown as {
+      checkPath: string;
+      checkResult: { path: string; ignored: boolean; matches: unknown[] } | null;
+      editingLine: number | null;
+      startEditingAttribute: (a: GitAttribute) => void;
+    };
+
+    internal.checkPath = 'dist/bundle.js';
+    internal.checkResult = { path: 'dist/bundle.js', ignored: true, matches: [] };
+    internal.startEditingAttribute(gitattributes[0]);
+    expect(internal.editingLine).to.equal(1);
+
+    el.open = false;
+    await el.updateComplete;
+    el.open = true;
+    await el.updateComplete;
+
+    expect(internal.checkPath).to.equal('');
+    expect(internal.checkResult).to.be.null;
+    expect(internal.editingLine).to.be.null;
+  });
 });

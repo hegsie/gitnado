@@ -1541,6 +1541,7 @@ export class GnGpgDialog extends LitElement {
       }, 2000);
     } catch {
       console.error('Failed to copy to clipboard');
+      this.error = 'Failed to copy to clipboard';
     }
   }
 

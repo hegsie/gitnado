@@ -398,6 +398,7 @@ export class GnBlameView extends CodeRenderMixin(LitElement) {
   private authorColors: Map<string, string> = new Map();
   private uniqueAuthors: Set<string> = new Set();
   private uniqueCommits: Set<string> = new Set();
+  private loadSeq = 0;
 
   updated(changedProps: Map<string, unknown>): void {
     if (
@@ -410,35 +411,49 @@ export class GnBlameView extends CodeRenderMixin(LitElement) {
   }
 
   private async loadBlame(): Promise<void> {
+    const seq = ++this.loadSeq;
+    this.contextMenu = { ...this.contextMenu, visible: false };
+
     if (!this.repositoryPath || !this.filePath) {
       this.lines = [];
-      this.groups = [];
+      this.processLinesIntoGroups();
+      this.error = null;
+      this.isLoading = false;
       return;
     }
+
+    const repoPath = this.repositoryPath;
+    const filePath = this.filePath;
+    const commitOid = this.commitOid ?? undefined;
 
     this.isLoading = true;
     this.error = null;
 
-    // Initialize Shiki highlighter and detect language
-    await this.initCodeLanguage(this.filePath);
-
     try {
-      const result = await getFileBlame(
-        this.repositoryPath,
-        this.filePath,
-        this.commitOid ?? undefined
-      );
+      // Initialize Shiki highlighter and detect language
+      await this.initCodeLanguage(filePath);
+      if (seq !== this.loadSeq) return;
+
+      const result = await getFileBlame(repoPath, filePath, commitOid);
+      if (seq !== this.loadSeq) return;
 
       if (result.success && result.data) {
         this.lines = result.data.lines;
         this.processLinesIntoGroups();
       } else {
+        this.lines = [];
+        this.processLinesIntoGroups();
         this.error = result.error?.message ?? 'Failed to load blame';
       }
     } catch (e) {
+      if (seq !== this.loadSeq) return;
+      this.lines = [];
+      this.processLinesIntoGroups();
       this.error = e instanceof Error ? e.message : 'Failed to load blame';
     } finally {
-      this.isLoading = false;
+      if (seq === this.loadSeq) {
+        this.isLoading = false;
+      }
     }
   }
 
@@ -511,6 +526,10 @@ export class GnBlameView extends CodeRenderMixin(LitElement) {
     this.contextMenu = { ...this.contextMenu, visible: false };
     try {
       await navigator.clipboard.writeText(group.commitOid);
+      showToast(
+        `Copied SHA ${group.commitShortId || group.commitOid.substring(0, 7)} to clipboard`,
+        'success'
+      );
     } catch (err) {
       console.error('Failed to copy hash:', err);
       showToast('Failed to copy hash to clipboard', 'error');
@@ -523,6 +542,7 @@ export class GnBlameView extends CodeRenderMixin(LitElement) {
     this.contextMenu = { ...this.contextMenu, visible: false };
     try {
       await navigator.clipboard.writeText(line.content);
+      showToast('Copied line to clipboard', 'success');
     } catch (err) {
       console.error('Failed to copy line:', err);
       showToast('Failed to copy line to clipboard', 'error');

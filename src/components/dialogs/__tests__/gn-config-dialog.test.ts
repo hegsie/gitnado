@@ -656,4 +656,29 @@ describe('gn-config-dialog', () => {
     expect(successToast).to.not.be.undefined;
     expect(successToast!.message).to.equal('Alias deleted');
   });
+
+  it('clears stale identity and shows error when get_user_identity fails on reopen', async () => {
+    const el = await fixture<GnConfigDialog>(
+      html`<gn-config-dialog ?open=${true} .repositoryPath=${'/test/repo-a'}></gn-config-dialog>`,
+    );
+    await settleOpenLoad();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).editName).to.equal('Test User');
+
+    el.open = false;
+    await el.updateComplete;
+
+    failingCommands.add('get_user_identity');
+    el.repositoryPath = '/test/repo-b';
+    el.open = true;
+    await el.updateComplete;
+    await settleOpenLoad();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).editName).to.equal('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).editEmail).to.equal('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).error).to.include('Operation failed');
+  });
 });

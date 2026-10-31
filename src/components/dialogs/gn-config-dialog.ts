@@ -427,38 +427,63 @@ export class GnConfigDialog extends LitElement {
   updated(changedProperties: Map<string, unknown>): void {
     if (changedProperties.has('open') && this.open) {
       this.pinnedRepoPath = this.repositoryPath;
+      this.newAliasName = '';
+      this.newAliasCommand = '';
+      this.error = null;
       this.loadData();
     }
   }
 
   private async loadData(): Promise<void> {
+    const targetRepo = this.pinnedRepoPath;
     this.loading = true;
     this.error = null;
 
     try {
       const [identityResult, settingsResult, aliasesResult] = await Promise.all([
-        gitService.getUserIdentity(this.pinnedRepoPath),
-        gitService.getCommonSettings(this.pinnedRepoPath),
-        gitService.getAliases(this.pinnedRepoPath),
+        gitService.getUserIdentity(targetRepo),
+        gitService.getCommonSettings(targetRepo),
+        gitService.getAliases(targetRepo),
       ]);
+
+      if (targetRepo !== this.pinnedRepoPath) return;
 
       if (identityResult.success && identityResult.data) {
         this.identity = identityResult.data;
         this.editName = identityResult.data.name || '';
         this.editEmail = identityResult.data.email || '';
+      } else if (!identityResult.success) {
+        this.identity = null;
+        this.editName = '';
+        this.editEmail = '';
+        this.error = identityResult.error?.message || 'Failed to load user identity';
       }
 
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data;
+      } else if (!settingsResult.success) {
+        this.settings = [];
+        if (!this.error) {
+          this.error = settingsResult.error?.message || 'Failed to load settings';
+        }
       }
 
       if (aliasesResult.success && aliasesResult.data) {
         this.aliases = aliasesResult.data;
+      } else if (!aliasesResult.success) {
+        this.aliases = [];
+        if (!this.error) {
+          this.error = aliasesResult.error?.message || 'Failed to load aliases';
+        }
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : 'Failed to load configuration';
+      if (targetRepo === this.pinnedRepoPath) {
+        this.error = e instanceof Error ? e.message : 'Failed to load configuration';
+      }
     } finally {
-      this.loading = false;
+      if (targetRepo === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
   }
 
@@ -548,9 +573,19 @@ export class GnConfigDialog extends LitElement {
    * would flip the dialog back to its loading state and blank the other tabs.
    */
   private async reloadSettings(): Promise<void> {
-    const settingsResult = await gitService.getCommonSettings(this.pinnedRepoPath);
-    if (settingsResult.success && settingsResult.data) {
-      this.settings = settingsResult.data;
+    const targetRepo = this.pinnedRepoPath;
+    try {
+      const settingsResult = await gitService.getCommonSettings(targetRepo);
+      if (targetRepo !== this.pinnedRepoPath) return;
+      if (settingsResult.success && settingsResult.data) {
+        this.settings = settingsResult.data;
+      } else if (!settingsResult.success) {
+        this.error = settingsResult.error?.message || 'Failed to load settings';
+      }
+    } catch (e) {
+      if (targetRepo === this.pinnedRepoPath) {
+        this.error = e instanceof Error ? e.message : 'Failed to load settings';
+      }
     }
   }
 
@@ -560,6 +595,7 @@ export class GnConfigDialog extends LitElement {
    * reload — say so instead of claiming the setting is gone.
    */
   private async clearSetting(key: string): Promise<void> {
+    this.error = null;
     try {
       const result = await gitService.unsetConfigValue(
         this.pinnedRepoPath,

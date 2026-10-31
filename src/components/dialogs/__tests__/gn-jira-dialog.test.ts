@@ -271,4 +271,62 @@ describe('gn-jira-dialog', () => {
       transitionId: '31',
     });
   });
+
+  it('clears stale credentials, issues, and transitions when switching to a repo without config', async () => {
+    const el = await fixture<GnJiraDialog>(html`
+      <gn-jira-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-jira-dialog>
+    `);
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // Load transitions on repo A
+    const firstIssue = el.shadowRoot!.querySelector('.issue-item')!;
+    firstIssue.querySelector<HTMLButtonElement>('.load-transitions-btn')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // Switch to repo B with no saved config and no issues
+    mockConfig = null;
+    mockIssues = [];
+    el.repositoryPath = '/repo/b';
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).baseUrl).to.equal('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).email).to.equal('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).apiToken).to.equal('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).projectKey).to.equal('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).hasSavedConfig).to.be.false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).issues).to.deep.equal([]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).issueTransitions).to.deep.equal({});
+  });
+
+  it('clears stale issues and surfaces error when refreshing issues fails', async () => {
+    const el = await fixture<GnJiraDialog>(html`
+      <gn-jira-dialog ?open=${true} .repositoryPath=${'/test/repo'}></gn-jira-dialog>
+    `);
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    expect(el.shadowRoot!.querySelectorAll('.issue-item').length).to.equal(2);
+
+    failCommand = 'get_jira_issues';
+    const refreshBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('.refresh-btn')!;
+    refreshBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    expect(el.shadowRoot!.querySelectorAll('.issue-item').length).to.equal(0);
+    expect(el.shadowRoot!.querySelector('.error-banner')?.textContent).to.include(
+      'get_jira_issues failed',
+    );
+  });
 });

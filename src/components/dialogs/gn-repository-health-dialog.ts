@@ -27,9 +27,9 @@ interface HealthStats {
   packCount: number;
   looseObjectCount: number;
   sizeKb: number;
-  branchCount: number;
-  tagCount: number;
-  stashCount: number;
+  branchCount: number | null;
+  tagCount: number | null;
+  stashCount: number | null;
   lastGcDate: string | null;
   recommendations: string[];
   // Overview stats from getRepoStats
@@ -352,19 +352,33 @@ export class GnRepositoryHealthDialog extends LitElement {
 
   private async loadHealthStats(): Promise<void> {
     if (!this.pinnedRepoPath) return;
+    const targetRepo = this.pinnedRepoPath;
 
     this.loading = true;
+    this.stats = null;
 
     try {
       // Get repository statistics
       const [countResult, packsResult, branchesResult, tagsResult, stashesResult, repoStatsResult] = await Promise.all([
-        gitService.getRepositoryStats(this.pinnedRepoPath),
-        gitService.getPackInfo(this.pinnedRepoPath),
-        gitService.getBranches(this.pinnedRepoPath),
-        gitService.getTags(this.pinnedRepoPath),
-        gitService.getStashes(this.pinnedRepoPath),
-        gitService.getRepoStats(this.pinnedRepoPath, 10000),
+        gitService.getRepositoryStats(targetRepo),
+        gitService.getPackInfo(targetRepo),
+        gitService.getBranches(targetRepo),
+        gitService.getTags(targetRepo),
+        gitService.getStashes(targetRepo),
+        gitService.getRepoStats(targetRepo, 10000),
       ]);
+
+      if (targetRepo !== this.pinnedRepoPath) return;
+
+      if (!countResult.success || !packsResult.success) {
+        showToast(
+          countResult.error?.message ||
+            packsResult.error?.message ||
+            'Failed to load repository health information',
+          'error',
+        );
+        return;
+      }
 
       // Calculate recommendations
       const recommendations: string[] = [];
@@ -395,23 +409,23 @@ export class GnRepositoryHealthDialog extends LitElement {
 
       const branchCount = branchesResult.success && branchesResult.data
         ? branchesResult.data.length
-        : 0;
+        : null;
 
       // Recommend cleanup if many branches
-      if (branchCount > 50) {
+      if (branchCount != null && branchCount > 50) {
         recommendations.push('Many branches detected. Consider cleaning up merged branches.');
       }
 
       const tagCount = tagsResult.success && tagsResult.data
         ? tagsResult.data.length
-        : 0;
+        : null;
 
       const stashCount = stashesResult.success && stashesResult.data
         ? stashesResult.data.length
-        : 0;
+        : null;
 
       // Recommend stash cleanup if many stashes
-      if (stashCount > 10) {
+      if (stashCount != null && stashCount > 10) {
         recommendations.push('Many stashes detected. Consider cleaning up old stashes.');
       }
 
@@ -445,10 +459,14 @@ export class GnRepositoryHealthDialog extends LitElement {
         latestCommitDate,
       };
     } catch (error) {
-      console.error('Failed to load health stats:', error);
-      showToast('Failed to load repository health information', 'error');
+      if (targetRepo === this.pinnedRepoPath) {
+        console.error('Failed to load health stats:', error);
+        showToast('Failed to load repository health information', 'error');
+      }
     } finally {
-      this.loading = false;
+      if (targetRepo === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
   }
 
@@ -628,7 +646,16 @@ export class GnRepositoryHealthDialog extends LitElement {
 
     if (!this.stats) {
       return html`
-        <div class="loading">Failed to load health information</div>
+        <div class="loading">
+          <span>Failed to load health information</span>
+          <button
+            class="action-btn"
+            style="margin-left: var(--spacing-sm);"
+            @click=${() => this.loadHealthStats()}
+          >
+            Retry
+          </button>
+        </div>
       `;
     }
 
@@ -664,11 +691,11 @@ export class GnRepositoryHealthDialog extends LitElement {
             </div>
             <div class="stat-card">
               <span class="stat-label">Branches</span>
-              <span class="stat-value">${this.stats.branchCount}</span>
+              <span class="stat-value">${this.stats.branchCount != null ? this.stats.branchCount : '—'}</span>
             </div>
             <div class="stat-card">
               <span class="stat-label">Tags</span>
-              <span class="stat-value">${this.stats.tagCount}</span>
+              <span class="stat-value">${this.stats.tagCount != null ? this.stats.tagCount : '—'}</span>
             </div>
           </div>
         </div>

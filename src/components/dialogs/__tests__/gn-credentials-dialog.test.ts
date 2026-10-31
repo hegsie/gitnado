@@ -581,4 +581,26 @@ describe('gn-credentials-dialog credential test result', () => {
     expect(el.shadowRoot!.querySelector('.test-result')!.className).to.match(/\berror\b/);
     expect(offersErase(el), 'no complete credential was found').to.be.false;
   });
+
+  it('resets selectedRemote and testResult when reopened on a different repository', async () => {
+    mockRemotes = [remote('https://github.com/org/repo-a.git')];
+    mockTestResult = testResult({ host: 'github.com' });
+    const el = await openTestTab();
+    await runTest(el);
+    expect(el.shadowRoot!.querySelector('.test-result')).to.not.be.null;
+
+    // Close and switch to Repo B with no remotes
+    el.open = false;
+    await el.updateComplete;
+    mockRemotes = [];
+    el.repositoryPath = '/test/repo-b';
+    el.open = true;
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).selectedRemote).to.be.null;
+    expect(el.shadowRoot!.querySelector('.test-result')).to.be.null;
+  });
 });

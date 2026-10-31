@@ -225,6 +225,39 @@ describe('gn-file-history', () => {
       const toasts = uiStore.getState().toasts;
       expect(toasts.some((t) => t.type === 'error' && /copy hash/i.test(t.message))).to.be.true;
     });
+
+    it('shows a success toast when copying a hash succeeds', async () => {
+      const el = await renderHistory();
+
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.resolve() },
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).contextMenu = { visible: true, x: 0, y: 0, entry: postRename };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).handleContextCopyHash();
+
+      const toasts = uiStore.getState().toasts;
+      expect(
+        toasts.some((t) => t.type === 'success' && t.message.includes(postRename.commit.shortId))
+      ).to.be.true;
+    });
+
+    it('clears entries and selectedCommit when filePath is cleared', async () => {
+      const el = await renderHistory();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).selectedCommit = postRename.commit.oid;
+
+      el.filePath = '';
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).entries).to.deep.equal([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).selectedCommit).to.be.null;
+    });
   });
   describe('restore this version', () => {
     const RESTORE_LABEL = /restore this version/i;

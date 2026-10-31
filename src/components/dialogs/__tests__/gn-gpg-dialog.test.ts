@@ -549,4 +549,27 @@ describe('gn-gpg-dialog signing switches', () => {
       'and the failure is reported',
     ).to.not.be.null;
   });
+
+  it('sets inline error when copyToClipboard fails', async () => {
+    const el = await openOn(REPO);
+    const origWriteText = navigator.clipboard.writeText;
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      value: () => Promise.reject(new Error('Clipboard blocked')),
+      configurable: true,
+    });
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).copyToClipboard('gpg --list-secret-keys');
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.message.error')?.textContent).to.include(
+        'Failed to copy to clipboard',
+      );
+    } finally {
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        value: origWriteText,
+        configurable: true,
+      });
+    }
+  });
 });

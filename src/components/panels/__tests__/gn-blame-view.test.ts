@@ -111,6 +111,74 @@ describe('gn-blame-view', () => {
       const toasts = uiStore.getState().toasts;
       expect(toasts.some((t) => t.type === 'error' && /copy hash/i.test(t.message))).to.be.true;
     });
+
+    it('shows a success toast when copying a hash or line succeeds', async () => {
+      mockInvoke = async () => blameResultAged(10);
+      const el = await renderBlame();
+
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.resolve() },
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).contextMenu = {
+        visible: true,
+        x: 0,
+        y: 0,
+        group: { commitOid: 'deadbeefdeadbeef', commitShortId: 'deadbee' },
+        line: { content: 'const a = 1;' },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).handleContextCopyHash();
+
+      expect(
+        uiStore.getState().toasts.some((t) => t.type === 'success' && t.message.includes('deadbee'))
+      ).to.be.true;
+
+      uiStore.setState({ toasts: [] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).contextMenu = {
+        visible: true,
+        x: 0,
+        y: 0,
+        group: null,
+        line: { content: 'const a = 1;' },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).handleContextCopyLine();
+
+      expect(
+        uiStore.getState().toasts.some((t) => t.type === 'success' && /copied line/i.test(t.message))
+      ).to.be.true;
+    });
+
+    it('clears stale lines and groups when a subsequent blame load fails', async () => {
+      mockInvoke = async (command: string) => {
+        if (command === 'get_file_blame') return blameResultAged(10);
+        return null;
+      };
+      const el = await renderBlame();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).groups.length).to.equal(1);
+
+      mockInvoke = async (command: string) => {
+        if (command === 'get_file_blame') {
+          throw { code: 'BLAME_ERROR', message: 'File deleted' };
+        }
+        return null;
+      };
+      el.filePath = 'src/other.ts';
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 50));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).lines).to.deep.equal([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).groups).to.deep.equal([]);
+      expect(el.shadowRoot!.querySelector('.error')?.textContent).to.include('File deleted');
+    });
   });
 
   // ── Relative dates ───────────────────────────────────────────────────────

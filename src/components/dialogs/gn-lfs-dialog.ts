@@ -494,6 +494,8 @@ export class GnLfsDialog extends LitElement {
       // in the same sweep, after the handlers and the mode-switch buttons.
       this.success = '';
       this.error = '';
+      this.newPattern = '';
+      this.showFiles = false;
       await this.loadStatus();
     }
   }
@@ -512,32 +514,58 @@ export class GnLfsDialog extends LitElement {
     this.loading = true;
     this.error = '';
 
-    const result = await gitService.getLfsStatus(repoPath);
+    try {
+      const result = await gitService.getLfsStatus(repoPath);
 
-    if (repoPath !== this.pinnedRepoPath) return;
+      if (repoPath !== this.pinnedRepoPath) return;
 
-    if (result.success && result.data) {
-      this.status = result.data;
-      if (result.data.enabled) {
-        await this.loadFiles(repoPath);
+      if (result.success && result.data) {
+        this.status = result.data;
+        if (result.data.enabled) {
+          await this.loadFiles(repoPath);
+        } else {
+          this.files = [];
+        }
+      } else {
+        this.status = null;
+        this.files = [];
+        this.error = result.error?.message || 'Failed to load LFS status';
       }
-    } else {
-      this.error = result.error?.message || 'Failed to load LFS status';
+    } catch (err) {
+      if (repoPath !== this.pinnedRepoPath) return;
+      this.status = null;
+      this.files = [];
+      this.error = err instanceof Error ? err.message : 'Failed to load LFS status';
+    } finally {
+      if (repoPath === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
-
-    this.loading = false;
   }
 
   /** @param repoPath See loadStatus. */
   private async loadFiles(repoPath: string = this.pinnedRepoPath): Promise<void> {
     if (repoPath !== this.pinnedRepoPath) return;
 
-    const result = await gitService.getLfsFiles(repoPath);
+    try {
+      const result = await gitService.getLfsFiles(repoPath);
 
-    if (repoPath !== this.pinnedRepoPath) return;
+      if (repoPath !== this.pinnedRepoPath) return;
 
-    if (result.success && result.data) {
-      this.files = result.data;
+      if (result.success && result.data) {
+        this.files = result.data;
+      } else {
+        this.files = [];
+        if (!result.success && !this.error) {
+          this.error = result.error?.message || 'Failed to load LFS files';
+        }
+      }
+    } catch (err) {
+      if (repoPath !== this.pinnedRepoPath) return;
+      this.files = [];
+      if (!this.error) {
+        this.error = err instanceof Error ? err.message : 'Failed to load LFS files';
+      }
     }
   }
 

@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
+import { showToast } from '../../services/notification.service.ts';
 import type { SshKey, SshConfig, SshTestResult } from '../../services/git.service.ts';
 import './gn-modal.ts';
 
@@ -395,10 +396,18 @@ export class GnSshDialog extends LitElement {
 
       if (configResult.success && configResult.data) {
         this.config = configResult.data;
+      } else if (!configResult.success) {
+        this.config = null;
+        this.error = configResult.error?.message || 'Failed to load SSH configuration';
       }
 
       if (keysResult.success && keysResult.data) {
         this.keys = keysResult.data;
+      } else if (!keysResult.success) {
+        this.keys = [];
+        if (!this.error) {
+          this.error = keysResult.error?.message || 'Failed to load SSH keys';
+        }
       }
     } catch (e) {
       this.error = e instanceof Error ? e.message : 'Failed to load SSH data';
@@ -411,7 +420,14 @@ export class GnSshDialog extends LitElement {
     this.dispatchEvent(new CustomEvent('close'));
     // Reset state
     this.generatedKey = null;
+    this.generateKeyType = 'ed25519';
+    this.generateEmail = '';
+    this.generateFilename = '';
+    this.generatePassphrase = '';
+    this.testHost = '';
     this.testResult = null;
+    this.copiedKey = null;
+    this.error = null;
     this.activeTab = 'keys';
   }
 
@@ -491,6 +507,7 @@ export class GnSshDialog extends LitElement {
       const result = await gitService.deleteSshKey(key.name);
 
       if (result.success) {
+        showToast(`Deleted SSH key "${key.name}"`, 'success');
         await this.loadData();
       } else {
         this.error = result.error?.message || 'Failed to delete key';

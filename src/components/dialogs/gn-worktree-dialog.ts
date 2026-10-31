@@ -462,6 +462,10 @@ export class GnWorktreeDialog extends LitElement {
       this.success = '';
       this.error = '';
       this.mode = 'list';
+      this.addPath = '';
+      this.addBranch = '';
+      this.createNewBranch = false;
+      this.newBranchName = '';
       await this.loadWorktrees();
       await this.loadBranches();
     }
@@ -481,41 +485,57 @@ export class GnWorktreeDialog extends LitElement {
     this.loading = true;
     this.error = '';
 
-    const result = await gitService.getWorktrees(repoPath);
+    try {
+      const result = await gitService.getWorktrees(repoPath);
 
-    if (repoPath !== this.pinnedRepoPath) return;
+      if (repoPath !== this.pinnedRepoPath) return;
 
-    if (result.success && result.data) {
-      this.worktrees = result.data;
-    } else {
-      this.error = result.error?.message || 'Failed to load worktrees';
+      if (result.success && result.data) {
+        this.worktrees = result.data;
+      } else {
+        this.worktrees = [];
+        this.error = result.error?.message || 'Failed to load worktrees';
+      }
+    } catch (err) {
+      if (repoPath !== this.pinnedRepoPath) return;
+      this.worktrees = [];
+      this.error = err instanceof Error ? err.message : 'Failed to load worktrees';
+    } finally {
+      if (repoPath === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
-
-    this.loading = false;
   }
 
   /** @param repoPath See loadWorktrees. */
   private async loadBranches(repoPath: string = this.pinnedRepoPath): Promise<void> {
     if (repoPath !== this.pinnedRepoPath) return;
 
-    const result = await gitService.getBranches(repoPath);
+    try {
+      const result = await gitService.getBranches(repoPath);
 
-    if (repoPath !== this.pinnedRepoPath) return;
+      if (repoPath !== this.pinnedRepoPath) return;
 
-    if (result.success && result.data) {
-      // LOCAL branches only, and only those free.
-      //
-      // get_branches returns remotes too, and they rendered here as plain rows
-      // — `origin/main` sitting among the local names, visually identical.
-      // `git worktree add <path> origin/main` exits 0 having created a
-      // DETACHED worktree: the DWIM that creates a tracking branch fires only
-      // for a bare name, not `remote/name`. So the dialog reported "Worktree
-      // added successfully" and the row it then drew read `detached HEAD`,
-      // not the branch the user had picked.
-      const usedBranches = new Set(this.worktrees.map((wt) => wt.branch).filter(Boolean));
-      this.branches = result.data.filter((b) => !b.isRemote && !usedBranches.has(b.name));
-    } else {
-      showToast(result.error?.message || 'Failed to load branches', 'error');
+      if (result.success && result.data) {
+        // LOCAL branches only, and only those free.
+        //
+        // get_branches returns remotes too, and they rendered here as plain rows
+        // — `origin/main` sitting among the local names, visually identical.
+        // `git worktree add <path> origin/main` exits 0 having created a
+        // DETACHED worktree: the DWIM that creates a tracking branch fires only
+        // for a bare name, not `remote/name`. So the dialog reported "Worktree
+        // added successfully" and the row it then drew read `detached HEAD`,
+        // not the branch the user had picked.
+        const usedBranches = new Set(this.worktrees.map((wt) => wt.branch).filter(Boolean));
+        this.branches = result.data.filter((b) => !b.isRemote && !usedBranches.has(b.name));
+      } else {
+        this.branches = [];
+        showToast(result.error?.message || 'Failed to load branches', 'error');
+      }
+    } catch (err) {
+      if (repoPath !== this.pinnedRepoPath) return;
+      this.branches = [];
+      showToast(err instanceof Error ? err.message : 'Failed to load branches', 'error');
     }
   }
 

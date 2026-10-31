@@ -83,6 +83,7 @@ const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
       return hook ?? null;
     }
     case 'get_hook_execution_logs':
+      if (failWith) throw failWith;
       return mockExecutionLogs;
     case 'clear_hook_execution_logs':
       if (failWith) throw failWith;
@@ -474,6 +475,22 @@ describe('gn-hooks-dialog', () => {
       const emptyAfter = el.shadowRoot!.querySelector('.execution-logs-empty');
       expect(emptyAfter).to.not.be.null;
       expect(uiStore.getState().toasts.some((t) => t.type === 'success')).to.be.true;
+    });
+
+    it('shows an error toast when loading execution logs fails', async () => {
+      uiStore.setState({ toasts: [] });
+      failWith = { code: 'COMMAND_ERROR', message: 'Database locked' };
+
+      const el = await fixture<GnHooksDialog>(
+        html`<gn-hooks-dialog ?open=${true} .repoPath=${'/test/repo'}></gn-hooks-dialog>`,
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      await el.updateComplete;
+
+      expect(
+        uiStore.getState().toasts.some((t) => t.type === 'error' && t.message.includes('Database locked')),
+      ).to.be.true;
+      failWith = null;
     });
   });
 });

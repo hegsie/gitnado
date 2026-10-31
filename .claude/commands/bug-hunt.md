@@ -11,7 +11,7 @@ Three classes of defect are in scope, weighted equally:
 
 1. **Bugs** — wrong behaviour, crashes, data loss, races, unhandled failures.
 2. **Bad implementations** — code that "works" but is wired wrong: duplicated logic that has drifted, state that can't be reached, contracts held together by coincidence, error handling that swallows.
-3. **Incorrect or incoherent UX** — flows that dead-end, silent failures, the same operation behaving differently depending on where the user invoked it, missing empty/loading/error states, confirmations that lie about what they do.
+3. **Incorrect or incoherent UX & Polish** — flows that dead-end, silent failures, focus/Escape/Enter dialog issues, closing on error and losing user input, stale dialog state across repo switches, layout/overflow breaks on long names, the same operation behaving differently depending on where the user invoked it, missing empty/loading/error/disabled states, confirmations that lie about what they do.
 
 ## Ground rules
 
@@ -69,7 +69,8 @@ Hunt these deliberately. Each is a pattern that has produced real bugs in this r
   ```
   For each, ask whether the user sees anything. If not, that's a finding.
 - Missing **empty / loading / disabled** states: a list that renders nothing with no "no branches yet" message; a button clickable while the operation is in flight (double-submit); a long git operation with no progress indication.
-- Dialogs that close on failure and lose the user's input, or stay open with no message.
+- **Dialog lifecycle & flow**: dialogs that close on failure and lose the user's input, stay open with no message, retain stale form/error state when closed and reopened or when `repositoryPath` changes, lack Escape-to-close or Enter-to-submit where expected, or fail to trap/restore focus.
+- **Visual & layout polish**: long branch/file/repo/commit strings overflowing containers without truncation (`text-overflow: ellipsis` / `min-width: 0`), inconsistent spacing or button hierarchy, or jarring layout shifts between loading/empty/populated states.
 - Toast vs inline (`this.error`/`this.success`) chosen inconsistently between sibling handlers.
 
 ### D. Cross-provider coherence

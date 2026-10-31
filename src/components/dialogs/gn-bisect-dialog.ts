@@ -521,43 +521,58 @@ export class GnBisectDialog extends LitElement {
     // — captioning a status that was just recomputed from scratch.
     this.message = '';
 
-    const result = await gitService.getBisectStatus(loadedPath);
+    try {
+      const result = await gitService.getBisectStatus(loadedPath);
 
-    // The tab may have switched while the fetch was in flight; a stale result
-    // must not be painted over the now-active repository's session.
-    if (this.repositoryPath !== loadedPath) return;
+      // The tab may have switched while the fetch was in flight; a stale result
+      // must not be painted over the now-active repository's session.
+      if (this.repositoryPath !== loadedPath) return;
 
-    if (result.success && result.data) {
-      this.status = result.data;
-      if (result.data.active) {
-        // The session stays active in git until Finish runs `bisect reset`, so
-        // a dialog closed at the result screen (X, Escape, overlay click) must
-        // reopen ON the result. Mapping every active session to 'in-progress'
-        // presented the finished search as unfinished and lost the answer.
-        // Only when a culprit is actually recorded, though: renderComplete
-        // shows nothing but the log without one.
-        if (result.data.culprit) {
-          this.culprit = result.data.culprit;
-          this.currentCommitInfo = null;
-          this.step = 'complete';
-        } else {
-          this.culprit = null;
-          this.step = 'in-progress';
-          // Fetch current commit info
-          if (result.data.currentCommit) {
-            await this.fetchCurrentCommitInfo(result.data.currentCommit);
+      if (result.success && result.data) {
+        this.status = result.data;
+        if (result.data.active) {
+          // The session stays active in git until Finish runs `bisect reset`, so
+          // a dialog closed at the result screen (X, Escape, overlay click) must
+          // reopen ON the result. Mapping every active session to 'in-progress'
+          // presented the finished search as unfinished and lost the answer.
+          // Only when a culprit is actually recorded, though: renderComplete
+          // shows nothing but the log without one.
+          if (result.data.culprit) {
+            this.culprit = result.data.culprit;
+            this.currentCommitInfo = null;
+            this.step = 'complete';
+          } else {
+            this.culprit = null;
+            this.step = 'in-progress';
+            // Fetch current commit info
+            if (result.data.currentCommit) {
+              await this.fetchCurrentCommitInfo(result.data.currentCommit);
+            }
           }
+        } else {
+          this.step = 'setup';
+          this.culprit = null;
+          this.currentCommitInfo = null;
         }
       } else {
-        this.step = 'setup';
+        this.status = null;
         this.culprit = null;
+        this.currentCommitInfo = null;
+        this.step = 'setup';
+        this.error = result.error?.message || 'Failed to get bisect status';
       }
-    } else {
-      this.error = result.error?.message || 'Failed to get bisect status';
+    } catch (err) {
+      if (this.repositoryPath !== loadedPath) return;
+      this.status = null;
+      this.culprit = null;
+      this.currentCommitInfo = null;
+      this.step = 'setup';
+      this.error = err instanceof Error ? err.message : 'Failed to get bisect status';
+    } finally {
+      if (this.repositoryPath === loadedPath) {
+        this.loading = false;
+      }
     }
-
-    if (this.repositoryPath !== loadedPath) return;
-    this.loading = false;
   }
 
   private async fetchCurrentCommitInfo(oid: string): Promise<void> {

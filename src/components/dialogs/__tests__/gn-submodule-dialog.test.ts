@@ -523,4 +523,30 @@ describe('gn-submodule-dialog', () => {
       ]);
     });
   });
+
+  it('clears stale submodules when get_submodules fails on reopen', async () => {
+    const el = await fixture<GnSubmoduleDialog>(
+      html`<gn-submodule-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-submodule-dialog>`,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).submodules.length).to.equal(1);
+
+    el.open = false;
+    await el.updateComplete;
+
+    failingCommands.add('get_submodules');
+    el.repositoryPath = '/repo/b';
+    el.open = true;
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).submodules).to.deep.equal([]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).error).to.include('Operation failed');
+  });
 });

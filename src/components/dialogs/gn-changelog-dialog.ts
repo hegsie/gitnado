@@ -231,22 +231,44 @@ export class GnChangelogDialog extends LitElement {
   private reset(): void {
     this.baseRef = '';
     this.compareRef = 'HEAD';
+    this.tags = [];
     this.result = '';
     this.error = '';
     this.isGenerating = false;
   }
 
   private async loadTags(): Promise<void> {
-    const result = await gitService.getTags(this.pinnedRepoPath);
-    if (result.success && result.data) {
-      this.tags = result.data;
-      // Default baseRef to the second most recent tag (previous release)
-      if (this.tags.length >= 2) {
-        this.baseRef = this.tags[1].name;
-        this.compareRef = this.tags[0].name;
-      } else if (this.tags.length === 1) {
-        this.baseRef = this.tags[0].name;
+    const targetRepo = this.pinnedRepoPath;
+    try {
+      const result = await gitService.getTags(targetRepo);
+      if (targetRepo !== this.pinnedRepoPath) return;
+      if (result.success && result.data) {
+        this.tags = result.data;
+        // Default baseRef to the second most recent tag (previous release)
+        if (this.tags.length >= 2) {
+          this.baseRef = this.tags[1].name;
+          this.compareRef = this.tags[0].name;
+        } else if (this.tags.length === 1) {
+          this.baseRef = this.tags[0].name;
+          this.compareRef = 'HEAD';
+        } else {
+          this.baseRef = '';
+          this.compareRef = 'HEAD';
+        }
+      } else {
+        this.tags = [];
+        this.baseRef = '';
         this.compareRef = 'HEAD';
+        if (!result.success) {
+          this.error = result.error?.message || 'Failed to load tags';
+        }
+      }
+    } catch (e) {
+      if (targetRepo === this.pinnedRepoPath) {
+        this.tags = [];
+        this.baseRef = '';
+        this.compareRef = 'HEAD';
+        this.error = e instanceof Error ? e.message : 'Failed to load tags';
       }
     }
   }

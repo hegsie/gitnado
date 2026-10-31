@@ -461,15 +461,14 @@ export class GnImageDiff extends LitElement {
   @state() private isDragging = false;
   @state() private differenceThreshold = 10;
   @state() private differenceDataUrl: string | null = null;
+  @state() private differenceError: string | null = null;
   @state() private differenceStats = { added: 0, removed: 0, changed: 0, unchanged: 0 };
   @state() private computingDifference = false;
 
   private thresholdDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
-
-  async connectedCallback() {
-    super.connectedCallback();
-    await this.loadImageVersions();
-  }
+  private loadSeq = 0;
+  private pendingDifferenceRecompute = false;
+  private differenceFailedFor: ImageVersions | null = null;
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
@@ -498,6 +497,7 @@ export class GnImageDiff extends LitElement {
       this.mode === 'difference' &&
       !this.differenceDataUrl &&
       !this.computingDifference &&
+      this.differenceFailedFor !== this.imageData &&
       this.imageData &&
       (this.imageData.oldData || this.imageData.newData)
     ) {
@@ -506,7 +506,22 @@ export class GnImageDiff extends LitElement {
   }
 
   private async loadImageVersions() {
-    if (!this.repoPath || !this.filePath) return;
+    const seq = ++this.loadSeq;
+    this.differenceFailedFor = null;
+    this.differenceError = null;
+    if (!this.repoPath || !this.filePath) {
+      this.imageData = null;
+      this.differenceDataUrl = null;
+      this.differenceStats = { added: 0, removed: 0, changed: 0, unchanged: 0 };
+      this.error = null;
+      this.loading = false;
+      return;
+    }
+
+    const repoPath = this.repoPath;
+    const filePath = this.filePath;
+    const staged = this.staged;
+    const commitOid = this.commitOid;
 
     this.loading = true;
     this.error = null;
@@ -515,20 +530,30 @@ export class GnImageDiff extends LitElement {
     this.differenceDataUrl = null;
     this.differenceStats = { added: 0, removed: 0, changed: 0, unchanged: 0 };
 
-    const result = await gitService.getImageVersions(
-      this.repoPath,
-      this.filePath,
-      this.staged,
-      this.commitOid
-    );
+    try {
+      const result = await gitService.getImageVersions(
+        repoPath,
+        filePath,
+        staged,
+        commitOid
+      );
+      if (seq !== this.loadSeq) return;
 
-    if (result.success && result.data) {
-      this.imageData = result.data;
-    } else {
-      this.error = result.error?.message || 'Failed to load images';
+      if (result.success && result.data) {
+        this.imageData = result.data;
+      } else {
+        this.imageData = null;
+        this.error = result.error?.message || 'Failed to load images';
+      }
+    } catch (err) {
+      if (seq !== this.loadSeq) return;
+      this.imageData = null;
+      this.error = err instanceof Error ? err.message : 'Failed to load images';
+    } finally {
+      if (seq === this.loadSeq) {
+        this.loading = false;
+      }
     }
-
-    this.loading = false;
   }
 
   private setMode(mode: ImageDiffMode) {
@@ -591,6 +616,8 @@ export class GnImageDiff extends LitElement {
   private handleThresholdChange(e: Event) {
     const input = e.target as HTMLInputElement;
     this.differenceThreshold = parseInt(input.value, 10);
+    this.differenceFailedFor = null;
+    this.differenceError = null;
     this.debouncedComputeDifference();
   }
 
@@ -609,9 +636,17 @@ export class GnImageDiff extends LitElement {
   }
 
   private async computeDifference() {
-    if (!this.imageData || this.computingDifference) return;
+    if (!this.imageData) return;
+    if (this.computingDifference) {
+      this.pendingDifferenceRecompute = true;
+      return;
+    }
 
+    const seq = this.loadSeq;
+    const imageData = this.imageData;
+    const threshold = this.differenceThreshold;
     this.computingDifference = true;
+    this.differenceError = null;
 
     // Track canvases for cleanup in finally block
     let oldCanvas: HTMLCanvasElement | null = null;
@@ -620,16 +655,18 @@ export class GnImageDiff extends LitElement {
 
     try {
       const oldSrc = this.getImageSrc(
-        this.imageData.oldData ?? null,
-        this.imageData.imageType ?? null
+        imageData.oldData ?? null,
+        imageData.imageType ?? null
       );
       const newSrc = this.getImageSrc(
-        this.imageData.newData ?? null,
-        this.imageData.imageType ?? null
+        imageData.newData ?? null,
+        imageData.imageType ?? null
       );
 
       if (!oldSrc && !newSrc) {
-        this.differenceDataUrl = null;
+        if (seq === this.loadSeq && this.imageData === imageData) {
+          this.differenceDataUrl = null;
+        }
         return;
       }
 
@@ -649,12 +686,16 @@ export class GnImageDiff extends LitElement {
         loadImage(newSrc),
       ]);
 
+      if (seq !== this.loadSeq || this.imageData !== imageData) return;
+
       // Determine canvas size (use the larger dimensions)
       const width = Math.max(oldImg?.width ?? 0, newImg?.width ?? 0);
       const height = Math.max(oldImg?.height ?? 0, newImg?.height ?? 0);
 
       if (width === 0 || height === 0) {
+        this.differenceFailedFor = imageData;
         this.differenceDataUrl = null;
+        this.differenceError = 'Failed to compute image difference';
         return;
       }
 
@@ -671,7 +712,8 @@ export class GnImageDiff extends LitElement {
       const diffCtx = diffCanvas.getContext('2d');
 
       if (!oldCtx || !newCtx || !diffCtx) {
-        this.error = 'Failed to create canvas context for difference computation';
+        this.differenceFailedFor = imageData;
+        this.differenceError = 'Failed to create canvas context for difference computation';
         return;
       }
 
@@ -693,7 +735,6 @@ export class GnImageDiff extends LitElement {
       let removed = 0;
       let changed = 0;
       let unchanged = 0;
-      const threshold = this.differenceThreshold;
 
       const totalLength = oldData.data.length;
       const pixelsPerChunk = 10000; // number of pixels per chunk (adjust if needed)
@@ -703,6 +744,10 @@ export class GnImageDiff extends LitElement {
         let index = 0;
 
         const processChunk = () => {
+          if (seq !== this.loadSeq || this.imageData !== imageData) {
+            resolve();
+            return;
+          }
           const maxIndex = Math.min(index + pixelsPerChunk * step, totalLength);
 
           for (; index < maxIndex; index += step) {
@@ -777,13 +822,18 @@ export class GnImageDiff extends LitElement {
         requestAnimationFrame(processChunk);
       });
 
+      if (seq !== this.loadSeq || this.imageData !== imageData) return;
+
       diffCtx.putImageData(diffData, 0, 0);
+      this.differenceFailedFor = null;
       this.differenceDataUrl = diffCanvas.toDataURL('image/png');
       this.differenceStats = { added, removed, changed, unchanged };
     } catch (err) {
+      if (seq !== this.loadSeq || this.imageData !== imageData) return;
       // Log error and set error state so user knows computation failed
       console.error('Error computing image difference:', err);
-      this.error = 'Failed to compute image difference';
+      this.differenceFailedFor = imageData;
+      this.differenceError = 'Failed to compute image difference';
       this.differenceDataUrl = null;
     } finally {
       // Always reset the computing flag to allow future computations
@@ -802,6 +852,20 @@ export class GnImageDiff extends LitElement {
       if (diffCanvas) {
         diffCanvas.width = 0;
         diffCanvas.height = 0;
+      }
+
+      const needsRecompute =
+        this.pendingDifferenceRecompute ||
+        this.imageData !== imageData ||
+        this.differenceThreshold !== threshold;
+      this.pendingDifferenceRecompute = false;
+      if (
+        needsRecompute &&
+        this.mode === 'difference' &&
+        this.imageData &&
+        this.differenceFailedFor !== this.imageData
+      ) {
+        void this.computeDifference();
       }
     }
   }
@@ -930,6 +994,9 @@ export class GnImageDiff extends LitElement {
 
   private renderDifference() {
     if (!this.differenceDataUrl) {
+      if (this.differenceError) {
+        return html`<div class="error">${this.differenceError}</div>`;
+      }
       // Show loading if computation is in progress or will be triggered by updated()
       if (this.computingDifference || (this.imageData && (this.imageData.oldData || this.imageData.newData))) {
         return html`<div class="loading">Computing difference...</div>`;

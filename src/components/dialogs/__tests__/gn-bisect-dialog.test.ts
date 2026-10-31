@@ -461,5 +461,30 @@ describe('gn-bisect-dialog repository targeting', () => {
       expect(el.shadowRoot!.querySelector('.culprit-card'), 'the answer is shown').to.not.be.null;
       expect(el.shadowRoot!.querySelector('.culprit-oid')!.textContent).to.contain(CULPRIT.oid);
     });
+
+    it('resets stale session state to setup and shows error when get_bisect_status fails on reopen', async () => {
+      statusByPath = { [REPO_A]: status({ culprit: CULPRIT }) };
+      const el = await openOn(REPO_A);
+      expect(el.shadowRoot!.querySelector('.culprit-card')).to.not.be.null;
+
+      el.open = false;
+      await settle(el);
+
+      mockInvoke = async (command: string) => {
+        if (command === 'get_bisect_status') {
+          throw { code: 'GIT_ERROR', message: 'Failed to read bisect state' };
+        }
+        return null;
+      };
+
+      el.open = true;
+      await settle(el);
+
+      expect(el.shadowRoot!.querySelector('.culprit-card')).to.be.null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).step).to.equal('setup');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).error).to.include('Failed to read bisect state');
+    });
   });
 });

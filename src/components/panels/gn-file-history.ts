@@ -277,6 +277,8 @@ export class GnFileHistory extends LitElement {
   @state() private selectedCommit: string | null = null;
   @state() private contextMenu: HistoryContextMenuState = { visible: false, x: 0, y: 0, entry: null };
 
+  private loadSeq = 0;
+
   private handleDocumentClick = (): void => {
     if (this.contextMenu.visible) {
       this.contextMenu = { ...this.contextMenu, visible: false };
@@ -297,22 +299,35 @@ export class GnFileHistory extends LitElement {
     if (changedProps.has('filePath') || changedProps.has('repositoryPath')) {
       if (this.filePath && this.repositoryPath) {
         await this.loadHistory();
+      } else {
+        this.loadSeq++;
+        this.entries = [];
+        this.selectedCommit = null;
+        this.contextMenu = { ...this.contextMenu, visible: false };
+        this.error = null;
+        this.loading = false;
       }
     }
   }
 
   private async loadHistory(): Promise<void> {
+    const seq = ++this.loadSeq;
+    const repoPath = this.repositoryPath;
+    const filePath = this.filePath;
     this.loading = true;
     this.error = null;
     this.entries = [];
+    this.selectedCommit = null;
+    this.contextMenu = { ...this.contextMenu, visible: false };
 
     try {
       const result = await gitService.getFileHistory(
-        this.repositoryPath,
-        this.filePath,
+        repoPath,
+        filePath,
         100,
         true
       );
+      if (seq !== this.loadSeq) return;
 
       if (result.success && result.data) {
         this.entries = result.data;
@@ -320,10 +335,13 @@ export class GnFileHistory extends LitElement {
         this.error = result.error?.message ?? 'Failed to load file history';
       }
     } catch (err) {
+      if (seq !== this.loadSeq) return;
       this.error = err instanceof Error ? err.message : 'Failed to load file history';
       console.error('Failed to load file history:', err);
     } finally {
-      this.loading = false;
+      if (seq === this.loadSeq) {
+        this.loading = false;
+      }
     }
   }
 
@@ -441,6 +459,10 @@ export class GnFileHistory extends LitElement {
     this.contextMenu = { ...this.contextMenu, visible: false };
     try {
       await navigator.clipboard.writeText(entry.commit.oid);
+      showToast(
+        `Copied SHA ${entry.commit.shortId || entry.commit.oid.substring(0, 7)} to clipboard`,
+        'success'
+      );
     } catch (err) {
       console.error('Failed to copy hash:', err);
       showToast('Failed to copy hash to clipboard', 'error');

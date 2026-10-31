@@ -2334,6 +2334,7 @@ export class GnDiffView extends CodeRenderMixin(LitElement) {
       await navigator.clipboard.writeText(line.content);
     } catch (err) {
       console.error('Failed to copy line:', err);
+      showToast('Failed to copy line to clipboard', 'error');
     }
   }
 
@@ -2346,6 +2347,7 @@ export class GnDiffView extends CodeRenderMixin(LitElement) {
       }
     } catch (err) {
       console.error('Failed to copy selection:', err);
+      showToast('Failed to copy selection to clipboard', 'error');
     }
   }
 

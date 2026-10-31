@@ -351,32 +351,57 @@ export class GnJiraDialog extends LitElement {
         removeOverlay(this);
       }
     } else if (changedProps.has('repositoryPath') && this.open && this.repositoryPath) {
+      this.error = null;
+      this.success = null;
+      this.jqlFilter = '';
       void this.loadInitialData();
     }
   }
 
   private async loadInitialData(): Promise<void> {
     if (!this.repositoryPath) return;
+    const targetRepo = this.repositoryPath;
     this.loading = true;
+    this.issueTransitions = {};
     try {
-      const configResult = await getJiraConfig(this.repositoryPath);
+      const configResult = await getJiraConfig(targetRepo);
+      if (this.repositoryPath !== targetRepo) return;
       if (configResult.success && configResult.data) {
         this.applyConfig(configResult.data);
       } else {
+        this.baseUrl = '';
+        this.email = '';
+        this.apiToken = '';
+        this.projectKey = '';
         this.hasSavedConfig = false;
+        if (!configResult.success) {
+          this.error = configResult.error?.message ?? 'Failed to load Jira configuration';
+        }
       }
 
       const issuesResult = await getJiraIssues(
-        this.repositoryPath,
+        targetRepo,
         this.jqlFilter.trim() || undefined,
       );
+      if (this.repositoryPath !== targetRepo) return;
       if (issuesResult.success && Array.isArray(issuesResult.data)) {
         this.issues = issuesResult.data;
       } else {
         this.issues = [];
+        if (!issuesResult.success && this.hasSavedConfig && !this.error) {
+          this.error = issuesResult.error?.message ?? 'Failed to load Jira issues';
+        }
+      }
+    } catch (err) {
+      if (this.repositoryPath !== targetRepo) return;
+      this.issues = [];
+      if (!this.error) {
+        this.error = err instanceof Error ? err.message : 'Failed to load Jira data';
       }
     } finally {
-      this.loading = false;
+      if (this.repositoryPath === targetRepo) {
+        this.loading = false;
+      }
     }
   }
 
@@ -462,6 +487,7 @@ export class GnJiraDialog extends LitElement {
         this.projectKey = '';
         this.hasSavedConfig = false;
         this.issues = [];
+        this.issueTransitions = {};
         this.success = 'Jira configuration deleted';
         showToast(this.success, 'success');
         this.dispatchEvent(
@@ -482,22 +508,35 @@ export class GnJiraDialog extends LitElement {
 
   private async handleRefreshIssues(): Promise<void> {
     if (!this.repositoryPath) return;
+    const targetRepo = this.repositoryPath;
     this.error = null;
     this.success = null;
     this.loading = true;
     try {
       const result = await getJiraIssues(
-        this.repositoryPath,
+        targetRepo,
         this.jqlFilter.trim() || undefined,
       );
+      if (this.repositoryPath !== targetRepo) return;
       if (result.success && result.data) {
         this.issues = result.data;
+        this.issueTransitions = {};
       } else {
+        this.issues = [];
+        this.issueTransitions = {};
         this.error = result.error?.message ?? 'Failed to load Jira issues';
         showToast(this.error, 'error');
       }
+    } catch (err) {
+      if (this.repositoryPath !== targetRepo) return;
+      this.issues = [];
+      this.issueTransitions = {};
+      this.error = err instanceof Error ? err.message : 'Failed to load Jira issues';
+      showToast(this.error, 'error');
     } finally {
-      this.loading = false;
+      if (this.repositoryPath === targetRepo) {
+        this.loading = false;
+      }
     }
   }
 
@@ -536,16 +575,30 @@ export class GnJiraDialog extends LitElement {
   }
 
   private async handleLoadTransitions(issueKey: string): Promise<void> {
+    if (!this.repositoryPath) return;
+    const targetRepo = this.repositoryPath;
     this.error = null;
-    const result = await getJiraTransitions(this.repositoryPath, issueKey);
-    if (result.success && result.data) {
-      this.issueTransitions = {
-        ...this.issueTransitions,
-        [issueKey]: result.data,
-      };
-    } else {
-      this.error = result.error?.message ?? `Failed to load transitions for ${issueKey}`;
+    this.loading = true;
+    try {
+      const result = await getJiraTransitions(targetRepo, issueKey);
+      if (this.repositoryPath !== targetRepo) return;
+      if (result.success && result.data) {
+        this.issueTransitions = {
+          ...this.issueTransitions,
+          [issueKey]: result.data,
+        };
+      } else {
+        this.error = result.error?.message ?? `Failed to load transitions for ${issueKey}`;
+        showToast(this.error, 'error');
+      }
+    } catch (err) {
+      if (this.repositoryPath !== targetRepo) return;
+      this.error = err instanceof Error ? err.message : `Failed to load transitions for ${issueKey}`;
       showToast(this.error, 'error');
+    } finally {
+      if (this.repositoryPath === targetRepo) {
+        this.loading = false;
+      }
     }
   }
 

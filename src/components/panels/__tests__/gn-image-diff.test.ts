@@ -688,5 +688,94 @@ describe('gn-image-diff', () => {
         commitOid: 'abc123',
       });
     });
+
+    it('clears stale imageData when switching to a file that fails to load or when filePath is cleared', async () => {
+      const el = await renderImageDiff();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).imageData).to.not.be.null;
+
+      mockInvoke = async (command: string) => {
+        if (command === 'get_image_versions') {
+          throw { code: 'IMAGE_ERROR', message: 'Missing blob' };
+        }
+        return null;
+      };
+      el.filePath = 'images/missing.png';
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 30));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).imageData).to.be.null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).error).to.include('Missing blob');
+
+      el.filePath = '';
+      await el.updateComplete;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).error).to.be.null;
+    });
+
+    it('discards stale difference computation when switching files mid-compute', async () => {
+      const el = await renderImageDiff();
+
+      // Switch to difference mode while an artificial in-flight compute is simulated
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).mode = 'difference';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).computingDifference = true;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).computeDifference();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).pendingDifferenceRecompute).to.be.true;
+
+      // Release flag and verify loadImageVersions increments loadSeq to invalidate stale runs
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const prevSeq = (el as any).loadSeq;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).computingDifference = false;
+      el.filePath = 'images/logo-v2.png';
+      await el.updateComplete;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).loadSeq).to.be.greaterThan(prevSeq);
+    });
+
+    it('surfaces an error without looping when difference images fail to decode', async () => {
+      mockInvoke = async (command: string) => {
+        if (command === 'get_image_versions') {
+          return {
+            path: 'images/corrupt.png',
+            oldData: 'bm90LWFuLWltYWdl',
+            newData: 'bm90LWFuLWltYWdl',
+            oldSize: [0, 0],
+            newSize: [0, 0],
+            imageType: 'png',
+          };
+        }
+        return null;
+      };
+
+      const el = await renderImageDiff({ filePath: 'images/corrupt.png' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).setMode('difference');
+      await new Promise((r) => setTimeout(r, 40));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).computingDifference).to.be.false;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).differenceError).to.equal('Failed to compute image difference');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).differenceFailedFor).to.equal((el as any).imageData);
+      expect(el.shadowRoot!.querySelector('.error')?.textContent).to.include(
+        'Failed to compute image difference'
+      );
+
+      // Switching back to side-by-side mode remains usable
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).setMode('side-by-side');
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.side-by-side')).to.not.be.null;
+    });
   });
 });

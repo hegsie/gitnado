@@ -337,58 +337,90 @@ export class GnGitignoreDialog extends LitElement {
   updated(changedProperties: Map<string, unknown>): void {
     if (changedProperties.has('open') && this.open) {
       this.pinnedRepoPath = this.repositoryPath;
+      this.newPattern = '';
+      this.selectedTemplate = '';
+      this.checkPath = '';
+      this.checkResult = null;
+      this.newAttrPattern = '';
+      this.newAttrValue = '';
+      this.cancelEditingAttribute();
       this.loadData();
     }
   }
 
   private async loadData(): Promise<void> {
+    const targetRepo = this.pinnedRepoPath;
     this.loading = true;
     this.error = null;
 
     try {
       const [ignoreResult, templatesResult, attrsResult, commonResult] =
         await Promise.all([
-          gitService.getGitignore(this.pinnedRepoPath),
+          gitService.getGitignore(targetRepo),
           gitService.getGitignoreTemplates(),
-          gitService.getGitattributes(this.pinnedRepoPath),
+          gitService.getGitattributes(targetRepo),
           gitService.getCommonAttributes(),
         ]);
+
+      if (targetRepo !== this.pinnedRepoPath) return;
 
       if (ignoreResult.success && ignoreResult.data) {
         this.entries = ignoreResult.data;
       } else if (!ignoreResult.success) {
+        this.entries = [];
         this.error = ignoreResult.error?.message || 'Failed to read .gitignore';
       }
 
       if (templatesResult.success && templatesResult.data) {
         this.templates = templatesResult.data;
+      } else if (!templatesResult.success) {
+        this.templates = [];
       }
 
       if (attrsResult.success && attrsResult.data) {
         this.attributeRules = attrsResult.data;
       } else if (!attrsResult.success) {
-        this.error =
-          attrsResult.error?.message || 'Failed to read .gitattributes';
+        this.attributeRules = [];
+        if (!this.error) {
+          this.error =
+            attrsResult.error?.message || 'Failed to read .gitattributes';
+        }
       }
 
       if (commonResult.success && commonResult.data) {
         this.commonAttributes = commonResult.data;
+      } else if (!commonResult.success) {
+        this.commonAttributes = [];
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : 'Failed to load ignore rules';
+      if (targetRepo === this.pinnedRepoPath) {
+        this.error = e instanceof Error ? e.message : 'Failed to load ignore rules';
+      }
     } finally {
-      this.loading = false;
+      if (targetRepo === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
   }
 
   private async reloadGitignore(): Promise<void> {
-    const result = await gitService.getGitignore(this.pinnedRepoPath);
-    if (result.success && result.data) {
-      this.entries = result.data;
+    const targetRepo = this.pinnedRepoPath;
+    try {
+      const result = await gitService.getGitignore(targetRepo);
+      if (targetRepo !== this.pinnedRepoPath) return;
+      if (result.success && result.data) {
+        this.entries = result.data;
+      } else if (!result.success) {
+        this.error = result.error?.message || 'Failed to read .gitignore';
+      }
+      // The rule set just moved, so any "why is this ignored?" answer on screen
+      // describes a file state that no longer exists.
+      this.checkResult = null;
+    } catch (e) {
+      if (targetRepo === this.pinnedRepoPath) {
+        this.error = e instanceof Error ? e.message : 'Failed to read .gitignore';
+      }
     }
-    // The rule set just moved, so any "why is this ignored?" answer on screen
-    // describes a file state that no longer exists.
-    this.checkResult = null;
   }
 
   /**
@@ -496,17 +528,20 @@ export class GnGitignoreDialog extends LitElement {
     const path = this.checkPath.trim();
     if (!path) return;
 
+    const targetRepo = this.pinnedRepoPath;
     this.error = null;
     try {
-      const result = await gitService.checkIgnoreVerbose(this.pinnedRepoPath, [
+      const result = await gitService.checkIgnoreVerbose(targetRepo, [
         path,
       ]);
+      if (targetRepo !== this.pinnedRepoPath) return;
       if (result.success && result.data) {
         this.checkResult = result.data[0] ?? null;
       } else {
         this.error = result.error?.message || 'Failed to check path';
       }
     } catch (e) {
+      if (targetRepo !== this.pinnedRepoPath) return;
       this.error = e instanceof Error ? e.message : 'Failed to check path';
     }
   }

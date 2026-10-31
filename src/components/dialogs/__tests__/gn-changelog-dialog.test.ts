@@ -157,4 +157,22 @@ describe('gn-changelog-dialog', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((el as any).error).to.not.be.empty;
   });
+
+  it('clears stale tags when reopened on a repository with no tags', async () => {
+    const el = await fixture<GnChangelogDialog>(
+      html`<gn-changelog-dialog .repositoryPath=${'/test/repo-a'}></gn-changelog-dialog>`,
+    );
+    await el.open();
+    await el.updateComplete;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).tags.length).to.equal(2);
+
+    commandOverrides = { get_tags: [] };
+    el.repositoryPath = '/test/repo-b';
+    await el.open();
+    await el.updateComplete;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).tags).to.deep.equal([]);
+  });
 });

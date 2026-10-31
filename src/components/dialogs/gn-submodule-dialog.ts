@@ -485,17 +485,26 @@ export class GnSubmoduleDialog extends LitElement {
     this.loading = true;
     this.error = '';
 
-    const result = await gitService.getSubmodules(repoPath);
+    try {
+      const result = await gitService.getSubmodules(repoPath);
 
-    if (repoPath !== this.pinnedRepoPath) return;
+      if (repoPath !== this.pinnedRepoPath) return;
 
-    if (result.success && result.data) {
-      this.submodules = result.data;
-    } else {
-      this.error = result.error?.message || 'Failed to load submodules';
+      if (result.success && result.data) {
+        this.submodules = result.data;
+      } else {
+        this.submodules = [];
+        this.error = result.error?.message || 'Failed to load submodules';
+      }
+    } catch (err) {
+      if (repoPath !== this.pinnedRepoPath) return;
+      this.submodules = [];
+      this.error = err instanceof Error ? err.message : 'Failed to load submodules';
+    } finally {
+      if (repoPath === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
-
-    this.loading = false;
   }
 
   private async handleAdd(): Promise<void> {

@@ -2935,15 +2935,27 @@ export class GnGraphCanvas extends LitElement {
         // Copy commit SHA to clipboard (Ctrl/Cmd+C)
         if ((e.ctrlKey || e.metaKey) && this.selectedNode) {
           e.preventDefault();
-          navigator.clipboard.writeText(this.selectedNode.oid);
-          // Dispatch event for toast notification
-          this.dispatchEvent(
-            new CustomEvent('copy-sha', {
-              detail: { sha: this.selectedNode.oid.substring(0, 7) },
-              bubbles: true,
-              composed: true,
+          const oid = this.selectedNode.oid;
+          navigator.clipboard
+            .writeText(oid)
+            .then(() => {
+              this.dispatchEvent(
+                new CustomEvent('copy-sha', {
+                  detail: { sha: oid.substring(0, 7) },
+                  bubbles: true,
+                  composed: true,
+                })
+              );
             })
-          );
+            .catch(() => {
+              this.dispatchEvent(
+                new CustomEvent('graph-notice', {
+                  detail: { message: 'Failed to copy SHA to clipboard', type: 'error' },
+                  bubbles: true,
+                  composed: true,
+                })
+              );
+            });
         }
         return;
 

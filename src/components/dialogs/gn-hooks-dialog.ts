@@ -882,6 +882,7 @@ export class GnHooksDialog extends LitElement {
 
   private async loadHooks(): Promise<void> {
     if (!this.pinnedRepoPath) return;
+    const targetRepo = this.pinnedRepoPath;
 
     this.loading = true;
     this.hooks = [];
@@ -894,37 +895,52 @@ export class GnHooksDialog extends LitElement {
 
     try {
       const [logsResult, result] = await Promise.all([
-        getHookExecutionLogs(this.pinnedRepoPath),
-        getHooks(this.pinnedRepoPath),
+        getHookExecutionLogs(targetRepo),
+        getHooks(targetRepo),
       ]);
+
+      if (targetRepo !== this.pinnedRepoPath) return;
 
       if (logsResult.success && Array.isArray(logsResult.data)) {
         this.executionLogs = logsResult.data;
+      } else if (!logsResult.success) {
+        showToast(logsResult.error?.message || 'Failed to load hook execution logs', 'error');
       }
 
       if (result.success && result.data) {
         this.hooks = result.data;
-      } else {
-        showToast('Failed to load hooks', 'error');
+      } else if (!result.success) {
+        showToast(result.error?.message || 'Failed to load hooks', 'error');
       }
     } catch (err) {
-      console.error('Failed to load hooks:', err);
-      showToast('Failed to load hooks', 'error');
+      if (targetRepo === this.pinnedRepoPath) {
+        console.error('Failed to load hooks:', err);
+        showToast('Failed to load hooks', 'error');
+      }
     } finally {
-      this.loading = false;
+      if (targetRepo === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
   }
 
   private async loadExecutionLogs(): Promise<void> {
     if (!this.pinnedRepoPath) return;
+    const targetRepo = this.pinnedRepoPath;
 
     try {
-      const result = await getHookExecutionLogs(this.pinnedRepoPath);
+      const result = await getHookExecutionLogs(targetRepo);
+      if (targetRepo !== this.pinnedRepoPath) return;
       if (result.success && Array.isArray(result.data)) {
         this.executionLogs = result.data;
+      } else if (!result.success) {
+        showToast(result.error?.message || 'Failed to load hook execution logs', 'error');
       }
     } catch (err) {
-      console.error('Failed to load hook execution logs:', err);
+      if (targetRepo === this.pinnedRepoPath) {
+        console.error('Failed to load hook execution logs:', err);
+        showToast('Failed to load hook execution logs', 'error');
+      }
     }
   }
 

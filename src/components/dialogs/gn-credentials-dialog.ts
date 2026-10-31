@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
+import { showToast } from '../../services/notification.service.ts';
 import type {
   CredentialHelper,
   AvailableHelper,
@@ -454,47 +455,81 @@ export class GnCredentialsDialog extends LitElement {
   updated(changedProperties: Map<string, unknown>): void {
     if (changedProperties.has('open') && this.open) {
       this.pinnedRepoPath = this.repositoryPath;
+      this.selectedRemote = null;
+      this.testResult = null;
+      this.gcmStatus = null;
+      this.newHelper = '';
+      this.error = null;
       this.loadData();
     }
   }
 
   private async loadData(): Promise<void> {
+    const targetRepo = this.pinnedRepoPath;
     this.loading = true;
     this.error = null;
 
     try {
       const [helpersResult, availableResult, remotesResult] = await Promise.all([
-        gitService.getCredentialHelpers(this.pinnedRepoPath),
+        gitService.getCredentialHelpers(targetRepo),
         gitService.getAvailableHelpers(),
-        gitService.getRemotes(this.pinnedRepoPath),
+        gitService.getRemotes(targetRepo),
       ]);
+
+      if (targetRepo !== this.pinnedRepoPath) return;
 
       if (helpersResult.success && helpersResult.data) {
         this.helpers = helpersResult.data;
+      } else if (!helpersResult.success) {
+        this.helpers = [];
+        this.error = helpersResult.error?.message || 'Failed to load credential helpers';
       }
 
       if (availableResult.success && availableResult.data) {
         this.availableHelpers = availableResult.data;
+      } else if (!availableResult.success) {
+        this.availableHelpers = [];
       }
 
       if (remotesResult.success && remotesResult.data) {
         this.remotes = remotesResult.data;
-        if (this.remotes.length > 0 && !this.selectedRemote) {
-          this.selectedRemote = this.remotes[0];
+        const currentStillPresent =
+          this.selectedRemote &&
+          this.remotes.some(
+            (r) => r.name === this.selectedRemote?.name && r.url === this.selectedRemote?.url
+          );
+        if (!currentStillPresent) {
+          this.selectedRemote = this.remotes[0] ?? null;
+        }
+      } else if (!remotesResult.success) {
+        this.remotes = [];
+        this.selectedRemote = null;
+        if (!this.error) {
+          this.error = remotesResult.error?.message || 'Failed to load remotes';
         }
       }
 
       // Detect GCM status
       try {
         const { detectCredentialManager } = await import('../../services/credential.service.ts');
-        this.gcmStatus = await detectCredentialManager(this.pinnedRepoPath);
+        const status = await detectCredentialManager(targetRepo);
+        if (targetRepo === this.pinnedRepoPath) {
+          this.gcmStatus = status;
+        }
       } catch {
         // GCM detection is best-effort
+        if (targetRepo === this.pinnedRepoPath) {
+          this.gcmStatus = null;
+        }
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : 'Failed to load data';
+      if (targetRepo === this.pinnedRepoPath) {
+        this.error = e instanceof Error ? e.message : 'Failed to load data';
+      }
     } finally {
-      this.loading = false;
+      if (targetRepo === this.pinnedRepoPath) {
+        this.loading = false;
+      }
     }
   }
 
@@ -516,6 +551,7 @@ export class GnCredentialsDialog extends LitElement {
 
       if (result.success) {
         this.newHelper = '';
+        showToast('Credential helper configured', 'success');
         await this.loadData();
       } else {
         this.error = result.error?.message || 'Failed to set helper';
@@ -557,6 +593,7 @@ export class GnCredentialsDialog extends LitElement {
       );
 
       if (result.success) {
+        showToast('Credential helper removed', 'success');
         await this.loadData();
       } else {
         this.error = result.error?.message || 'Failed to remove helper';

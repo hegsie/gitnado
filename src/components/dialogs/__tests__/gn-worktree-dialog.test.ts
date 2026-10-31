@@ -475,4 +475,51 @@ describe('gn-worktree-dialog', () => {
       expect(invokedCommands).to.include('remove_worktree');
     });
   });
+
+  describe('state hygiene on reopen and failed loads', () => {
+    it('resets add form fields on reopen and clears stale worktrees/branches when reload fails', async () => {
+      const el = await fixture<GnWorktreeDialog>(
+        html`<gn-worktree-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-worktree-dialog>`,
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).worktrees.length).to.equal(2);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).addPath = '/tmp/stale-wt';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).addBranch = 'develop';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).createNewBranch = true;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).newBranchName = 'feat/stale';
+
+      el.open = false;
+      await el.updateComplete;
+
+      failingCommands.add('get_worktrees');
+      failingCommands.add('get_branches');
+      el.repositoryPath = '/repo/b';
+      el.open = true;
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).addPath).to.equal('');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).addBranch).to.equal('');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).createNewBranch).to.be.false;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).newBranchName).to.equal('');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).worktrees).to.deep.equal([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).branches).to.deep.equal([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).error).to.include('Failed: get_worktrees');
+    });
+  });
 });

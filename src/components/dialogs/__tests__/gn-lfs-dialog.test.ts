@@ -408,4 +408,67 @@ describe('gn-lfs-dialog', () => {
       ]);
     });
   });
+
+  describe('state hygiene on reopen and failed loads', () => {
+    it('resets newPattern and showFiles on reopen and clears stale status/files on failed reload', async () => {
+      const el = await fixture<GnLfsDialog>(
+        html`<gn-lfs-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-lfs-dialog>`,
+      );
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).newPattern = '*.zip';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).showFiles = true;
+
+      el.open = false;
+      await el.updateComplete;
+
+      failingCommands.add('get_lfs_status');
+      el.repositoryPath = '/repo/b';
+      el.open = true;
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).newPattern).to.equal('');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).showFiles).to.be.false;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).status).to.be.null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).files).to.deep.equal([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).error).to.include('Operation failed');
+    });
+
+    it('surfaces get_lfs_files failure and clears stale files', async () => {
+      statusOverride = {
+        installed: true,
+        version: '3.0.0',
+        enabled: true,
+        patterns: ['*.bin'],
+        fileCount: 1,
+        totalSize: 100,
+      };
+      const el = await fixture<GnLfsDialog>(
+        html`<gn-lfs-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-lfs-dialog>`,
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).files = [{ path: 'data.bin', oid: 'abc', size: 100, downloaded: true }];
+
+      failingCommands.add('get_lfs_files');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (el as any).loadStatus();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).files).to.deep.equal([]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((el as any).error).to.include('Operation failed');
+    });
+  });
 });

@@ -3036,4 +3036,71 @@ describe('gn-graph-canvas SVG export node sizing', () => {
     expect(radii.length).to.be.greaterThan(1);
     expect(radii.every((r) => r === baseRadius)).to.be.true;
   });
+
+  // ── Clipboard copy (Ctrl/Cmd+C) ──────────────────────────────────────
+  describe('Ctrl/Cmd+C clipboard copy', () => {
+    it('dispatches copy-sha only after clipboard write succeeds', async () => {
+      const el = await renderCanvas(10);
+      el.selectCommit(defaultCommits[0].oid);
+      await el.updateComplete;
+
+      let writtenText = '';
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            writtenText = text;
+            return Promise.resolve();
+          },
+        },
+      });
+
+      const copiedShas: string[] = [];
+      el.addEventListener('copy-sha', (e) => {
+        copiedShas.push((e as CustomEvent<{ sha: string }>).detail.sha);
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).handleKeyDown(
+        new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true })
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(writtenText).to.equal(defaultCommits[0].oid);
+      expect(copiedShas).to.deep.equal([defaultCommits[0].oid.substring(0, 7)]);
+    });
+
+    it('dispatches graph-notice error and not copy-sha when clipboard write rejects', async () => {
+      const el = await renderCanvas(10);
+      el.selectCommit(defaultCommits[0].oid);
+      await el.updateComplete;
+
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: () => Promise.reject(new Error('Clipboard blocked')),
+        },
+      });
+
+      const copiedShas: string[] = [];
+      const notices: Array<{ message: string; type?: string }> = [];
+      el.addEventListener('copy-sha', (e) => {
+        copiedShas.push((e as CustomEvent<{ sha: string }>).detail.sha);
+      });
+      el.addEventListener('graph-notice', (e) => {
+        notices.push((e as CustomEvent<{ message: string; type?: string }>).detail);
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (el as any).handleKeyDown(
+        new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true })
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(copiedShas).to.be.empty;
+      expect(notices).to.have.lengthOf(1);
+      expect(notices[0].type).to.equal('error');
+      expect(notices[0].message).to.include('Failed to copy SHA');
+    });
+  });
 });
