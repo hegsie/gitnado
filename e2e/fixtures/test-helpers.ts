@@ -254,6 +254,12 @@ export async function openViaCommandPalette(page: Page, commandName: string): Pr
 /**
  * Start command capture with mock overrides combined.
  * Captures all commands AND overrides specific ones.
+ *
+ * A mocked `save_global_account` behaves like the real backend and persists:
+ * accounts it returns are included in later `get_unified_profiles_config`
+ * reloads (unless that command is mocked explicitly). Without this, a dialog
+ * that saves an account and then reloads profiles sees the account vanish and
+ * drops its selection, which never happens against the real backend.
  */
 export async function startCommandCaptureWithMocks(
   page: Page,
@@ -268,11 +274,30 @@ export async function startCommandCaptureWithMocks(
       __INVOKED_COMMANDS__: { command: string; args: unknown }[];
     }).__INVOKED_COMMANDS__ = [];
 
+    const savedAccounts = new Map<string, Record<string, unknown>>();
+
     (window as unknown as {
       __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
     }).__TAURI_INTERNALS__.invoke = async (command: string, args?: unknown) => {
       (window as unknown as { __INVOKED_COMMANDS__: { command: string; args: unknown }[] })
         .__INVOKED_COMMANDS__.push({ command, args });
+
+      if (
+        command === 'get_unified_profiles_config' &&
+        !(command in mocks) &&
+        savedAccounts.size > 0
+      ) {
+        const config = (await originalInvoke(command, args)) as {
+          accounts?: Record<string, unknown>[];
+        } | null;
+        if (config && typeof config === 'object') {
+          const accounts = (config.accounts ?? []).filter(
+            (a) => !savedAccounts.has(a.id as string)
+          );
+          return { ...config, accounts: [...accounts, ...savedAccounts.values()] };
+        }
+        return config;
+      }
 
       // plugin-dialog 2.7 implements confirm()/ask() by invoking the `message`
       // command and comparing the resolved button label. Translate legacy
@@ -291,6 +316,15 @@ export async function startCommandCaptureWithMocks(
         const val = mocks[command];
         if (typeof val === 'object' && val !== null && '__error__' in val) {
           throw new Error((val as { __error__: string }).__error__);
+        }
+        if (
+          command === 'save_global_account' &&
+          typeof val === 'object' &&
+          val !== null &&
+          typeof (val as { id?: unknown }).id === 'string'
+        ) {
+          const saved = val as Record<string, unknown>;
+          savedAccounts.set(saved.id as string, saved);
         }
         return val;
       }

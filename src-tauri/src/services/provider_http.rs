@@ -167,7 +167,7 @@ pub async fn check_provider_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::security::test_support::{allowlist, no_policy, offline};
+    use crate::services::security::test_support::{self, no_policy};
     use reqwest::header::{HeaderMap, HeaderValue};
 
     #[test]
@@ -189,13 +189,13 @@ mod tests {
             assert!(ensure_url_allowed("https://api.github.com").is_ok());
         }
         {
-            let _guard = offline();
+            let _guard = test_support::offline();
             let err = ensure_url_allowed("https://api.github.com")
                 .expect_err("offline mode must block outbound URLs");
             assert!(matches!(err, GitnadoError::NetworkBlocked(_)));
         }
         {
-            let _guard = allowlist(&["gitlab.example.com"]);
+            let _guard = test_support::allowlist(&["gitlab.example.com"]);
             assert!(ensure_url_allowed("https://gitlab.example.com/api/v4/user").is_ok());
             let blocked = ensure_url_allowed("https://api.github.com")
                 .expect_err("non-allowlisted host must be blocked");
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_build_guarded_provider_http_client_blocks_when_offline() {
-        let _guard = offline();
+        let _guard = test_support::offline();
         let err = build_guarded_provider_http_client("https://api.bitbucket.org/2.0")
             .expect_err("offline mode must block guarded client creation");
         assert!(matches!(err, GitnadoError::NetworkBlocked(_)));
