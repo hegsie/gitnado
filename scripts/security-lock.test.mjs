@@ -263,7 +263,7 @@ test('the scan is not vacuous: the commands known to reach the gate are found', 
   const has = (file, name) => gated.has(`src-tauri/src/${file}::${name}`);
   assert.ok(has('commands/tags.rs', 'delete_remote_tag'));
   assert.ok(has('commands/tags.rs', 'push_tag'));
-  assert.ok(has('commands/remote.rs', 'fetch'));
+  assert.ok(has('commands/remote/fetch_pull.rs', 'fetch'));
   assert.ok(has('commands/repository.rs', 'clone_repository'));
   assert.ok(has('services/ai/mod.rs', 'provider_network_allowed'), 'a gated method is followed');
   assert.ok(has('services/ai/mod.rs', 'generate_commit_message'), 'through two more methods');

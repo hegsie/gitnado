@@ -52,7 +52,7 @@ export const DYNAMIC_ALLOWLIST = [
     reason: 'invokeCommands() forwards names its callers pass as literals',
   },
   {
-    file: 'src/services/git.service.ts',
+    file: 'src/services/git/shared.ts',
     expression: 'command',
     reason:
       'invokeProviderCommand() forwards names its callers pass as literals',
