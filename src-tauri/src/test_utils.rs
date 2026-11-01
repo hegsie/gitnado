@@ -201,6 +201,54 @@ impl TestRepo {
             .expect("Failed to create commit")
     }
 
+    /// Cherry-pick `commit` onto the current HEAD as a new commit, the way a
+    /// hosted "Rebase and merge" replays a branch.
+    pub fn cherry_pick_onto_head(&self, commit: git2::Oid) -> git2::Oid {
+        let repo = self.repo();
+        let commit = repo.find_commit(commit).expect("Failed to find commit");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let mut index = repo
+            .cherrypick_commit(&commit, &head, 0, None)
+            .expect("Failed to cherry-pick");
+        assert!(!index.has_conflicts(), "cherry-pick conflicted");
+        let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+        let sig = repo.signature().unwrap();
+        let oid = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                commit.message().unwrap_or(""),
+                &tree,
+                &[&head],
+            )
+            .expect("Failed to commit cherry-pick");
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .expect("Failed to checkout HEAD");
+        oid
+    }
+
+    /// Land the combined change of `branch` (since `base`) on HEAD as a single
+    /// commit, the way a hosted "Squash and merge" does.
+    pub fn squash_onto_head(&self, branch: git2::Oid, base: git2::Oid) -> git2::Oid {
+        let repo = self.repo();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let base_tree = repo.find_commit(base).unwrap().tree().unwrap();
+        let branch_tree = repo.find_commit(branch).unwrap().tree().unwrap();
+        let mut index = repo
+            .merge_trees(&base_tree, &head.tree().unwrap(), &branch_tree, None)
+            .expect("Failed to merge trees");
+        assert!(!index.has_conflicts(), "squash conflicted");
+        let tree = repo.find_tree(index.write_tree_to(&repo).unwrap()).unwrap();
+        let sig = repo.signature().unwrap();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "Squashed", &tree, &[&head])
+            .expect("Failed to commit squash");
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .expect("Failed to checkout HEAD");
+        oid
+    }
+
     /// Create a branch at the current HEAD
     pub fn create_branch(&self, name: &str) -> git2::Oid {
         let repo = self.repo();

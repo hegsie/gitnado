@@ -2,8 +2,9 @@
 //!
 //! Provides server-side logic for identifying branches that are candidates
 //! for cleanup: merged, stale, or with gone (deleted) upstream tracking branches.
-//! Uses `graph_descendant_of` for accurate merge detection instead of the
-//! less reliable ahead/behind heuristic.
+//! Uses graph ancestry plus patch-id and tree comparison
+//! (`services::merge_detection`) so branches landed via "Rebase and merge" or
+//! "Squash and merge" are recognised as merged, not just true ancestors.
 
 use std::path::Path;
 
@@ -12,6 +13,7 @@ use tauri::command;
 
 use crate::error::Result;
 use crate::models::AheadBehind;
+use crate::services::merge_detection::{detect_merge_kind, MergeKind};
 
 use super::branch_rules::load_rules;
 
@@ -36,12 +38,16 @@ pub struct CleanupCandidate {
     pub upstream: Option<String>,
     /// Ahead/behind counts relative to upstream
     pub ahead_behind: Option<AheadBehind>,
+    /// How the branch was merged into HEAD (`ancestor`, `rebase`, `squash`).
+    /// Set on every entry of a merged branch, `None` when not merged.
+    pub merge_kind: Option<MergeKind>,
 }
 
 /// Get all branches that are candidates for cleanup.
 ///
 /// Returns branches categorized as:
-/// - **merged**: HEAD is a descendant of the branch (i.e., all branch commits are in HEAD)
+/// - **merged**: all of the branch's changes are in HEAD — HEAD descends from
+///   it, or its commits were rebase-merged / squash-merged (see `merge_kind`)
 /// - **stale**: last commit is older than `stale_days` (default 90)
 /// - **gone**: branch has upstream configured but the remote branch no longer exists
 ///
@@ -148,13 +154,12 @@ pub async fn get_cleanup_candidates(
             None
         };
 
-        // Check if merged: HEAD is a descendant of the branch commit, or the
-        // branch points at the exact same commit as HEAD (git treats a branch
-        // whose tip equals HEAD as merged — `git branch --merged` lists it).
-        let is_merged = branch_oid == head_oid
-            || repo
-                .graph_descendant_of(head_oid, branch_oid)
-                .unwrap_or(false);
+        // Merged when HEAD descends from (or equals) the branch tip, or when
+        // the branch's changes landed via rebase- or squash-merge. Detection
+        // errors are treated as "not merged" so a failure never labels a
+        // branch safe to delete.
+        let merge_kind = detect_merge_kind(&repo, branch_oid, head_oid).unwrap_or(None);
+        let is_merged = merge_kind.is_some();
 
         // Check if stale
         let is_stale = stale_days > 0
@@ -170,6 +175,7 @@ pub async fn get_cleanup_candidates(
             is_protected: protected,
             upstream: upstream.clone(),
             ahead_behind: ahead_behind.clone(),
+            merge_kind,
         };
 
         if is_merged {
@@ -204,6 +210,7 @@ mod tests {
                 ahead: 0,
                 behind: 2,
             }),
+            merge_kind: Some(MergeKind::Squash),
         };
 
         let json = serde_json::to_string(&candidate).expect("Failed to serialize");
@@ -214,10 +221,12 @@ mod tests {
         assert!(json.contains("\"isProtected\""));
         assert!(json.contains("\"upstream\""));
         assert!(json.contains("\"aheadBehind\""));
+        assert!(json.contains("\"mergeKind\":\"squash\""));
         // Verify camelCase
         assert!(!json.contains("last_commit_timestamp"));
         assert!(!json.contains("is_protected"));
         assert!(!json.contains("ahead_behind"));
+        assert!(!json.contains("merge_kind"));
     }
 
     #[tokio::test]
@@ -366,5 +375,84 @@ mod tests {
                 .any(|c| c.name == "feature-wip" && c.category == "merged"),
             "Unmerged branch should not be a merged candidate"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_cleanup_candidates_squash_merged_branch() {
+        let repo = TestRepo::with_initial_commit();
+        let main = repo.current_branch();
+        let base = repo.head_oid();
+        repo.create_branch("feature-squashed");
+        repo.checkout_branch("feature-squashed");
+        repo.create_commit("one", &[("f.txt", "1")]);
+        let tip = repo.create_commit("two", &[("f.txt", "2"), ("g.txt", "g")]);
+        repo.checkout_branch(&main);
+        repo.create_commit("main moves", &[("m.txt", "m")]);
+        repo.squash_onto_head(tip, base);
+
+        let candidates = get_cleanup_candidates(repo.path_str(), Some(0))
+            .await
+            .unwrap();
+        let merged = candidates
+            .iter()
+            .find(|c| c.name == "feature-squashed" && c.category == "merged")
+            .expect("squash-merged branch should be a merged candidate");
+        assert_eq!(merged.merge_kind, Some(MergeKind::Squash));
+    }
+
+    #[tokio::test]
+    async fn test_get_cleanup_candidates_rebase_merged_branch() {
+        let repo = TestRepo::with_initial_commit();
+        let main = repo.current_branch();
+        repo.create_branch("feature-rebased");
+        repo.checkout_branch("feature-rebased");
+        let c1 = repo.create_commit("r1", &[("r1.txt", "1")]);
+        let c2 = repo.create_commit("r2", &[("r2.txt", "2")]);
+        repo.checkout_branch(&main);
+        repo.create_commit("main moves", &[("m.txt", "m")]);
+        repo.cherry_pick_onto_head(c1);
+        repo.cherry_pick_onto_head(c2);
+
+        let candidates = get_cleanup_candidates(repo.path_str(), Some(0))
+            .await
+            .unwrap();
+        let merged = candidates
+            .iter()
+            .find(|c| c.name == "feature-rebased" && c.category == "merged")
+            .expect("rebase-merged branch should be a merged candidate");
+        assert_eq!(merged.merge_kind, Some(MergeKind::Rebase));
+    }
+
+    #[tokio::test]
+    async fn test_get_cleanup_candidates_ancestor_merge_kind() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_branch("plain");
+        repo.create_commit("main moves", &[("m.txt", "m")]);
+
+        let candidates = get_cleanup_candidates(repo.path_str(), Some(0))
+            .await
+            .unwrap();
+        let merged = candidates
+            .iter()
+            .find(|c| c.name == "plain" && c.category == "merged")
+            .unwrap();
+        assert_eq!(merged.merge_kind, Some(MergeKind::Ancestor));
+    }
+
+    #[tokio::test]
+    async fn test_get_cleanup_candidates_unmerged_has_no_merge_kind() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_branch("old");
+        repo.checkout_branch("old");
+        repo.create_commit("wip", &[("w.txt", "w")]);
+        repo.checkout_branch("main");
+
+        let candidates = get_cleanup_candidates(repo.path_str(), Some(0))
+            .await
+            .unwrap();
+        assert!(candidates
+            .iter()
+            .filter(|c| c.name == "old")
+            .all(|c| c.merge_kind.is_none()));
     }
 }

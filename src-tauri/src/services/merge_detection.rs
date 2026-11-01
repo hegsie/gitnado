@@ -1,0 +1,313 @@
+//! Merge detection beyond ancestry.
+//!
+//! `git branch --merged` only recognises branches whose tip is an ancestor of
+//! the target. Hosted PR workflows routinely land work with "Squash and merge"
+//! or "Rebase and merge", which rewrite the commits, so the original branch is
+//! never an ancestor of the target even though every change on it is already
+//! there. This module detects those cases so branch cleanup (and later, stack
+//! pruning) can treat them as merged.
+//!
+//! Detection order, cheapest first:
+//! 1. **Ancestor** — the branch tip equals or is reachable from the target.
+//! 2. **Rebase** — every non-merge commit on the branch has a commit with the
+//!    same patch-id among the target's commits since the merge base.
+//! 3. **Squash** — re-applying the branch's combined change (merge base →
+//!    branch tip) on top of the target is a no-op, i.e. the target tree
+//!    already contains it.
+//!
+//! Every check is conservative: anything ambiguous reports "not merged", so a
+//! branch is only ever labelled merged when deleting it loses no content.
+
+use std::collections::HashSet;
+
+use git2::{Oid, Repository, Sort};
+use serde::Serialize;
+
+/// Upper bound on branch-only commits examined for patch-id equivalence.
+const MAX_BRANCH_COMMITS: usize = 500;
+/// Upper bound on target-only commits examined for patch-id equivalence.
+const MAX_TARGET_COMMITS: usize = 5000;
+
+/// How a branch's work reached the target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeKind {
+    /// The branch tip is the target or one of its ancestors.
+    Ancestor,
+    /// Each branch commit was replayed onto the target (same patch-ids).
+    Rebase,
+    /// The branch's combined change already exists in the target tree.
+    Squash,
+}
+
+/// Determine whether `branch` has been merged into `target`, and how.
+///
+/// Returns `Ok(None)` when the branch carries changes the target does not.
+pub fn detect_merge_kind(
+    repo: &Repository,
+    branch: Oid,
+    target: Oid,
+) -> Result<Option<MergeKind>, git2::Error> {
+    if branch == target || repo.graph_descendant_of(target, branch)? {
+        return Ok(Some(MergeKind::Ancestor));
+    }
+
+    let merge_base = match repo.merge_base(branch, target) {
+        Ok(oid) => oid,
+        // Unrelated histories: nothing to compare against.
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+
+    if is_rebase_merged(repo, branch, target)? {
+        return Ok(Some(MergeKind::Rebase));
+    }
+
+    if is_squash_merged(repo, branch, target, merge_base)? {
+        return Ok(Some(MergeKind::Squash));
+    }
+
+    Ok(None)
+}
+
+/// Commits reachable from `include` but not from `exclude`, newest first.
+/// Returns `None` when more than `limit` commits would be produced.
+fn commits_between(
+    repo: &Repository,
+    include: Oid,
+    exclude: Oid,
+    limit: usize,
+) -> Result<Option<Vec<git2::Commit<'_>>>, git2::Error> {
+    let mut walk = repo.revwalk()?;
+    walk.set_sorting(Sort::TOPOLOGICAL)?;
+    walk.push(include)?;
+    walk.hide(exclude)?;
+
+    let mut commits = Vec::new();
+    for oid in walk {
+        if commits.len() >= limit {
+            return Ok(None);
+        }
+        commits.push(repo.find_commit(oid?)?);
+    }
+    Ok(Some(commits))
+}
+
+/// Patch-id of a single-parent commit's change, or `None` for merge commits
+/// and root commits (which have no well-defined single patch).
+fn commit_patch_id(repo: &Repository, commit: &git2::Commit<'_>) -> Result<Option<Oid>, git2::Error> {
+    if commit.parent_count() != 1 {
+        return Ok(None);
+    }
+    let parent_tree = commit.parent(0)?.tree()?;
+    let tree = commit.tree()?;
+    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)?;
+    Ok(Some(diff.patchid(None)?))
+}
+
+fn is_rebase_merged(repo: &Repository, branch: Oid, target: Oid) -> Result<bool, git2::Error> {
+    let Some(branch_commits) = commits_between(repo, branch, target, MAX_BRANCH_COMMITS)? else {
+        return Ok(false);
+    };
+
+    let mut branch_ids = Vec::with_capacity(branch_commits.len());
+    for commit in &branch_commits {
+        match commit_patch_id(repo, commit)? {
+            Some(id) => branch_ids.push(id),
+            // A merge commit on the branch cannot be matched by patch-id; let
+            // the tree comparison decide instead.
+            None => return Ok(false),
+        }
+    }
+    if branch_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let Some(target_commits) = commits_between(repo, target, branch, MAX_TARGET_COMMITS)? else {
+        return Ok(false);
+    };
+    let mut target_ids = HashSet::with_capacity(target_commits.len());
+    for commit in &target_commits {
+        if let Some(id) = commit_patch_id(repo, commit)? {
+            target_ids.insert(id);
+        }
+    }
+
+    Ok(branch_ids.iter().all(|id| target_ids.contains(id)))
+}
+
+fn is_squash_merged(
+    repo: &Repository,
+    branch: Oid,
+    target: Oid,
+    merge_base: Oid,
+) -> Result<bool, git2::Error> {
+    let base_tree = repo.find_commit(merge_base)?.tree()?;
+    let branch_tree = repo.find_commit(branch)?.tree()?;
+    let target_tree = repo.find_commit(target)?.tree()?;
+
+    // A branch whose net change is empty contributes nothing; that is not
+    // evidence of a squash merge, and ancestry/rebase already had their say.
+    if base_tree.id() == branch_tree.id() {
+        return Ok(false);
+    }
+
+    // Three-way merge of the branch's change onto the target. If the change is
+    // already present, the result is exactly the target tree.
+    let mut index = repo.merge_trees(&base_tree, &target_tree, &branch_tree, None)?;
+    if index.has_conflicts() {
+        return Ok(false);
+    }
+    let merged_tree = index.write_tree_to(repo)?;
+    Ok(merged_tree == target_tree.id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::TestRepo;
+
+    fn oid_of(repo: &Repository, name: &str) -> Oid {
+        repo.revparse_single(name).unwrap().peel_to_commit().unwrap().id()
+    }
+
+    #[test]
+    fn ancestor_branch_is_detected() {
+        let t = TestRepo::with_initial_commit();
+        t.create_branch("done");
+        t.create_commit("main moves", &[("m.txt", "m")]);
+        let repo = t.repo();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "done"), t.head_oid()).unwrap();
+        assert_eq!(kind, Some(MergeKind::Ancestor));
+    }
+
+    #[test]
+    fn branch_at_target_is_ancestor() {
+        let t = TestRepo::with_initial_commit();
+        t.create_branch("same");
+        let repo = t.repo();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "same"), t.head_oid()).unwrap();
+        assert_eq!(kind, Some(MergeKind::Ancestor));
+    }
+
+    #[test]
+    fn unmerged_branch_is_not_detected() {
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        t.create_branch("wip");
+        t.checkout_branch("wip");
+        t.create_commit("wip", &[("wip.txt", "wip")]);
+        t.checkout_branch(&main);
+        t.create_commit("main moves", &[("m.txt", "m")]);
+        let repo = t.repo();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "wip"), t.head_oid()).unwrap();
+        assert_eq!(kind, None);
+    }
+
+    #[test]
+    fn rebase_merged_branch_is_detected() {
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        t.create_branch("feature");
+        t.checkout_branch("feature");
+        let c1 = t.create_commit("feat 1", &[("a.txt", "a")]);
+        let c2 = t.create_commit("feat 2", &[("b.txt", "b")]);
+        t.checkout_branch(&main);
+        t.create_commit("main moves", &[("m.txt", "m")]);
+        let repo = t.repo();
+        t.cherry_pick_onto_head(c1);
+        t.cherry_pick_onto_head(c2);
+
+        let target = repo.head().unwrap().target().unwrap();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
+        assert_eq!(kind, Some(MergeKind::Rebase));
+    }
+
+    #[test]
+    fn partially_rebased_branch_is_not_merged() {
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        t.create_branch("feature");
+        t.checkout_branch("feature");
+        let c1 = t.create_commit("feat 1", &[("a.txt", "a")]);
+        t.create_commit("feat 2", &[("b.txt", "b")]);
+        t.checkout_branch(&main);
+        t.create_commit("main moves", &[("m.txt", "m")]);
+        let repo = t.repo();
+        t.cherry_pick_onto_head(c1);
+
+        let target = repo.head().unwrap().target().unwrap();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
+        assert_eq!(kind, None, "feat 2 never landed, so the branch is not merged");
+    }
+
+    #[test]
+    fn squash_merged_branch_is_detected() {
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        let base = t.head_oid();
+        t.create_branch("feature");
+        t.checkout_branch("feature");
+        t.create_commit("feat 1", &[("a.txt", "a1")]);
+        t.create_commit("feat 2", &[("a.txt", "a2"), ("b.txt", "b")]);
+        t.checkout_branch(&main);
+        t.create_commit("main moves", &[("m.txt", "m")]);
+        let repo = t.repo();
+        t.squash_onto_head(oid_of(&repo, "feature"), base);
+
+        let target = repo.head().unwrap().target().unwrap();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
+        assert_eq!(kind, Some(MergeKind::Squash));
+    }
+
+    #[test]
+    fn squash_merged_then_further_edited_on_target_is_not_merged_when_conflicting() {
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        let base = t.head_oid();
+        t.create_branch("feature");
+        t.checkout_branch("feature");
+        t.create_commit("feat", &[("a.txt", "feature")]);
+        t.checkout_branch(&main);
+        let repo = t.repo();
+        t.squash_onto_head(oid_of(&repo, "feature"), base);
+        // Target later rewrites the same line: re-applying the branch would
+        // conflict, so we cannot prove the branch is fully contained.
+        t.create_commit("rewrite", &[("a.txt", "rewritten")]);
+
+        let target = repo.head().unwrap().target().unwrap();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
+        assert_eq!(kind, None);
+    }
+
+    #[test]
+    fn branch_with_extra_work_after_squash_is_not_merged() {
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        let base = t.head_oid();
+        t.create_branch("feature");
+        t.checkout_branch("feature");
+        t.create_commit("feat", &[("a.txt", "a")]);
+        let repo = t.repo();
+        let squashed_tip = oid_of(&repo, "feature");
+        t.create_commit("more work", &[("c.txt", "c")]);
+        t.checkout_branch(&main);
+        t.squash_onto_head(squashed_tip, base);
+
+        let target = repo.head().unwrap().target().unwrap();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
+        assert_eq!(kind, None, "c.txt is not in the target");
+    }
+
+    #[test]
+    fn merge_kind_serializes_camel_case() {
+        assert_eq!(
+            serde_json::to_string(&MergeKind::Squash).unwrap(),
+            "\"squash\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MergeKind::Ancestor).unwrap(),
+            "\"ancestor\""
+        );
+    }
+}

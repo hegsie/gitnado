@@ -241,10 +241,15 @@ pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> R
             };
             if let (Some(head_oid), Some(branch_oid)) = (head.target(), branch.get().target()) {
                 // A branch is fully merged into HEAD when HEAD is at or descends
-                // from the branch tip. The equality case matters: `git branch -d`
-                // deletes a branch that points at the same commit as HEAD, but
-                // graph_descendant_of returns false for equal oids.
-                if head_oid == branch_oid || repo.graph_descendant_of(head_oid, branch_oid)? {
+                // from the branch tip (`git branch -d` semantics, including the
+                // equal-oid case), or when its changes landed via a rebase- or
+                // squash-merge. The cleanup dialog labels those Safe and deletes
+                // them without force, so this check must agree with it.
+                if crate::services::merge_detection::detect_merge_kind(
+                    &repo, branch_oid, head_oid,
+                )?
+                .is_some()
+                {
                     branch.delete()?;
                 } else {
                     return Err(GitnadoError::OperationFailed(
@@ -3053,6 +3058,60 @@ mod tests {
         let result =
             delete_branch(repo.path_str(), "merged-feature".to_string(), Some(false)).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_squash_merged_branch_without_force_succeeds() {
+        let repo = TestRepo::with_initial_commit();
+        let main = repo.current_branch();
+        let base = repo.head_oid();
+        repo.create_branch("squashed");
+        repo.checkout_branch("squashed");
+        repo.create_commit("part 1", &[("s.txt", "one")]);
+        let tip = repo.create_commit("part 2", &[("s.txt", "two")]);
+        repo.checkout_branch(&main);
+        repo.squash_onto_head(tip, base);
+
+        let result = delete_branch(repo.path_str(), "squashed".to_string(), Some(false)).await;
+        assert!(result.is_ok(), "squash-merged branch should delete: {result:?}");
+        assert!(repo
+            .repo()
+            .find_branch("squashed", git2::BranchType::Local)
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_rebase_merged_branch_without_force_succeeds() {
+        let repo = TestRepo::with_initial_commit();
+        let main = repo.current_branch();
+        repo.create_branch("rebased");
+        repo.checkout_branch("rebased");
+        let c1 = repo.create_commit("r1", &[("r1.txt", "1")]);
+        let c2 = repo.create_commit("r2", &[("r2.txt", "2")]);
+        repo.checkout_branch(&main);
+        repo.create_commit("main moves", &[("m.txt", "m")]);
+        repo.cherry_pick_onto_head(c1);
+        repo.cherry_pick_onto_head(c2);
+
+        let result = delete_branch(repo.path_str(), "rebased".to_string(), Some(false)).await;
+        assert!(result.is_ok(), "rebase-merged branch should delete: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_delete_partially_squashed_branch_without_force_fails() {
+        let repo = TestRepo::with_initial_commit();
+        let main = repo.current_branch();
+        let base = repo.head_oid();
+        repo.create_branch("partial");
+        repo.checkout_branch("partial");
+        let landed = repo.create_commit("landed", &[("l.txt", "l")]);
+        repo.create_commit("not landed", &[("n.txt", "n")]);
+        repo.checkout_branch(&main);
+        repo.squash_onto_head(landed, base);
+
+        let result = delete_branch(repo.path_str(), "partial".to_string(), Some(false)).await;
+        let err = format!("{}", result.expect_err("unlanded work must block delete"));
+        assert!(err.contains("not fully merged"), "got: {err}");
     }
 
     #[tokio::test]

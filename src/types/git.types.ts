@@ -627,7 +627,15 @@ export interface CleanupCandidate {
   isProtected: boolean;
   upstream: string | null;
   aheadBehind: AheadBehind | null;
+  /**
+   * How a merged branch reached HEAD: a true ancestor, replayed commit-by-
+   * commit ("Rebase and merge"), or folded into one commit ("Squash and
+   * merge"). Null when the branch is not merged.
+   */
+  mergeKind?: CleanupMergeKind | null;
 }
+
+export type CleanupMergeKind = 'ancestor' | 'rebase' | 'squash';
 
 /**
  * A workspace grouping related repositories

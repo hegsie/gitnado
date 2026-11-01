@@ -11,7 +11,7 @@ import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
-import type { Branch, CleanupCandidate } from '../../types/git.types.ts';
+import type { Branch, CleanupCandidate, CleanupMergeKind } from '../../types/git.types.ts';
 import './gn-modal.ts';
 import type { GnModal } from './gn-modal.ts';
 import {
@@ -35,6 +35,22 @@ const BUILTIN_PROTECTED = ['main', 'master', 'develop', 'development', 'staging'
 
 /** Most branch names spelled out in the delete confirm; the rest collapse to a count. */
 const MAX_CONFIRM_NAMES = 10;
+
+/**
+ * Why a merged branch is safe to delete. Squash- and rebase-merged branches are
+ * named as such: their tips are NOT ancestors of HEAD, so a user cross-checking
+ * with `git branch --merged` would otherwise think the label was wrong.
+ */
+export function mergedReason(kind: CleanupMergeKind | null | undefined): string {
+  switch (kind) {
+    case 'squash':
+      return 'Squash-merged — all changes are in the current branch';
+    case 'rebase':
+      return 'Rebase-merged — all commits are in the current branch';
+    default:
+      return 'Fully merged into current branch';
+  }
+}
 
 @customElement('gn-branch-cleanup-dialog')
 export class GnBranchCleanupDialog extends LitElement {
@@ -531,13 +547,15 @@ export class GnBranchCleanupDialog extends LitElement {
    * loses nothing.
    */
   private assessRisk(group: CleanupCandidate[]): { risk: RiskLevel; riskReason: string } {
-    // The backend proved this merged — HEAD descends from its tip, or the two
-    // are equal (branch_cleanup.rs). Every commit on it is therefore reachable
-    // from HEAD and deleting the ref loses nothing. That proof outranks any
-    // upstream comparison, measured or missing: `ahead` counts distance from
-    // the UPSTREAM, which says nothing about whether local deletion loses work.
-    if (group.some((c) => c.category === 'merged')) {
-      return { risk: 'safe', riskReason: 'Fully merged into current branch' };
+    // The backend proved this merged — HEAD descends from its tip, or every
+    // change on it already landed via rebase- or squash-merge
+    // (merge_detection.rs). Deleting the ref therefore loses no content. That
+    // proof outranks any upstream comparison, measured or missing: `ahead`
+    // counts distance from the UPSTREAM, which says nothing about whether
+    // local deletion loses work.
+    const merged = group.find((c) => c.category === 'merged');
+    if (merged) {
+      return { risk: 'safe', riskReason: mergedReason(merged.mergeKind) };
     }
 
     // branch_cleanup.rs computes ahead_behind once per branch and clones it

@@ -14,6 +14,7 @@ pub mod github_app;
 #[cfg(not(target_os = "macos"))]
 pub mod keyring_util;
 pub mod loopback_server;
+pub mod merge_detection;
 pub mod oauth;
 pub mod provider_http;
 pub mod remote_ops;

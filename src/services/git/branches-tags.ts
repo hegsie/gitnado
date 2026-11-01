@@ -96,7 +96,8 @@ export async function deleteBranch(
 
 /**
  * Get branches that are candidates for cleanup (merged, stale, gone).
- * Uses server-side graph_descendant_of for accurate merge detection.
+ * Merge detection is server-side: ancestry plus rebase-/squash-merge detection
+ * (patch-id and tree comparison), reported per candidate as `mergeKind`.
  */
 export async function getCleanupCandidates(
   path: string,

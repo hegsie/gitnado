@@ -434,6 +434,46 @@ describe('gn-branch-cleanup-dialog (fixture)', () => {
       expect(el.shadowRoot!.querySelector('.risk-badge.safe')).to.not.be.null;
     });
 
+    it('labels a squash-merged branch as safe and names how it was merged', async () => {
+      // The tip of a squash-merged branch is NOT an ancestor of HEAD, so
+      // `git branch --merged` would not list it. The reason must say why the
+      // dialog still calls it safe.
+      const squashed = createCandidate('feature/squashed', 'merged', {
+        mergeKind: 'squash',
+        aheadBehind: { ahead: 4, behind: 0 },
+        upstream: 'origin/feature/squashed',
+      });
+      const el = await renderAndOpen([squashed]);
+
+      expect(el.shadowRoot!.querySelector('.risk-badge.safe')).to.not.be.null;
+      const details = Array.from(el.shadowRoot!.querySelectorAll('.branch-detail')).map(
+        (d) => d.textContent ?? '',
+      );
+      expect(details.some((d) => d.includes('Squash-merged'))).to.be.true;
+    });
+
+    it('names a rebase-merged branch as such', async () => {
+      const rebased = createCandidate('feature/rebased', 'merged', { mergeKind: 'rebase' });
+      const el = await renderAndOpen([rebased]);
+
+      const details = Array.from(el.shadowRoot!.querySelectorAll('.branch-detail')).map(
+        (d) => d.textContent ?? '',
+      );
+      expect(details.some((d) => d.includes('Rebase-merged'))).to.be.true;
+    });
+
+    it('keeps the plain merged reason for ancestor merges and older backends', async () => {
+      const el = await renderAndOpen([
+        createCandidate('feature/a', 'merged', { mergeKind: 'ancestor' }),
+        createCandidate('feature/b', 'merged'),
+      ]);
+
+      const details = Array.from(el.shadowRoot!.querySelectorAll('.branch-detail')).map(
+        (d) => d.textContent ?? '',
+      );
+      expect(details.filter((d) => d.includes('Fully merged into current branch'))).to.have.length(2);
+    });
+
     it('merged branch with no upstream stays .risk-badge.safe', async () => {
       // The backend proved it merged (graph_descendant_of) to put it in the
       // 'merged' category; a missing upstream comparison must not override that
@@ -538,6 +578,31 @@ describe('gn-branch-cleanup-dialog (fixture)', () => {
 
       const checkbox = featureItem!.querySelector('input[type="checkbox"]') as HTMLInputElement;
       expect(checkbox.checked).to.be.true;
+    });
+
+    it('auto-selects a squash-merged branch and deletes it without force', async () => {
+      const squashed = createCandidate('feature/squashed', 'merged', {
+        mergeKind: 'squash',
+        aheadBehind: { ahead: 2, behind: 0 },
+        upstream: 'origin/feature/squashed',
+      });
+      const el = await renderAndOpen([squashed]);
+
+      const checkbox = el.shadowRoot!.querySelector(
+        '.branch-item input[type="checkbox"]',
+      ) as HTMLInputElement;
+      expect(checkbox.checked, 'squash-merged branches are safe, so pre-selected').to.be.true;
+
+      clearHistory();
+      const deleteBtn = Array.from(el.shadowRoot!.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Delete Selected'),
+      ) as HTMLButtonElement;
+      deleteBtn.click();
+      await waitUntil(() => findCommands('delete_branch').length > 0, 'delete_branch not called');
+
+      const args = findCommands('delete_branch')[0].args as { name: string; force?: boolean };
+      expect(args.name).to.equal('feature/squashed');
+      expect(args.force, 'a merged branch is never force-deleted').to.not.equal(true);
     });
 
     it('protected branches are NOT auto-selected', async () => {
