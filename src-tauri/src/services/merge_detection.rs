@@ -95,7 +95,10 @@ fn commits_between(
 
 /// Patch-id of a single-parent commit's change, or `None` for merge commits
 /// and root commits (which have no well-defined single patch).
-fn commit_patch_id(repo: &Repository, commit: &git2::Commit<'_>) -> Result<Option<Oid>, git2::Error> {
+fn commit_patch_id(
+    repo: &Repository,
+    commit: &git2::Commit<'_>,
+) -> Result<Option<Oid>, git2::Error> {
     if commit.parent_count() != 1 {
         return Ok(None);
     }
@@ -168,7 +171,11 @@ mod tests {
     use crate::test_utils::TestRepo;
 
     fn oid_of(repo: &Repository, name: &str) -> Oid {
-        repo.revparse_single(name).unwrap().peel_to_commit().unwrap().id()
+        repo.revparse_single(name)
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
     }
 
     #[test]
@@ -238,7 +245,10 @@ mod tests {
 
         let target = repo.head().unwrap().target().unwrap();
         let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
-        assert_eq!(kind, None, "feat 2 never landed, so the branch is not merged");
+        assert_eq!(
+            kind, None,
+            "feat 2 never landed, so the branch is not merged"
+        );
     }
 
     #[test]
@@ -261,7 +271,11 @@ mod tests {
     }
 
     #[test]
-    fn squash_merged_then_further_edited_on_target_is_not_merged_when_conflicting() {
+    fn landed_commit_later_edited_on_target_is_still_merged() {
+        // A one-commit branch squash-merged has the same patch-id as its
+        // commit, so it is recognised even after the target rewrites the line
+        // (`git cherry` agrees). Deleting it loses nothing that is not already
+        // in the target's history.
         let t = TestRepo::with_initial_commit();
         let main = t.current_branch();
         let base = t.head_oid();
@@ -271,8 +285,28 @@ mod tests {
         t.checkout_branch(&main);
         let repo = t.repo();
         t.squash_onto_head(oid_of(&repo, "feature"), base);
-        // Target later rewrites the same line: re-applying the branch would
-        // conflict, so we cannot prove the branch is fully contained.
+        t.create_commit("rewrite", &[("a.txt", "rewritten")]);
+
+        let target = repo.head().unwrap().target().unwrap();
+        let kind = detect_merge_kind(&repo, oid_of(&repo, "feature"), target).unwrap();
+        assert_eq!(kind, Some(MergeKind::Rebase));
+    }
+
+    #[test]
+    fn squash_then_conflicting_target_edit_is_not_provably_merged() {
+        // Multi-commit squash (no patch-id match) followed by a target edit of
+        // the same lines: re-applying the branch conflicts, so containment
+        // cannot be proven and the branch must not be labelled merged.
+        let t = TestRepo::with_initial_commit();
+        let main = t.current_branch();
+        let base = t.head_oid();
+        t.create_branch("feature");
+        t.checkout_branch("feature");
+        t.create_commit("feat 1", &[("a.txt", "one")]);
+        t.create_commit("feat 2", &[("a.txt", "two")]);
+        t.checkout_branch(&main);
+        let repo = t.repo();
+        t.squash_onto_head(oid_of(&repo, "feature"), base);
         t.create_commit("rewrite", &[("a.txt", "rewritten")]);
 
         let target = repo.head().unwrap().target().unwrap();

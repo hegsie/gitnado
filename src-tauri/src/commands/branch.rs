@@ -3073,7 +3073,10 @@ mod tests {
         repo.squash_onto_head(tip, base);
 
         let result = delete_branch(repo.path_str(), "squashed".to_string(), Some(false)).await;
-        assert!(result.is_ok(), "squash-merged branch should delete: {result:?}");
+        assert!(
+            result.is_ok(),
+            "squash-merged branch should delete: {result:?}"
+        );
         assert!(repo
             .repo()
             .find_branch("squashed", git2::BranchType::Local)
@@ -3094,7 +3097,10 @@ mod tests {
         repo.cherry_pick_onto_head(c2);
 
         let result = delete_branch(repo.path_str(), "rebased".to_string(), Some(false)).await;
-        assert!(result.is_ok(), "rebase-merged branch should delete: {result:?}");
+        assert!(
+            result.is_ok(),
+            "rebase-merged branch should delete: {result:?}"
+        );
     }
 
     #[tokio::test]
