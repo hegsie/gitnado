@@ -6,6 +6,7 @@
 
 use crate::error::{GitnadoError, Result};
 use crate::models::{ProviderRepository, ProviderRepositoryPage};
+use crate::services::provider_http;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
@@ -28,8 +29,8 @@ fn resolve_token(token: Option<String>) -> Result<String> {
 /// is aimed at rather than a fixed constant — the same value the frontend gate
 /// passes (`providerApiHost` in src/services/git.service.ts).
 fn api_client(instance_url: &str) -> Result<reqwest::Client> {
-    crate::services::security::guard_url(instance_url)?;
-    Ok(reqwest::Client::new())
+    provider_http::ensure_url_allowed(instance_url)?;
+    provider_http::build_provider_http_client()
 }
 
 /// Helper to make authenticated GitLab API GET requests
@@ -805,16 +806,11 @@ pub async fn add_gitlab_mr_comment(
     let token = resolve_token(token)?;
 
     let payload = build_gitlab_mr_comment_payload(&body);
-    let response = gitlab_post(&url, &token, &payload).await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "GitLab API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(
+        gitlab_post(&url, &token, &payload).await?,
+        "GitLab",
+    )
+    .await?;
 
     let resp_body = response
         .text()
@@ -1149,10 +1145,7 @@ const PROJECTS_DEFAULT_PER_PAGE: u32 = 30;
 /// `AUTH_REQUIRED` so the picker can offer "reconnect this account" instead of
 /// a raw API string. Anything else keeps the module's usual message shape.
 fn map_project_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return GitnadoError::AuthenticationRequired;
-    }
-    GitnadoError::OperationFailed(format!("GitLab API error {}: {}", status, body))
+    provider_http::map_repository_list_api_error("GitLab", status, body, false)
 }
 
 /// One project as `/projects` returns it.

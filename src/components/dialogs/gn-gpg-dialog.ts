@@ -3,8 +3,8 @@
  * Manage GPG signing configuration
  */
 
-import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css, nothing } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import type { GpgConfig, GpgKey, SshKey } from '../../services/git.service.ts';
@@ -12,11 +12,12 @@ import { getPlatform, type Platform } from '../../utils/platform.ts';
 import { openExternalUrl } from '../../utils/external-link.ts';
 import { pushOverlay, removeOverlay, isTopOverlay } from '../../utils/overlay-stack.ts';
 import '../common/gn-toggle.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 type SetupStep = 'install-guide' | 'generate-guide' | 'configure' | 'complete';
 
 @customElement('gn-gpg-dialog')
-export class GnGpgDialog extends LitElement {
+export class GnGpgDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -601,9 +602,6 @@ export class GnGpgDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   @state() private config: GpgConfig | null = null;
   @state() private keys: GpgKey[] = [];
   @state() private sshKeys: SshKey[] = [];
@@ -661,7 +659,8 @@ export class GnGpgDialog extends LitElement {
     return this.open ? this.pinnedRepoPath : null;
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
+  override async updated(changedProperties: Map<string, unknown>): Promise<void> {
+    super.updated(changedProperties);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProperties.has('open')) {
       if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
@@ -806,9 +805,7 @@ export class GnGpgDialog extends LitElement {
     if (result.success) {
       this.config = { ...this.config, signCommits: !this.config.signCommits };
       this.success = `Commit signing ${this.config.signCommits ? 'enabled' : 'disabled'}`;
-      this.dispatchEvent(new CustomEvent('gpg-changed', {
-        detail: { repositoryPath: this.pinnedRepoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('gpg-changed', this.pinnedRepoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to update setting';
     }
@@ -832,9 +829,7 @@ export class GnGpgDialog extends LitElement {
     if (result.success) {
       this.config = { ...this.config, signTags: !this.config.signTags };
       this.success = `Tag signing ${this.config.signTags ? 'enabled' : 'disabled'}`;
-      this.dispatchEvent(new CustomEvent('gpg-changed', {
-        detail: { repositoryPath: this.pinnedRepoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('gpg-changed', this.pinnedRepoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to update setting';
     }
@@ -856,9 +851,7 @@ export class GnGpgDialog extends LitElement {
     if (result.success) {
       this.selectedKey = keyId;
       this.success = 'Signing key updated';
-      this.dispatchEvent(new CustomEvent('gpg-changed', {
-        detail: { repositoryPath: this.pinnedRepoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('gpg-changed', this.pinnedRepoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to set signing key';
     }

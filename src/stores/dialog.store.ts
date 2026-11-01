@@ -98,6 +98,7 @@ export const DIALOG_REGISTRY = {
   config: { repoScoped: true },
   credentials: { repoScoped: true },
   hooks: { repoScoped: true },
+  jira: { repoScoped: true },
   gitignore: { repoScoped: true },
 } as const satisfies Record<string, DialogDescriptor>;
 

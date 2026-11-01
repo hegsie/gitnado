@@ -1809,5 +1809,184 @@ describe('gn-gitlab-dialog', () => {
       expect((el as unknown as { createIssueLabels: string[] }).createIssueLabels).to.deep.equal([]);
       expect(chips(el).length).to.equal(0);
     });
+
+    it('clears detectedRepo, repo lists, and isLoading when switching to a non-GitLab repository mid-load', async () => {
+      const el = await openCreateIssueTab();
+      expect((el as unknown as { detectedRepo: unknown }).detectedRepo).to.not.be.null;
+
+      let resolveMrs: (v: unknown) => void = () => {};
+      const prevInvoke = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'list_gitlab_merge_requests') {
+          return new Promise((r) => {
+            resolveMrs = r;
+          });
+        }
+        return prevInvoke(command, args);
+      };
+
+      const pendingLoad = (el as unknown as { loadMergeRequests: () => Promise<void> }).loadMergeRequests();
+      expect((el as unknown as { isLoading: boolean }).isLoading).to.be.true;
+
+      detectedRepoResponse = null;
+      el.repositoryPath = '/mock/local-only-repo';
+      await waitForLoad(el);
+
+      expect((el as unknown as { isLoading: boolean }).isLoading).to.be.false;
+      resolveMrs(mockMergeRequests);
+      await pendingLoad;
+
+      expect((el as unknown as { detectedRepo: unknown }).detectedRepo).to.be.null;
+      expect((el as unknown as { mergeRequests: unknown[] }).mergeRequests).to.deep.equal([]);
+      expect((el as unknown as { labels: string[] }).labels).to.deep.equal([]);
+      expect((el as unknown as { isLoading: boolean }).isLoading).to.be.false;
+    });
+
+    it('loads merge requests only once when reopening an already-connected dialog', async () => {
+      const el = await openCreateIssueTab();
+      el.open = false;
+      await el.updateComplete;
+
+      invokeHistory.length = 0;
+      el.open = true;
+      await waitForLoad(el);
+
+      const mrCalls = invokeHistory.filter((h) => h.command === 'list_gitlab_merge_requests');
+      expect(mrCalls.length).to.equal(1);
+    });
+
+    it('re-checks connection when switching repositoryPath to a different GitLab instance', async () => {
+      const el = await openCreateIssueTab();
+
+      detectedRepoResponse = {
+        instanceUrl: 'https://gitlab.corp.example.com',
+        projectPath: 'corp/project',
+        remoteName: 'origin',
+      };
+      connectionResponse = {
+        connected: true,
+        user: mockGitLabUser,
+        instanceUrl: 'https://gitlab.corp.example.com',
+      };
+
+      invokeHistory.length = 0;
+      el.repositoryPath = '/mock/corp-repo';
+      await waitForLoad(el);
+
+      const checkCalls = invokeHistory.filter((h) => h.command === 'check_gitlab_connection');
+      expect(checkCalls.length).to.equal(1);
+      expect((checkCalls[0].args as { instanceUrl: string }).instanceUrl).to.equal(
+        'https://gitlab.corp.example.com'
+      );
+    });
+
+    it('drops a stale connection check when switching repositories twice across instances', async () => {
+      const el = await openCreateIssueTab();
+
+      let resolveCorpCheck: (v: unknown) => void = () => {};
+      const prevInvoke = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'detect_gitlab_repo') {
+          const path = (args as { path: string }).path;
+          if (path === '/mock/corp-repo') {
+            return {
+              instanceUrl: 'https://gitlab.corp.example.com',
+              projectPath: 'corp/project',
+              remoteName: 'origin',
+            };
+          }
+          return mockDetectedRepo;
+        }
+        if (command === 'check_gitlab_connection') {
+          const instanceUrl = (args as { instanceUrl: string }).instanceUrl;
+          if (instanceUrl === 'https://gitlab.corp.example.com') {
+            return new Promise((r) => {
+              resolveCorpCheck = r;
+            });
+          }
+          return mockConnectedStatus;
+        }
+        return prevInvoke(command, args);
+      };
+
+      el.repositoryPath = '/mock/corp-repo';
+      await new Promise((r) => setTimeout(r, 20));
+
+      el.repositoryPath = '/mock/repo-2';
+      await waitForLoad(el);
+
+      resolveCorpCheck({
+        connected: false,
+        user: null,
+        instanceUrl: 'https://gitlab.corp.example.com',
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      expect(
+        (el as unknown as { connectionStatus: { connected: boolean; instanceUrl: string } })
+          .connectionStatus
+      ).to.deep.include({
+        connected: true,
+        instanceUrl: 'https://gitlab.com',
+      });
+    });
+
+    it('creates a new global account when saving a token for a different GitLab instance', async () => {
+      const persistedAccounts: IntegrationAccount[] = [mockAccount];
+      accountsResponse = persistedAccounts;
+      unifiedProfileStore.getState().setAccounts([mockAccount]);
+      keyringStore.set('gitlab_token_gl-acc-1', 'glpat-gitlab-com');
+
+      const prevInvoke = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'save_global_account') {
+          const account = (args as { account: IntegrationAccount }).account;
+          persistedAccounts.push(account);
+          return account;
+        }
+        return prevInvoke(command, args);
+      };
+
+      detectedRepoResponse = {
+        instanceUrl: 'https://gitlab.corp.example.com',
+        projectPath: 'corp/project',
+        remoteName: 'origin',
+      };
+      connectionResponse = {
+        connected: false,
+        user: null,
+        instanceUrl: 'https://gitlab.corp.example.com',
+      };
+
+      const el = await fixture<GnGitLabDialog>(html`
+        <gn-gitlab-dialog .open=${true} .repositoryPath=${'/mock/corp-repo'}></gn-gitlab-dialog>
+      `);
+      await waitForLoad(el);
+
+      connectionResponse = {
+        connected: true,
+        user: mockGitLabUser,
+        instanceUrl: 'https://gitlab.corp.example.com',
+      };
+      const priv = el as unknown as {
+        tokenInput: string;
+        instanceUrlInput: string;
+        selectedAccountId: string | null;
+        handleSaveToken: () => Promise<void>;
+      };
+      priv.tokenInput = 'glpat-corp-secret';
+      await priv.handleSaveToken();
+      await waitForLoad(el);
+
+      // Original gitlab.com account token must remain untouched.
+      expect(keyringStore.get('gitlab_token_gl-acc-1')).to.equal('glpat-gitlab-com');
+      // A new account was created and selected for the self-hosted instance.
+      expect(persistedAccounts.length).to.equal(2);
+      expect(priv.selectedAccountId).to.not.equal('gl-acc-1');
+      expect(keyringStore.get(`gitlab_token_${priv.selectedAccountId}`)).to.equal(
+        'glpat-corp-secret'
+      );
+    });
   });
 });

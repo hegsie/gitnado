@@ -127,4 +127,65 @@ describe('gn-remote-dialog', () => {
     expect(addedToRepo).to.deep.equal(['/repo/a']);
     expect(remoteReads).to.deep.equal(['/repo/b']);
   });
+
+  it('includes repositoryPath in remotes-changed event detail and discards stale load results on repositoryPath switch', async () => {
+    let resolveLoadA!: (remotes: Array<{ name: string; url: string; pushUrl: string | null }>) => void;
+
+    mockInvoke = async (command: string, args?: unknown) => {
+      const path = ((args as { path?: string }) ?? {}).path ?? '';
+      if (command === 'get_remotes') {
+        if (path === '/repo/a') {
+          return new Promise((r) => {
+            resolveLoadA = r;
+          });
+        }
+        return [{ name: 'origin-b', url: 'https://github.com/acme/b.git', pushUrl: null }];
+      }
+      if (command === 'add_remote') {
+        return null;
+      }
+      return null;
+    };
+
+    const el = await fixture<GnRemoteDialog>(
+      html`<gn-remote-dialog ?open=${true} .repositoryPath=${'/repo/a'}></gn-remote-dialog>`,
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Switch repositoryPath while /repo/a's initial get_remotes is still in flight
+    el.repositoryPath = '/repo/b';
+    await el.updateComplete;
+
+    // Resolve /repo/a's in-flight load — stale result must be discarded
+    resolveLoadA([{ name: 'origin-a', url: 'https://github.com/acme/a.git', pushUrl: null }]);
+    await new Promise((r) => setTimeout(r, 20));
+    await el.updateComplete;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((el as any).remotes).to.deep.equal([]);
+
+    // Reopen on /repo/b and verify remotes-changed carries repositoryPath in detail
+    el.open = false;
+    await el.updateComplete;
+    el.open = true;
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 20));
+
+    const events: Array<{ repositoryPath?: string }> = [];
+    el.addEventListener('remotes-changed', (e) => {
+      events.push((e as CustomEvent<{ repositoryPath?: string }>).detail);
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).startAdd();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).formName = 'upstream';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (el as any).formUrl = 'https://github.com/acme/upstream.git';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (el as any).handleAdd();
+
+    expect(events).to.deep.equal([{ repositoryPath: '/repo/b' }]);
+  });
 });
+

@@ -1017,5 +1017,33 @@ describe('gn-migration-dialog', () => {
       expect(order).to.deep.equal(['open-profile-manager', 'close']);
       expect((el as unknown as { open: boolean }).open).to.be.false;
     });
+
+    it('ignores an in-flight preview response if the dialog is closed and reopened before it resolves', async () => {
+      let resolvePreview: (value: unknown) => void = () => {};
+      mockInvoke = async (command: string) => {
+        if (command === 'preview_unified_profiles_migration') {
+          return new Promise((r) => {
+            resolvePreview = r;
+          });
+        }
+        return null;
+      };
+
+      const el = await renderDialog(true);
+      clickButton(el, 'Continue');
+      await waitForUpdate(el, 20);
+
+      // Close and reopen while preview is still in flight
+      el.open = false;
+      await el.updateComplete;
+      el.open = true;
+      await el.updateComplete;
+
+      resolvePreview(PREVIEW_WITH_PROFILES);
+      await waitForUpdate(el, 50);
+
+      // Reopened dialog should remain on intro view, not flip to preview
+      expect(el.shadowRoot!.querySelector('.intro-content')).to.not.be.null;
+    });
   });
 });

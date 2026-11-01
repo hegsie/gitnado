@@ -2433,5 +2433,20 @@ describe('gn-github-dialog', () => {
         uiStore.getState().toasts.some((t) => t.type === 'error' && /Validation Failed/.test(t.message))
       ).to.be.true;
     });
+
+    it('clears detectedRepo and repo lists when switching to a non-GitHub repository', async () => {
+      const el = await openPullRequestsTab();
+      expect(el.shadowRoot!.querySelectorAll('.pr-item').length).to.be.greaterThan(0);
+
+      detectedRepoResponse = null;
+      el.repositoryPath = '/mock/local-only-repo';
+      await waitForLoad(el);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dialog = el as any;
+      expect(dialog.detectedRepo).to.be.null;
+      expect(dialog.pullRequests).to.deep.equal([]);
+      expect(el.shadowRoot!.querySelectorAll('.repo-name').length).to.equal(0);
+    });
   });
 });

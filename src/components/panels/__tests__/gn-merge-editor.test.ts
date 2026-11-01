@@ -4783,5 +4783,37 @@ describe('gn-merge-editor', () => {
 
       expect(shadowText(el)).to.include('this submodule was removed');
     });
+
+    it('ignores a stale getMergeToolConfig response after repositoryPath changes', async () => {
+      setupDefaultMocks();
+      let resolveFirst: (v: unknown) => void = () => {};
+      const baseMock = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'get_merge_tool_config') {
+          const path = (args as { path?: string })?.path;
+          if (path === '/repo/a') {
+            return new Promise((r) => {
+              resolveFirst = r;
+            });
+          }
+          return { toolName: null };
+        }
+        return baseMock(command, args);
+      };
+
+      const el = await renderEditor();
+      el.repositoryPath = '/repo/a';
+      await el.updateComplete;
+
+      el.repositoryPath = '/repo/b';
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 20));
+
+      resolveFirst({ toolName: 'meld' });
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      expect((el as unknown as { hasMergeTool: boolean }).hasMergeTool).to.be.false;
+    });
   });
 });

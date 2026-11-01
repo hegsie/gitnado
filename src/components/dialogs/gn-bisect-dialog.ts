@@ -3,8 +3,8 @@
  * Provides UI for git bisect binary search to find bug-introducing commits
  */
 
-import { LitElement, html, css } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import type { BisectStatus, CulpritCommit } from '../../services/git.service.ts';
@@ -16,11 +16,12 @@ import {
   releaseRefOp,
   RefLockController,
 } from '../../utils/ref-lock.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 type BisectStep = 'setup' | 'in-progress' | 'complete';
 
 @customElement('gn-bisect-dialog')
-export class GnBisectDialog extends LitElement {
+export class GnBisectDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -427,9 +428,6 @@ export class GnBisectDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   /**
    * Observe the shared working-tree lock, not just claim it.
    *
@@ -479,7 +477,8 @@ export class GnBisectDialog extends LitElement {
     document.removeEventListener('keydown', this.handleKeyDown);
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
+  override async updated(changedProperties: Map<string, unknown>): Promise<void> {
+    super.updated(changedProperties);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProperties.has('open')) {
       if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
@@ -512,6 +511,7 @@ export class GnBisectDialog extends LitElement {
 
   private async checkBisectStatus(): Promise<void> {
     const loadedPath = this.repositoryPath;
+    const gen = this.nextLoadGeneration();
     this.loading = true;
     this.error = '';
     // The step messages ("Marked as good", "Bisect session started") describe
@@ -526,7 +526,7 @@ export class GnBisectDialog extends LitElement {
 
       // The tab may have switched while the fetch was in flight; a stale result
       // must not be painted over the now-active repository's session.
-      if (this.repositoryPath !== loadedPath) return;
+      if (!this.isCurrentRepoLoad(gen, loadedPath)) return;
 
       if (result.success && result.data) {
         this.status = result.data;
@@ -651,9 +651,7 @@ export class GnBisectDialog extends LitElement {
     // partway through having already moved HEAD, and the handler only triggers
     // an idempotent refresh. (bisect-complete is different — it also CLOSES
     // the dialog, so it stays gated on success or the error is never read.)
-    this.dispatchEvent(
-      new CustomEvent('bisect-step', { detail: { repositoryPath: repoPath } })
-    );
+    this.dispatchRepoEvent('bisect-step', repoPath);
   }
 
   private async handleBad(): Promise<void> {
@@ -695,9 +693,7 @@ export class GnBisectDialog extends LitElement {
       }
     }
 
-    this.dispatchEvent(
-      new CustomEvent('bisect-step', { detail: { repositoryPath: repoPath } })
-    );
+    this.dispatchRepoEvent('bisect-step', repoPath);
   }
 
   private async handleGood(): Promise<void> {
@@ -736,9 +732,7 @@ export class GnBisectDialog extends LitElement {
       }
     }
 
-    this.dispatchEvent(
-      new CustomEvent('bisect-step', { detail: { repositoryPath: repoPath } })
-    );
+    this.dispatchRepoEvent('bisect-step', repoPath);
   }
 
   private async handleSkip(): Promise<void> {
@@ -772,9 +766,7 @@ export class GnBisectDialog extends LitElement {
       }
     }
 
-    this.dispatchEvent(
-      new CustomEvent('bisect-step', { detail: { repositoryPath: repoPath } })
-    );
+    this.dispatchRepoEvent('bisect-step', repoPath);
   }
 
   private async handleReset(): Promise<void> {
@@ -833,9 +825,7 @@ export class GnBisectDialog extends LitElement {
     // `git bisect reset` checks the original HEAD back out, so the refresh has
     // to land on the repo the reset ran against, not whichever tab is active.
     if (result.success) {
-      this.dispatchEvent(
-        new CustomEvent('bisect-complete', { detail: { repositoryPath: repoPath } })
-      );
+      this.dispatchRepoEvent('bisect-complete', repoPath);
     }
   }
 

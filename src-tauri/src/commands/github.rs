@@ -6,20 +6,21 @@ use tauri::command;
 
 use crate::error::{GitnadoError, Result};
 use crate::models::{ProviderRepository, ProviderRepositoryPage};
+use crate::services::provider_http;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 
 /// The HTTP client every outbound GitHub API call in this module goes through.
 ///
 /// Offline mode and the remote allowlist are enforced HERE rather than at each
-/// command: `reqwest::Client::new()` was already the first thing every
+/// command: `reqwest::Client` construction is the first thing every
 /// network-touching function in this file does, so making it the one
 /// constructor means a command added later cannot forget the check. The host is
 /// the fixed API base, matching what the frontend gate checks the allowlist
 /// against (`providerApiHost` in src/services/git.service.ts).
 fn api_client() -> Result<reqwest::Client> {
-    crate::services::security::guard_url(GITHUB_API_BASE)?;
-    Ok(reqwest::Client::new())
+    provider_http::ensure_url_allowed(GITHUB_API_BASE)?;
+    provider_http::build_provider_http_client()
 }
 
 /// GitHub user information
@@ -577,10 +578,7 @@ fn parse_github_repository_page(
 /// string. Everything else (403 rate limits included, whose body explains
 /// itself) keeps the module's usual message shape.
 fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return GitnadoError::AuthenticationRequired;
-    }
-    GitnadoError::OperationFailed(format!("GitHub API error {}: {}", status, body))
+    provider_http::map_repository_list_api_error("GitHub", status, body, false)
 }
 
 /// List the repositories the authenticated account can clone.
@@ -1425,15 +1423,7 @@ pub async fn get_workflow_runs(
     let response = request.send().await.map_err(|e| {
         GitnadoError::OperationFailed(format!("Failed to fetch workflow runs: {}", e))
     })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "GitHub API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "GitHub").await?;
 
     #[derive(Deserialize)]
     struct ApiWorkflowRuns {

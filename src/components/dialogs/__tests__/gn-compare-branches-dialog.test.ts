@@ -332,6 +332,7 @@ describe('gn-compare-branches-dialog', () => {
     setTimeout(() => row.click());
     const event = await oneEvent(el, 'show-commit');
     expect(event.detail.oid).to.equal('aaa111bbb222');
+    expect(event.detail.repositoryPath).to.equal('/test/repo');
     expect(el.pinnedRepositoryPathIfOpen, 'the dialog closed').to.be.null;
   });
 
@@ -586,6 +587,37 @@ describe('gn-compare-branches-dialog', () => {
         'feature',
         'origin/feature',
       ]);
+    });
+
+    it('keeps the dialog open when clicking a commit after switching to a different repository tab', async () => {
+      const el = await makeDialog();
+      await openAndSettle(el, 'feature');
+      (el.renderRoot.querySelector('.btn-primary') as HTMLButtonElement).click();
+      await settle(el);
+
+      let dispatchedDetail: { oid: string; repositoryPath?: string } | null = null;
+      el.addEventListener('show-commit', (e) => {
+        dispatchedDetail = (e as CustomEvent<{ oid: string; repositoryPath?: string }>).detail;
+      });
+
+      // Switch active repository tab while the compare dialog remains open on its pinned repo
+      el.repositoryPath = '/repo-other';
+      await el.updateComplete;
+
+      const row = el.renderRoot.querySelector(
+        '[data-testid="commits-ahead"] .row',
+      ) as HTMLButtonElement;
+      row.click();
+      await el.updateComplete;
+
+      expect(dispatchedDetail).to.deep.equal({
+        oid: 'aaa111bbb222',
+        repositoryPath: '/test/repo',
+      });
+      expect(
+        el.pinnedRepositoryPathIfOpen,
+        'dialog stays open when active repo does not match pinned repo',
+      ).to.equal('/test/repo');
     });
   });
 

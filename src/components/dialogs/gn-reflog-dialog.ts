@@ -908,7 +908,7 @@ export class GnReflogDialog extends LitElement {
     if (!entry) return;
     this.contextMenu = { ...this.contextMenu, visible: false };
     this.dispatchEvent(new CustomEvent('show-commit', {
-      detail: { oid: entry.oid },
+      detail: { oid: entry.oid, repositoryPath: this.pinnedRepoPath },
       bubbles: true,
       composed: true,
     }));

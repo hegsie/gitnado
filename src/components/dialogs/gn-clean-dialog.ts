@@ -3,8 +3,8 @@
  * Remove untracked and ignored files from the working directory
  */
 
-import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css, nothing } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import type { CleanEntry } from '../../services/git.service.ts';
@@ -18,9 +18,10 @@ import {
   isRefOpRunning,
   subscribeRefOps,
 } from '../../utils/ref-lock.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 @customElement('gn-clean-dialog')
-export class GnCleanDialog extends LitElement {
+export class GnCleanDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -336,9 +337,6 @@ export class GnCleanDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean, reflect: true }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   @state() private entries: CleanEntry[] = [];
   @state() private selectedPaths: Set<string> = new Set();
   @state() private loading = false;
@@ -373,10 +371,11 @@ export class GnCleanDialog extends LitElement {
     return this.cleaning;
   }
 
-  async updated(changedProps: Map<string, unknown>): Promise<void> {
+  override async updated(changedProps: Map<string, unknown>): Promise<void> {
+    super.updated(changedProps);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProps.has('open')) {
-      if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
+      if (this.open) { pushOverlay(this); } else { removeOverlay(this); this.loadGeneration++; }
     }
     if (changedProps.has('open') && this.open) {
       // A prior operation may still be running against this component; its
@@ -415,7 +414,12 @@ export class GnCleanDialog extends LitElement {
   }
 
   private async loadFiles(): Promise<void> {
-    if (!this.pinnedRepoPath) return;
+    const repoPath = this.pinnedRepoPath;
+    if (!repoPath) return;
+
+    const gen = this.nextLoadGeneration();
+    const includeIgnored = this.includeIgnored;
+    const includeDirectories = this.includeDirectories;
 
     this.loading = true;
     this.entries = [];
@@ -423,10 +427,13 @@ export class GnCleanDialog extends LitElement {
 
     try {
       const result = await gitService.getCleanableFiles(
-        this.pinnedRepoPath,
-        this.includeIgnored,
-        this.includeDirectories
+        repoPath,
+        includeIgnored,
+        includeDirectories
       );
+      if (gen !== this.loadGeneration || !this.open || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.entries = result.data;
@@ -440,10 +447,15 @@ export class GnCleanDialog extends LitElement {
         showToast(result.error?.message || 'Failed to load cleanable files', 'error');
       }
     } catch (err) {
+      if (gen !== this.loadGeneration || !this.open || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
       console.error('Failed to load cleanable files:', err);
       showToast('Failed to load cleanable files', 'error');
     } finally {
-      this.loading = false;
+      if (gen === this.loadGeneration) {
+        this.loading = false;
+      }
     }
   }
 
@@ -610,13 +622,9 @@ export class GnCleanDialog extends LitElement {
           shortfall > 0 ? 'warning' : 'success'
         );
 
-        this.dispatchEvent(new CustomEvent('files-cleaned', {
-          // repositoryPath so the host refreshes the repo the clean ran on —
-          // the user may have switched tabs during the IPC await.
-          detail: { count: removed, repositoryPath: repoPath },
-          bubbles: true,
-          composed: true,
-        }));
+        // repositoryPath so the host refreshes the repo the clean ran on —
+        // the user may have switched tabs during the IPC await.
+        this.dispatchRepoEvent('files-cleaned', repoPath, { count: removed });
         this.close();
       } else {
         showToast(result.error?.message ?? 'Clean operation failed', 'error');
@@ -721,6 +729,7 @@ export class GnCleanDialog extends LitElement {
             <input
               type="checkbox"
               .checked=${this.includeIgnored}
+              ?disabled=${this.loading || this.cleaning}
               @change=${(e: Event) => {
                 this.includeIgnored = (e.target as HTMLInputElement).checked;
                 this.handleOptionChange();
@@ -732,6 +741,7 @@ export class GnCleanDialog extends LitElement {
             <input
               type="checkbox"
               .checked=${this.includeDirectories}
+              ?disabled=${this.loading || this.cleaning}
               @change=${(e: Event) => {
                 this.includeDirectories = (e.target as HTMLInputElement).checked;
                 this.handleOptionChange();

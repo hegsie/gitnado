@@ -3,8 +3,8 @@
  * Manage git submodules - list, add, update, remove
  */
 
-import { LitElement, html, css } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
@@ -17,11 +17,12 @@ import {
   isRefOpRunning,
   subscribeRefOps,
 } from '../../utils/ref-lock.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 type DialogMode = 'list' | 'add';
 
 @customElement('gn-submodule-dialog')
-export class GnSubmoduleDialog extends LitElement {
+export class GnSubmoduleDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -350,9 +351,6 @@ export class GnSubmoduleDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   @state() private mode: DialogMode = 'list';
   @state() private submodules: Submodule[] = [];
   @state() private loading = false;
@@ -442,7 +440,8 @@ export class GnSubmoduleDialog extends LitElement {
     return this.removingPath !== null;
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
+  override async updated(changedProperties: Map<string, unknown>): Promise<void> {
+    super.updated(changedProperties);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProperties.has('open')) {
       if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
@@ -536,9 +535,7 @@ export class GnSubmoduleDialog extends LitElement {
       this.addBranch = '';
       this.mode = 'list';
       await this.loadSubmodules(repoPath);
-      this.dispatchEvent(new CustomEvent('submodules-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('submodules-changed', repoPath || this.repositoryPath);
     } else if (!gitService.isNetworkGateRefusal(result.error)) {
       // The gate already announced a block, and a declined confirm is the
       // user's own decision — neither is a failure to report.
@@ -582,9 +579,7 @@ export class GnSubmoduleDialog extends LitElement {
         this.success = `Initialized ${submodule.path}`;
       }
       await this.loadSubmodules(repoPath);
-      this.dispatchEvent(new CustomEvent('submodules-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('submodules-changed', repoPath || this.repositoryPath);
     } else if (!gitService.isNetworkGateRefusal(result.error)) {
       this.error = result.error?.message || 'Failed to initialize submodule';
       showToast(result.error?.message || 'Failed to initialize submodule', 'error');
@@ -617,9 +612,7 @@ export class GnSubmoduleDialog extends LitElement {
       // Same asymmetry as handleInit — see the note there.
       this.success = `Updated ${submodule.path}`;
       await this.loadSubmodules(repoPath);
-      this.dispatchEvent(new CustomEvent('submodules-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('submodules-changed', repoPath || this.repositoryPath);
     } else if (!gitService.isNetworkGateRefusal(result.error)) {
       this.error = result.error?.message || 'Failed to update submodule';
       showToast(result.error?.message || 'Failed to update submodule', 'error');
@@ -682,9 +675,7 @@ export class GnSubmoduleDialog extends LitElement {
         this.success = 'Submodule removed successfully';
         showToast('Submodule removed successfully', 'success');
         await this.loadSubmodules(repoPath);
-        this.dispatchEvent(new CustomEvent('submodules-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+        this.dispatchRepoEvent('submodules-changed', repoPath || this.repositoryPath);
       } else {
         this.error = result.error?.message || 'Failed to remove submodule';
         showToast(result.error?.message || 'Failed to remove submodule', 'error');
@@ -714,9 +705,7 @@ export class GnSubmoduleDialog extends LitElement {
       this.success = 'All submodules updated';
       showToast('All submodules updated', 'success');
       await this.loadSubmodules(repoPath);
-      this.dispatchEvent(new CustomEvent('submodules-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('submodules-changed', repoPath || this.repositoryPath);
     } else if (!gitService.isNetworkGateRefusal(result.error)) {
       this.error = result.error?.message || 'Failed to update submodules';
       showToast(result.error?.message || 'Failed to update submodules', 'error');

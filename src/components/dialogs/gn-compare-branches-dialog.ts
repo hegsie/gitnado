@@ -540,12 +540,19 @@ export class GnCompareBranchesDialog extends LitElement {
   }
 
   /** Reveal a commit in the graph. app-shell listens for `show-commit` and
-   * reports its own miss cases, so the dialog closes out of the way. */
+   * reports its own miss cases, so the dialog closes out of the way when the
+   * pinned repository is still active. */
   private handleShowCommit(oid: string): void {
     this.dispatchEvent(
-      new CustomEvent('show-commit', { detail: { oid }, bubbles: true, composed: true }),
+      new CustomEvent('show-commit', {
+        detail: { oid, repositoryPath: this.pinnedRepoPath },
+        bubbles: true,
+        composed: true,
+      }),
     );
-    this.close();
+    if (!this.pinnedRepoPath || !this.repositoryPath || this.pinnedRepoPath === this.repositoryPath) {
+      this.close();
+    }
   }
 
   private handleModalClose(): void {

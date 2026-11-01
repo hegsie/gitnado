@@ -2326,5 +2326,118 @@ describe('gn-azure-devops-dialog', () => {
       expect(credFailureToasts(), 'no second warning once it succeeds').to.equal(1);
       expect(api.lastSyncedGitCredKey).to.equal('testorg::new-rotated-pat');
     });
+
+    it('clears detectedRepo and repo lists when switching to a non-Azure-DevOps repository', async () => {
+      unifiedProfileStore.getState().setAccounts([mockAccount]);
+      connectionResponse = mockConnectedStatus;
+      detectedRepoResponse = mockDetectedRepo;
+      keyringStore.set('azure_devops_token_ado-acc-1', 'pat-123');
+
+      const el = await fixture<GnAzureDevOpsDialog>(html`
+        <gn-azure-devops-dialog .open=${true} .repositoryPath=${'/mock/repo'}></gn-azure-devops-dialog>
+      `);
+      await waitForLoad(el);
+      expect((el as unknown as { detectedRepo: unknown }).detectedRepo).to.not.be.null;
+
+      detectedRepoResponse = null;
+      el.repositoryPath = '/mock/local-only-repo';
+      await waitForLoad(el);
+
+      expect((el as unknown as { detectedRepo: unknown }).detectedRepo).to.be.null;
+      expect((el as unknown as { pullRequests: unknown[] }).pullRequests).to.deep.equal([]);
+    });
+
+    it('re-checks connection when switching repositoryPath to a different Azure DevOps organization', async () => {
+      unifiedProfileStore.getState().setAccounts([mockAccount]);
+      connectionResponse = mockConnectedStatus;
+      detectedRepoResponse = mockDetectedRepo;
+      keyringStore.set('azure_devops_token_ado-acc-1', 'pat-123');
+
+      const el = await fixture<GnAzureDevOpsDialog>(html`
+        <gn-azure-devops-dialog .open=${true} .repositoryPath=${'/mock/repo'}></gn-azure-devops-dialog>
+      `);
+      await waitForLoad(el);
+
+      detectedRepoResponse = {
+        organization: 'other-org',
+        project: 'other-project',
+        repository: 'other-repo',
+        remoteName: 'origin',
+      };
+      connectionResponse = {
+        connected: true,
+        user: mockAdoUser,
+        organization: 'other-org',
+      };
+
+      invokeHistory.length = 0;
+      el.repositoryPath = '/mock/other-org-repo';
+      await waitForLoad(el);
+
+      const checkCalls = invokeHistory.filter((h) => h.command === 'check_ado_connection');
+      expect(checkCalls.length).to.equal(1);
+      expect((checkCalls[0].args as { organization: string }).organization).to.equal('other-org');
+    });
+
+    it('drops a stale connection check when switching repositories twice across organizations', async () => {
+      unifiedProfileStore.getState().setAccounts([mockAccount]);
+      connectionResponse = mockConnectedStatus;
+      detectedRepoResponse = mockDetectedRepo;
+      keyringStore.set('azure_devops_token_ado-acc-1', 'pat-123');
+
+      const el = await fixture<GnAzureDevOpsDialog>(html`
+        <gn-azure-devops-dialog .open=${true} .repositoryPath=${'/mock/repo'}></gn-azure-devops-dialog>
+      `);
+      await waitForLoad(el);
+
+      let resolveOtherOrgCheck: (v: unknown) => void = () => {};
+      const prevInvoke = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'detect_ado_repo') {
+          const path = (args as { path: string }).path;
+          if (path === '/mock/other-org-repo') {
+            return {
+              organization: 'other-org',
+              project: 'other-project',
+              repository: 'other-repo',
+              remoteName: 'origin',
+            };
+          }
+          return mockDetectedRepo;
+        }
+        if (command === 'check_ado_connection') {
+          const org = (args as { organization: string }).organization;
+          if (org === 'other-org') {
+            return new Promise((r) => {
+              resolveOtherOrgCheck = r;
+            });
+          }
+          return mockConnectedStatus;
+        }
+        return prevInvoke(command, args);
+      };
+
+      el.repositoryPath = '/mock/other-org-repo';
+      await new Promise((r) => setTimeout(r, 20));
+
+      el.repositoryPath = '/mock/repo-2';
+      await waitForLoad(el);
+
+      resolveOtherOrgCheck({
+        connected: false,
+        user: null,
+        organization: 'other-org',
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      await el.updateComplete;
+
+      expect(
+        (el as unknown as { connectionStatus: { connected: boolean; organization: string } })
+          .connectionStatus
+      ).to.deep.include({
+        connected: true,
+        organization: 'testorg',
+      });
+    });
   });
 });

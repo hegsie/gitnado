@@ -437,4 +437,28 @@ describe('gn-clean-dialog re-entrancy', () => {
 
     expect(lastCleanFilesArgs, 'a declined clean must not wedge the button').to.not.be.null;
   });
+
+  it('discards a superseded loadFiles result when a newer load starts mid-flight', async () => {
+    cleanableEntries = [
+      { path: 'untracked.txt', isDirectory: false, isIgnored: false, isNestedRepo: false, size: 10 },
+    ];
+    const el = await fixture<GnCleanDialog>(
+      html`<gn-clean-dialog ?open=${true} .repositoryPath=${'/test/repo'}></gn-clean-dialog>`,
+    );
+    await el.updateComplete;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dialog = el as any;
+    cleanableEntries = [
+      { path: 'stale-ignored.txt', isDirectory: false, isIgnored: true, isNestedRepo: false, size: 10 },
+    ];
+    const firstLoad = dialog.loadFiles();
+    cleanableEntries = [];
+    const secondLoad = dialog.loadFiles();
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(dialog.entries).to.deep.equal([]);
+    expect(dialog.selectedPaths.size).to.equal(0);
+  });
 });

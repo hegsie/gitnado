@@ -620,18 +620,29 @@ export class GnMergeEditor extends CodeRenderMixin(LitElement) {
     if (changedProperties.has('conflictFile') && this.conflictFile) {
       await this.loadContents();
     }
-    if (changedProperties.has('repositoryPath') && this.repositoryPath) {
-      await this.checkMergeToolAvailability();
-      await this.refreshAiAvailability();
+    if (changedProperties.has('repositoryPath')) {
+      if (this.repositoryPath) {
+        await this.checkMergeToolAvailability();
+        await this.refreshAiAvailability();
+      } else {
+        this.mergeToolCheckSeq++;
+        this.hasMergeTool = false;
+      }
     }
   }
 
+  private mergeToolCheckSeq = 0;
+
   private async checkMergeToolAvailability(): Promise<void> {
-    if (!this.repositoryPath) return;
+    const repoPath = this.repositoryPath;
+    if (!repoPath) return;
+    const seq = ++this.mergeToolCheckSeq;
     try {
-      const result = await gitService.getMergeToolConfig(this.repositoryPath);
+      const result = await gitService.getMergeToolConfig(repoPath);
+      if (this.repositoryPath !== repoPath || this.mergeToolCheckSeq !== seq) return;
       this.hasMergeTool = result.success && !!result.data?.toolName;
     } catch {
+      if (this.repositoryPath !== repoPath || this.mergeToolCheckSeq !== seq) return;
       this.hasMergeTool = false;
     }
   }

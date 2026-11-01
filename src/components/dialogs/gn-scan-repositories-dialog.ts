@@ -456,7 +456,7 @@ export class GnScanRepositoriesDialog extends LitElement {
     this.cancelRequested = false;
     this.scanIssued = false;
     this.detachProgress();
-    this.progressUnlisten = await onRepositoryScanProgress((progress) => {
+    const unlisten = await onRepositoryScanProgress((progress) => {
       // A late event from a scan the user already cancelled must not reanimate
       // the progress line under the results.
       if (token === this.scanToken && this.phase === 'scanning') this.progress = progress;
@@ -464,9 +464,10 @@ export class GnScanRepositoriesDialog extends LitElement {
 
     // Closed, reopened, or rescanned while the listener was being attached.
     if (token !== this.scanToken) {
-      this.detachProgress();
+      unlisten();
       return;
     }
+    this.progressUnlisten = unlisten;
     if (this.cancelRequested) {
       // Cancelled before the walk was even asked for: report it as the empty
       // cancelled scan it is rather than starting one nobody wants.
@@ -484,7 +485,9 @@ export class GnScanRepositoriesDialog extends LitElement {
 
     this.scanIssued = true;
     const response = await scanForRepositories(this.scanPath);
-    this.detachProgress();
+    if (this.progressUnlisten === unlisten) {
+      this.detachProgress();
+    }
     // Closed, reopened, or rescanned while this scan was running.
     if (token !== this.scanToken) return;
 

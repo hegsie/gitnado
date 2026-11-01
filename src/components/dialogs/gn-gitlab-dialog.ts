@@ -3,15 +3,16 @@
  * Manage GitLab connection, view MRs, issues, and pipelines
  */
 
-import { LitElement, html, css, nothing } from 'lit';
+import { html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
-import { showConfirm } from '../../services/dialog.service.ts';
-import { loggers, openExternalUrl, handleExternalLink } from '../../utils/index.ts';
+import { loggers, handleExternalLink } from '../../utils/index.ts';
+import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
+export type { PrReviewComment };
 import type {
   GitLabConnectionStatus,
   DetectedGitLabRepo,
@@ -33,29 +34,19 @@ import './gn-account-selector.ts';
 
 const log = loggers.gitlab;
 
-export interface PrReviewComment {
-  id: string;
-  author: string;
-  avatarUrl?: string | null;
-  body: string;
-  createdAt: string;
-  filePath?: string | null;
-  line?: number | null;
-}
-
-/**
- * Page sizes this dialog asks for when listing merge requests, issues and
- * pipelines. Each is passed straight into the listing call as `perPage`, so the
- * number the request caps at and the number the "capped" hint discloses are the
- * same constant — never a literal at the call site or in commands/gitlab.rs.
- */
 const GITLAB_LIST_PAGE_SIZE = 30;
 const GITLAB_PIPELINE_PAGE_SIZE = 20;
 
 type TabType = 'connection' | 'merge-requests' | 'issues' | 'pipelines' | 'create-mr' | 'create-issue';
 
 @customElement('gn-gitlab-dialog')
-export class GnGitLabDialog extends LitElement {
+export class GnGitLabDialog extends GnProviderDialogBase<
+  DetectedGitLabRepo,
+  GitLabConnectionStatus,
+  TabType
+> {
+  protected readonly providerDisplayName = 'GitLab';
+  protected override readonly reviewCommentNoun = 'MR' as const;
   static styles = [
     sharedStyles,
     css`
@@ -778,8 +769,6 @@ export class GnGitLabDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
   /**
    * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
    * this dialog was opened with a return target (the profile manager).
@@ -788,36 +777,21 @@ export class GnGitLabDialog extends LitElement {
   /** Profile name for the "Adding to <name>" breadcrumb; empty when standalone. */
   @property({ type: String }) attachToProfileName = '';
 
-  @state() private activeTab: TabType = 'connection';
-  @state() private connectionStatus: GitLabConnectionStatus | null = null;
-  @state() private detectedRepo: DetectedGitLabRepo | null = null;
   @state() private mergeRequests: GitLabMergeRequest[] = [];
   @state() private issues: GitLabIssue[] = [];
   @state() private pipelines: GitLabPipeline[] = [];
   @state() private labels: string[] = [];
-  @state() private isLoading = false;
-  @state() private error: string | null = null;
   @state() private tokenInput = '';
   @state() private instanceUrlInput = 'https://gitlab.com';
   @state() private mrFilter: 'opened' | 'merged' | 'closed' | 'all' = 'opened';
   @state() private issueFilter: 'opened' | 'closed' | 'all' = 'opened';
 
-  // Multi-account support (global accounts)
-  @state() private accounts: IntegrationAccount[] = [];
-  @state() private selectedAccountId: string | null = null;
-
   // OAuth state
   @state() private authMethod: 'oauth' | 'pat' = 'oauth';
   @state() private oauthState: OAuthFlowState = { status: 'idle' };
 
-  private unsubscribeStore?: () => void;
   private oauthCompleteHandler?: EventListener;
   private oauthStateUnsubscribe?: () => void;
-  private loadGeneration = 0;
-  // Set while the user is mid-"Add account" (selection intentionally cleared so
-  // the next save creates a NEW account). Guards the store subscription from
-  // re-selecting an existing account on a background emit.
-  private isAddingAccount = false;
   // The account/instance the in-flight OAuth flow targets, pinned when the flow
   // STARTS. The browser round-trip is async, so `selectedAccountId` may point at
   // a different account by the time `oauth-complete` lands — writing the new
@@ -838,15 +812,6 @@ export class GnGitLabDialog extends LitElement {
   @state() private createIssueTitle = '';
   @state() private createIssueDescription = '';
   @state() private createIssueLabels: string[] = [];
-
-  // MR Review Comments drawer
-  @state() private expandedPrNumber: number | null = null;
-  @state() private prComments: Record<number, PrReviewComment[]> = {};
-  @state() private loadingCommentsForPr: number | null = null;
-  @state() private postingCommentForPr: number | null = null;
-  @state() private commentBodyInput = '';
-  @state() private commentFilePathInput = '';
-  @state() private commentLineInput = '';
 
   async connectedCallback(): Promise<void> {
     super.connectedCallback();
@@ -892,25 +857,55 @@ export class GnGitLabDialog extends LitElement {
       if (this.selectedAccountId && !this.accounts.some(a => a.id === this.selectedAccountId)) {
         this.selectedAccountId = null;
       }
+      const selectMatchingCandidate = () => {
+        const candidate =
+          getActiveProfilePreferredAccount('gitlab') ??
+          selectDefaultGlobalAccount('gitlab') ??
+          this.accounts[0];
+        if (this.detectedRepo) {
+          const detectedNorm = this.normalizeInstanceUrl(this.detectedRepo.instanceUrl);
+          const candidateNorm =
+            candidate?.config.type === 'gitlab'
+              ? this.normalizeInstanceUrl(candidate.config.instanceUrl)
+              : '';
+          const matching =
+            candidate && (!candidateNorm || candidateNorm === detectedNorm)
+              ? candidate
+              : this.accounts.find(
+                  (a) =>
+                    a.config.type === 'gitlab' &&
+                    (!a.config.instanceUrl ||
+                      this.normalizeInstanceUrl(a.config.instanceUrl) === detectedNorm)
+                );
+          if (matching) {
+            applyAccount(matching);
+          }
+        } else {
+          applyAccount(candidate);
+        }
+      };
       const activeProfileId = state.activeProfile?.id ?? null;
       if (activeProfileId !== lastActiveProfileId) {
         // Track the id either way so this doesn't re-fire, but DON'T clobber a
-        // half-completed "Add account" flow (a background store emit must not
-        // re-select an existing account, or the next save overwrites it).
+        // half-completed "Add account" flow or an in-flight loadInitialData()
+        // that is about to detect the repo and match the host.
         lastActiveProfileId = activeProfileId;
-        if (!this.isAddingAccount) {
-          applyAccount(getActiveProfilePreferredAccount('gitlab') ?? this.accounts[0]);
+        if (!this.isAddingAccount && !this.initInFlight && this.accounts.length > 0) {
+          selectMatchingCandidate();
         }
-      } else if (!this.isAddingAccount && !this.selectedAccountId && this.accounts.length > 0) {
-        applyAccount(
-          getActiveProfilePreferredAccount('gitlab') ?? selectDefaultGlobalAccount('gitlab') ?? this.accounts[0],
-        );
+      } else if (
+        !this.isAddingAccount &&
+        !this.initInFlight &&
+        !this.selectedAccountId &&
+        this.accounts.length > 0
+      ) {
+        selectMatchingCandidate();
       }
     });
 
     // Initialize from current state
     this.accounts = getAccountsByType('gitlab');
-    if (this.accounts.length > 0 && !this.selectedAccountId) {
+    if (this.accounts.length > 0 && !this.selectedAccountId && !this.open) {
       applyAccount(
         getActiveProfilePreferredAccount('gitlab') ?? selectDefaultGlobalAccount('gitlab') ?? this.accounts[0],
       );
@@ -932,58 +927,36 @@ export class GnGitLabDialog extends LitElement {
     this.oauthStateUnsubscribe?.();
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
-    if (changedProperties.has('open') && this.open) {
-      // Fresh open: clear selectedAccountId so loadInitialData() re-derives
-      // it from the current active profile's preferred account.
-      this.selectedAccountId = null;
-      await this.loadInitialData();
+  protected resetProviderRepoScopedState(): void {
+    if (!this.isAddingAccount) {
+      const selectedAccount = this.selectedAccountId
+        ? (getAccountById(this.selectedAccountId) ??
+          this.accounts.find((a) => a.id === this.selectedAccountId))
+        : undefined;
+      this.instanceUrlInput =
+        selectedAccount?.config.type === 'gitlab' && selectedAccount.config.instanceUrl
+          ? selectedAccount.config.instanceUrl
+          : 'https://gitlab.com';
     }
-    if (changedProperties.has('repositoryPath')) {
-      // The dialog is repo-independent (it stays open across the last tab close),
-      // so an empty path must clear the previously detected repo. Otherwise the
-      // repo-backed tabs keep rendering and acting on the closed repository.
-      // The create-* drafts belong to the repository they were typed against,
-      // so they go too -- otherwise a draft left on screen is submitted into
-      // whichever repository the dialog is repointed at.
-      this.resetRepoScopedDrafts();
-      if (!this.repositoryPath) {
-        this.detectedRepo = null;
-      } else if (this.open) {
-        await this.detectRepo();
-      }
-    }
-  }
-
-  /**
-   * Drop every create-* draft and leave any create-* tab. Called when
-   * repositoryPath changes, because those drafts are scoped to the repository
-   * they were composed against while the create handlers guard only on
-   * detectedRepo, which is re-derived from whatever repository is now current.
-   */
-  private resetRepoScopedDrafts(): void {
     this.createMrTitle = '';
     this.createMrDescription = '';
     this.createMrSource = '';
     this.createMrTarget = '';
     this.createMrDraft = false;
+    this.generatingMrDescription = false;
     this.createIssueTitle = '';
     this.createIssueDescription = '';
     this.createIssueLabels = [];
-    this.expandedPrNumber = null;
-    this.prComments = {};
-    this.loadingCommentsForPr = null;
-    this.postingCommentForPr = null;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    if (this.activeTab.startsWith('create-')) {
-      this.activeTab = 'connection';
-    }
+    this.mergeRequests = [];
+    this.issues = [];
+    this.pipelines = [];
+    this.labels = [];
   }
 
-  private async loadInitialData(): Promise<void> {
+  protected async loadInitialData(): Promise<void> {
     const generation = ++this.loadGeneration;
+    const autoSelectAccount = !this.selectedAccountId && !this.isAddingAccount;
+    this.initInFlight = true;
     this.isLoading = true;
     this.error = null;
 
@@ -1003,28 +976,45 @@ export class GnGitLabDialog extends LitElement {
       // Manual switches set selectedAccountId before calling loadInitialData()
       // and must not be overwritten.
       this.accounts = getAccountsByType('gitlab');
-      if (this.accounts.length > 0 && !this.selectedAccountId) {
-        const preferred = getActiveProfilePreferredAccount('gitlab')
-          ?? selectDefaultGlobalAccount('gitlab');
-        this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
-        if (preferred?.config.type === 'gitlab' && preferred.config.instanceUrl) {
-          this.instanceUrlInput = preferred.config.instanceUrl;
-        }
-      }
 
       if (this.repositoryPath) {
-        await this.detectRepo();
+        await this.detectRepo(false, autoSelectAccount && !this.selectedAccountId && !this.isAddingAccount);
         if (generation !== this.loadGeneration) return;
       }
-      if (this.detectedRepo?.instanceUrl || this.instanceUrlInput) {
+
+      if (this.accounts.length > 0 && autoSelectAccount && !this.selectedAccountId && !this.isAddingAccount) {
+        const preferred = getActiveProfilePreferredAccount('gitlab')
+          ?? selectDefaultGlobalAccount('gitlab');
+        if (this.detectedRepo) {
+          const matching = this.findMatchingAccountForInstance(
+            this.detectedRepo.instanceUrl,
+            preferred
+          );
+          this.selectedAccountId = matching?.id ?? null;
+        } else {
+          const chosen = preferred ?? this.accounts[0];
+          this.selectedAccountId = chosen?.id ?? null;
+          if (chosen?.config.type === 'gitlab' && chosen.config.instanceUrl) {
+            this.instanceUrlInput = chosen.config.instanceUrl;
+          }
+        }
+      }
+      if (!this.isAddingAccount && (this.detectedRepo?.instanceUrl || this.instanceUrlInput)) {
         await this.checkConnection();
+        if (generation !== this.loadGeneration) return;
+
+        if (this.isConnectedForDetectedRepo() && this.detectedRepo) {
+          await this.loadAllData();
+        }
       }
     } catch (err) {
       if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to load data';
     } finally {
       if (generation === this.loadGeneration) {
+        this.initInFlight = false;
         this.isLoading = false;
+        this.isDetectingRepo = false;
       }
     }
   }
@@ -1041,18 +1031,88 @@ export class GnGitLabDialog extends LitElement {
     }
   }
 
-  private async checkConnection(): Promise<void> {
-    const instanceUrl = this.detectedRepo?.instanceUrl || this.instanceUrlInput;
+  private normalizeInstanceUrl(url?: string | null): string {
+    return (url ?? '').trim().replace(/\/+$/, '').toLowerCase();
+  }
+
+  private findMatchingAccountForInstance(
+    instanceUrl?: string | null,
+    preferred?: IntegrationAccount | null
+  ): IntegrationAccount | undefined {
+    const detectedNorm = this.normalizeInstanceUrl(instanceUrl);
+    if (!detectedNorm) return preferred ?? this.accounts[0];
+    const preferredNorm =
+      preferred?.config.type === 'gitlab'
+        ? this.normalizeInstanceUrl(preferred.config.instanceUrl)
+        : '';
+    if (preferred && preferredNorm && preferredNorm === detectedNorm) {
+      return preferred;
+    }
+    const exactMatch = this.accounts.find(
+      (a) =>
+        a.config.type === 'gitlab' &&
+        Boolean(this.normalizeInstanceUrl(a.config.instanceUrl)) &&
+        this.normalizeInstanceUrl(a.config.instanceUrl) === detectedNorm
+    );
+    if (exactMatch) return exactMatch;
+    if (preferred && !preferredNorm) return preferred;
+    return this.accounts.find(
+      (a) =>
+        a.config.type === 'gitlab' &&
+        !this.normalizeInstanceUrl(a.config.instanceUrl)
+    );
+  }
+
+  private isConnectedForDetectedRepo(): boolean {
+    if (!this.connectionStatus?.connected) return false;
+    if (!this.detectedRepo || !this.connectionStatus.instanceUrl) return true;
+    return (
+      this.normalizeInstanceUrl(this.connectionStatus.instanceUrl) ===
+      this.normalizeInstanceUrl(this.detectedRepo.instanceUrl)
+    );
+  }
+
+  private async checkConnection(expectedRepoGen?: number): Promise<void> {
+    const accountId = this.selectedAccountId;
+    const account = accountId
+      ? (getAccountById(accountId) ?? this.accounts.find((a) => a.id === accountId))
+      : undefined;
+    const accountInstanceUrl =
+      account?.config.type === 'gitlab' ? account.config.instanceUrl : undefined;
+    const instanceUrl =
+      accountInstanceUrl || this.detectedRepo?.instanceUrl || this.instanceUrlInput;
     if (!instanceUrl) return;
 
-    // Get token for selected account (or legacy token if no account)
-    const token = await this.getSelectedAccountToken();
+    const generation = this.loadGeneration;
+    const matchesAccountInstance =
+      !accountInstanceUrl ||
+      this.normalizeInstanceUrl(accountInstanceUrl) === this.normalizeInstanceUrl(instanceUrl);
+    const isCurrent = () =>
+      generation === this.loadGeneration &&
+      (expectedRepoGen === undefined || this.repoGeneration === expectedRepoGen) &&
+      this.selectedAccountId === accountId &&
+      this.normalizeInstanceUrl(
+        accountInstanceUrl || this.detectedRepo?.instanceUrl || this.instanceUrlInput
+      ) === this.normalizeInstanceUrl(instanceUrl);
+    // When checking a detected repository whose host differs from the selected
+    // account's configured instance, do not send that account's token to the
+    // foreign host.
+    const token = matchesAccountInstance
+      ? await this.getSelectedAccountToken(instanceUrl)
+      : null;
+    if (!isCurrent()) return;
     const result = await gitService.checkGitLabConnectionWithToken(instanceUrl, token);
+    if (!isCurrent()) return;
     if (result.success && result.data) {
-      this.connectionStatus = result.data;
-      this.syncSharedConnectionStatus(result.data.connected);
+      this.connectionStatus = {
+        ...result.data,
+        instanceUrl: result.data.instanceUrl || instanceUrl,
+      };
+      if (matchesAccountInstance) {
+        this.syncSharedConnectionStatus(result.data.connected);
+      }
       // Update cached user in global account if connected
-      if (this.selectedAccountId && result.data.connected && result.data.user) {
+      if (this.selectedAccountId && matchesAccountInstance && result.data.connected && result.data.user) {
         await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
           username: result.data.user.username,
           displayName: result.data.user.name ?? null,
@@ -1065,7 +1125,9 @@ export class GnGitLabDialog extends LitElement {
       // surfaces (toolbar, account selector dot) don't keep showing a stale
       // "connected" state for a now-invalid token.
       this.connectionStatus = { connected: false, user: null, instanceUrl };
-      this.syncSharedConnectionStatus(false);
+      if (matchesAccountInstance) {
+        this.syncSharedConnectionStatus(false);
+      }
     }
   }
 
@@ -1075,16 +1137,30 @@ export class GnGitLabDialog extends LitElement {
    * this a signed-in account reads as disconnected on the next open). Personal
    * access tokens have no OAuth bundle and are returned unchanged.
    */
-  private async getSelectedAccountToken(): Promise<string | null> {
-    if (!this.selectedAccountId) return null;
+  private async getSelectedAccountToken(
+    targetInstanceUrl = this.detectedRepo?.instanceUrl,
+    targetAccountId: string | null = this.selectedAccountId,
+  ): Promise<string | null> {
+    if (!targetAccountId) return null;
     // Refresh against the instance the account was created on — a detected repo
     // on a DIFFERENT instance must not redirect the refresh grant.
-    const account = getAccountById(this.selectedAccountId);
+    const account =
+      getAccountById(targetAccountId) ??
+      this.accounts.find((a) => a.id === targetAccountId);
     const instanceUrl =
       account?.config.type === 'gitlab' ? account.config.instanceUrl : this.instanceUrlInput;
+    if (
+      targetInstanceUrl &&
+      account?.config.type === 'gitlab' &&
+      account.config.instanceUrl &&
+      this.normalizeInstanceUrl(account.config.instanceUrl) !==
+        this.normalizeInstanceUrl(targetInstanceUrl)
+    ) {
+      return null;
+    }
     return credentialService.getFreshAccountToken(
       'gitlab',
-      this.selectedAccountId,
+      targetAccountId,
       'gitlab',
       instanceUrl || undefined
     );
@@ -1097,10 +1173,12 @@ export class GnGitLabDialog extends LitElement {
     const { account } = e.detail;
     // The user explicitly selected an existing account — re-enable the
     // subscription's auto-apply branch.
-    this.isAddingAccount = false;
-    this.selectedAccountId = account.id;
-    this.connectionStatus = null;
-    this.error = null;
+    this.beginAccountSwitch(account.id);
+    this.tokenInput = '';
+    this.mergeRequests = [];
+    this.issues = [];
+    this.pipelines = [];
+    this.labels = [];
 
     // Update instance URL from account config
     if (account.config.type === 'gitlab' && account.config.instanceUrl) {
@@ -1117,10 +1195,7 @@ export class GnGitLabDialog extends LitElement {
   private handleAddAccount(): void {
     // Clear selection so the next token save creates a new account instead of
     // overwriting the previously-selected account's token.
-    this.isAddingAccount = true;
-    this.activeTab = 'connection';
-    this.connectionStatus = null;
-    this.selectedAccountId = null;
+    this.beginAddAccount();
     this.tokenInput = '';
   }
 
@@ -1141,8 +1216,12 @@ export class GnGitLabDialog extends LitElement {
     );
   }
 
-  private async detectRepo(): Promise<void> {
-    if (!this.repositoryPath) return;
+  protected async detectRepo(loadData = true, updateInstanceInput = true): Promise<void> {
+    if (!this.repositoryPath) {
+      this.detectGeneration++;
+      this.isDetectingRepo = false;
+      return;
+    }
 
     // The dialog outlives the repository -- it stays open when the last tab
     // closes -- so a detect issued for one path can resolve after the path has
@@ -1150,18 +1229,101 @@ export class GnGitLabDialog extends LitElement {
     // selected) repository from being re-detected and re-loaded over the
     // current one.
     const requestedPath = this.repositoryPath;
-    const result = await gitService.detectGitLabRepo(requestedPath);
-    if (this.repositoryPath !== requestedPath) return;
-    if (result.success && result.data) {
-      this.detectedRepo = result.data;
-      this.instanceUrlInput = result.data.instanceUrl;
-      if (this.connectionStatus?.connected) {
-        await this.loadAllData();
+    const repoGen = this.repoGeneration;
+    const detectGen = ++this.detectGeneration;
+    this.detectedRepo = null;
+    this.isDetectingRepo = true;
+    try {
+      const result = await gitService.detectGitLabRepo(requestedPath);
+      if (
+        this.repositoryPath !== requestedPath ||
+        this.repoGeneration !== repoGen ||
+        this.detectGeneration !== detectGen
+      ) {
+        return;
       }
-    } else if (!result.success) {
-      // A genuine backend failure (not merely "this isn't a GitLab repo", which
-      // surfaces as success with null data) must not fail silently.
-      this.error = result.error?.message ?? 'Failed to detect GitLab repository';
+      this.isDetectingRepo = false;
+      if (result.success && result.data) {
+        this.detectedRepo = result.data;
+        if (!this.isAddingAccount && (loadData || updateInstanceInput)) {
+          this.instanceUrlInput = result.data.instanceUrl;
+        }
+        if (loadData && !this.isAddingAccount) {
+          const detectedNorm = this.normalizeInstanceUrl(result.data.instanceUrl);
+          let accountChanged = false;
+          if (this.accounts.length > 0) {
+            const currentAccount = this.selectedAccountId
+              ? (getAccountById(this.selectedAccountId) ??
+                this.accounts.find((a) => a.id === this.selectedAccountId))
+              : undefined;
+            const matchingAccount = this.findMatchingAccountForInstance(
+              result.data.instanceUrl,
+              currentAccount
+            );
+            const nextAccountId = matchingAccount?.id ?? null;
+            if (this.selectedAccountId !== nextAccountId) {
+              this.selectedAccountId = nextAccountId;
+              this.connectionStatus = null;
+              accountChanged = true;
+            }
+          }
+          const statusNorm = this.normalizeInstanceUrl(this.connectionStatus?.instanceUrl);
+          if (!this.connectionStatus || statusNorm !== detectedNorm || accountChanged) {
+            this.connectionStatus = null;
+            await this.checkConnection(repoGen);
+            if (
+              this.repositoryPath !== requestedPath ||
+              this.repoGeneration !== repoGen ||
+              this.detectGeneration !== detectGen
+            ) {
+              return;
+            }
+          }
+          if (this.isConnectedForDetectedRepo()) {
+            await this.loadAllData();
+          }
+        }
+      } else {
+        this.detectedRepo = null;
+        if (!result.success) {
+          // A genuine backend failure (not merely "this isn't a GitLab repo", which
+          // surfaces as success with null data) must not fail silently.
+          this.error = result.error?.message ?? 'Failed to detect GitLab repository';
+        } else if (loadData && !this.isAddingAccount && this.accounts.length > 0) {
+          if (!this.selectedAccountId) {
+            const preferred =
+              getActiveProfilePreferredAccount('gitlab') ??
+              selectDefaultGlobalAccount('gitlab') ??
+              this.accounts[0];
+            this.selectedAccountId = preferred?.id ?? null;
+            if (preferred?.config.type === 'gitlab' && preferred.config.instanceUrl) {
+              this.instanceUrlInput = preferred.config.instanceUrl;
+            }
+            this.connectionStatus = null;
+          }
+          const currentAccount = this.selectedAccountId
+            ? (getAccountById(this.selectedAccountId) ??
+              this.accounts.find((a) => a.id === this.selectedAccountId))
+            : undefined;
+          const accountInstanceUrl =
+            currentAccount?.config.type === 'gitlab'
+              ? currentAccount.config.instanceUrl
+              : undefined;
+          if (
+            !this.connectionStatus ||
+            (accountInstanceUrl &&
+              this.normalizeInstanceUrl(this.connectionStatus.instanceUrl) !==
+                this.normalizeInstanceUrl(accountInstanceUrl))
+          ) {
+            this.connectionStatus = null;
+            await this.checkConnection(repoGen);
+          }
+        }
+      }
+    } finally {
+      if (this.detectGeneration === detectGen) {
+        this.isDetectingRepo = false;
+      }
     }
   }
 
@@ -1175,20 +1337,30 @@ export class GnGitLabDialog extends LitElement {
   }
 
   private async loadMergeRequests(): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     this.isLoading = true;
     this.error = null;
 
     try {
       const token = await this.getSelectedAccountToken();
       const result = await gitService.listGitLabMergeRequests(
-        this.detectedRepo.instanceUrl,
-        this.detectedRepo.projectPath,
+        targetDetectedRepo.instanceUrl,
+        targetDetectedRepo.projectPath,
         this.mrFilter === 'all' ? undefined : this.mrFilter,
         GITLAB_LIST_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.mergeRequests = result.data;
@@ -1196,111 +1368,98 @@ export class GnGitLabDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load merge requests';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load merge requests';
     } finally {
-      this.isLoading = false;
-    }
-  }
-
-  private async togglePrComments(mrIid: number): Promise<void> {
-    if (this.expandedPrNumber === mrIid) {
-      this.expandedPrNumber = null;
-      return;
-    }
-    this.expandedPrNumber = mrIid;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    await this.loadPrComments(mrIid);
-  }
-
-  private async loadPrComments(mrIid: number): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed(this.detectedRepo.instanceUrl || 'https://gitlab.com', false)) return;
-
-    this.loadingCommentsForPr = mrIid;
-    this.error = null;
-
-    try {
-      const token = await this.getSelectedAccountToken();
-      const result = await invokeCommand<PrReviewComment[]>('get_gitlab_mr_comments', {
-        instanceUrl: this.detectedRepo.instanceUrl,
-        projectPath: this.detectedRepo.projectPath,
-        mrIid,
-        token,
-      });
-
-      if (result.success && result.data) {
-        this.prComments = {
-          ...this.prComments,
-          [mrIid]: result.data,
-        };
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to load MR comments';
-        showToast(this.error, 'error');
+      if (
+        this.repositoryPath === targetRepoPath &&
+        this.detectedRepo === targetDetectedRepo &&
+        this.selectedAccountId === targetAccountId
+      ) {
+        this.isLoading = false;
       }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to load MR comments';
-      showToast(this.error, 'error');
-    } finally {
-      this.loadingCommentsForPr = null;
     }
   }
 
-  private async handleAddPrComment(mrIid: number): Promise<void> {
-    const rawBody = this.commentBodyInput.trim();
-    if (!rawBody || !this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed(this.detectedRepo.instanceUrl || 'https://gitlab.com', false)) return;
+  protected override isConnectedForComments(): boolean {
+    return this.isConnectedForDetectedRepo();
+  }
 
-    const filePath = this.commentFilePathInput.trim();
-    const parsedLine = parseInt(this.commentLineInput.trim(), 10);
-    const line = !Number.isNaN(parsedLine) && parsedLine > 0 ? parsedLine : undefined;
+  protected getCommentsOutboundHost(repo: DetectedGitLabRepo): string {
+    return repo.instanceUrl || 'https://gitlab.com';
+  }
+
+  protected async getTokenForComments(
+    targetAccountId: string | null,
+  ): Promise<string | null | undefined> {
+    return this.getSelectedAccountToken(
+      this.detectedRepo?.instanceUrl,
+      targetAccountId,
+    );
+  }
+
+  protected fetchPrComments(
+    repo: DetectedGitLabRepo,
+    mrIid: number,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment[]>('get_gitlab_mr_comments', {
+      instanceUrl: repo.instanceUrl,
+      projectPath: repo.projectPath,
+      mrIid,
+      token,
+    });
+  }
+
+  protected postPrComment(
+    repo: DetectedGitLabRepo,
+    mrIid: number,
+    rawBody: string,
+    filePath: string | undefined,
+    line: number | undefined,
+    _commitId: string | undefined,
+    token: string | null | undefined,
+  ) {
     const body = filePath ? `[${filePath}${line ? `:${line}` : ''}] ${rawBody}` : rawBody;
-
-    this.postingCommentForPr = mrIid;
-    this.error = null;
-
-    try {
-      const token = await this.getSelectedAccountToken();
-      const result = await invokeCommand<PrReviewComment>('add_gitlab_mr_comment', {
-        instanceUrl: this.detectedRepo.instanceUrl,
-        projectPath: this.detectedRepo.projectPath,
-        mrIid,
-        body,
-        token,
-      });
-
-      if (result.success) {
-        this.commentBodyInput = '';
-        this.commentFilePathInput = '';
-        this.commentLineInput = '';
-        showToast('Comment posted', 'success');
-        await this.loadPrComments(mrIid);
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to post MR comment';
-        showToast(this.error, 'error');
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to post MR comment';
-      showToast(this.error, 'error');
-    } finally {
-      this.postingCommentForPr = null;
-    }
+    return invokeCommand<PrReviewComment>('add_gitlab_mr_comment', {
+      instanceUrl: repo.instanceUrl,
+      projectPath: repo.projectPath,
+      mrIid,
+      body,
+      token,
+    });
   }
 
   private async loadIssues(): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
+
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
 
     try {
       const token = await this.getSelectedAccountToken();
       const result = await gitService.listGitLabIssues(
-        this.detectedRepo.instanceUrl,
-        this.detectedRepo.projectPath,
+        targetDetectedRepo.instanceUrl,
+        targetDetectedRepo.projectPath,
         this.issueFilter === 'all' ? undefined : this.issueFilter,
         undefined, // labels
         GITLAB_LIST_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.issues = result.data;
@@ -1308,22 +1467,40 @@ export class GnGitLabDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load issues';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load issues';
     }
   }
 
   private async loadPipelines(): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
+
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
 
     try {
       const token = await this.getSelectedAccountToken();
       const result = await gitService.listGitLabPipelines(
-        this.detectedRepo.instanceUrl,
-        this.detectedRepo.projectPath,
+        targetDetectedRepo.instanceUrl,
+        targetDetectedRepo.projectPath,
         undefined, // status
         GITLAB_PIPELINE_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.pipelines = result.data;
@@ -1331,20 +1508,38 @@ export class GnGitLabDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load pipelines';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load pipelines';
     }
   }
 
   private async loadLabels(): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
+
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
 
     try {
       const token = await this.getSelectedAccountToken();
       const result = await gitService.getGitLabLabels(
-        this.detectedRepo.instanceUrl,
-        this.detectedRepo.projectPath,
+        targetDetectedRepo.instanceUrl,
+        targetDetectedRepo.projectPath,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.labels = result.data;
@@ -1355,6 +1550,13 @@ export class GnGitLabDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load labels';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load labels';
     }
   }
@@ -1362,34 +1564,54 @@ export class GnGitLabDialog extends LitElement {
   private async handleSaveToken(): Promise<void> {
     if (!this.tokenInput.trim() || !this.instanceUrlInput.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const generation = this.beginAccountOp();
     const tokenToSave = this.tokenInput.trim();
     const instanceUrl = this.instanceUrlInput.trim();
+    const targetAccountId = this.selectedAccountId;
+    const targetWasAddingAccount = this.isAddingAccount;
 
     try {
       // First verify the token works by checking connection
       const verifyResult = await gitService.checkGitLabConnectionWithToken(instanceUrl, tokenToSave);
       if (!verifyResult.success || !verifyResult.data?.connected) {
-        this.error = verifyResult.error?.message ?? 'Invalid token or connection failed';
+        if (generation === this.loadGeneration) {
+          this.error = verifyResult.error?.message ?? 'Invalid token or connection failed';
+        }
         return;
       }
 
       const user = verifyResult.data.user;
+      const selectedAccount = targetAccountId
+        ? (getAccountById(targetAccountId) ??
+          this.accounts.find((a) => a.id === targetAccountId))
+        : undefined;
+      const selectedAccountInstance =
+        selectedAccount?.config.type === 'gitlab'
+          ? selectedAccount.config.instanceUrl
+          : undefined;
+      const canUpdateSelectedAccount =
+        Boolean(targetAccountId) &&
+        !targetWasAddingAccount &&
+        (!selectedAccountInstance ||
+          this.normalizeInstanceUrl(selectedAccountInstance) ===
+            this.normalizeInstanceUrl(instanceUrl));
 
-      // If we have a selected account, save token to that account
-      if (this.selectedAccountId) {
-        await credentialService.storeAccountToken('gitlab', this.selectedAccountId, tokenToSave);
+      let connectedAccountId: string;
+
+      // If we have a selected account for this same instance, save token to that account
+      if (targetAccountId && canUpdateSelectedAccount) {
+        await credentialService.storeAccountToken('gitlab', targetAccountId, tokenToSave);
         // Refresh cachedUser so the profile manager shows the up-to-date
         // avatar/username immediately instead of waiting for background validation.
         if (user) {
-          await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
+          await unifiedProfileService.updateGlobalAccountCachedUser(targetAccountId, {
             username: user.username,
             displayName: user.name ?? null,
             email: null, // GitLab API doesn't return email in user object
             avatarUrl: user.avatarUrl ?? null,
           });
         }
+        connectedAccountId = targetAccountId;
       } else {
         // No account selected - create a new global account
         const { createEmptyIntegrationAccount, generateId } = await import('../../types/unified-profile.types.ts');
@@ -1408,115 +1630,111 @@ export class GnGitLabDialog extends LitElement {
 
         const savedAccount = await unifiedProfileService.saveGlobalAccount(newAccount);
         await credentialService.storeAccountToken('gitlab', savedAccount.id, tokenToSave);
-        this.selectedAccountId = savedAccount.id;
-        // The new account now exists and is selected — the add flow is complete.
-        this.isAddingAccount = false;
+        connectedAccountId = savedAccount.id;
+        if (
+          this.selectedAccountId === targetAccountId &&
+          this.isAddingAccount === targetWasAddingAccount
+        ) {
+          this.selectedAccountId = savedAccount.id;
+          // The new account now exists and is selected — the add flow is complete.
+          this.isAddingAccount = false;
+        }
 
         // Refresh accounts list
         await unifiedProfileService.loadUnifiedProfiles();
         this.accounts = getAccountsByType('gitlab');
       }
 
-      // Token saved, update state
-      this.tokenInput = '';
-      this.connectionStatus = verifyResult.data;
-      this.syncSharedConnectionStatus(true);
+      unifiedProfileStore
+        .getState()
+        .setAccountConnectionStatus(connectedAccountId, 'connected');
+      if (this.tokenInput.trim() === tokenToSave) {
+        this.tokenInput = '';
+      }
 
-      // Load data if connected and repo detected
-      if (this.connectionStatus?.connected && this.detectedRepo) {
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+      this.connectionStatus = verifyResult.data;
+
+      if (this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false, false);
+      }
+
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+      // Load data if connected and repo detected on this instance
+      if (
+        this.connectionStatus?.connected &&
+        this.detectedRepo &&
+        this.normalizeInstanceUrl(this.detectedRepo.instanceUrl) ===
+          this.normalizeInstanceUrl(instanceUrl)
+      ) {
         await this.loadAllData();
       }
     } catch (err) {
+      if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to connect';
       this.tokenInput = tokenToSave;
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(generation);
     }
   }
 
   private async handleDisconnect(): Promise<void> {
-    this.isLoading = true;
-    this.error = null;
+    const targetAccountId = this.selectedAccountId;
 
-    try {
-      // Delete token for selected account or legacy token
-      if (this.selectedAccountId) {
-        await credentialService.deleteAccountToken('gitlab', this.selectedAccountId);
-      } else {
-        await gitService.deleteGitLabToken();
-      }
-
-      this.syncSharedConnectionStatus(false);
-      this.connectionStatus = null;
-      this.mergeRequests = [];
-      this.issues = [];
-      this.pipelines = [];
-      this.labels = [];
-      this.createIssueLabels = [];
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to disconnect';
-      showToast(this.error, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+    await this.runDisconnectOperation(
+      async () => {
+        if (targetAccountId) {
+          await credentialService.deleteAccountToken('gitlab', targetAccountId);
+        } else {
+          await gitService.deleteGitLabToken();
+        }
+      },
+      () => {
+        this.connectionStatus = {
+          connected: false,
+          user: null,
+          instanceUrl: this.instanceUrlInput || 'https://gitlab.com',
+        };
+        this.mergeRequests = [];
+        this.issues = [];
+        this.pipelines = [];
+        this.labels = [];
+        this.createIssueLabels = [];
+      },
+    );
   }
 
   private async handleDeleteIntegration(): Promise<void> {
-    if (!this.selectedAccountId) return;
-
-    const selected = this.accounts.find((a) => a.id === this.selectedAccountId);
-    const accountName = selected?.name ?? 'this account';
-    const confirmed = await showConfirm(
-      'Delete GitLab Integration',
-      `Delete ${accountName}? The stored token will be removed and any profile that uses this account as its default will lose that reference.`,
-      'warning',
-    );
-    if (!confirmed) return;
-
-    this.isLoading = true;
-    this.error = null;
-
-    // M10: Delete the config/account record (the source of truth) FIRST so a
-    // failure leaves the token intact but no zombie account. The keyring token
-    // deletion is best-effort last; if it fails we surface a warning rather than
-    // leaving a half-deleted state.
     const accountId = this.selectedAccountId;
-    try {
-      await unifiedProfileService.deleteGlobalAccount(accountId);
+    const account = accountId
+      ? (this.accounts.find((a) => a.id === accountId) ??
+        ({ id: accountId, name: 'this account' } as IntegrationAccount))
+      : undefined;
 
-      await unifiedProfileService.loadUnifiedProfiles();
-      this.accounts = getAccountsByType('gitlab');
+    await this.runDeleteIntegrationOperation({
+      account,
+      providerLabel: 'GitLab',
+      deleteCredentials: async (target) => {
+        await credentialService.deleteAccountToken('gitlab', target.id);
+      },
+      getRemainingAccounts: () => getAccountsByType('gitlab'),
+      onDeleted: async (nextAccountId) => {
+        const nextAccount = this.accounts.length > 0 ? this.accounts[0] : null;
+        this.instanceUrlInput =
+          (nextAccount?.config.type === 'gitlab' && nextAccount.config.instanceUrl) ||
+          this.detectedRepo?.instanceUrl ||
+          'https://gitlab.com';
+        this.mergeRequests = [];
+        this.issues = [];
+        this.pipelines = [];
+        this.labels = [];
+        this.createIssueLabels = [];
 
-      this.selectedAccountId = this.accounts.length > 0 ? this.accounts[0].id : null;
-      this.connectionStatus = null;
-      this.mergeRequests = [];
-      this.issues = [];
-      this.pipelines = [];
-
-      // Best-effort token cleanup after the record is gone.
-      try {
-        await credentialService.deleteAccountToken('gitlab', accountId);
-      } catch (tokenErr) {
-        // M7/M10: surface partial failure instead of swallowing it.
-        const msg =
-          tokenErr instanceof Error
-            ? `Account deleted, but its stored token could not be removed: ${tokenErr.message}`
-            : 'Account deleted, but its stored token could not be removed.';
-        this.error = msg;
-        showToast(msg, 'error');
-      }
-
-      if (this.accounts.length > 0) {
-        await this.loadInitialData();
-      }
-    } catch (err) {
-      // M7: error path was previously console-only (silent). Surface to the user.
-      const msg = err instanceof Error ? err.message : 'Failed to delete GitLab integration';
-      this.error = msg;
-      showToast(msg, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+        if (nextAccountId) {
+          await this.loadInitialData();
+        }
+      },
+    });
   }
 
   /**
@@ -1586,14 +1804,14 @@ export class GnGitLabDialog extends LitElement {
     this.oauthTargetWasAddingAccount = undefined;
     this.oauthTargetInstanceUrl = undefined;
 
-    this.isLoading = true;
-    this.error = null;
-    const targetAccountExists = (): boolean =>
-      !targetAccountId ||
-      getAccountsByType('gitlab').some((account) => account.id === targetAccountId);
     const selectionChangedDuringOAuth = (): boolean =>
       this.selectedAccountId !== targetAccountId ||
       this.isAddingAccount !== targetWasAddingAccount;
+    const invalidatedLoad = !selectionChangedDuringOAuth();
+    const generation = this.beginAccountOp(invalidatedLoad);
+    const targetAccountExists = (): boolean =>
+      !targetAccountId ||
+      getAccountsByType('gitlab').some((account) => account.id === targetAccountId);
     let applyOAuthResultToSelection = false;
     let connectedAccountId: string | undefined;
 
@@ -1630,16 +1848,24 @@ export class GnGitLabDialog extends LitElement {
       });
 
       // Find existing account for this instance URL, or use the account the flow
-      // targeted. When the user explicitly chose "Add account", never match an
-      // existing same-instance account — that would clobber it instead of creating
-      // the new account they asked for (the two-identities-on-gitlab.com case).
-      const existingAccount = targetAccountId
-        ? getAccountById(targetAccountId)
+      // targeted (when its configured instance matches). When the user explicitly
+      // chose "Add account", never match an existing same-instance account — that
+      // would clobber it instead of creating the new account they asked for.
+      const targetAccount = targetAccountId ? getAccountById(targetAccountId) : undefined;
+      const targetAccountMatchesInstance =
+        targetAccount &&
+        (targetAccount.config.type !== 'gitlab' ||
+          !targetAccount.config.instanceUrl ||
+          this.normalizeInstanceUrl(targetAccount.config.instanceUrl) ===
+            this.normalizeInstanceUrl(targetInstanceUrl));
+      const existingAccount = targetAccountMatchesInstance
+        ? targetAccount
         : targetWasAddingAccount
           ? undefined
           : this.accounts.find((a) =>
               a.config.type === 'gitlab' &&
-              a.config.instanceUrl === targetInstanceUrl
+              this.normalizeInstanceUrl(a.config.instanceUrl) ===
+                this.normalizeInstanceUrl(targetInstanceUrl)
             );
 
       if (existingAccount) {
@@ -1652,7 +1878,7 @@ export class GnGitLabDialog extends LitElement {
           tokens.refreshToken,
           tokens.expiresIn
         );
-        if (!targetAccountExists()) {
+        if (existingAccount.id === targetAccountId && !targetAccountExists()) {
           // Deleted between the existence check and the write — don't leave an
           // orphaned credential behind for an account that no longer exists.
           await credentialService.deleteAccountToken('gitlab', existingAccount.id);
@@ -1757,17 +1983,30 @@ export class GnGitLabDialog extends LitElement {
         );
       }
 
-      // Load data if connected and repo detected
-      if (wasOpen && this.connectionStatus?.connected && this.detectedRepo) {
+      if (wasOpen && this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false, false);
+      }
+
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+      // Load data if connected and repo detected on this instance
+      if (
+        wasOpen &&
+        this.connectionStatus?.connected &&
+        this.detectedRepo &&
+        this.normalizeInstanceUrl(this.detectedRepo.instanceUrl) ===
+          this.normalizeInstanceUrl(targetInstanceUrl)
+      ) {
         await this.loadAllData();
       }
     } catch (err) {
-      if (targetAccountId && !targetAccountExists()) {
+      if (connectedAccountId === targetAccountId && targetAccountId && !targetAccountExists()) {
         await credentialService.deleteAccountToken('gitlab', targetAccountId);
       }
-      this.error = err instanceof Error ? err.message : 'Failed to complete OAuth';
+      if (invalidatedLoad && generation === this.loadGeneration) {
+        this.error = err instanceof Error ? err.message : 'Failed to complete OAuth';
+      }
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(invalidatedLoad ? generation : undefined);
     }
   }
 
@@ -1784,47 +2023,52 @@ export class GnGitLabDialog extends LitElement {
   private async handleGenerateMrDescription(): Promise<void> {
     if (!this.repositoryPath || !this.createMrSource || !this.createMrTarget) return;
 
+    const repoPath = this.repositoryPath;
+    const repoGen = this.repoGeneration;
     this.generatingMrDescription = true;
-    const result = await aiService.generatePrDescription(
-      this.repositoryPath,
-      this.createMrTarget,
-      this.createMrSource,
-      this.createMrTitle || 'Untitled MR',
-    );
+    try {
+      const result = await aiService.generatePrDescription(
+        repoPath,
+        this.createMrTarget,
+        this.createMrSource,
+        this.createMrTitle || 'Untitled MR',
+      );
+      if (this.repositoryPath !== repoPath || this.repoGeneration !== repoGen) return;
 
-    if (result.success && result.data) {
-      this.createMrDescription = result.data.body;
-    } else {
-      showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      if (result.success && result.data) {
+        this.createMrDescription = result.data.body;
+      } else {
+        showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      }
+    } finally {
+      if (this.repositoryPath === repoPath && this.repoGeneration === repoGen) {
+        this.generatingMrDescription = false;
+      }
     }
-
-    this.generatingMrDescription = false;
   }
 
   private async handleCreateMr(): Promise<void> {
     if (!this.detectedRepo || !this.createMrTitle.trim() || !this.createMrSource.trim() || !this.createMrTarget.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateMergeRequestInput = {
+      title: this.createMrTitle,
+      description: this.createMrDescription || undefined,
+      sourceBranch: this.createMrSource,
+      targetBranch: this.createMrTarget,
+      draft: this.createMrDraft,
+    };
 
-    try {
-      const token = await this.getSelectedAccountToken();
-      const input: CreateMergeRequestInput = {
-        title: this.createMrTitle,
-        description: this.createMrDescription || undefined,
-        sourceBranch: this.createMrSource,
-        targetBranch: this.createMrTarget,
-        draft: this.createMrDraft,
-      };
-
-      const result = await gitService.createGitLabMergeRequest(
-        this.detectedRepo.instanceUrl,
-        this.detectedRepo.projectPath,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
+    await this.runCreateOperation({
+      successMessage: 'Merge request created successfully',
+      failureMessage: 'Failed to create merge request',
+      getToken: (targetAccountId) =>
+        this.getSelectedAccountToken(
+          this.detectedRepo?.instanceUrl,
+          targetAccountId,
+        ),
+      execute: (repo, token) =>
+        gitService.createGitLabMergeRequest(repo.instanceUrl, repo.projectPath, input, token),
+      onSuccess: async () => {
         this.createMrTitle = '';
         this.createMrDescription = '';
         this.createMrSource = '';
@@ -1832,53 +2076,37 @@ export class GnGitLabDialog extends LitElement {
         this.createMrDraft = false;
         this.activeTab = 'merge-requests';
         await this.loadMergeRequests();
-        showToast('Merge request created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create merge request';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create merge request';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private async handleCreateIssue(): Promise<void> {
     if (!this.detectedRepo || !this.createIssueTitle.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateGitLabIssueInput = {
+      title: this.createIssueTitle,
+      description: this.createIssueDescription || undefined,
+      labels: this.createIssueLabels.length > 0 ? [...this.createIssueLabels] : undefined,
+    };
 
-    try {
-      const token = await this.getSelectedAccountToken();
-      const input: CreateGitLabIssueInput = {
-        title: this.createIssueTitle,
-        description: this.createIssueDescription || undefined,
-        labels: this.createIssueLabels.length > 0 ? this.createIssueLabels : undefined,
-      };
-
-      const result = await gitService.createGitLabIssue(
-        this.detectedRepo.instanceUrl,
-        this.detectedRepo.projectPath,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
+    await this.runCreateOperation({
+      successMessage: 'Issue created successfully',
+      failureMessage: 'Failed to create issue',
+      getToken: (targetAccountId) =>
+        this.getSelectedAccountToken(
+          this.detectedRepo?.instanceUrl,
+          targetAccountId,
+        ),
+      execute: (repo, token) =>
+        gitService.createGitLabIssue(repo.instanceUrl, repo.projectPath, input, token),
+      onSuccess: async () => {
         this.createIssueTitle = '';
         this.createIssueDescription = '';
         this.createIssueLabels = [];
         this.activeTab = 'issues';
         await this.loadIssues();
-        showToast('Issue created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create issue';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create issue';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private toggleCreateIssueLabel(label: string): void {
@@ -1889,32 +2117,6 @@ export class GnGitLabDialog extends LitElement {
 
   private handleClose(): void {
     this.dispatchEvent(new CustomEvent('close'));
-  }
-
-  private openInBrowser(url: string): void {
-    openExternalUrl(url);
-  }
-
-  private formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-    if (days === 0) return 'today';
-    if (days === 1) return 'yesterday';
-    if (days < 7) return `${days} days ago`;
-    if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
-    return date.toLocaleDateString();
-  }
-
-  private getInitials(name: string): string {
-    return name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .substring(0, 2)
-      .toUpperCase();
   }
 
   private renderConnectionTab() {
@@ -1980,7 +2182,7 @@ export class GnGitLabDialog extends LitElement {
           <button
             class="btn-oauth"
             @click=${this.handleStartOAuth}
-            ?disabled=${isOAuthPending || this.isLoading || !this.instanceUrlInput.trim()}
+            ?disabled=${isOAuthPending || this.isLoading || this.isDetectingRepo || !this.instanceUrlInput.trim()}
           >
             ${isOAuthPending ? html`
               <div class="oauth-spinner"></div>
@@ -2036,7 +2238,7 @@ export class GnGitLabDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleSaveToken}
-            ?disabled=${this.isLoading || isOAuthPending || !this.tokenInput.trim() || !this.instanceUrlInput.trim()}
+            ?disabled=${this.isLoading || isOAuthPending || this.isDetectingRepo || !this.tokenInput.trim() || !this.instanceUrlInput.trim()}
           >
             Connect with Token
           </button>
@@ -2046,7 +2248,7 @@ export class GnGitLabDialog extends LitElement {
   }
 
   private renderMergeRequestsTab() {
-    if (!this.connectionStatus?.connected) {
+    if (!this.isConnectedForDetectedRepo()) {
       return this.renderNotConnected('merge requests');
     }
 
@@ -2119,81 +2321,8 @@ export class GnGitLabDialog extends LitElement {
     `;
   }
 
-  private renderPrCommentsDrawer(mrIid: number) {
-    const comments = this.prComments[mrIid] ?? [];
-    const isLoadingComments = this.loadingCommentsForPr === mrIid;
-    const isPosting = this.postingCommentForPr === mrIid;
-
-    return html`
-      <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${mrIid}" @click=${(e: Event) => e.stopPropagation()}>
-        ${isLoadingComments ? html`
-          <div class="pr-comments-empty">Loading comments...</div>
-        ` : comments.length === 0 ? html`
-          <div class="pr-comments-empty">No comments yet</div>
-        ` : html`
-          <div class="pr-comments-list">
-            ${comments.map(c => html`
-              <div class="pr-comment-item" data-testid="pr-comment-item-${c.id}">
-                <div class="pr-comment-header">
-                  <span class="pr-comment-author">${c.author}</span>
-                  ${c.filePath ? html`
-                    <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
-                  ` : nothing}
-                  <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
-                </div>
-                <div class="pr-comment-body">${c.body}</div>
-              </div>
-            `)}
-          </div>
-        `}
-        <div class="pr-comment-form">
-          <div class="pr-comment-inline-fields">
-            <input
-              type="text"
-              class="pr-comment-file-input"
-              placeholder="File path (optional, for inline comment)"
-              .value=${this.commentFilePathInput}
-              @input=${(e: Event) => {
-                this.commentFilePathInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-            <input
-              type="number"
-              min="1"
-              class="pr-comment-line-input"
-              placeholder="Line #"
-              .value=${this.commentLineInput}
-              @input=${(e: Event) => {
-                this.commentLineInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </div>
-          <div class="pr-comment-input-row">
-            <textarea
-              class="pr-comment-body-input"
-              rows="2"
-              placeholder="Write a review comment..."
-              .value=${this.commentBodyInput}
-              @input=${(e: Event) => {
-                this.commentBodyInput = (e.target as HTMLTextAreaElement).value;
-              }}
-            ></textarea>
-            <button
-              class="btn btn-primary pr-comment-submit"
-              data-testid="pr-comment-submit-${mrIid}"
-              ?disabled=${!this.commentBodyInput.trim() || isPosting}
-              @click=${() => this.handleAddPrComment(mrIid)}
-            >
-              ${isPosting ? 'Posting...' : 'Post Comment'}
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
   private renderIssuesTab() {
-    if (!this.connectionStatus?.connected) {
+    if (!this.isConnectedForDetectedRepo()) {
       return this.renderNotConnected('issues');
     }
 
@@ -2257,7 +2386,7 @@ export class GnGitLabDialog extends LitElement {
   }
 
   private renderPipelinesTab() {
-    if (!this.connectionStatus?.connected) {
+    if (!this.isConnectedForDetectedRepo()) {
       return this.renderNotConnected('pipelines');
     }
 
@@ -2391,7 +2520,7 @@ export class GnGitLabDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreateMr}
-            ?disabled=${this.isLoading || !this.createMrTitle.trim() || !this.createMrSource.trim() || !this.createMrTarget.trim()}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createMrTitle.trim() || !this.createMrSource.trim() || !this.createMrTarget.trim()}
           >
             Create Merge Request
           </button>
@@ -2444,7 +2573,7 @@ export class GnGitLabDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreateIssue}
-            ?disabled=${this.isLoading || !this.createIssueTitle.trim()}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createIssueTitle.trim()}
           >
             Create Issue
           </button>
@@ -2454,25 +2583,22 @@ export class GnGitLabDialog extends LitElement {
   }
 
   private renderNotConnected(feature: string) {
+    const mismatch =
+      this.connectionStatus?.connected &&
+      this.detectedRepo &&
+      this.connectionStatus.instanceUrl &&
+      this.normalizeInstanceUrl(this.connectionStatus.instanceUrl) !==
+        this.normalizeInstanceUrl(this.detectedRepo.instanceUrl);
     return html`
       <div class="empty-state">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
         </svg>
-        <p>Connect to GitLab to view ${feature}</p>
-      </div>
-    `;
-  }
-
-  private renderNoRepo() {
-    return html`
-      <div class="empty-state">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-          <line x1="12" y1="17" x2="12.01" y2="17"></line>
-        </svg>
-        <p>No GitLab repository detected</p>
+        <p>
+          ${mismatch
+            ? `Connected to ${this.connectionStatus?.instanceUrl}, not ${this.detectedRepo?.instanceUrl}. Connect to GitLab (${this.detectedRepo?.instanceUrl}) to view ${feature}`
+            : `Connect to GitLab to view ${feature}`}
+        </p>
       </div>
     `;
   }

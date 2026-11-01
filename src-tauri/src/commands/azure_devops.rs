@@ -4,7 +4,7 @@
 
 use crate::error::{GitnadoError, Result};
 use crate::models::{ProviderRepository, ProviderRepositoryPage};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use crate::services::provider_http;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 use tracing::{debug, error, info};
@@ -157,8 +157,7 @@ fn get_auth_header(token: &str) -> String {
         format!("Bearer {}", token)
     } else {
         // PAT — use Basic auth with empty username
-        let credentials = format!(":{}", token);
-        format!("Basic {}", BASE64.encode(credentials.as_bytes()))
+        provider_http::basic_auth_header("", token)
     }
 }
 
@@ -174,8 +173,8 @@ const ADO_API_HOST: &str = "https://dev.azure.com";
 /// The HTTP client every outbound Azure DevOps call goes through — see the note
 /// on GitHub's `api_client` for why the gate lives on the client constructor.
 fn api_client() -> Result<reqwest::Client> {
-    crate::services::security::guard_url(ADO_API_HOST)?;
-    Ok(reqwest::Client::new())
+    provider_http::ensure_url_allowed(ADO_API_HOST)?;
+    provider_http::build_provider_http_client()
 }
 
 fn build_api_url(organization: &str, project: &str, path: &str) -> String {
@@ -421,15 +420,7 @@ pub async fn get_ado_pull_request(
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to fetch pull request: {}", e))
         })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ApiPullRequest {
@@ -587,15 +578,7 @@ pub async fn list_ado_pull_requests(
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to fetch pull requests: {}", e))
         })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ApiResponse {
@@ -718,15 +701,7 @@ pub async fn create_ado_pull_request(
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to create pull request: {}", e))
         })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ApiPullRequest {
@@ -1078,15 +1053,7 @@ pub async fn get_ado_work_items(
         .send()
         .await
         .map_err(|e| GitnadoError::OperationFailed(format!("Failed to fetch work items: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ApiResponse {
@@ -1346,15 +1313,7 @@ pub async fn create_azure_devops_work_item(
         .send()
         .await
         .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create work item: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ApiWorkItem {
@@ -1527,15 +1486,7 @@ pub async fn list_ado_pipeline_runs(
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to fetch pipeline runs: {}", e))
         })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ApiResponse {
@@ -1625,14 +1576,8 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
             GitnadoError::OperationFailed(format!("Failed to fetch profile: {}", e))
         })?;
 
-    if !profile_response.status().is_success() {
-        let status = profile_response.status();
-        let body = profile_response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let profile_response =
+        provider_http::check_provider_response(profile_response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct ProfileData {
@@ -1662,14 +1607,8 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
             GitnadoError::OperationFailed(format!("Failed to fetch accounts: {}", e))
         })?;
 
-    if !accounts_response.status().is_success() {
-        let status = accounts_response.status();
-        let body = accounts_response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Azure DevOps API error {}: {}",
-            status, body
-        )));
-    }
+    let accounts_response =
+        provider_http::check_provider_response(accounts_response, "Azure DevOps").await?;
 
     #[derive(Deserialize)]
     struct AccountsResponse {
@@ -1718,12 +1657,7 @@ const REPOSITORIES_DEFAULT_PER_PAGE: u32 = 30;
 /// and an HTML sign-in page, which is treated the same way. Anything else keeps
 /// the module's usual message shape.
 fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
-    if status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::NON_AUTHORITATIVE_INFORMATION
-    {
-        return GitnadoError::AuthenticationRequired;
-    }
-    GitnadoError::OperationFailed(format!("Azure DevOps API error {}: {}", status, body))
+    provider_http::map_repository_list_api_error("Azure DevOps", status, body, true)
 }
 
 #[derive(Deserialize)]
@@ -1877,6 +1811,7 @@ pub async fn list_ado_repositories(
 mod tests {
     use super::*;
     use crate::services::security::test_support::no_policy;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     // ========================================================================
     // Repository Listing Tests

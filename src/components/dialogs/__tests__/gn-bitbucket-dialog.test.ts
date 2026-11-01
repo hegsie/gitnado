@@ -1794,5 +1794,25 @@ describe('gn-bitbucket-dialog', () => {
       expect((check!.args as { token: string }).token).to.equal('bbapp:newuser:new-secret');
       expect(keyringStore.get('bitbucket_token_bb-acc-1')).to.equal('bbapp:newuser:new-secret');
     });
+
+    it('clears detectedRepo and repo lists when switching to a non-Bitbucket repository', async () => {
+      keyringStore.set('bitbucket_token_bb-acc-1', 'tok-1');
+      connectionResponse = mockConnectedStatus;
+      detectedRepoResponse = mockDetectedRepo;
+      unifiedProfileStore.getState().setAccounts([mockAccount]);
+
+      const el = await fixture<GnBitbucketDialog>(html`
+        <gn-bitbucket-dialog .open=${true} .repositoryPath=${'/mock/repo'}></gn-bitbucket-dialog>
+      `);
+      await waitForLoad(el);
+      expect((el as unknown as { detectedRepo: unknown }).detectedRepo).to.not.be.null;
+
+      detectedRepoResponse = null;
+      el.repositoryPath = '/mock/local-only-repo';
+      await waitForLoad(el);
+
+      expect((el as unknown as { detectedRepo: unknown }).detectedRepo).to.be.null;
+      expect((el as unknown as { pullRequests: unknown[] }).pullRequests).to.deep.equal([]);
+    });
   });
 });

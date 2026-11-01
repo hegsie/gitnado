@@ -396,9 +396,21 @@ export class GnAnalyticsPanel extends LitElement {
   }
 
   updated(changed: Map<string, unknown>): void {
-    if (changed.has('repositoryPath') && this.repositoryPath && this.repositoryPath !== this.lastLoadedPath) {
-      this.loadStats();
-      return;
+    if (changed.has('repositoryPath')) {
+      if (!this.repositoryPath) {
+        this.clearPendingReload();
+        this.loadSeq++;
+        this.lastLoadedPath = null;
+        this.stats = null;
+        this.loading = false;
+        this.error = null;
+        this.needsReload = false;
+        return;
+      }
+      if (this.repositoryPath !== this.lastLoadedPath) {
+        this.loadStats();
+        return;
+      }
     }
     if (changed.has('active') && this.active && this.needsReload) {
       this.scheduleReload();

@@ -3,8 +3,8 @@
  * Manage Git Large File Storage
  */
 
-import { LitElement, html, css } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
@@ -17,9 +17,10 @@ import {
   isMaintenanceBlocked,
 } from '../../utils/maintenance-confirms.ts';
 import { warnRepositoryBusy, subscribeRefOps } from '../../utils/ref-lock.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 @customElement('gn-lfs-dialog')
-export class GnLfsDialog extends LitElement {
+export class GnLfsDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -383,9 +384,6 @@ export class GnLfsDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   @state() private status: LfsStatus | null = null;
   @state() private files: LfsFile[] = [];
   @state() private loading = false;
@@ -473,7 +471,8 @@ export class GnLfsDialog extends LitElement {
     return this.pruning;
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
+  override async updated(changedProperties: Map<string, unknown>): Promise<void> {
+    super.updated(changedProperties);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProperties.has('open')) {
       if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
@@ -588,9 +587,7 @@ export class GnLfsDialog extends LitElement {
       // but writes no .gitattributes, so nothing is tracked yet.
       this.success = 'Git LFS hooks installed — add a pattern below to start tracking files';
       await this.loadStatus(repoPath);
-      this.dispatchEvent(new CustomEvent('lfs-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('lfs-changed', repoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to initialize LFS';
     }
@@ -629,9 +626,7 @@ export class GnLfsDialog extends LitElement {
       this.success = `Now tracking ${pattern}`;
       this.newPattern = '';
       await this.loadStatus(repoPath);
-      this.dispatchEvent(new CustomEvent('lfs-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('lfs-changed', repoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to track pattern';
     }
@@ -665,9 +660,7 @@ export class GnLfsDialog extends LitElement {
       // Same asymmetry as handleTrack — see the note there.
       this.success = `No longer tracking ${pattern}`;
       await this.loadStatus(repoPath);
-      this.dispatchEvent(new CustomEvent('lfs-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('lfs-changed', repoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to untrack pattern';
     }
@@ -700,9 +693,7 @@ export class GnLfsDialog extends LitElement {
     if (result.success) {
       this.success = 'LFS files pulled successfully';
       await this.loadFiles(repoPath);
-      this.dispatchEvent(new CustomEvent('lfs-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('lfs-changed', repoPath || this.repositoryPath);
     } else if (!gitService.isNetworkGateRefusal(result.error)) {
       // The gate already said why; a declined confirm needs no message at all.
       this.error = result.error?.message || 'Failed to pull LFS files';
@@ -769,9 +760,7 @@ export class GnLfsDialog extends LitElement {
       if (result.success) {
         this.success = result.data || 'LFS files pruned';
         await this.loadStatus(repoPath);
-        this.dispatchEvent(new CustomEvent('lfs-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+        this.dispatchRepoEvent('lfs-changed', repoPath || this.repositoryPath);
       } else {
         this.error = result.error?.message || 'Failed to prune LFS files';
       }

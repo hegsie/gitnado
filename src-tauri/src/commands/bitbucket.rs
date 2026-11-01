@@ -6,7 +6,7 @@
 
 use crate::error::{GitnadoError, Result};
 use crate::models::{ProviderRepository, ProviderRepositoryPage};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use crate::services::provider_http;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 
@@ -16,8 +16,8 @@ const BITBUCKET_API_BASE: &str = "https://api.bitbucket.org/2.0";
 /// through — see the note on GitHub's `api_client` for why the gate lives on
 /// the client constructor rather than on each command.
 fn api_client() -> Result<reqwest::Client> {
-    crate::services::security::guard_url(BITBUCKET_API_BASE)?;
-    Ok(reqwest::Client::new())
+    provider_http::ensure_url_allowed(BITBUCKET_API_BASE)?;
+    provider_http::build_provider_http_client()
 }
 
 /// Sentinel prefix marking a per-account token slot that actually holds an
@@ -191,8 +191,7 @@ pub struct BitbucketPipeline {
 // ============================================================================
 
 fn get_auth_header(username: &str, password: &str) -> String {
-    let credentials = format!("{}:{}", username, password);
-    format!("Basic {}", BASE64.encode(credentials.as_bytes()))
+    provider_http::basic_auth_header(username, password)
 }
 
 /// Build the Authorization header for a per-account token.
@@ -493,14 +492,7 @@ pub async fn list_bitbucket_pull_requests(
             GitnadoError::OperationFailed(format!("Failed to fetch pull requests: {}", e))
         })?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bitbucket API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Bitbucket").await?;
 
     #[derive(Deserialize)]
     struct ApiResponse {
@@ -609,15 +601,7 @@ pub async fn get_bitbucket_pull_request(
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to fetch pull request: {}", e))
         })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bitbucket API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Bitbucket").await?;
 
     #[derive(Deserialize)]
     struct ApiPullRequest {
@@ -985,15 +969,7 @@ pub async fn create_bitbucket_pull_request(
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to create pull request: {}", e))
         })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bitbucket API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Bitbucket").await?;
 
     #[derive(Deserialize)]
     struct ApiPullRequest {
@@ -1231,15 +1207,7 @@ pub async fn create_bitbucket_issue(
         .send()
         .await
         .map_err(|e| GitnadoError::OperationFailed(format!("Failed to create issue: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bitbucket API error {}: {}",
-            status, body
-        )));
-    }
+    let response = provider_http::check_provider_response(response, "Bitbucket").await?;
 
     #[derive(Deserialize)]
     struct ApiIssue {
@@ -1480,10 +1448,7 @@ const REPOSITORIES_DEFAULT_PAGELEN: u32 = 30;
 /// `AUTH_REQUIRED` so the picker can offer "reconnect this account" instead of
 /// a raw API string. Anything else keeps the module's usual message shape.
 fn map_repository_list_error(status: reqwest::StatusCode, body: &str) -> GitnadoError {
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return GitnadoError::AuthenticationRequired;
-    }
-    GitnadoError::OperationFailed(format!("Bitbucket API error {}: {}", status, body))
+    provider_http::map_repository_list_api_error("Bitbucket", status, body, false)
 }
 
 #[derive(Deserialize)]
@@ -1655,6 +1620,7 @@ mod tests {
     use super::*;
     use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
     #[test]
     fn test_pagelen_query_param() {

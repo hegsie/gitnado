@@ -938,7 +938,12 @@ export class AppShell extends LitElement {
    * exactly as it did when each dialog had its own `@state()` flag.
    */
   @state() private dialogVersion = 0;
-  @state() private showJiraDialog = false;
+  private get showJiraDialog(): boolean {
+    return dialogs.isOpen('jira');
+  }
+  private set showJiraDialog(value: boolean) {
+    dialogs.setOpen('jira', value);
+  }
   private unsubscribeDialogs?: () => void;
   /**
    * Keys for destructive actions already running.
@@ -1622,11 +1627,20 @@ export class AppShell extends LitElement {
   };
 
   // Handle show-commit events (e.g., from reflog dialog "Show in graph")
-  private handleShowCommitEvent = (e: Event): void => {
-    const customEvent = e as CustomEvent<{ oid: string }>;
-    if (customEvent.detail?.oid) {
-      this.revealCommitInGraph(customEvent.detail.oid);
+  private handleShowCommitEvent = (e: Event): boolean => {
+    const customEvent = e as CustomEvent<{ oid: string; repositoryPath?: string }>;
+    if (!customEvent.detail?.oid) return false;
+    const repoPath = customEvent.detail.repositoryPath;
+    if (repoPath && this.activeRepository?.repository.path !== repoPath) {
+      showToast(
+        'Repository changed — switch back to that repository tab to view this commit in the graph',
+        'info',
+        4000,
+      );
+      return false;
     }
+    this.revealCommitInGraph(customEvent.detail.oid);
+    return true;
   };
 
   // Handle settings-changed events from settings dialog to re-render with new settings
@@ -1679,7 +1693,6 @@ export class AppShell extends LitElement {
       // unless it says otherwise.
       if (state.openRepositories.length === 0) {
         dialogs.closeRepoScoped();
-        this.showJiraDialog = false;
       }
 
       // Closing the pinned repo's TAB while its conflict dialog is up
@@ -5231,7 +5244,7 @@ export class AppShell extends LitElement {
         category: 'action',
         icon: 'globe',
         action: this.requiresRepository(() => {
-          this.showJiraDialog = true;
+          dialogs.open('jira');
         }),
       },
     ];
@@ -6602,7 +6615,12 @@ export class AppShell extends LitElement {
             dialogs.close('reflog');
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
-          @show-commit=${(e: CustomEvent<{ oid: string }>) => { dialogs.close('reflog'); this.revealCommitInGraph(e.detail.oid); }}
+          @show-commit=${(e: CustomEvent<{ oid: string; repositoryPath?: string }>) => {
+            e.stopPropagation();
+            if (this.handleShowCommitEvent(e)) {
+              dialogs.close('reflog');
+            }
+          }}
         ></gn-reflog-dialog>
 
         <gn-search-dialog
@@ -6628,7 +6646,8 @@ export class AppShell extends LitElement {
           ?open=${dialogs.isOpen('remotes')}
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('remotes'); }}
-          @remotes-changed=${() => this.handleRefresh()}
+          @remotes-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
+            this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
         ></gn-remote-dialog>
       ` : ''}
 
@@ -6842,9 +6861,9 @@ export class AppShell extends LitElement {
           @close=${() => { dialogs.close('hooks'); }}
         ></gn-hooks-dialog>
         <gn-jira-dialog
-          ?open=${this.showJiraDialog}
+          ?open=${dialogs.isOpen('jira')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { this.showJiraDialog = false; }}
+          @close=${() => { dialogs.close('jira'); }}
           @branch-created=${() => this.handleRefresh()}
         ></gn-jira-dialog>
       ` : ''}

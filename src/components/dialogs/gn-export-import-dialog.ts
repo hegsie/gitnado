@@ -303,6 +303,7 @@ export class GnExportImportDialog extends LitElement {
    * chosen first must not land on the file that is chosen now, or a stale
    * `isValid` would enable Import for a bundle nobody verified. */
   private bundleInspectSeq = 0;
+  private archivePreviewSeq = 0;
 
   @query('gn-modal') private modal!: GnModal;
 
@@ -411,6 +412,7 @@ export class GnExportImportDialog extends LitElement {
     // An inspection still in flight from the previous open must not report
     // into the freshly reset dialog.
     this.bundleInspectSeq++;
+    this.archivePreviewSeq++;
   }
 
   /** Cancel / × / Escape / overlay all honour the same rule. */
@@ -455,13 +457,20 @@ export class GnExportImportDialog extends LitElement {
     const repoPath = this.pinnedRepoPath;
     if (!repoPath) return;
     const ref = this.archiveRef;
+    const seq = ++this.archivePreviewSeq;
     this.previewLoading = true;
     this.error = '';
     try {
       const result = await gitService.getArchiveFiles(repoPath, ref);
-      // A ref change while this was in flight must not be overwritten by the
-      // stale answer.
-      if (this.archiveRef !== ref) return;
+      // A ref change or dialog reopen while this was in flight must not be
+      // overwritten by the stale answer.
+      if (
+        seq !== this.archivePreviewSeq ||
+        this.archiveRef !== ref ||
+        this.pinnedRepoPath !== repoPath
+      ) {
+        return;
+      }
       if (result.success) {
         this.previewFiles = result.data ?? [];
       } else {
@@ -469,11 +478,19 @@ export class GnExportImportDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to list archive contents';
       }
     } catch (err) {
-      if (this.archiveRef !== ref) return;
+      if (
+        seq !== this.archivePreviewSeq ||
+        this.archiveRef !== ref ||
+        this.pinnedRepoPath !== repoPath
+      ) {
+        return;
+      }
       this.previewFiles = [];
       this.error = err instanceof Error ? err.message : 'Failed to list archive contents';
     } finally {
-      if (this.archiveRef === ref) this.previewLoading = false;
+      if (seq === this.archivePreviewSeq && this.archiveRef === ref) {
+        this.previewLoading = false;
+      }
     }
   }
 
@@ -487,27 +504,31 @@ export class GnExportImportDialog extends LitElement {
   }
 
   private async handleExportArchive(): Promise<void> {
+    if (this.operationRunning) return;
     const repoPath = this.pinnedRepoPath;
+    const archiveRef = this.archiveRef;
+    const archiveFormat = this.archiveFormat;
+    const archivePrefix = this.archivePrefix.trim() || undefined;
     const ext = this.archiveExtension;
-    const suggested = `${basename(repoPath)}-${sanitizeForFilename(this.archiveRef)}.${ext}`;
-
-    const chosen = await saveDialog({
-      title: 'Export Archive',
-      defaultPath: suggested,
-      filters: [{ name: this.archiveFormat, extensions: [ext] }],
-    });
-    // Cancelling the picker is not a failure: no invoke, no error banner.
-    if (!chosen) return;
+    const suggested = `${basename(repoPath)}-${sanitizeForFilename(archiveRef)}.${ext}`;
 
     this.operationRunning = true;
     this.error = '';
     try {
+      const chosen = await saveDialog({
+        title: 'Export Archive',
+        defaultPath: suggested,
+        filters: [{ name: archiveFormat, extensions: [ext] }],
+      });
+      // Cancelling the picker is not a failure: no invoke, no error banner.
+      if (!chosen) return;
+
       const result = await gitService.createArchive(
         repoPath,
         chosen,
-        this.archiveRef,
-        this.archiveFormat,
-        this.archivePrefix.trim() || undefined,
+        archiveRef,
+        archiveFormat,
+        archivePrefix,
       );
       if (result.success) {
         showToast(`Archive written to ${chosen}`, 'success');
@@ -552,15 +573,8 @@ export class GnExportImportDialog extends LitElement {
   }
 
   private async handleCreatePatch(): Promise<void> {
-    if (this.selectedCommits.size === 0) return;
+    if (this.operationRunning || this.selectedCommits.size === 0) return;
     const repoPath = this.pinnedRepoPath;
-
-    const chosen = await openDialog({
-      title: 'Choose a folder for the patch files',
-      directory: true,
-    });
-    const dir = Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
-    if (!dir) return;
 
     // The backend numbers the files 0001-, 0002-, ... in the order it is
     // given, and stamps "Subject: [PATCH n/total]" the same way. The graph
@@ -587,6 +601,13 @@ export class GnExportImportDialog extends LitElement {
     this.operationRunning = true;
     this.error = '';
     try {
+      const chosen = await openDialog({
+        title: 'Choose a folder for the patch files',
+        directory: true,
+      });
+      const dir = Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
+      if (!dir) return;
+
       const result = await gitService.createPatch(repoPath, oids, dir);
       if (result.success) {
         const files = result.data ?? [];
@@ -698,24 +719,26 @@ export class GnExportImportDialog extends LitElement {
   private async handleCreateBundle(): Promise<void> {
     // The backend rejects "no refs and not --all"; the button is disabled for
     // that combination so the user can never reach the error.
-    if (!this.bundleAllRefs && this.selectedRefs.size === 0) return;
+    if (this.operationRunning || (!this.bundleAllRefs && this.selectedRefs.size === 0)) return;
     const repoPath = this.pinnedRepoPath;
-
-    const chosen = await saveDialog({
-      title: 'Create Bundle',
-      defaultPath: `${basename(repoPath)}.bundle`,
-      filters: [{ name: 'Git bundle', extensions: ['bundle'] }],
-    });
-    if (!chosen) return;
+    const allRefs = this.bundleAllRefs;
+    const refs = allRefs ? [] : [...this.selectedRefs];
 
     this.operationRunning = true;
     this.error = '';
     try {
+      const chosen = await saveDialog({
+        title: 'Create Bundle',
+        defaultPath: `${basename(repoPath)}.bundle`,
+        filters: [{ name: 'Git bundle', extensions: ['bundle'] }],
+      });
+      if (!chosen) return;
+
       const result = await gitService.bundleCreate(
         repoPath,
         chosen,
-        this.bundleAllRefs ? [] : [...this.selectedRefs],
-        this.bundleAllRefs,
+        refs,
+        allRefs,
       );
       if (result.success) {
         const data = result.data;

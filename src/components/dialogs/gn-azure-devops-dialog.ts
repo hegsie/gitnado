@@ -3,15 +3,14 @@
  * Manage Azure DevOps connection, view PRs, work items, and pipelines
  */
 
-import { LitElement, html, css, nothing } from 'lit';
+import { html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
-import { showConfirm } from '../../services/dialog.service.ts';
-import { loggers, openExternalUrl, handleExternalLink } from '../../utils/index.ts';
+import { loggers, handleExternalLink } from '../../utils/index.ts';
 import * as oauthService from '../../services/oauth.service.ts';
 import type { OAuthTokenResponse } from '../../types/oauth.types.ts';
 
@@ -30,20 +29,13 @@ import { unifiedProfileStore, getAccountsByType, selectDefaultGlobalAccount, get
 import * as unifiedProfileService from '../../services/unified-profile.service.ts';
 import type { IntegrationAccount } from '../../types/unified-profile.types.ts';
 import * as credentialService from '../../services/credential.service.ts';
+import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
 import './gn-modal.ts';
 import './gn-account-selector.ts';
 
-type TabType = 'connection' | 'pull-requests' | 'work-items' | 'pipelines' | 'create-pr' | 'create-work-item';
+export type { PrReviewComment };
 
-export interface PrReviewComment {
-  id: string;
-  author: string;
-  avatarUrl?: string | null;
-  body: string;
-  createdAt: string;
-  filePath?: string | null;
-  line?: number | null;
-}
+type TabType = 'connection' | 'pull-requests' | 'work-items' | 'pipelines' | 'create-pr' | 'create-work-item';
 
 /**
  * Page size this dialog asks for when listing work items. Passed straight into
@@ -74,7 +66,12 @@ interface EntraTokens {
 }
 
 @customElement('gn-azure-devops-dialog')
-export class GnAzureDevOpsDialog extends LitElement {
+export class GnAzureDevOpsDialog extends GnProviderDialogBase<
+  DetectedAdoRepo,
+  AdoConnectionStatus,
+  TabType
+> {
+  protected readonly providerDisplayName = 'Azure DevOps';
   static styles = [
     sharedStyles,
     css`
@@ -772,8 +769,6 @@ export class GnAzureDevOpsDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
   /**
    * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
    * this dialog was opened with a return target (the profile manager).
@@ -782,14 +777,9 @@ export class GnAzureDevOpsDialog extends LitElement {
   /** Profile name for the "Adding to <name>" breadcrumb; empty when standalone. */
   @property({ type: String }) attachToProfileName = '';
 
-  @state() private activeTab: TabType = 'connection';
-  @state() private connectionStatus: AdoConnectionStatus | null = null;
-  @state() private detectedRepo: DetectedAdoRepo | null = null;
   @state() private pullRequests: AdoPullRequest[] = [];
   @state() private workItems: AdoWorkItem[] = [];
   @state() private pipelineRuns: AdoPipelineRun[] = [];
-  @state() private isLoading = false;
-  @state() private error: string | null = null;
   @state() private tokenInput = '';
   @state() private organizationInput = '';
   @state() private hasStoredToken = false;
@@ -822,17 +812,6 @@ export class GnAzureDevOpsDialog extends LitElement {
   @state() private prFilter: 'active' | 'completed' | 'abandoned' | 'all' = 'active';
   @state() private workItemFilter: string = '';
 
-  // Multi-account support (global accounts)
-  @state() private accounts: IntegrationAccount[] = [];
-  @state() private selectedAccountId: string | null = null;
-
-  private unsubscribeStore?: () => void;
-  private loadGeneration = 0;
-  // Set while the user is mid-"Add account" (selection intentionally cleared so
-  // the next save creates a NEW account). Guards the store subscription from
-  // re-selecting an existing account on a background emit.
-  private isAddingAccount = false;
-
   // Create PR form
   @state() private createPrTitle = '';
   @state() private createPrDescription = '';
@@ -845,15 +824,6 @@ export class GnAzureDevOpsDialog extends LitElement {
   @state() private createWorkItemType = 'Task';
   @state() private createWorkItemTitle = '';
   @state() private createWorkItemDescription = '';
-
-  // PR Review Comments drawer
-  @state() private expandedPrNumber: number | null = null;
-  @state() private prComments: Record<number, PrReviewComment[]> = {};
-  @state() private loadingCommentsForPr: number | null = null;
-  @state() private postingCommentForPr: number | null = null;
-  @state() private commentBodyInput = '';
-  @state() private commentFilePathInput = '';
-  @state() private commentLineInput = '';
 
   async connectedCallback(): Promise<void> {
     super.connectedCallback();
@@ -895,27 +865,55 @@ export class GnAzureDevOpsDialog extends LitElement {
       if (this.selectedAccountId && !this.accounts.some(a => a.id === this.selectedAccountId)) {
         this.selectedAccountId = null;
       }
+      const selectMatchingCandidate = () => {
+        const candidate =
+          getActiveProfilePreferredAccount('azure-devops') ??
+          selectDefaultGlobalAccount('azure-devops') ??
+          this.accounts[0];
+        if (this.detectedRepo) {
+          const detectedNorm = this.normalizeOrg(this.detectedRepo.organization);
+          const candidateNorm =
+            candidate?.config.type === 'azure-devops'
+              ? this.normalizeOrg(candidate.config.organization)
+              : '';
+          const matching =
+            candidate && (!candidateNorm || candidateNorm === detectedNorm)
+              ? candidate
+              : this.accounts.find(
+                  (a) =>
+                    a.config.type === 'azure-devops' &&
+                    (!a.config.organization ||
+                      this.normalizeOrg(a.config.organization) === detectedNorm)
+                );
+          if (matching) {
+            applyAccount(matching);
+          }
+        } else {
+          applyAccount(candidate);
+        }
+      };
       const activeProfileId = state.activeProfile?.id ?? null;
       if (activeProfileId !== lastActiveProfileId) {
         // Track the id either way so this doesn't re-fire, but DON'T clobber a
-        // half-completed "Add account" flow (a background store emit must not
-        // re-select an existing account, or the next save overwrites it).
+        // half-completed "Add account" flow or an in-flight loadInitialData()
+        // that is about to detect the repo and match the organization.
         lastActiveProfileId = activeProfileId;
-        if (!this.isAddingAccount) {
-          applyAccount(getActiveProfilePreferredAccount('azure-devops') ?? this.accounts[0]);
+        if (!this.isAddingAccount && !this.initInFlight && this.accounts.length > 0) {
+          selectMatchingCandidate();
         }
-      } else if (!this.isAddingAccount && !this.selectedAccountId && this.accounts.length > 0) {
-        applyAccount(
-          getActiveProfilePreferredAccount('azure-devops')
-          ?? selectDefaultGlobalAccount('azure-devops')
-          ?? this.accounts[0],
-        );
+      } else if (
+        !this.isAddingAccount &&
+        !this.initInFlight &&
+        !this.selectedAccountId &&
+        this.accounts.length > 0
+      ) {
+        selectMatchingCandidate();
       }
     });
 
     // Initialize from current state
     this.accounts = getAccountsByType('azure-devops');
-    if (this.accounts.length > 0 && !this.selectedAccountId) {
+    if (this.accounts.length > 0 && !this.selectedAccountId && !this.open) {
       applyAccount(
         getActiveProfilePreferredAccount('azure-devops')
         ?? selectDefaultGlobalAccount('azure-devops')
@@ -940,62 +938,45 @@ export class GnAzureDevOpsDialog extends LitElement {
     this.oauthStateUnsubscribe?.();
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
-    if (changedProperties.has('open') && this.open) {
-      // Fresh open: abandon any sign-in left in-flight from a prior session
-      // (the host may hide the dialog without routing through handleClose, e.g.
-      // by setting its `open` prop false), so a reopen can't surface a stuck
-      // "Connecting..." spinner. Then clear selectedAccountId so
-      // loadInitialData() re-derives it.
-      this.abandonPendingEntraFlow();
-      this.selectedAccountId = null;
-      await this.loadInitialData();
-    }
-    if (changedProperties.has('repositoryPath')) {
-      // The dialog is repo-independent (it stays open across the last tab close),
-      // so an empty path must clear the previously detected repo. Otherwise the
-      // repo-backed tabs keep rendering and acting on the closed repository.
-      // The create-* drafts belong to the repository they were typed against,
-      // so they go too -- otherwise a draft left on screen is submitted into
-      // whichever repository the dialog is repointed at.
-      this.resetRepoScopedDrafts();
-      if (!this.repositoryPath) {
-        this.detectedRepo = null;
-      } else if (this.open) {
-        await this.detectRepo();
-      }
-    }
+  protected override onBeforeOpen(): void {
+    // Fresh open: abandon any sign-in left in-flight from a prior session
+    // (the host may hide the dialog without routing through handleClose, e.g.
+    // by setting its `open` prop false), so a reopen can't surface a stuck
+    // "Connecting..." spinner.
+    this.abandonPendingEntraFlow();
   }
 
-  /**
-   * Drop every create-* draft and leave any create-* tab. Called when
-   * repositoryPath changes, because those drafts are scoped to the repository
-   * they were composed against while the create handlers guard only on
-   * detectedRepo, which is re-derived from whatever repository is now current.
-   */
-  private resetRepoScopedDrafts(): void {
+  protected override isAccountSetupPending(): boolean {
+    return this.isAddingAccount || this.needsOrgSelection;
+  }
+
+  protected resetProviderRepoScopedState(): void {
+    if (!this.isAddingAccount) {
+      const selectedAccount = this.selectedAccountId
+        ? this.accounts.find((a) => a.id === this.selectedAccountId)
+        : undefined;
+      if (selectedAccount?.config.type === 'azure-devops') {
+        this.organizationInput = selectedAccount.config.organization ?? '';
+      }
+    }
     this.createPrTitle = '';
     this.createPrDescription = '';
     this.createPrSource = '';
     this.createPrTarget = '';
     this.createPrDraft = false;
+    this.generatingPrDescription = false;
     this.createWorkItemType = 'Task';
     this.createWorkItemTitle = '';
     this.createWorkItemDescription = '';
-    this.expandedPrNumber = null;
-    this.prComments = {};
-    this.loadingCommentsForPr = null;
-    this.postingCommentForPr = null;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    if (this.activeTab.startsWith('create-')) {
-      this.activeTab = 'connection';
-    }
+    this.pullRequests = [];
+    this.workItems = [];
+    this.pipelineRuns = [];
   }
 
-  private async loadInitialData(): Promise<void> {
+  protected async loadInitialData(): Promise<void> {
     const generation = ++this.loadGeneration;
+    const autoSelectAccount = !this.selectedAccountId && !this.isAddingAccount;
+    this.initInFlight = true;
     this.isLoading = true;
     this.error = null;
 
@@ -1015,32 +996,44 @@ export class GnAzureDevOpsDialog extends LitElement {
       // Manual switches set selectedAccountId before calling loadInitialData()
       // and must not be overwritten.
       this.accounts = getAccountsByType('azure-devops');
-      if (this.accounts.length > 0 && !this.selectedAccountId) {
-        const preferred = getActiveProfilePreferredAccount('azure-devops')
-          ?? selectDefaultGlobalAccount('azure-devops');
-        this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
-        if (preferred?.config.type === 'azure-devops' && preferred.config.organization) {
-          this.organizationInput = preferred.config.organization;
-        }
-      }
-
-      // Check if selected account has a stored token
-      await this.checkStoredToken();
-      if (generation !== this.loadGeneration) return;
 
       // Try to detect repo first to get organization
       if (this.repositoryPath) {
-        await this.detectRepo();
+        await this.detectRepo(false, autoSelectAccount && !this.selectedAccountId && !this.isAddingAccount);
         if (generation !== this.loadGeneration) return;
       }
-      // Check connection if we have an organization
-      if (this.detectedRepo?.organization || this.organizationInput) {
-        await this.checkConnection();
-        if (generation !== this.loadGeneration) return;
 
-        // Load data now that we know the connection status
-        if (this.connectionStatus?.connected && this.detectedRepo) {
-          await this.loadAllData();
+      if (this.accounts.length > 0 && autoSelectAccount && !this.selectedAccountId && !this.isAddingAccount) {
+        const preferred = getActiveProfilePreferredAccount('azure-devops')
+          ?? selectDefaultGlobalAccount('azure-devops');
+        if (this.detectedRepo) {
+          const matching = this.findMatchingAccountForOrg(
+            this.detectedRepo.organization,
+            preferred
+          );
+          this.selectedAccountId = matching?.id ?? null;
+        } else {
+          const chosen = preferred ?? this.accounts[0];
+          this.selectedAccountId = chosen?.id ?? null;
+          if (chosen?.config.type === 'azure-devops' && chosen.config.organization) {
+            this.organizationInput = chosen.config.organization;
+          }
+        }
+      }
+
+      if (!this.isAddingAccount) {
+        // Check if selected account has a stored token
+        await this.checkStoredToken();
+        if (generation !== this.loadGeneration) return;
+        // Check connection if we have an organization
+        if (this.detectedRepo?.organization || this.organizationInput) {
+          await this.checkConnection();
+          if (generation !== this.loadGeneration) return;
+
+          // Load data now that we know the connection status
+          if (this.isConnectedForDetectedRepo() && this.detectedRepo) {
+            await this.loadAllData();
+          }
         }
       }
     } catch (err) {
@@ -1048,20 +1041,26 @@ export class GnAzureDevOpsDialog extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to load data';
     } finally {
       if (generation === this.loadGeneration) {
+        this.initInFlight = false;
         this.isLoading = false;
+        this.isDetectingRepo = false;
       }
     }
   }
 
   private async checkStoredToken(): Promise<void> {
-    if (this.selectedAccountId) {
-      let token = await credentialService.getAccountToken('azure-devops', this.selectedAccountId);
+    const accountId = this.selectedAccountId;
+    if (accountId) {
+      let token = await credentialService.getAccountToken('azure-devops', accountId);
+      if (this.selectedAccountId !== accountId) return;
 
       // If not found, check legacy token and migrate it
       if (!token) {
         const legacyToken = await credentialService.AzureDevOpsCredentials.getToken();
+        if (this.selectedAccountId !== accountId) return;
         if (legacyToken) {
-          await credentialService.storeAccountToken('azure-devops', this.selectedAccountId, legacyToken);
+          await credentialService.storeAccountToken('azure-devops', accountId, legacyToken);
+          if (this.selectedAccountId !== accountId) return;
           token = legacyToken;
         }
       }
@@ -1084,18 +1083,86 @@ export class GnAzureDevOpsDialog extends LitElement {
     }
   }
 
-  private async checkConnection(): Promise<void> {
-    const org = this.detectedRepo?.organization || this.organizationInput;
+  private normalizeOrg(org?: string | null): string {
+    return (org ?? '').trim().toLowerCase();
+  }
+
+  private findMatchingAccountForOrg(
+    org?: string | null,
+    preferred?: IntegrationAccount | null
+  ): IntegrationAccount | undefined {
+    const detectedNorm = this.normalizeOrg(org);
+    if (!detectedNorm) return preferred ?? this.accounts[0];
+    const preferredNorm =
+      preferred?.config.type === 'azure-devops'
+        ? this.normalizeOrg(preferred.config.organization)
+        : '';
+    if (preferred && preferredNorm && preferredNorm === detectedNorm) {
+      return preferred;
+    }
+    const exactMatch = this.accounts.find(
+      (a) =>
+        a.config.type === 'azure-devops' &&
+        Boolean(this.normalizeOrg(a.config.organization)) &&
+        this.normalizeOrg(a.config.organization) === detectedNorm
+    );
+    if (exactMatch) return exactMatch;
+    if (preferred && !preferredNorm) return preferred;
+    return this.accounts.find(
+      (a) =>
+        a.config.type === 'azure-devops' &&
+        !this.normalizeOrg(a.config.organization)
+    );
+  }
+
+  private isConnectedForDetectedRepo(): boolean {
+    if (!this.connectionStatus?.connected) return false;
+    if (!this.detectedRepo || !this.connectionStatus.organization) return true;
+    return (
+      this.normalizeOrg(this.connectionStatus.organization) ===
+      this.normalizeOrg(this.detectedRepo.organization)
+    );
+  }
+
+  private async checkConnection(expectedRepoGen?: number): Promise<void> {
+    const accountId = this.selectedAccountId;
+    const account = accountId
+      ? this.accounts.find((a) => a.id === accountId)
+      : undefined;
+    const accountOrg =
+      account?.config.type === 'azure-devops' ? account.config.organization : undefined;
+    const org = accountOrg || this.detectedRepo?.organization || this.organizationInput;
     if (!org) return;
 
+    const generation = this.loadGeneration;
+    const matchesAccountOrg =
+      !accountOrg || this.normalizeOrg(accountOrg) === this.normalizeOrg(org);
+    const isCurrent = () =>
+      generation === this.loadGeneration &&
+      (expectedRepoGen === undefined || this.repoGeneration === expectedRepoGen) &&
+      this.selectedAccountId === accountId &&
+      this.normalizeOrg(accountOrg || this.detectedRepo?.organization || this.organizationInput) ===
+        this.normalizeOrg(org);
     // Get token for selected account (refresh-aware for OAuth accounts).
-    const token = await this.getSelectedAccountToken();
+    // When checking a detected repository whose organization differs from the
+    // selected account's configured organization, do not send that account's
+    // token to the foreign organization.
+    const token = matchesAccountOrg
+      ? await this.getSelectedAccountToken(org)
+      : null;
+    if (!isCurrent()) return;
     const result = await gitService.checkAdoConnectionWithToken(org, token);
+    if (!isCurrent()) return;
     if (result.success && result.data) {
-      this.connectionStatus = result.data;
-      this.syncSharedConnectionStatus(result.data.connected);
+      this.connectionStatus = {
+        ...result.data,
+        organization: result.data.organization || org,
+      };
+      if (matchesAccountOrg) {
+        this.syncSharedConnectionStatus(result.data.connected);
+      }
       // Update cached user in global account if connected
-      if (this.selectedAccountId && result.data.connected && result.data.user) {
+      if (this.selectedAccountId && matchesAccountOrg && result.data.connected && result.data.user) {
         await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
           username: result.data.user.displayName,
           displayName: result.data.user.displayName,
@@ -1106,7 +1173,7 @@ export class GnAzureDevOpsDialog extends LitElement {
 
       // Sync the keyring git credentials only with a VERIFIED-connected token, so
       // external git push/pull get a valid credential (never a stale fallback).
-      if (result.data.connected && token) {
+      if (isCurrent() && matchesAccountOrg && result.data.connected && token) {
         await this.syncGitCredentials(org, token);
       }
     } else if (!result.success) {
@@ -1114,7 +1181,9 @@ export class GnAzureDevOpsDialog extends LitElement {
       // Failed check must mark the account as disconnected so dependent UI
       // surfaces (toolbar, selector dot) don't keep a stale connected state.
       this.connectionStatus = { connected: false, user: null, organization: org };
-      this.syncSharedConnectionStatus(false);
+      if (matchesAccountOrg) {
+        this.syncSharedConnectionStatus(false);
+      }
     }
   }
 
@@ -1123,24 +1192,42 @@ export class GnAzureDevOpsDialog extends LitElement {
    * Entra OAuth token first (and re-syncing the keyring git credentials so
    * push/pull stay valid). Non-OAuth (PAT) accounts return their stored token.
    */
-  private async getSelectedAccountToken(): Promise<string | null> {
-    if (!this.selectedAccountId) return null;
+  private async getSelectedAccountToken(
+    targetOrg = this.detectedRepo?.organization,
+    targetAccountId: string | null = this.selectedAccountId,
+  ): Promise<string | null> {
+    const accountId = targetAccountId;
+    if (!accountId) return null;
+
+    const account = this.accounts.find((a) => a.id === accountId);
+    if (
+      targetOrg &&
+      account?.config.type === 'azure-devops' &&
+      account.config.organization &&
+      this.normalizeOrg(account.config.organization) !==
+        this.normalizeOrg(targetOrg)
+    ) {
+      return null;
+    }
 
     // Refresh-aware: for an OAuth account this returns a freshly-refreshed access
     // token when the stored one is near expiry; for a PAT it returns it unchanged.
     let token = await credentialService.getFreshAccountToken(
       'azure-devops',
-      this.selectedAccountId,
+      accountId,
       'azure',
     );
+    if (this.selectedAccountId !== accountId) return null;
 
     // If not found, check legacy token and migrate it
     if (!token) {
       const legacyToken = await credentialService.AzureDevOpsCredentials.getToken();
+      if (this.selectedAccountId !== accountId) return null;
       if (legacyToken) {
         try {
-          await credentialService.storeAccountToken('azure-devops', this.selectedAccountId, legacyToken);
+          await credentialService.storeAccountToken('azure-devops', accountId, legacyToken);
         } catch { /* migration failed, still use the token */ }
+        if (this.selectedAccountId !== accountId) return null;
         token = legacyToken;
       }
     }
@@ -1184,11 +1271,11 @@ export class GnAzureDevOpsDialog extends LitElement {
     this.abandonPendingEntraFlow();
     // The user explicitly selected an existing account — re-enable the
     // subscription's auto-apply branch.
-    this.isAddingAccount = false;
-    this.selectedAccountId = account.id;
-    this.connectionStatus = null;
-    this.error = null;
+    this.beginAccountSwitch(account.id);
     this.tokenInput = ''; // Clear any manually entered token
+    this.pullRequests = [];
+    this.workItems = [];
+    this.pipelineRuns = [];
 
     // Update organization from account config
     if (account.config.type === 'azure-devops' && account.config.organization) {
@@ -1222,10 +1309,7 @@ export class GnAzureDevOpsDialog extends LitElement {
     // otherwise a new Entra sign-in would reuse the previous account's org and
     // bypass the org picker (binding the new account to the wrong org). Rotating
     // an existing selected account still uses that account's org.
-    this.isAddingAccount = true;
-    this.activeTab = 'connection';
-    this.connectionStatus = null;
-    this.selectedAccountId = null;
+    this.beginAddAccount();
     this.tokenInput = '';
     this.organizationInput = '';
   }
@@ -1251,8 +1335,12 @@ export class GnAzureDevOpsDialog extends LitElement {
     );
   }
 
-  private async detectRepo(): Promise<void> {
-    if (!this.repositoryPath) return;
+  protected async detectRepo(loadData = true, updateOrgInput = true): Promise<void> {
+    if (!this.repositoryPath) {
+      this.detectGeneration++;
+      this.isDetectingRepo = false;
+      return;
+    }
 
     // The dialog outlives the repository -- it stays open when the last tab
     // closes -- so a detect issued for one path can resolve after the path has
@@ -1260,19 +1348,119 @@ export class GnAzureDevOpsDialog extends LitElement {
     // selected) repository from being re-detected and re-loaded over the
     // current one.
     const requestedPath = this.repositoryPath;
-    const result = await gitService.detectAdoRepo(requestedPath);
-    if (this.repositoryPath !== requestedPath) return;
-    if (result.success && result.data) {
-      this.detectedRepo = result.data;
-      this.organizationInput = result.data.organization;
-      // Auto-load data if connected
-      if (this.connectionStatus?.connected) {
-        await this.loadAllData();
+    const repoGen = this.repoGeneration;
+    const detectGen = ++this.detectGeneration;
+    this.detectedRepo = null;
+    this.isDetectingRepo = true;
+    try {
+      const result = await gitService.detectAdoRepo(requestedPath);
+      if (
+        this.repositoryPath !== requestedPath ||
+        this.repoGeneration !== repoGen ||
+        this.detectGeneration !== detectGen
+      ) {
+        return;
       }
-    } else if (!result.success) {
-      // A genuine backend failure (not merely "this isn't an Azure DevOps repo",
-      // which surfaces as success with null data) must not fail silently.
-      this.error = result.error?.message ?? 'Failed to detect Azure DevOps repository';
+      this.isDetectingRepo = false;
+      if (result.success && result.data) {
+        this.detectedRepo = result.data;
+        if (!this.isAddingAccount && (loadData || updateOrgInput)) {
+          this.organizationInput = result.data.organization;
+        }
+        if (loadData && !this.isAddingAccount) {
+          const detectedNorm = this.normalizeOrg(result.data.organization);
+          let accountChanged = false;
+          if (this.accounts.length > 0) {
+            const currentAccount = this.selectedAccountId
+              ? this.accounts.find((a) => a.id === this.selectedAccountId)
+              : undefined;
+            const matchingAccount = this.findMatchingAccountForOrg(
+              result.data.organization,
+              currentAccount
+            );
+            const nextAccountId = matchingAccount?.id ?? null;
+            if (this.selectedAccountId !== nextAccountId) {
+              this.selectedAccountId = nextAccountId;
+              this.connectionStatus = null;
+              accountChanged = true;
+            }
+          }
+          if (accountChanged) {
+            await this.checkStoredToken();
+            if (
+              this.repositoryPath !== requestedPath ||
+              this.repoGeneration !== repoGen ||
+              this.detectGeneration !== detectGen
+            ) {
+              return;
+            }
+          }
+          const statusNorm = this.normalizeOrg(this.connectionStatus?.organization);
+          if (!this.connectionStatus || statusNorm !== detectedNorm || accountChanged) {
+            this.connectionStatus = null;
+            await this.checkConnection(repoGen);
+            if (
+              this.repositoryPath !== requestedPath ||
+              this.repoGeneration !== repoGen ||
+              this.detectGeneration !== detectGen
+            ) {
+              return;
+            }
+          }
+          // Auto-load data if connected
+          if (this.isConnectedForDetectedRepo()) {
+            await this.loadAllData();
+          }
+        }
+      } else {
+        this.detectedRepo = null;
+        if (!result.success) {
+          // A genuine backend failure (not merely "this isn't an Azure DevOps repo",
+          // which surfaces as success with null data) must not fail silently.
+          this.error = result.error?.message ?? 'Failed to detect Azure DevOps repository';
+        } else if (loadData && !this.isAddingAccount && this.accounts.length > 0) {
+          if (!this.selectedAccountId) {
+            const preferred =
+              getActiveProfilePreferredAccount('azure-devops') ??
+              selectDefaultGlobalAccount('azure-devops') ??
+              this.accounts[0];
+            this.selectedAccountId = preferred?.id ?? null;
+            if (preferred?.config.type === 'azure-devops' && preferred.config.organization) {
+              this.organizationInput = preferred.config.organization;
+            }
+            this.connectionStatus = null;
+            await this.checkStoredToken();
+            if (
+              this.repositoryPath !== requestedPath ||
+              this.repoGeneration !== repoGen ||
+              this.detectGeneration !== detectGen
+            ) {
+              return;
+            }
+          }
+          const currentAccount = this.selectedAccountId
+            ? this.accounts.find((a) => a.id === this.selectedAccountId)
+            : undefined;
+          const accountOrg =
+            currentAccount?.config.type === 'azure-devops'
+              ? currentAccount.config.organization
+              : undefined;
+          if (
+            this.organizationInput &&
+            (!this.connectionStatus ||
+              (accountOrg &&
+                this.normalizeOrg(this.connectionStatus.organization) !==
+                  this.normalizeOrg(accountOrg)))
+          ) {
+            this.connectionStatus = null;
+            await this.checkConnection(repoGen);
+          }
+        }
+      }
+    } finally {
+      if (this.detectGeneration === detectGen) {
+        this.isDetectingRepo = false;
+      }
     }
   }
 
@@ -1285,17 +1473,20 @@ export class GnAzureDevOpsDialog extends LitElement {
   }
 
   private async loadPullRequests(providedToken?: string): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     this.isLoading = true;
     this.error = null;
 
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.listAdoPullRequests(
-        this.detectedRepo.organization,
-        this.detectedRepo.project,
-        this.detectedRepo.repository,
+        targetDetectedRepo.organization,
+        targetDetectedRepo.project,
+        targetDetectedRepo.repository,
         // Always send the filter: Azure DevOps defaults `searchCriteria.status`
         // to `active`, so omitting it for "All" would return the Active list
         // again and silently drop completed and abandoned pull requests. `all`
@@ -1304,6 +1495,13 @@ export class GnAzureDevOpsDialog extends LitElement {
         PULL_REQUESTS_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.pullRequests = result.data;
@@ -1311,104 +1509,83 @@ export class GnAzureDevOpsDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load pull requests';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load pull requests';
     } finally {
-      this.isLoading = false;
-    }
-  }
-
-  private async togglePrComments(prId: number): Promise<void> {
-    if (this.expandedPrNumber === prId) {
-      this.expandedPrNumber = null;
-      return;
-    }
-    this.expandedPrNumber = prId;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    await this.loadPrComments(prId);
-  }
-
-  private async loadPrComments(prId: number): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed('dev.azure.com', false)) return;
-
-    this.loadingCommentsForPr = prId;
-    this.error = null;
-
-    try {
-      const token = await this.getSelectedAccountToken();
-      const result = await invokeCommand<PrReviewComment[]>('get_ado_pr_comments', {
-        organization: this.detectedRepo.organization,
-        project: this.detectedRepo.project,
-        repository: this.detectedRepo.repository,
-        pullRequestId: prId,
-        token,
-      });
-
-      if (result.success && result.data) {
-        this.prComments = {
-          ...this.prComments,
-          [prId]: result.data,
-        };
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to load PR comments';
-        showToast(this.error, 'error');
+      if (
+        this.repositoryPath === targetRepoPath &&
+        this.detectedRepo === targetDetectedRepo &&
+        this.selectedAccountId === targetAccountId
+      ) {
+        this.isLoading = false;
       }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to load PR comments';
-      showToast(this.error, 'error');
-    } finally {
-      this.loadingCommentsForPr = null;
     }
   }
 
-  private async handleAddPrComment(prId: number): Promise<void> {
-    const content = this.commentBodyInput.trim();
-    if (!content || !this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed('dev.azure.com', false)) return;
+  protected override isConnectedForComments(): boolean {
+    return this.isConnectedForDetectedRepo();
+  }
 
-    const filePath = this.commentFilePathInput.trim() || undefined;
-    const parsedLine = parseInt(this.commentLineInput.trim(), 10);
-    const line = !Number.isNaN(parsedLine) && parsedLine > 0 ? parsedLine : undefined;
+  protected getCommentsOutboundHost(): string {
+    return 'dev.azure.com';
+  }
 
-    this.postingCommentForPr = prId;
-    this.error = null;
+  protected async getTokenForComments(
+    targetAccountId: string | null,
+  ): Promise<string | null | undefined> {
+    return this.getSelectedAccountToken(
+      this.detectedRepo?.organization,
+      targetAccountId,
+    );
+  }
 
-    try {
-      const token = await this.getSelectedAccountToken();
-      const result = await invokeCommand<PrReviewComment>('add_ado_pr_comment', {
-        organization: this.detectedRepo.organization,
-        project: this.detectedRepo.project,
-        repository: this.detectedRepo.repository,
-        pullRequestId: prId,
-        content,
-        filePath,
-        line,
-        token,
-      });
+  protected fetchPrComments(
+    repo: DetectedAdoRepo,
+    prId: number,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment[]>('get_ado_pr_comments', {
+      organization: repo.organization,
+      project: repo.project,
+      repository: repo.repository,
+      pullRequestId: prId,
+      token,
+    });
+  }
 
-      if (result.success) {
-        this.commentBodyInput = '';
-        this.commentFilePathInput = '';
-        this.commentLineInput = '';
-        showToast('Comment posted', 'success');
-        await this.loadPrComments(prId);
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to post PR comment';
-        showToast(this.error, 'error');
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to post PR comment';
-      showToast(this.error, 'error');
-    } finally {
-      this.postingCommentForPr = null;
-    }
+  protected postPrComment(
+    repo: DetectedAdoRepo,
+    prId: number,
+    content: string,
+    filePath: string | undefined,
+    line: number | undefined,
+    _commitId: string | undefined,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment>('add_ado_pr_comment', {
+      organization: repo.organization,
+      project: repo.project,
+      repository: repo.repository,
+      pullRequestId: prId,
+      content,
+      filePath,
+      line,
+      token,
+    });
   }
 
   private async loadWorkItems(providedToken?: string): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     // Clear any stale error (e.g. from another tab) so a successful load starts
     // clean — matches loadPullRequests.
     this.error = null;
@@ -1416,12 +1593,19 @@ export class GnAzureDevOpsDialog extends LitElement {
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.queryAdoWorkItems(
-        this.detectedRepo.organization,
-        this.detectedRepo.project,
+        targetDetectedRepo.organization,
+        targetDetectedRepo.project,
         this.workItemFilter || undefined,
         WORK_ITEMS_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.workItems = result.data;
@@ -1429,13 +1613,23 @@ export class GnAzureDevOpsDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load work items';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load work items';
     }
   }
 
   private async loadPipelineRuns(providedToken?: string): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
+    if (!this.detectedRepo || !this.isConnectedForDetectedRepo()) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     // Clear any stale error (e.g. from another tab) so a successful load starts
     // clean — matches loadPullRequests / loadWorkItems.
     this.error = null;
@@ -1443,12 +1637,19 @@ export class GnAzureDevOpsDialog extends LitElement {
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.listAdoPipelineRuns(
-        this.detectedRepo.organization,
-        this.detectedRepo.project,
-        this.detectedRepo.repository,
+        targetDetectedRepo.organization,
+        targetDetectedRepo.project,
+        targetDetectedRepo.repository,
         PIPELINE_RUNS_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.pipelineRuns = result.data;
@@ -1456,6 +1657,13 @@ export class GnAzureDevOpsDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load pipeline runs';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load pipeline runs';
     }
   }
@@ -1508,8 +1716,7 @@ export class GnAzureDevOpsDialog extends LitElement {
    * user's orgs — 1 is used automatically, >1 shows an in-dialog picker, 0 errors.
    */
   private async resolveOrgAndFinalize(tokens: EntraTokens, generation: number): Promise<void> {
-    this.isLoading = true;
-    this.error = null;
+    this.beginAccountOp();
     try {
       let org = this.detectedRepo?.organization || this.organizationInput.trim();
       if (!org) {
@@ -1541,6 +1748,7 @@ export class GnAzureDevOpsDialog extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to complete Microsoft sign-in';
       showToast(this.error, 'error');
     } finally {
+      this.finishAccountOp();
       // Only reset shared state if this flow is still current — a superseding
       // flow (close→reopen→restart) may already own oauthPending/isLoading.
       if (generation === this.entraGeneration) {
@@ -1559,8 +1767,7 @@ export class GnAzureDevOpsDialog extends LitElement {
     const tokens = this.pendingTokens;
     if (!tokens) return;
     const generation = this.entraGeneration;
-    this.isLoading = true;
-    this.error = null;
+    this.beginAccountOp();
     try {
       this.organizationInput = org.name;
       await this.finalizeEntraLogin(tokens, org.name, generation);
@@ -1576,6 +1783,7 @@ export class GnAzureDevOpsDialog extends LitElement {
       showToast(this.error, 'error');
       // Keep the picker + tokens so the user can retry or choose another org.
     } finally {
+      this.finishAccountOp();
       if (generation === this.entraGeneration) {
         this.isLoading = false;
       }
@@ -1604,6 +1812,8 @@ export class GnAzureDevOpsDialog extends LitElement {
     generation: number,
   ): Promise<void> {
     const accessToken = tokens.accessToken;
+    const targetAccountId = this.selectedAccountId;
+    const targetWasAddingAccount = this.isAddingAccount;
     // Verify connection BEFORE persisting anything
     const result = await gitService.checkAdoConnectionWithToken(organization, accessToken);
 
@@ -1622,23 +1832,41 @@ export class GnAzureDevOpsDialog extends LitElement {
           }
         : null;
 
-      if (this.selectedAccountId) {
+      const selectedAccount = targetAccountId
+        ? this.accounts.find((a) => a.id === targetAccountId)
+        : undefined;
+      const selectedAccountOrg =
+        selectedAccount?.config.type === 'azure-devops'
+          ? selectedAccount.config.organization
+          : undefined;
+      const canUpdateSelectedAccount =
+        Boolean(targetAccountId) &&
+        !targetWasAddingAccount &&
+        (!selectedAccountOrg ||
+          this.normalizeOrg(selectedAccountOrg) === this.normalizeOrg(organization));
+
+      let connectedAccountId: string;
+
+      if (targetAccountId && canUpdateSelectedAccount) {
         // Rotating credentials on an existing account. Store the full OAuth
         // bundle (access + refresh + expiry) so the token can be refreshed —
         // Entra access tokens are short-lived (~1h).
         await credentialService.storeAccountOAuthToken(
           'azure-devops',
-          this.selectedAccountId,
+          targetAccountId,
           accessToken,
           tokens.refreshToken,
           tokens.expiresIn,
         );
+        if (generation !== this.entraGeneration) return;
         if (cachedUser) {
           await unifiedProfileService.updateGlobalAccountCachedUser(
-            this.selectedAccountId,
+            targetAccountId,
             cachedUser,
           );
+          if (generation !== this.entraGeneration) return;
         }
+        connectedAccountId = targetAccountId;
       } else {
         // No account selected - create and persist a new global account
         // (mirror the PAT path) BEFORE storing the token so the keyring
@@ -1646,6 +1874,7 @@ export class GnAzureDevOpsDialog extends LitElement {
         const { createEmptyIntegrationAccount, generateId } = await import(
           '../../types/unified-profile.types.ts'
         );
+        if (generation !== this.entraGeneration) return;
         const newAccount: IntegrationAccount = {
           ...createEmptyIntegrationAccount('azure-devops', organization),
           id: generateId(),
@@ -1664,13 +1893,21 @@ export class GnAzureDevOpsDialog extends LitElement {
           tokens.refreshToken,
           tokens.expiresIn,
         );
-        this.selectedAccountId = savedAccount.id;
-        // The new account now exists and is selected — add flow complete.
-        this.isAddingAccount = false;
+        connectedAccountId = savedAccount.id;
+        if (
+          generation === this.entraGeneration &&
+          this.selectedAccountId === targetAccountId &&
+          this.isAddingAccount === targetWasAddingAccount
+        ) {
+          this.selectedAccountId = savedAccount.id;
+          // The new account now exists and is selected — add flow complete.
+          this.isAddingAccount = false;
+        }
 
         // Refresh accounts list
         await unifiedProfileService.loadUnifiedProfiles();
         this.accounts = getAccountsByType('azure-devops');
+        if (generation !== this.entraGeneration) return;
       }
 
       // Store git credentials in keyring for push/pull operations. Non-fatal:
@@ -1687,16 +1924,31 @@ export class GnAzureDevOpsDialog extends LitElement {
         this.lastSyncedGitCredKey = `${organization}::${accessToken}`;
       } else {
         log.warn('Failed to store Azure DevOps git credentials for push/pull:', cred1.error ?? cred2.error);
-        showToast('Signed in, but saving git credentials failed — push/pull may prompt for credentials', 'error');
+        if (generation === this.entraGeneration) {
+          showToast('Signed in, but saving git credentials failed — push/pull may prompt for credentials', 'error');
+        }
       }
+      if (generation !== this.entraGeneration) return;
 
+      unifiedProfileStore
+        .getState()
+        .setAccountConnectionStatus(connectedAccountId, 'connected');
+      if (this.selectedAccountId !== connectedAccountId) return;
       this.connectionStatus = result.data;
-      this.syncSharedConnectionStatus(true);
       showToast('Connected to Azure DevOps via Microsoft Entra ID', 'success');
+
+      if (this.open && this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false, false);
+        if (generation !== this.entraGeneration || this.selectedAccountId !== connectedAccountId) return;
+      }
 
       // Populate the PR / work-item / pipeline tabs immediately (mirror the PAT
       // path) so they aren't empty until the user clicks each tab.
-      if (this.connectionStatus?.connected && this.detectedRepo) {
+      if (
+        this.connectionStatus?.connected &&
+        this.detectedRepo &&
+        this.normalizeOrg(this.detectedRepo.organization) === this.normalizeOrg(organization)
+      ) {
         await this.loadAllData(accessToken);
       }
     } else {
@@ -1767,27 +2019,43 @@ export class GnAzureDevOpsDialog extends LitElement {
   private async handleConnectWithStoredToken(): Promise<void> {
     if (!this.organizationInput.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    // If user entered a new token, save it first
+    if (this.tokenInput.trim()) {
+      await this.handleSaveToken();
+      return;
+    }
+
+    const generation = this.beginAccountOp();
+    const targetAccountId = this.selectedAccountId;
 
     try {
-      // If user entered a new token, save it first
-      if (this.tokenInput.trim()) {
-        await this.handleSaveToken();
+      const organization = this.organizationInput.trim();
+      const selectedAccount = targetAccountId
+        ? this.accounts.find((a) => a.id === targetAccountId)
+        : undefined;
+      const selectedAccountOrg =
+        selectedAccount?.config.type === 'azure-devops'
+          ? selectedAccount.config.organization
+          : undefined;
+      if (
+        selectedAccountOrg &&
+        this.normalizeOrg(selectedAccountOrg) !== this.normalizeOrg(organization)
+      ) {
+        this.error = `Selected account is configured for organization "${selectedAccountOrg}". Enter a token for "${organization}" or add a new account.`;
         return;
       }
 
       // Otherwise use the stored token
-      const token = await this.getSelectedAccountToken();
+      const token = await this.getSelectedAccountToken(organization);
+      if (generation !== this.loadGeneration) return;
       if (!token) {
         this.error = 'No stored token found';
         return;
       }
 
-      const organization = this.organizationInput.trim();
-
       // Verify the stored token works
       const verifyResult = await gitService.checkAdoConnectionWithToken(organization, token);
+      if (generation !== this.loadGeneration) return;
       if (!verifyResult.success || !verifyResult.data?.connected) {
         this.error = verifyResult.error?.message ?? 'Connection failed - token may have expired';
         return;
@@ -1797,13 +2065,14 @@ export class GnAzureDevOpsDialog extends LitElement {
       this.syncSharedConnectionStatus(true);
 
       // Update cached user if we got user info
-      if (this.selectedAccountId && verifyResult.data.user) {
-        await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
+      if (targetAccountId && verifyResult.data.user) {
+        await unifiedProfileService.updateGlobalAccountCachedUser(targetAccountId, {
           username: verifyResult.data.user.displayName,
           displayName: verifyResult.data.user.displayName,
           email: null,
           avatarUrl: verifyResult.data.user.imageUrl ?? null,
         });
+        if (generation !== this.loadGeneration) return;
       }
 
       // Sync git credentials so git push/pull outside this dialog authenticate.
@@ -1813,25 +2082,37 @@ export class GnAzureDevOpsDialog extends LitElement {
       if (!(await this.syncGitCredentials(organization, token))) {
         showToast(GIT_CRED_WRITE_FAILED_TOAST, 'error');
       }
+      if (generation !== this.loadGeneration) return;
 
-      // Load data if connected and repo detected
-      if (this.connectionStatus?.connected && this.detectedRepo) {
+      if (this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false, false);
+        if (generation !== this.loadGeneration) return;
+      }
+
+      // Load data if connected and repo detected for this organization
+      if (
+        this.connectionStatus?.connected &&
+        this.detectedRepo &&
+        this.normalizeOrg(this.detectedRepo.organization) === this.normalizeOrg(organization)
+      ) {
         await this.loadAllData(token);
       }
     } catch (err) {
+      if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to connect';
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(generation);
     }
   }
 
   private async handleSaveToken(): Promise<void> {
     if (!this.tokenInput.trim() || !this.organizationInput.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const generation = this.beginAccountOp();
     const tokenToSave = this.tokenInput.trim();
     const organization = this.organizationInput.trim();
+    const targetAccountId = this.selectedAccountId;
+    const targetWasAddingAccount = this.isAddingAccount;
 
     try {
       log.debug('handleSaveToken: verifying token for org:', organization, 'token length:', tokenToSave.length);
@@ -1847,33 +2128,49 @@ export class GnAzureDevOpsDialog extends LitElement {
           timeoutPromise
         ]);
       } catch (ipcError) {
+        if (generation !== this.loadGeneration) return;
         log.error('handleSaveToken: IPC error:', ipcError);
         this.error = `Connection failed: ${ipcError instanceof Error ? ipcError.message : String(ipcError)}`;
-        this.isLoading = false;
         return;
       }
       log.debug('handleSaveToken: verifyResult:', verifyResult);
       if (!verifyResult.success || !verifyResult.data?.connected) {
-        this.error = verifyResult.error?.message ?? 'Invalid token or connection failed';
-        this.isLoading = false;
+        if (generation === this.loadGeneration) {
+          this.error = verifyResult.error?.message ?? 'Invalid token or connection failed';
+        }
         return;
       }
 
       const user = verifyResult.data.user;
+      const selectedAccount = targetAccountId
+        ? this.accounts.find((a) => a.id === targetAccountId)
+        : undefined;
+      const selectedAccountOrg =
+        selectedAccount?.config.type === 'azure-devops'
+          ? selectedAccount.config.organization
+          : undefined;
+      const canUpdateSelectedAccount =
+        Boolean(targetAccountId) &&
+        !targetWasAddingAccount &&
+        (!selectedAccountOrg ||
+          this.normalizeOrg(selectedAccountOrg) === this.normalizeOrg(organization));
 
-      // If we have a selected account, save token to that account
-      if (this.selectedAccountId) {
-        await credentialService.storeAccountToken('azure-devops', this.selectedAccountId, tokenToSave);
+      let connectedAccountId: string;
+
+      // If we have a selected account for this same organization, save token to that account
+      if (targetAccountId && canUpdateSelectedAccount) {
+        await credentialService.storeAccountToken('azure-devops', targetAccountId, tokenToSave);
         // Refresh cachedUser so the profile manager shows the up-to-date
         // avatar/username immediately instead of waiting for background validation.
         if (user) {
-          await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
+          await unifiedProfileService.updateGlobalAccountCachedUser(targetAccountId, {
             username: user.displayName,
             displayName: user.displayName,
             email: null, // ADO API doesn't return email in this context
             avatarUrl: user.imageUrl ?? null,
           });
         }
+        connectedAccountId = targetAccountId;
       } else {
         // No account selected - create a new global account
         const { createEmptyIntegrationAccount, generateId } = await import('../../types/unified-profile.types.ts');
@@ -1892,19 +2189,27 @@ export class GnAzureDevOpsDialog extends LitElement {
 
         const savedAccount = await unifiedProfileService.saveGlobalAccount(newAccount);
         await credentialService.storeAccountToken('azure-devops', savedAccount.id, tokenToSave);
-        this.selectedAccountId = savedAccount.id;
-        // The new account now exists and is selected — add flow complete.
-        this.isAddingAccount = false;
+        connectedAccountId = savedAccount.id;
+        if (
+          this.selectedAccountId === targetAccountId &&
+          this.isAddingAccount === targetWasAddingAccount
+        ) {
+          this.selectedAccountId = savedAccount.id;
+          // The new account now exists and is selected — add flow complete.
+          this.isAddingAccount = false;
+        }
 
         // Refresh accounts list
         await unifiedProfileService.loadUnifiedProfiles();
         this.accounts = getAccountsByType('azure-devops');
       }
 
-      // Token saved, update state
-      this.tokenInput = '';
-      this.connectionStatus = verifyResult.data;
-      this.syncSharedConnectionStatus(true);
+      unifiedProfileStore
+        .getState()
+        .setAccountConnectionStatus(connectedAccountId, 'connected');
+      if (this.tokenInput.trim() === tokenToSave) {
+        this.tokenInput = '';
+      }
 
       // Store git credentials in keyring for push/pull operations
       // Username must be non-empty for macOS Keychain - use 'pat' as a placeholder
@@ -1917,121 +2222,127 @@ export class GnAzureDevOpsDialog extends LitElement {
       } else {
         showToast(GIT_CRED_WRITE_FAILED_TOAST, 'error');
       }
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
 
-      // Load data if connected and repo detected
+      // Token saved, update state
+      this.hasStoredToken = true;
+      this.connectionStatus = verifyResult.data;
+
+      if (this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false, false);
+        if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+      }
+
+      // Load data if connected and repo detected for this organization
       // Pass the token directly since storage might not be ready yet
-      if (this.connectionStatus?.connected && this.detectedRepo) {
+      if (
+        this.connectionStatus?.connected &&
+        this.detectedRepo &&
+        this.normalizeOrg(this.detectedRepo.organization) === this.normalizeOrg(organization)
+      ) {
         await this.loadAllData(tokenToSave);
       }
     } catch (err) {
+      if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to connect';
-      this.tokenInput = tokenToSave;
+      if (!this.tokenInput) {
+        this.tokenInput = tokenToSave;
+      }
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(generation);
     }
   }
 
   private async handleDisconnect(): Promise<void> {
-    this.isLoading = true;
-    this.error = null;
+    const targetAccountId = this.selectedAccountId;
+    const selectedAccount = targetAccountId
+      ? this.accounts.find((a) => a.id === targetAccountId)
+      : undefined;
+    const orgToDelete =
+      (selectedAccount?.config.type === 'azure-devops'
+        ? selectedAccount.config.organization
+        : '') || this.organizationInput.trim();
+    const hasOtherAccounts =
+      Boolean(targetAccountId) &&
+      this.accounts.some((a) => a.id !== targetAccountId);
 
-    try {
-      // Delete token for selected account or legacy token
-      if (this.selectedAccountId) {
-        await credentialService.deleteAccountToken('azure-devops', this.selectedAccountId);
-      } else {
-        await gitService.deleteAdoToken();
-      }
+    await this.runDisconnectOperation(
+      async () => {
+        if (targetAccountId) {
+          await credentialService.deleteAccountToken('azure-devops', targetAccountId);
+        } else {
+          await gitService.deleteAdoToken();
+        }
 
-      // Also delete git credentials from keyring for both URL formats
-      await gitService.deleteGitCredentials('https://dev.azure.com');
-      if (this.organizationInput) {
-        await gitService.deleteGitCredentials(`https://${this.organizationInput}.visualstudio.com`);
-      }
-      // Deleted creds — force a re-sync on the next connect even if the token
-      // matches, both here and in the git.service token path (external git).
-      this.lastSyncedGitCredKey = null;
-      gitService.resetAdoGitCredentialSyncCache();
-      log.debug('Deleted git credentials from keyring');
-
-      this.syncSharedConnectionStatus(false);
-      this.connectionStatus = null;
-      this.pullRequests = [];
-      this.workItems = [];
-      this.pipelineRuns = [];
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to disconnect';
-      showToast(this.error, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+        // Delete shared dev.azure.com git credential only when no other ADO account remains
+        if (!hasOtherAccounts) {
+          await gitService.deleteGitCredentials('https://dev.azure.com');
+        }
+        if (orgToDelete) {
+          await gitService.deleteGitCredentials(`https://${orgToDelete}.visualstudio.com`);
+        }
+        this.lastSyncedGitCredKey = null;
+        gitService.resetAdoGitCredentialSyncCache();
+        log.debug('Deleted git credentials from keyring');
+      },
+      () => {
+        this.connectionStatus = {
+          connected: false,
+          user: null,
+          organization: orgToDelete || null,
+        };
+        this.hasStoredToken = false;
+        this.pullRequests = [];
+        this.workItems = [];
+        this.pipelineRuns = [];
+      },
+    );
   }
 
   private async handleDeleteIntegration(): Promise<void> {
-    if (!this.selectedAccountId) return;
-
-    const selected = this.accounts.find((a) => a.id === this.selectedAccountId);
-    const accountName = selected?.name ?? 'this account';
-    const confirmed = await showConfirm(
-      'Delete Azure DevOps Integration',
-      `Delete ${accountName}? The stored token will be removed and any profile that uses this account as its default will lose that reference.`,
-      'warning',
-    );
-    if (!confirmed) return;
-
-    this.isLoading = true;
-    this.error = null;
-
-    // Delete the account record (source of truth) FIRST, then best-effort token
-    // cleanup, matching GitHub/GitLab/OIDC. Deleting tokens first leaves a
-    // zombie account on a partial failure.
     const accountId = this.selectedAccountId;
-    const organization = this.organizationInput;
-    try {
-      // Delete the account from unified profiles
-      await unifiedProfileService.deleteGlobalAccount(accountId);
+    const selected = accountId
+      ? this.accounts.find((a) => a.id === accountId)
+      : undefined;
+    const account = accountId
+      ? (selected ?? ({ id: accountId, name: 'this account' } as IntegrationAccount))
+      : undefined;
+    const organization =
+      (selected?.config.type === 'azure-devops' ? selected.config.organization : '') ||
+      this.organizationInput.trim();
 
-      // Refresh accounts list
-      await unifiedProfileService.loadUnifiedProfiles();
-      this.accounts = getAccountsByType('azure-devops');
-
-      // Reset state
-      this.selectedAccountId = this.accounts.length > 0 ? this.accounts[0].id : null;
-      this.connectionStatus = null;
-      this.hasStoredToken = false;
-      this.pullRequests = [];
-      this.workItems = [];
-      this.pipelineRuns = [];
-      this.organizationInput = '';
-
-      // Best-effort token/credential cleanup after the record is gone.
-      try {
-        await credentialService.deleteAccountToken('azure-devops', accountId);
-        await gitService.deleteGitCredentials('https://dev.azure.com');
+    await this.runDeleteIntegrationOperation({
+      account,
+      providerLabel: 'Azure DevOps',
+      deleteCredentials: async (target) => {
+        const remainingAccounts = getAccountsByType('azure-devops');
+        await credentialService.deleteAccountToken('azure-devops', target.id);
+        if (remainingAccounts.length === 0) {
+          await gitService.deleteGitCredentials('https://dev.azure.com');
+        }
         if (organization) {
           await gitService.deleteGitCredentials(`https://${organization}.visualstudio.com`);
         }
         this.lastSyncedGitCredKey = null;
         gitService.resetAdoGitCredentialSyncCache();
-      } catch (tokenErr) {
-        const msg =
-          tokenErr instanceof Error
-            ? `Account deleted, but its stored token could not be removed: ${tokenErr.message}`
-            : 'Account deleted, but its stored token could not be removed.';
-        this.error = msg;
-        showToast(msg, 'error');
-      }
+      },
+      getRemainingAccounts: () => getAccountsByType('azure-devops'),
+      onDeleted: async (nextAccountId) => {
+        const nextAccount = this.accounts.length > 0 ? this.accounts[0] : null;
+        this.hasStoredToken = false;
+        this.pullRequests = [];
+        this.workItems = [];
+        this.pipelineRuns = [];
+        this.organizationInput =
+          (nextAccount?.config.type === 'azure-devops' && nextAccount.config.organization) ||
+          this.detectedRepo?.organization ||
+          '';
 
-      // If there are remaining accounts, reload data for the first one
-      if (this.selectedAccountId) {
-        await this.loadInitialData();
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to delete integration';
-      showToast(this.error, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+        if (nextAccountId) {
+          await this.loadInitialData();
+        }
+      },
+    });
   }
 
   private async handlePrFilterChange(e: Event): Promise<void> {
@@ -2042,48 +2353,60 @@ export class GnAzureDevOpsDialog extends LitElement {
   private async handleGeneratePrDescription(): Promise<void> {
     if (!this.repositoryPath || !this.createPrSource || !this.createPrTarget) return;
 
+    const repoPath = this.repositoryPath;
+    const repoGen = this.repoGeneration;
     this.generatingPrDescription = true;
-    const result = await aiService.generatePrDescription(
-      this.repositoryPath,
-      this.createPrTarget,
-      this.createPrSource,
-      this.createPrTitle || 'Untitled PR',
-    );
+    try {
+      const result = await aiService.generatePrDescription(
+        repoPath,
+        this.createPrTarget,
+        this.createPrSource,
+        this.createPrTitle || 'Untitled PR',
+      );
+      if (this.repositoryPath !== repoPath || this.repoGeneration !== repoGen) return;
 
-    if (result.success && result.data) {
-      this.createPrDescription = result.data.body;
-    } else {
-      showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      if (result.success && result.data) {
+        this.createPrDescription = result.data.body;
+      } else {
+        showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      }
+    } finally {
+      if (this.repositoryPath === repoPath && this.repoGeneration === repoGen) {
+        this.generatingPrDescription = false;
+      }
     }
-    this.generatingPrDescription = false;
   }
 
   private async handleCreatePr(): Promise<void> {
     if (!this.detectedRepo || !this.createPrTitle.trim() || !this.createPrSource.trim() || !this.createPrTarget.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateAdoPullRequestInput = {
+      title: this.createPrTitle,
+      description: this.createPrDescription || undefined,
+      sourceRefName: this.createPrSource,
+      targetRefName: this.createPrTarget,
+      isDraft: this.createPrDraft,
+    };
 
-    try {
-      const input: CreateAdoPullRequestInput = {
-        title: this.createPrTitle,
-        description: this.createPrDescription || undefined,
-        sourceRefName: this.createPrSource,
-        targetRefName: this.createPrTarget,
-        isDraft: this.createPrDraft,
-      };
-
-      const token = await this.getSelectedAccountToken();
-      const result = await gitService.createAdoPullRequest(
-        this.detectedRepo.organization,
-        this.detectedRepo.project,
-        this.detectedRepo.repository,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
-        // Reset form and go back to list
+    await this.runCreateOperation({
+      successMessage: 'Pull request created successfully',
+      failureMessage: 'Failed to create pull request',
+      getToken: async (targetAccountId) => {
+        const token = await this.getSelectedAccountToken(
+          this.detectedRepo?.organization,
+          targetAccountId,
+        );
+        return token ?? undefined;
+      },
+      execute: (repo, token) =>
+        gitService.createAdoPullRequest(
+          repo.organization,
+          repo.project,
+          repo.repository,
+          input,
+          token ?? null,
+        ),
+      onSuccess: async () => {
         this.createPrTitle = '';
         this.createPrDescription = '';
         this.createPrSource = '';
@@ -2091,49 +2414,50 @@ export class GnAzureDevOpsDialog extends LitElement {
         this.createPrDraft = false;
         this.activeTab = 'pull-requests';
         await this.loadPullRequests();
-        showToast('Pull request created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create pull request';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create pull request';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private async handleCreateWorkItem(): Promise<void> {
     if (!this.detectedRepo || !this.createWorkItemTitle.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const targetRepoPath = this.repositoryPath;
+    const repoGen = this.repoGeneration;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
+    const input: CreateAdoWorkItemInput = {
+      workItemType: this.createWorkItemType || 'Task',
+      title: this.createWorkItemTitle,
+      description: this.createWorkItemDescription || undefined,
+      // Assign to the signed-in user so the new item appears in the
+      // @Me-scoped Work Items list (otherwise it's created unassigned and
+      // would be absent from the list that's reloaded right after). Only use a
+      // UPN-like identity (uniqueName can fall back to a non-unique display
+      // name when the profile has no email — assigning by that is ambiguous, so
+      // leave the item unassigned rather than risk the wrong person).
+      assignedTo: this.connectionStatus?.user?.uniqueName?.includes('@')
+        ? this.connectionStatus.user.uniqueName
+        : undefined,
+    };
 
-    try {
-      const input: CreateAdoWorkItemInput = {
-        workItemType: this.createWorkItemType || 'Task',
-        title: this.createWorkItemTitle,
-        description: this.createWorkItemDescription || undefined,
-        // Assign to the signed-in user so the new item appears in the
-        // @Me-scoped Work Items list (otherwise it's created unassigned and
-        // would be absent from the list that's reloaded right after). Only use a
-        // UPN-like identity (uniqueName can fall back to a non-unique display
-        // name when the profile has no email — assigning by that is ambiguous, so
-        // leave the item unassigned rather than risk the wrong person).
-        assignedTo: this.connectionStatus?.user?.uniqueName?.includes('@')
-          ? this.connectionStatus.user.uniqueName
-          : undefined,
-      };
-
-      const token = await this.getSelectedAccountToken();
-      const result = await gitService.createAzureDevOpsWorkItem(
-        this.detectedRepo.organization,
-        this.detectedRepo.project,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
-        const created = result.data;
+    await this.runCreateOperation({
+      successMessage: 'Work item created successfully',
+      failureMessage: 'Failed to create work item',
+      getToken: async (accountId) => {
+        const token = await this.getSelectedAccountToken(
+          targetDetectedRepo.organization,
+          accountId,
+        );
+        return token ?? undefined;
+      },
+      execute: (repo, token) =>
+        gitService.createAzureDevOpsWorkItem(
+          repo.organization,
+          repo.project,
+          input,
+          token ?? null,
+        ),
+      onSuccess: async (created) => {
         this.createWorkItemType = 'Task';
         this.createWorkItemTitle = '';
         this.createWorkItemDescription = '';
@@ -2142,18 +2466,19 @@ export class GnAzureDevOpsDialog extends LitElement {
         // Ensure the just-created item is visible even in the edge case where it
         // couldn't be self-assigned (no UPN), so it isn't reloaded out of the
         // @Me-scoped list and replaced by a confusing "none assigned" empty state.
-        if (!this.workItems.some((w) => w.id === created.id)) {
+        if (
+          this.isCurrentRepoAndAccount(
+            targetRepoPath,
+            repoGen,
+            targetDetectedRepo,
+            targetAccountId,
+          ) &&
+          !this.workItems.some((w) => w.id === created.id)
+        ) {
           this.workItems = [created, ...this.workItems];
         }
-        showToast('Work item created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create work item';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create work item';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private handleClose(): void {
@@ -2164,32 +2489,6 @@ export class GnAzureDevOpsDialog extends LitElement {
     // reappears stale on reopen.
     this.abandonPendingEntraFlow();
     this.dispatchEvent(new CustomEvent('close'));
-  }
-
-  private openInBrowser(url: string): void {
-    openExternalUrl(url);
-  }
-
-  private formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-    if (days === 0) return 'today';
-    if (days === 1) return 'yesterday';
-    if (days < 7) return `${days} days ago`;
-    if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
-    return date.toLocaleDateString();
-  }
-
-  private getInitials(name: string): string {
-    return name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .substring(0, 2)
-      .toUpperCase();
   }
 
   private getWorkItemTypeClass(type: string): string {
@@ -2266,7 +2565,7 @@ export class GnAzureDevOpsDialog extends LitElement {
               <button
                 class="ms-signin-btn"
                 @click=${this.handleStartEntraOAuth}
-                ?disabled=${this.isLoading || this.oauthPending}
+                ?disabled=${this.isLoading || this.oauthPending || this.isDetectingRepo}
                 aria-label="Sign in with Microsoft"
               >
                 <svg width="21" height="21" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -2333,7 +2632,7 @@ export class GnAzureDevOpsDialog extends LitElement {
             <button
               class="btn btn-primary"
               @click=${this.tokenInput.trim() ? this.handleSaveToken : this.handleConnectWithStoredToken}
-              ?disabled=${this.isLoading || !this.organizationInput.trim() || (!this.tokenInput.trim() && !this.hasStoredToken)}
+              ?disabled=${this.isLoading || this.isDetectingRepo || !this.organizationInput.trim() || (!this.tokenInput.trim() && !this.hasStoredToken)}
             >
               Connect
             </button>
@@ -2343,29 +2642,36 @@ export class GnAzureDevOpsDialog extends LitElement {
     `;
   }
 
+  private renderNotConnected(feature: string) {
+    const connectedOrg = this.connectionStatus?.connected
+      ? this.connectionStatus.organization
+      : null;
+    const repoOrg = this.detectedRepo?.organization;
+    const isOrgMismatch =
+      Boolean(connectedOrg && repoOrg) &&
+      this.normalizeOrg(connectedOrg) !== this.normalizeOrg(repoOrg);
+    const decodedRepoOrg = repoOrg ? decodeURIComponent(repoOrg) : '';
+    return html`
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+        </svg>
+        <p>
+          ${isOrgMismatch
+            ? `Connected to ${connectedOrg}, not ${decodedRepoOrg}. Connect to Azure DevOps (${decodedRepoOrg}) to view ${feature}`
+            : `Connect to Azure DevOps to view ${feature}`}
+        </p>
+      </div>
+    `;
+  }
+
   private renderPullRequestsTab() {
-    if (!this.connectionStatus?.connected) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
-          </svg>
-          <p>Connect to Azure DevOps to view pull requests</p>
-        </div>
-      `;
+    if (!this.isConnectedForDetectedRepo()) {
+      return this.renderNotConnected('pull requests');
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No Azure DevOps repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     // The Azure DevOps PR page opens on its Active tab, so a bare link would send
@@ -2443,102 +2749,13 @@ export class GnAzureDevOpsDialog extends LitElement {
     `;
   }
 
-  private renderPrCommentsDrawer(prId: number) {
-    const comments = this.prComments[prId] ?? [];
-    const isLoadingComments = this.loadingCommentsForPr === prId;
-    const isPosting = this.postingCommentForPr === prId;
-
-    return html`
-      <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${prId}" @click=${(e: Event) => e.stopPropagation()}>
-        ${isLoadingComments ? html`
-          <div class="pr-comments-empty">Loading comments...</div>
-        ` : comments.length === 0 ? html`
-          <div class="pr-comments-empty">No comments yet</div>
-        ` : html`
-          <div class="pr-comments-list">
-            ${comments.map(c => html`
-              <div class="pr-comment-item" data-testid="pr-comment-item-${c.id}">
-                <div class="pr-comment-header">
-                  <span class="pr-comment-author">${c.author}</span>
-                  ${c.filePath ? html`
-                    <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
-                  ` : nothing}
-                  <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
-                </div>
-                <div class="pr-comment-body">${c.body}</div>
-              </div>
-            `)}
-          </div>
-        `}
-        <div class="pr-comment-form">
-          <div class="pr-comment-inline-fields">
-            <input
-              type="text"
-              class="pr-comment-file-input"
-              placeholder="File path (optional, for inline comment)"
-              .value=${this.commentFilePathInput}
-              @input=${(e: Event) => {
-                this.commentFilePathInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-            <input
-              type="number"
-              min="1"
-              class="pr-comment-line-input"
-              placeholder="Line #"
-              .value=${this.commentLineInput}
-              @input=${(e: Event) => {
-                this.commentLineInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </div>
-          <div class="pr-comment-input-row">
-            <textarea
-              class="pr-comment-body-input"
-              rows="2"
-              placeholder="Write a review comment..."
-              .value=${this.commentBodyInput}
-              @input=${(e: Event) => {
-                this.commentBodyInput = (e.target as HTMLTextAreaElement).value;
-              }}
-            ></textarea>
-            <button
-              class="btn btn-primary pr-comment-submit"
-              data-testid="pr-comment-submit-${prId}"
-              ?disabled=${!this.commentBodyInput.trim() || isPosting}
-              @click=${() => this.handleAddPrComment(prId)}
-            >
-              ${isPosting ? 'Posting...' : 'Post Comment'}
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
   private renderWorkItemsTab() {
-    if (!this.connectionStatus?.connected) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
-          </svg>
-          <p>Connect to Azure DevOps to view work items</p>
-        </div>
-      `;
+    if (!this.isConnectedForDetectedRepo()) {
+      return this.renderNotConnected('work items');
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No Azure DevOps repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     if (this.workItems.length === 0 && !this.error) {
@@ -2594,28 +2811,12 @@ export class GnAzureDevOpsDialog extends LitElement {
   }
 
   private renderPipelinesTab() {
-    if (!this.connectionStatus?.connected) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
-          </svg>
-          <p>Connect to Azure DevOps to view pipelines</p>
-        </div>
-      `;
+    if (!this.isConnectedForDetectedRepo()) {
+      return this.renderNotConnected('pipelines');
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No Azure DevOps repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     if (this.pipelineRuns.length === 0) {
@@ -2725,7 +2926,7 @@ export class GnAzureDevOpsDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreatePr}
-            ?disabled=${this.isLoading || !this.createPrTitle.trim() || !this.createPrSource.trim() || !this.createPrTarget.trim()}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createPrTitle.trim() || !this.createPrSource.trim() || !this.createPrTarget.trim()}
           >
             Create Pull Request
           </button>
@@ -2774,7 +2975,7 @@ export class GnAzureDevOpsDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreateWorkItem}
-            ?disabled=${this.isLoading || !this.createWorkItemTitle.trim()}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createWorkItemTitle.trim()}
           >
             Create Work Item
           </button>

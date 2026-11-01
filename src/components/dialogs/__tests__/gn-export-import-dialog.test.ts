@@ -694,5 +694,25 @@ describe('gn-export-import-dialog', () => {
       expect(q<HTMLButtonElement>(el, '[data-testid="bundle-create"]').disabled).to.be.true;
       expect(calls('bundle_create')).to.have.length(0);
     });
+
+    it('locks operationRunning while the archive save picker is open', async () => {
+      const el = await openDialogAt({ tab: 'archive' });
+      let resolveSave: (v: string | null) => void = () => {};
+      overrides['plugin:dialog|save'] = () =>
+        new Promise((r) => {
+          resolveSave = r;
+        });
+
+      const exportPromise = (el as unknown as { handleExportArchive: () => Promise<void> }).handleExportArchive();
+      await el.updateComplete;
+
+      expect((el as unknown as { operationRunning: boolean }).operationRunning).to.be.true;
+
+      resolveSave(null);
+      await exportPromise;
+      await el.updateComplete;
+
+      expect((el as unknown as { operationRunning: boolean }).operationRunning).to.be.false;
+    });
   });
 });

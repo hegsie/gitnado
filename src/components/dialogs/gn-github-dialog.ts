@@ -3,12 +3,14 @@
  * Manage GitHub connection, view PRs, and check Actions status
  */
 
-import { LitElement, html, css, nothing } from 'lit';
+import { html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
-import { loggers, openExternalUrl, handleExternalLink } from '../../utils/index.ts';
+import { loggers, handleExternalLink } from '../../utils/index.ts';
+import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
+export type { PrReviewComment };
 import type {
   GitHubConnectionStatus,
   DetectedGitHubRepo,
@@ -30,7 +32,6 @@ import { getClientId, isOAuthConfigured } from '../../services/oauth.service.ts'
 import type { OAuthFlowState, OAuthTokenResponse } from '../../types/oauth.types.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
-import { showConfirm } from '../../services/dialog.service.ts';
 import './gn-modal.ts';
 import './gn-account-selector.ts';
 
@@ -47,18 +48,13 @@ const WORKFLOW_PAGE_SIZE = 20;
 
 type TabType = 'connection' | 'pull-requests' | 'issues' | 'releases' | 'actions' | 'create-pr' | 'create-issue' | 'create-release';
 
-export interface PrReviewComment {
-  id: string;
-  author: string;
-  avatarUrl?: string | null;
-  body: string;
-  createdAt: string;
-  filePath?: string | null;
-  line?: number | null;
-}
-
 @customElement('gn-github-dialog')
-export class GnGitHubDialog extends LitElement {
+export class GnGitHubDialog extends GnProviderDialogBase<
+  DetectedGitHubRepo,
+  GitHubConnectionStatus,
+  TabType
+> {
+  protected readonly providerDisplayName = 'GitHub';
   static styles = [
     sharedStyles,
     css`
@@ -895,8 +891,6 @@ export class GnGitHubDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean, reflect: true }) open = false;
-  @property({ type: String }) repositoryPath = '';
   /**
    * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
    * this dialog was opened with a return target (the profile manager), so the
@@ -911,9 +905,6 @@ export class GnGitHubDialog extends LitElement {
    */
   @property({ type: String }) attachToProfileName = '';
 
-  @state() private activeTab: TabType = 'connection';
-  @state() private connectionStatus: GitHubConnectionStatus | null = null;
-  @state() private detectedRepo: DetectedGitHubRepo | null = null;
   @state() private pullRequests: PullRequestSummary[] = [];
   @state() private workflowRuns: WorkflowRun[] = [];
   @state() private issues: IssueSummary[] = [];
@@ -940,8 +931,6 @@ export class GnGitHubDialog extends LitElement {
   private runsRequestId = 0;
   private issuesRequestId = 0;
   private releasesRequestId = 0;
-  @state() private isLoading = false;
-  @state() private error: string | null = null;
   @state() private tokenInput = '';
   @state() private prFilter: 'open' | 'closed' | 'all' = 'open';
   @state() private issueFilter: 'open' | 'closed' | 'all' = 'open';
@@ -955,21 +944,9 @@ export class GnGitHubDialog extends LitElement {
   @state() private loadingInstallations = false;
   @state() private oauthState: OAuthFlowState = { status: 'idle' };
   private oauthUnsubscribe?: () => void;
-  // Set while the user is mid-"Add account" (selection intentionally cleared so
-  // the next save creates a NEW account). Guards the store subscription from
-  // re-selecting an existing account on a background emit, which would route the
-  // token onto the wrong account.
-  private isAddingAccount = false;
   private oauthTargetAccountId: string | null | undefined;
   private oauthTargetWasAddingAccount: boolean | undefined;
   private boundOAuthComplete = this.handleOAuthComplete.bind(this);
-
-  // Multi-account support (global accounts)
-  @state() private accounts: IntegrationAccount[] = [];
-  @state() private selectedAccountId: string | null = null;
-
-  private unsubscribeStore?: () => void;
-  private loadGeneration = 0;
 
   // Create PR form
   @state() private createPrTitle = '';
@@ -994,15 +971,6 @@ export class GnGitHubDialog extends LitElement {
   @state() private createReleasePrerelease = false;
   @state() private createReleaseDraft = false;
   @state() private createReleaseGenerateNotes = true;
-
-  // PR Review Comments drawer
-  @state() private expandedPrNumber: number | null = null;
-  @state() private prComments: Record<number, PrReviewComment[]> = {};
-  @state() private loadingCommentsForPr: number | null = null;
-  @state() private postingCommentForPr: number | null = null;
-  @state() private commentBodyInput = '';
-  @state() private commentFilePathInput = '';
-  @state() private commentLineInput = '';
 
   async connectedCallback(): Promise<void> {
     super.connectedCallback();
@@ -1079,43 +1047,13 @@ export class GnGitHubDialog extends LitElement {
     window.removeEventListener('oauth-complete', this.boundOAuthComplete as unknown as EventListener);
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
-    if (changedProperties.has('open') && this.open) {
-      // Fresh open: re-derive the preferred account so a profile switch since
-      // the last open is reflected. handleAccountChange() also calls
-      // loadInitialData(), and we must NOT re-derive in that path or a manual
-      // switch would immediately be overwritten.
-      this.selectedAccountId = null;
-      await this.loadInitialData();
-    }
-    if (changedProperties.has('repositoryPath')) {
-      // The dialog is repo-independent (it stays open across the last tab close),
-      // so an empty path must clear the previously detected repo. Otherwise the
-      // repo-backed tabs keep rendering and acting on the closed repository.
-      // The create-* drafts belong to the repository they were typed against,
-      // so they go too -- otherwise a draft left on screen is submitted into
-      // whichever repository the dialog is repointed at.
-      this.resetRepoScopedDrafts();
-      if (!this.repositoryPath) {
-        this.detectedRepo = null;
-      } else if (this.open) {
-        await this.detectRepo();
-      }
-    }
-  }
-
-  /**
-   * Drop every create-* draft and leave any create-* tab. Called when
-   * repositoryPath changes, because those drafts are scoped to the repository
-   * they were composed against while the create handlers guard only on
-   * detectedRepo, which is re-derived from whatever repository is now current.
-   */
-  private resetRepoScopedDrafts(): void {
+  protected resetProviderRepoScopedState(): void {
     this.createPrTitle = '';
     this.createPrBody = '';
     this.createPrHead = '';
     this.createPrBase = '';
     this.createPrDraft = false;
+    this.generatingPrDescription = false;
     this.createIssueTitle = '';
     this.createIssueBody = '';
     this.createIssueLabels = [];
@@ -1125,20 +1063,31 @@ export class GnGitHubDialog extends LitElement {
     this.createReleasePrerelease = false;
     this.createReleaseDraft = false;
     this.createReleaseGenerateNotes = true;
-    this.expandedPrNumber = null;
-    this.prComments = {};
-    this.loadingCommentsForPr = null;
-    this.postingCommentForPr = null;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    if (this.activeTab.startsWith('create-')) {
-      this.activeTab = 'connection';
-    }
+    this.pullRequests = [];
+    this.workflowRuns = [];
+    this.issues = [];
+    this.repoLabels = [];
+    this.releases = [];
+    this.prPage = 1;
+    this.hasMorePrs = false;
+    this.isLoadingMorePrs = false;
+    this.prRequestId++;
+    this.issuesNextPage = null;
+    this.isLoadingMoreIssues = false;
+    this.issuesRequestId++;
+    this.releasesPage = 1;
+    this.hasMoreReleases = false;
+    this.isLoadingMoreReleases = false;
+    this.releasesRequestId++;
+    this.runsPage = 1;
+    this.hasMoreRuns = false;
+    this.isLoadingMoreRuns = false;
+    this.runsRequestId++;
   }
 
-  private async loadInitialData(): Promise<void> {
+  protected async loadInitialData(): Promise<void> {
     const generation = ++this.loadGeneration;
+    this.initInFlight = true;
     this.isLoading = true;
     this.error = null;
 
@@ -1169,15 +1118,17 @@ export class GnGitHubDialog extends LitElement {
       // Only auto-derive if nothing is selected (fresh open clears it in
       // `updated()`). Manual switches set selectedAccountId before calling
       // loadInitialData(), and must not be overwritten.
-      if (this.accounts.length > 0 && !this.selectedAccountId) {
+      if (this.accounts.length > 0 && !this.selectedAccountId && !this.isAddingAccount) {
         const preferred = getActiveProfilePreferredAccount('github')
           ?? selectDefaultGlobalAccount('github');
         this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
         log.debug('Selected account', { accountId: this.selectedAccountId });
       }
 
-      await this.checkConnection();
-      if (generation !== this.loadGeneration) return;
+      if (!this.isAddingAccount) {
+        await this.checkConnection();
+        if (generation !== this.loadGeneration) return;
+      }
       if (this.repositoryPath) {
         await this.detectRepo();
       }
@@ -1186,7 +1137,9 @@ export class GnGitHubDialog extends LitElement {
       this.error = err instanceof Error ? err.message : 'Failed to load data';
     } finally {
       if (generation === this.loadGeneration) {
+        this.initInFlight = false;
         this.isLoading = false;
+        this.isDetectingRepo = false;
       }
     }
   }
@@ -1205,10 +1158,17 @@ export class GnGitHubDialog extends LitElement {
   }
 
   private async checkConnection(): Promise<void> {
+    const generation = this.loadGeneration;
+    const accountId = this.selectedAccountId;
+    const isCurrent = () =>
+      generation === this.loadGeneration &&
+      this.selectedAccountId === accountId;
     try {
       // Get token for selected account (or legacy token if no account)
       const token = await this.getSelectedAccountToken();
+      if (!isCurrent()) return;
       const result = await gitService.checkGitHubConnectionWithToken(token);
+      if (!isCurrent()) return;
       if (result.success && result.data) {
         this.connectionStatus = result.data;
         this.syncSharedConnectionStatus(result.data.connected);
@@ -1231,6 +1191,7 @@ export class GnGitHubDialog extends LitElement {
         this.syncSharedConnectionStatus(false);
       }
     } catch (err) {
+      if (!isCurrent()) return;
       this.error = err instanceof Error ? err.message : 'Failed to check connection';
       this.connectionStatus = { connected: false, user: null, scopes: [] };
       this.syncSharedConnectionStatus(false);
@@ -1240,11 +1201,13 @@ export class GnGitHubDialog extends LitElement {
   /**
    * Get the token for the currently selected account
    */
-  private async getSelectedAccountToken(): Promise<string | null> {
-    if (this.selectedAccountId) {
+  private async getSelectedAccountToken(
+    targetAccountId: string | null = this.selectedAccountId,
+  ): Promise<string | null> {
+    if (targetAccountId) {
       return credentialService.getFreshAccountToken(
         'github',
-        this.selectedAccountId,
+        targetAccountId,
         'github'
       );
     }
@@ -1258,10 +1221,16 @@ export class GnGitHubDialog extends LitElement {
     const { account } = e.detail;
     // The user explicitly selected an existing account, so we're no longer
     // adding a new one — re-enable the subscription's auto-apply branch.
-    this.isAddingAccount = false;
-    this.selectedAccountId = account.id;
-    this.connectionStatus = null;
-    this.error = null;
+    this.beginAccountSwitch(account.id);
+    this.tokenInput = '';
+    this.prRequestId++;
+    this.runsRequestId++;
+    this.issuesRequestId++;
+    this.releasesRequestId++;
+    this.isLoadingMorePrs = false;
+    this.isLoadingMoreRuns = false;
+    this.isLoadingMoreIssues = false;
+    this.isLoadingMoreReleases = false;
 
     // Re-check connection with new account
     await this.loadInitialData();
@@ -1275,10 +1244,15 @@ export class GnGitHubDialog extends LitElement {
     // selectedAccountId is essential — without it handleSaveToken would write
     // the new token onto the previously-selected account instead of creating
     // a new one, leaving the user with no way to add additional accounts.
-    this.isAddingAccount = true;
-    this.activeTab = 'connection';
-    this.connectionStatus = null;
-    this.selectedAccountId = null;
+    this.beginAddAccount();
+    this.prRequestId++;
+    this.runsRequestId++;
+    this.issuesRequestId++;
+    this.releasesRequestId++;
+    this.isLoadingMorePrs = false;
+    this.isLoadingMoreRuns = false;
+    this.isLoadingMoreIssues = false;
+    this.isLoadingMoreReleases = false;
     this.tokenInput = '';
   }
 
@@ -1300,8 +1274,12 @@ export class GnGitHubDialog extends LitElement {
     );
   }
 
-  private async detectRepo(): Promise<void> {
-    if (!this.repositoryPath) return;
+  protected async detectRepo(loadData = true): Promise<void> {
+    if (!this.repositoryPath) {
+      this.detectGeneration++;
+      this.isDetectingRepo = false;
+      return;
+    }
 
     // The dialog outlives the repository -- it stays open when the last tab
     // closes -- so a detect issued for one path can resolve after the path has
@@ -1309,24 +1287,44 @@ export class GnGitHubDialog extends LitElement {
     // selected) repository from being re-detected and re-loaded over the
     // current one.
     const requestedPath = this.repositoryPath;
-    const result = await gitService.detectGitHubRepo(requestedPath);
-    if (this.repositoryPath !== requestedPath) return;
-    if (result.success && result.data) {
-      this.detectedRepo = result.data;
-      // SAFETY: IPC calls are batched with Promise.all to avoid N+1 sequential calls.
-      if (this.connectionStatus?.connected) {
-        await Promise.all([
-          this.loadPullRequests(),
-          this.loadWorkflowRuns(),
-          this.loadIssues(),
-          this.loadLabels(),
-          this.loadReleases(),
-        ]);
+    const repoGen = this.repoGeneration;
+    const detectGen = ++this.detectGeneration;
+    this.detectedRepo = null;
+    this.isDetectingRepo = true;
+    try {
+      const result = await gitService.detectGitHubRepo(requestedPath);
+      if (
+        this.repositoryPath !== requestedPath ||
+        this.repoGeneration !== repoGen ||
+        this.detectGeneration !== detectGen
+      ) {
+        return;
       }
-    } else if (!result.success) {
-      // A genuine backend failure (not merely "this isn't a GitHub repo", which
-      // surfaces as success with null data) must not fail silently.
-      this.error = result.error?.message ?? 'Failed to detect GitHub repository';
+      this.isDetectingRepo = false;
+      if (result.success && result.data) {
+        this.detectedRepo = result.data;
+        // SAFETY: IPC calls are batched with Promise.all to avoid N+1 sequential calls.
+        if (loadData && !this.isAddingAccount && this.connectionStatus?.connected) {
+          await Promise.all([
+            this.loadPullRequests(),
+            this.loadWorkflowRuns(),
+            this.loadIssues(),
+            this.loadLabels(),
+            this.loadReleases(),
+          ]);
+        }
+      } else {
+        this.detectedRepo = null;
+        if (!result.success) {
+          // A genuine backend failure (not merely "this isn't a GitHub repo", which
+          // surfaces as success with null data) must not fail silently.
+          this.error = result.error?.message ?? 'Failed to detect GitHub repository';
+        }
+      }
+    } finally {
+      if (this.detectGeneration === detectGen) {
+        this.isDetectingRepo = false;
+      }
     }
   }
 
@@ -1338,6 +1336,9 @@ export class GnGitHubDialog extends LitElement {
   private async loadPullRequests(providedToken?: string, append = false): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     const requestedPage = append ? this.prPage + 1 : 1;
     const requestId = ++this.prRequestId;
     // Appending must not swap the rendered list for the "Loading…" placeholder,
@@ -1353,15 +1354,22 @@ export class GnGitHubDialog extends LitElement {
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.listPullRequests(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
+        targetDetectedRepo.owner,
+        targetDetectedRepo.repo,
         this.prFilter,
         PR_PAGE_SIZE,
         requestedPage,
         token
       );
 
-      if (requestId !== this.prRequestId) return;
+      if (
+        requestId !== this.prRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       if (result.success && result.data) {
         this.pullRequests = append ? [...this.pullRequests, ...result.data] : result.data;
         this.prPage = requestedPage;
@@ -1372,10 +1380,17 @@ export class GnGitHubDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load pull requests';
       }
     } catch (err) {
-      if (requestId !== this.prRequestId) return;
+      if (
+        requestId !== this.prRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load pull requests';
     } finally {
-      if (requestId === this.prRequestId) {
+      if (requestId === this.prRequestId && this.selectedAccountId === targetAccountId) {
         if (append) {
           this.isLoadingMorePrs = false;
         } else {
@@ -1385,98 +1400,57 @@ export class GnGitHubDialog extends LitElement {
     }
   }
 
-  private async togglePrComments(prNumber: number): Promise<void> {
-    if (this.expandedPrNumber === prNumber) {
-      this.expandedPrNumber = null;
-      return;
-    }
-    this.expandedPrNumber = prNumber;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    await this.loadPrComments(prNumber);
+  protected getCommentsOutboundHost(): string {
+    return 'api.github.com';
   }
 
-  private async loadPrComments(prNumber: number): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed('api.github.com', false)) return;
-
-    this.loadingCommentsForPr = prNumber;
-    this.error = null;
-
-    try {
-      const token = await this.getSelectedAccountToken();
-      const result = await invokeCommand<PrReviewComment[]>('get_github_pr_comments', {
-        owner: this.detectedRepo.owner,
-        repo: this.detectedRepo.repo,
-        pullNumber: prNumber,
-        token,
-      });
-
-      if (result.success && result.data) {
-        this.prComments = {
-          ...this.prComments,
-          [prNumber]: result.data,
-        };
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to load PR comments';
-        showToast(this.error, 'error');
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to load PR comments';
-      showToast(this.error, 'error');
-    } finally {
-      this.loadingCommentsForPr = null;
-    }
+  protected async getTokenForComments(
+    targetAccountId: string | null,
+  ): Promise<string | null | undefined> {
+    return this.getSelectedAccountToken(targetAccountId);
   }
 
-  private async handleAddPrComment(prNumber: number, commitId?: string): Promise<void> {
-    const body = this.commentBodyInput.trim();
-    if (!body || !this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed('api.github.com', false)) return;
+  protected fetchPrComments(
+    repo: DetectedGitHubRepo,
+    prNumber: number,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment[]>('get_github_pr_comments', {
+      owner: repo.owner,
+      repo: repo.repo,
+      pullNumber: prNumber,
+      token,
+    });
+  }
 
-    const path = this.commentFilePathInput.trim() || undefined;
-    const parsedLine = parseInt(this.commentLineInput.trim(), 10);
-    const line = !Number.isNaN(parsedLine) && parsedLine > 0 ? parsedLine : undefined;
-
-    this.postingCommentForPr = prNumber;
-    this.error = null;
-
-    try {
-      const token = await this.getSelectedAccountToken();
-      const result = await invokeCommand<PrReviewComment>('add_github_pr_comment', {
-        owner: this.detectedRepo.owner,
-        repo: this.detectedRepo.repo,
-        pullNumber: prNumber,
-        body,
-        path,
-        line,
-        commitId,
-        token,
-      });
-
-      if (result.success) {
-        this.commentBodyInput = '';
-        this.commentFilePathInput = '';
-        this.commentLineInput = '';
-        showToast('Comment posted', 'success');
-        await this.loadPrComments(prNumber);
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to post PR comment';
-        showToast(this.error, 'error');
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to post PR comment';
-      showToast(this.error, 'error');
-    } finally {
-      this.postingCommentForPr = null;
-    }
+  protected postPrComment(
+    repo: DetectedGitHubRepo,
+    prNumber: number,
+    body: string,
+    path: string | undefined,
+    line: number | undefined,
+    commitId: string | undefined,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment>('add_github_pr_comment', {
+      owner: repo.owner,
+      repo: repo.repo,
+      pullNumber: prNumber,
+      body,
+      path,
+      line,
+      commitId,
+      token,
+    });
   }
 
   /** Load workflow runs; see `loadPullRequests` for what `append` means. */
   private async loadWorkflowRuns(providedToken?: string, append = false): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     const requestedPage = append ? this.runsPage + 1 : 1;
     const requestId = ++this.runsRequestId;
     this.isLoadingMoreRuns = append;
@@ -1487,15 +1461,22 @@ export class GnGitHubDialog extends LitElement {
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.getWorkflowRuns(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
+        targetDetectedRepo.owner,
+        targetDetectedRepo.repo,
         undefined,
         WORKFLOW_PAGE_SIZE,
         requestedPage,
         token
       );
 
-      if (requestId !== this.runsRequestId) return;
+      if (
+        requestId !== this.runsRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       if (result.success && result.data) {
         this.workflowRuns = append ? [...this.workflowRuns, ...result.data] : result.data;
         this.runsPage = requestedPage;
@@ -1507,10 +1488,19 @@ export class GnGitHubDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load workflow runs';
       }
     } catch (err) {
-      if (requestId !== this.runsRequestId) return;
+      if (
+        requestId !== this.runsRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load workflow runs';
     } finally {
-      if (append && requestId === this.runsRequestId) this.isLoadingMoreRuns = false;
+      if (append && requestId === this.runsRequestId && this.selectedAccountId === targetAccountId) {
+        this.isLoadingMoreRuns = false;
+      }
     }
   }
 
@@ -1522,6 +1512,9 @@ export class GnGitHubDialog extends LitElement {
   private async loadIssues(providedToken?: string, append = false): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     const requestedPage = append ? (this.issuesNextPage ?? 1) : 1;
     const requestId = ++this.issuesRequestId;
     this.isLoadingMoreIssues = append;
@@ -1530,8 +1523,8 @@ export class GnGitHubDialog extends LitElement {
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.listIssues(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
+        targetDetectedRepo.owner,
+        targetDetectedRepo.repo,
         this.issueFilter,
         undefined,
         ISSUE_PAGE_SIZE,
@@ -1539,7 +1532,14 @@ export class GnGitHubDialog extends LitElement {
         token
       );
 
-      if (requestId !== this.issuesRequestId) return;
+      if (
+        requestId !== this.issuesRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       if (result.success && result.data) {
         this.issues = append ? [...this.issues, ...result.data.issues] : result.data.issues;
         this.issuesNextPage = result.data.nextPage ?? null;
@@ -1547,24 +1547,44 @@ export class GnGitHubDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load issues';
       }
     } catch (err) {
-      if (requestId !== this.issuesRequestId) return;
+      if (
+        requestId !== this.issuesRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load issues';
     } finally {
-      if (append && requestId === this.issuesRequestId) this.isLoadingMoreIssues = false;
+      if (append && requestId === this.issuesRequestId && this.selectedAccountId === targetAccountId) {
+        this.isLoadingMoreIssues = false;
+      }
     }
   }
 
   private async loadLabels(providedToken?: string): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
+
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.getRepoLabels(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
+        targetDetectedRepo.owner,
+        targetDetectedRepo.repo,
         undefined,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.repoLabels = result.data;
@@ -1572,6 +1592,13 @@ export class GnGitHubDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load labels';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load labels';
     }
   }
@@ -1580,6 +1607,9 @@ export class GnGitHubDialog extends LitElement {
   private async loadReleases(providedToken?: string, append = false): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     const requestedPage = append ? this.releasesPage + 1 : 1;
     const requestId = ++this.releasesRequestId;
     this.isLoadingMoreReleases = append;
@@ -1588,14 +1618,21 @@ export class GnGitHubDialog extends LitElement {
     try {
       const token = providedToken ?? await this.getSelectedAccountToken();
       const result = await gitService.listReleases(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
+        targetDetectedRepo.owner,
+        targetDetectedRepo.repo,
         RELEASE_PAGE_SIZE,
         requestedPage,
         token
       );
 
-      if (requestId !== this.releasesRequestId) return;
+      if (
+        requestId !== this.releasesRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       if (result.success && result.data) {
         this.releases = append ? [...this.releases, ...result.data] : result.data;
         this.releasesPage = requestedPage;
@@ -1604,10 +1641,19 @@ export class GnGitHubDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load releases';
       }
     } catch (err) {
-      if (requestId !== this.releasesRequestId) return;
+      if (
+        requestId !== this.releasesRequestId ||
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load releases';
     } finally {
-      if (append && requestId === this.releasesRequestId) this.isLoadingMoreReleases = false;
+      if (append && requestId === this.releasesRequestId && this.selectedAccountId === targetAccountId) {
+        this.isLoadingMoreReleases = false;
+      }
     }
   }
 
@@ -1666,14 +1712,14 @@ export class GnGitHubDialog extends LitElement {
     this.oauthTargetAccountId = undefined;
     this.oauthTargetWasAddingAccount = undefined;
 
-    this.isLoading = true;
-    this.error = null;
-    const targetAccountExists = (): boolean =>
-      !targetAccountId ||
-      getAccountsByType('github').some((account) => account.id === targetAccountId);
     const selectionChangedDuringOAuth = (): boolean =>
       this.selectedAccountId !== targetAccountId ||
       this.isAddingAccount !== targetWasAddingAccount;
+    const invalidatedLoad = !selectionChangedDuringOAuth();
+    const generation = this.beginAccountOp(invalidatedLoad);
+    const targetAccountExists = (): boolean =>
+      !targetAccountId ||
+      getAccountsByType('github').some((account) => account.id === targetAccountId);
     let applyOAuthResultToSelection = false;
     let connectedAccountId: string | undefined;
 
@@ -1813,6 +1859,11 @@ export class GnGitHubDialog extends LitElement {
         );
       }
 
+      if (wasOpen && this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false);
+      }
+
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
       // Load data if connected and repo detected
       if (wasOpen && this.connectionStatus?.connected && this.detectedRepo) {
         await Promise.all([
@@ -1824,45 +1875,52 @@ export class GnGitHubDialog extends LitElement {
         ]);
       }
     } catch (err) {
-      if (targetAccountId && !targetAccountExists()) {
+      if (connectedAccountId === targetAccountId && targetAccountId && !targetAccountExists()) {
         await credentialService.deleteAccountToken('github', targetAccountId);
       }
-      this.error = err instanceof Error ? err.message : 'OAuth authentication failed';
+      if (invalidatedLoad && generation === this.loadGeneration) {
+        this.error = err instanceof Error ? err.message : 'OAuth authentication failed';
+      }
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(invalidatedLoad ? generation : undefined);
     }
   }
 
   private async handleSaveToken(): Promise<void> {
     if (!this.tokenInput.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const generation = this.beginAccountOp();
     const tokenToSave = this.tokenInput.trim();
+    const targetAccountId = this.selectedAccountId;
+    const targetWasAddingAccount = this.isAddingAccount;
 
     try {
       // First verify the token works by checking connection
       const verifyResult = await gitService.checkGitHubConnectionWithToken(tokenToSave);
       if (!verifyResult.success || !verifyResult.data?.connected) {
-        this.error = verifyResult.error?.message ?? 'Invalid token or connection failed';
+        if (generation === this.loadGeneration) {
+          this.error = verifyResult.error?.message ?? 'Invalid token or connection failed';
+        }
         return;
       }
 
       const user = verifyResult.data.user;
+      let connectedAccountId: string;
 
-      // If we have a selected account, save token to that account
-      if (this.selectedAccountId) {
-        await credentialService.storeAccountToken('github', this.selectedAccountId, tokenToSave);
+      // If we had a selected account when Save was clicked, save token to that account
+      if (targetAccountId && !targetWasAddingAccount) {
+        await credentialService.storeAccountToken('github', targetAccountId, tokenToSave);
         // Refresh cachedUser so the profile manager shows the up-to-date
         // avatar/username immediately instead of waiting for background validation.
         if (user) {
-          await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
+          await unifiedProfileService.updateGlobalAccountCachedUser(targetAccountId, {
             username: user.login,
             displayName: user.name ?? null,
             email: user.email ?? null,
             avatarUrl: user.avatarUrl ?? null,
           });
         }
+        connectedAccountId = targetAccountId;
       } else {
         // No account selected - create a new global account
         const { createEmptyIntegrationAccount, generateId } = await import('../../types/unified-profile.types.ts');
@@ -1881,20 +1939,36 @@ export class GnGitHubDialog extends LitElement {
 
         const savedAccount = await unifiedProfileService.saveGlobalAccount(newAccount);
         await credentialService.storeAccountToken('github', savedAccount.id, tokenToSave);
-        this.selectedAccountId = savedAccount.id;
-        // The new account now exists and is selected — the add flow is complete.
-        this.isAddingAccount = false;
+        connectedAccountId = savedAccount.id;
+        if (
+          this.selectedAccountId === targetAccountId &&
+          this.isAddingAccount === targetWasAddingAccount
+        ) {
+          this.selectedAccountId = savedAccount.id;
+          // The new account now exists and is selected — the add flow is complete.
+          this.isAddingAccount = false;
+        }
 
         // Refresh accounts list
         await unifiedProfileService.loadUnifiedProfiles();
         this.accounts = getAccountsByType('github');
       }
 
-      // Token saved, update state
-      this.tokenInput = '';
-      this.connectionStatus = verifyResult.data;
-      this.syncSharedConnectionStatus(true);
+      unifiedProfileStore
+        .getState()
+        .setAccountConnectionStatus(connectedAccountId, 'connected');
+      if (this.tokenInput.trim() === tokenToSave) {
+        this.tokenInput = '';
+      }
 
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+      this.connectionStatus = verifyResult.data;
+
+      if (this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false);
+      }
+
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
       // Load data if connected and repo detected
       // Pass the token directly since storage might not be ready yet
       if (this.connectionStatus?.connected && this.detectedRepo) {
@@ -1907,10 +1981,11 @@ export class GnGitHubDialog extends LitElement {
         ]);
       }
     } catch (err) {
+      if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to save token';
       this.tokenInput = tokenToSave;
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(generation);
     }
   }
 
@@ -1927,125 +2002,83 @@ export class GnGitHubDialog extends LitElement {
   }
 
   private async handleDisconnect(): Promise<void> {
-    this.isLoading = true;
-    this.error = null;
+    const targetAccountId = this.selectedAccountId;
+    const wasAppConnection = this.isAppConnection(targetAccountId);
 
-    const wasAppConnection = this.isAppConnection(this.selectedAccountId);
-
-    try {
-      // Delete token for selected account or legacy token
-      if (this.selectedAccountId) {
-        await credentialService.deleteAccountToken('github', this.selectedAccountId);
-      } else {
-        await gitService.deleteGitHubToken();
-      }
-
-      // The App config lives in its own keyring entry, so deleting the account
-      // token does not disconnect an App. Leaving it behind kept the App
-      // authenticating requests after the user pressed Disconnect.
-      if (wasAppConnection) {
-        try {
-          await credentialService.removeGitHubAppConfig();
-        } catch (appErr) {
-          showToast(
-            appErr instanceof Error
-              ? `Disconnected, but the GitHub App configuration could not be removed: ${appErr.message}`
-              : 'Disconnected, but the GitHub App configuration could not be removed',
-            'warning',
-          );
+    await this.runDisconnectOperation(
+      async () => {
+        if (targetAccountId) {
+          await credentialService.deleteAccountToken('github', targetAccountId);
+        } else {
+          await gitService.deleteGitHubToken();
         }
-      }
 
-      this.syncSharedConnectionStatus(false);
-      this.connectionStatus = { connected: false, user: null, scopes: [] };
-      this.pullRequests = [];
-      this.workflowRuns = [];
-      this.issues = [];
-      this.repoLabels = [];
-      this.releases = [];
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to disconnect';
-      showToast(this.error, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+        // The App config lives in its own keyring entry, so deleting the account
+        // token does not disconnect an App. Leaving it behind kept the App
+        // authenticating requests after the user pressed Disconnect.
+        if (wasAppConnection) {
+          try {
+            await credentialService.removeGitHubAppConfig();
+          } catch (appErr) {
+            showToast(
+              appErr instanceof Error
+                ? `Disconnected, but the GitHub App configuration could not be removed: ${appErr.message}`
+                : 'Disconnected, but the GitHub App configuration could not be removed',
+              'warning',
+            );
+          }
+        }
+      },
+      () => {
+        this.connectionStatus = { connected: false, user: null, scopes: [] };
+        this.pullRequests = [];
+        this.workflowRuns = [];
+        this.issues = [];
+        this.repoLabels = [];
+        this.releases = [];
+      },
+    );
   }
 
   private async handleDeleteIntegration(): Promise<void> {
-    if (!this.selectedAccountId) return;
-
-    const selected = this.accounts.find((a) => a.id === this.selectedAccountId);
-    const accountName = selected?.name ?? 'this account';
-    const confirmed = await showConfirm(
-      'Delete GitHub Integration',
-      `Delete ${accountName}? The stored token will be removed and any profile that uses this account as its default will lose that reference.`,
-      'warning',
-    );
-    if (!confirmed) return;
-
-    this.isLoading = true;
-    this.error = null;
-
-    // M10: Delete the config/account record (the source of truth) FIRST so a
-    // failure leaves the token intact but no zombie account. The keyring token
-    // deletion is best-effort last; if it fails we surface a warning rather than
-    // leaving a half-deleted state.
     const accountId = this.selectedAccountId;
+    const account = accountId
+      ? (this.accounts.find((a) => a.id === accountId) ??
+        ({ id: accountId, name: 'this account' } as IntegrationAccount))
+      : undefined;
     const wasAppConnection = this.isAppConnection(accountId);
-    try {
-      await unifiedProfileService.deleteGlobalAccount(accountId);
 
-      // Same as Disconnect: the App keeps its credentials in a separate keyring
-      // entry, so deleting the account record alone leaves it able to
-      // authenticate.
-      if (wasAppConnection) {
-        try {
-          await credentialService.removeGitHubAppConfig();
-        } catch (appErr) {
-          showToast(
-            appErr instanceof Error
-              ? `Account deleted, but the GitHub App configuration could not be removed: ${appErr.message}`
-              : 'Account deleted, but the GitHub App configuration could not be removed',
-            'warning',
-          );
+    await this.runDeleteIntegrationOperation({
+      account,
+      providerLabel: 'GitHub',
+      deleteCredentials: async (target) => {
+        if (wasAppConnection) {
+          try {
+            await credentialService.removeGitHubAppConfig();
+          } catch (appErr) {
+            showToast(
+              appErr instanceof Error
+                ? `Account deleted, but the GitHub App configuration could not be removed: ${appErr.message}`
+                : 'Account deleted, but the GitHub App configuration could not be removed',
+              'warning',
+            );
+          }
         }
-      }
+        await credentialService.deleteAccountToken('github', target.id);
+      },
+      getRemainingAccounts: () => getAccountsByType('github'),
+      onDeleted: async (nextAccountId) => {
+        this.pullRequests = [];
+        this.issues = [];
+        this.workflowRuns = [];
+        this.releases = [];
+        this.repoLabels = [];
 
-      await unifiedProfileService.loadUnifiedProfiles();
-      this.accounts = getAccountsByType('github');
-
-      this.selectedAccountId = this.accounts.length > 0 ? this.accounts[0].id : null;
-      this.connectionStatus = null;
-      this.pullRequests = [];
-      this.issues = [];
-      this.workflowRuns = [];
-      this.releases = [];
-      this.repoLabels = [];
-
-      // Best-effort token cleanup after the record is gone.
-      try {
-        await credentialService.deleteAccountToken('github', accountId);
-      } catch (tokenErr) {
-        // M10: surface partial failure instead of swallowing it.
-        const msg =
-          tokenErr instanceof Error
-            ? `Account deleted, but its stored token could not be removed: ${tokenErr.message}`
-            : 'Account deleted, but its stored token could not be removed.';
-        this.error = msg;
-        showToast(msg, 'error');
-      }
-
-      if (this.accounts.length > 0) {
-        await this.loadInitialData();
-      }
-    } catch (err) {
-      // M10: pair inline error with a toast for consistent feedback.
-      const msg = err instanceof Error ? err.message : 'Failed to delete integration';
-      this.error = msg;
-      showToast(msg, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+        if (nextAccountId) {
+          await this.loadInitialData();
+        }
+      },
+    });
   }
 
   private async handleLoadInstallations(): Promise<void> {
@@ -2066,8 +2099,7 @@ export class GnGitHubDialog extends LitElement {
   private async handleConnectGitHubApp(): Promise<void> {
     if (!this.appId || !this.appPrivateKey || !this.appInstallationId) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const generation = this.beginAccountOp();
 
     try {
       // The backend now validates the key, mints a JWT, and persists the app
@@ -2155,58 +2187,59 @@ export class GnGitHubDialog extends LitElement {
       this.appInstallationId = '';
       this.appInstallations = [];
     } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to connect GitHub App';
-      showToast(this.error, 'error');
+      if (generation === this.loadGeneration) {
+        this.error = err instanceof Error ? err.message : 'Failed to connect GitHub App';
+      }
+      showToast(err instanceof Error ? err.message : 'Failed to connect GitHub App', 'error');
+    } finally {
+      this.finishAccountOp(generation);
     }
-
-    this.isLoading = false;
   }
 
   private async handleGeneratePrDescription(): Promise<void> {
     if (!this.repositoryPath || !this.createPrHead || !this.createPrBase) return;
 
+    const repoPath = this.repositoryPath;
+    const repoGen = this.repoGeneration;
     this.generatingPrDescription = true;
-    const result = await aiService.generatePrDescription(
-      this.repositoryPath,
-      this.createPrBase,
-      this.createPrHead,
-      this.createPrTitle || 'Untitled PR',
-    );
+    try {
+      const result = await aiService.generatePrDescription(
+        repoPath,
+        this.createPrBase,
+        this.createPrHead,
+        this.createPrTitle || 'Untitled PR',
+      );
+      if (this.repositoryPath !== repoPath || this.repoGeneration !== repoGen) return;
 
-    if (result.success && result.data) {
-      this.createPrBody = result.data.body;
-    } else {
-      showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      if (result.success && result.data) {
+        this.createPrBody = result.data.body;
+      } else {
+        showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      }
+    } finally {
+      if (this.repositoryPath === repoPath && this.repoGeneration === repoGen) {
+        this.generatingPrDescription = false;
+      }
     }
-
-    this.generatingPrDescription = false;
   }
 
   private async handleCreatePR(): Promise<void> {
     if (!this.detectedRepo || !this.createPrTitle || !this.createPrHead || !this.createPrBase) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreatePullRequestInput = {
+      title: this.createPrTitle,
+      body: this.createPrBody || undefined,
+      head: this.createPrHead,
+      base: this.createPrBase,
+      draft: this.createPrDraft || undefined,
+    };
 
-    try {
-      const token = await this.getSelectedAccountToken();
-      const input: CreatePullRequestInput = {
-        title: this.createPrTitle,
-        body: this.createPrBody || undefined,
-        head: this.createPrHead,
-        base: this.createPrBase,
-        draft: this.createPrDraft || undefined,
-      };
-
-      const result = await gitService.createPullRequest(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
-        // Reset form and switch to PR list
+    await this.runCreateOperation({
+      successMessage: 'Pull request created successfully',
+      failureMessage: 'Failed to create pull request',
+      getToken: (targetAccountId) => this.getSelectedAccountToken(targetAccountId),
+      execute: (repo, token) => gitService.createPullRequest(repo.owner, repo.repo, input, token),
+      onSuccess: async () => {
         this.createPrTitle = '';
         this.createPrBody = '';
         this.createPrHead = '';
@@ -2214,15 +2247,8 @@ export class GnGitHubDialog extends LitElement {
         this.createPrDraft = false;
         this.activeTab = 'pull-requests';
         await this.loadPullRequests();
-        showToast('Pull request created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create pull request';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create pull request';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private handlePrFilterChange(e: Event): void {
@@ -2240,40 +2266,25 @@ export class GnGitHubDialog extends LitElement {
   private async handleCreateIssue(): Promise<void> {
     if (!this.detectedRepo || !this.createIssueTitle) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateIssueInput = {
+      title: this.createIssueTitle,
+      body: this.createIssueBody || undefined,
+      labels: this.createIssueLabels.length > 0 ? [...this.createIssueLabels] : undefined,
+    };
 
-    try {
-      const token = await this.getSelectedAccountToken();
-      const input: CreateIssueInput = {
-        title: this.createIssueTitle,
-        body: this.createIssueBody || undefined,
-        labels: this.createIssueLabels.length > 0 ? this.createIssueLabels : undefined,
-      };
-
-      const result = await gitService.createIssue(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
-        // Reset form and switch to issues list
+    await this.runCreateOperation({
+      successMessage: 'Issue created successfully',
+      failureMessage: 'Failed to create issue',
+      getToken: (targetAccountId) => this.getSelectedAccountToken(targetAccountId),
+      execute: (repo, token) => gitService.createIssue(repo.owner, repo.repo, input, token),
+      onSuccess: async () => {
         this.createIssueTitle = '';
         this.createIssueBody = '';
         this.createIssueLabels = [];
         this.activeTab = 'issues';
         await this.loadIssues();
-        showToast('Issue created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create issue';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create issue';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private toggleIssueLabel(labelName: string): void {
@@ -2297,29 +2308,21 @@ export class GnGitHubDialog extends LitElement {
   private async handleCreateRelease(): Promise<void> {
     if (!this.detectedRepo || !this.createReleaseTag) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateReleaseInput = {
+      tagName: this.createReleaseTag,
+      name: this.createReleaseName || undefined,
+      body: this.createReleaseBody || undefined,
+      draft: this.createReleaseDraft || undefined,
+      prerelease: this.createReleasePrerelease || undefined,
+      generateReleaseNotes: this.createReleaseGenerateNotes || undefined,
+    };
 
-    try {
-      const token = await this.getSelectedAccountToken();
-      const input: CreateReleaseInput = {
-        tagName: this.createReleaseTag,
-        name: this.createReleaseName || undefined,
-        body: this.createReleaseBody || undefined,
-        draft: this.createReleaseDraft || undefined,
-        prerelease: this.createReleasePrerelease || undefined,
-        generateReleaseNotes: this.createReleaseGenerateNotes || undefined,
-      };
-
-      const result = await gitService.createRelease(
-        this.detectedRepo.owner,
-        this.detectedRepo.repo,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
-        // Reset form and switch to releases list
+    await this.runCreateOperation({
+      successMessage: 'Release created successfully',
+      failureMessage: 'Failed to create release',
+      getToken: (targetAccountId) => this.getSelectedAccountToken(targetAccountId),
+      execute: (repo, token) => gitService.createRelease(repo.owner, repo.repo, input, token),
+      onSuccess: async () => {
         this.createReleaseTag = '';
         this.createReleaseName = '';
         this.createReleaseBody = '';
@@ -2328,23 +2331,12 @@ export class GnGitHubDialog extends LitElement {
         this.createReleaseGenerateNotes = true;
         this.activeTab = 'releases';
         await this.loadReleases();
-        showToast('Release created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create release';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create release';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private handleClose(): void {
     this.dispatchEvent(new CustomEvent('close'));
-  }
-
-  private openInBrowser(url: string): void {
-    openExternalUrl(url);
   }
 
   /**
@@ -2364,19 +2356,6 @@ export class GnGitHubDialog extends LitElement {
     if (pr.draft && pr.state === 'open') return 'draft';
     if (pr.mergedAt) return 'merged';
     return pr.state;
-  }
-
-  private formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-    if (days === 0) return 'today';
-    if (days === 1) return 'yesterday';
-    if (days < 7) return `${days} days ago`;
-    if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
-    return date.toLocaleDateString();
   }
 
   private renderConnectionTab() {
@@ -2617,16 +2596,7 @@ export class GnGitHubDialog extends LitElement {
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No GitHub repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     return html`
@@ -2696,79 +2666,6 @@ export class GnGitHubDialog extends LitElement {
     `;
   }
 
-  private renderPrCommentsDrawer(prNumber: number, commitId?: string) {
-    const comments = this.prComments[prNumber] ?? [];
-    const isLoadingComments = this.loadingCommentsForPr === prNumber;
-    const isPosting = this.postingCommentForPr === prNumber;
-
-    return html`
-      <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${prNumber}" @click=${(e: Event) => e.stopPropagation()}>
-        ${isLoadingComments ? html`
-          <div class="pr-comments-empty">Loading comments...</div>
-        ` : comments.length === 0 ? html`
-          <div class="pr-comments-empty">No comments yet</div>
-        ` : html`
-          <div class="pr-comments-list">
-            ${comments.map(c => html`
-              <div class="pr-comment-item" data-testid="pr-comment-item-${c.id}">
-                <div class="pr-comment-header">
-                  <span class="pr-comment-author">${c.author}</span>
-                  ${c.filePath ? html`
-                    <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
-                  ` : nothing}
-                  <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
-                </div>
-                <div class="pr-comment-body">${c.body}</div>
-              </div>
-            `)}
-          </div>
-        `}
-        <div class="pr-comment-form">
-          <div class="pr-comment-inline-fields">
-            <input
-              type="text"
-              class="pr-comment-file-input"
-              placeholder="File path (optional, for inline comment)"
-              .value=${this.commentFilePathInput}
-              @input=${(e: Event) => {
-                this.commentFilePathInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-            <input
-              type="number"
-              min="1"
-              class="pr-comment-line-input"
-              placeholder="Line #"
-              .value=${this.commentLineInput}
-              @input=${(e: Event) => {
-                this.commentLineInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </div>
-          <div class="pr-comment-input-row">
-            <textarea
-              class="pr-comment-body-input"
-              rows="2"
-              placeholder="Write a review comment..."
-              .value=${this.commentBodyInput}
-              @input=${(e: Event) => {
-                this.commentBodyInput = (e.target as HTMLTextAreaElement).value;
-              }}
-            ></textarea>
-            <button
-              class="btn btn-primary pr-comment-submit"
-              data-testid="pr-comment-submit-${prNumber}"
-              ?disabled=${!this.commentBodyInput.trim() || isPosting}
-              @click=${() => this.handleAddPrComment(prNumber, commitId)}
-            >
-              ${isPosting ? 'Posting...' : 'Post Comment'}
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
   private renderActionsTab() {
     if (!this.connectionStatus?.connected) {
       return html`
@@ -2782,16 +2679,7 @@ export class GnGitHubDialog extends LitElement {
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No GitHub repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     return html`
@@ -2847,16 +2735,7 @@ export class GnGitHubDialog extends LitElement {
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No GitHub repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     return html`
@@ -2980,7 +2859,7 @@ export class GnGitHubDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreateIssue}
-            ?disabled=${this.isLoading || !this.createIssueTitle}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createIssueTitle}
           >
             Create Issue
           </button>
@@ -3002,16 +2881,7 @@ export class GnGitHubDialog extends LitElement {
     }
 
     if (!this.detectedRepo) {
-      return html`
-        <div class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-          <p>No GitHub repository detected</p>
-        </div>
-      `;
+      return this.renderNoRepo();
     }
 
     return html`
@@ -3139,7 +3009,7 @@ export class GnGitHubDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreateRelease}
-            ?disabled=${this.isLoading || !this.createReleaseTag}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createReleaseTag}
           >
             Create Release
           </button>
@@ -3237,7 +3107,7 @@ export class GnGitHubDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreatePR}
-            ?disabled=${this.isLoading || !this.createPrTitle || !this.createPrHead || !this.createPrBase}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createPrTitle || !this.createPrHead || !this.createPrBase}
           >
             Create Pull Request
           </button>

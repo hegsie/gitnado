@@ -351,6 +351,14 @@ Recently shipped milestones (as of 2026-10-23):
 - ✅ **Recursive submodule clone (`--recurse-submodules`)** — `clone_repository` and `gn-clone-dialog.ts` support cloning submodules recursively (enabled by default).
 - ✅ **Hook execution logs & Output panel filter/terminal launcher** — `gn-hooks-dialog.ts` records and displays historical hook execution logs, and `gn-output-panel.ts` provides output search/filtering and a quick external terminal launcher.
 - ✅ **Local AI `Pro` tier, custom `.gguf` import & token streaming** — `Pro` (32GB+ RAM / 12GB+ VRAM) model tier (Qwen 2.5 Coder 14B), local `.gguf` model import from disk (`import_custom_model`), and real-time `ai-stream-token` streaming during commit message generation.
+- ✅ **Unified Provider Dialog Base (`GnProviderDialogBase`)** — shared abstract base class (`src/components/dialogs/gn-provider-dialog-base.ts`) unifying repository detection, generation-counter stale-response guards, deferred repo reconciliation during account ops, PR/MR creation guards, and review comment drawers across GitHub, GitLab, Bitbucket, and Azure DevOps dialogs.
+
+### Architectural Refactoring & Modularization ✅
+
+- ✅ **`AppShell` & `GnRepoScopedDialogBase` (`arch-1`)** — Extracted `GnRepoScopedDialogBase` (`src/components/dialogs/gn-repo-scoped-dialog-base.ts`) for repository-bound dialogs (`gn-remote-dialog`, `gn-clean-dialog`, `gn-submodule-dialog`, `gn-worktree-dialog`, `gn-lfs-dialog`, `gn-gpg-dialog`, `gn-bisect-dialog`) to pin `repositoryPath` at operation start, invalidate stale loads on repo switch, and always emit `{ repositoryPath }` in `*-changed` events. Wired `@remotes-changed` in `AppShell` through `refreshConflictDialogRepo` and moved `showJiraDialog` into `dialog.store.ts`.
+- ✅ **`git.service.ts` Domain Modularization (`arch-2`)** — Split the 9,619-line `src/services/git.service.ts` monolith into 9 focused domain modules under `src/services/git/` (`shared.ts`, `repository.ts`, `branches-tags.ts`, `diff-blame.ts`, `merge-rebase.ts`, `remotes.ts`, `security-credentials.ts`, `providers.ts`, `ai-workspace.ts`) while keeping `src/services/git.service.ts` as a 100% backwards-compatible barrel export.
+- ✅ **Provider Stack Phase 2 — Shared Auth Lifecycle & Rust HTTP Layer (`arch-3`)** — Extracted `runDisconnectOperation` and `runDeleteIntegrationOperation` into `GnProviderDialogBase` across GitHub, GitLab, Bitbucket, and Azure DevOps dialogs, and extracted `src-tauri/src/services/provider_http.rs` for shared `reqwest::Client` construction, outbound-host security checks, auth header builders, and HTTP status/rate-limit error formatting across `commands/{github,gitlab,bitbucket,azure_devops}.rs`.
+- ✅ **Rust Mega-Commands Modularization (`arch-4`)** — Decomposed monolithic Rust command files (`merge.rs` 7,891 → 873 lines, `remote.rs` 5,487 → 475 lines, `rewrite.rs` 4,612 → 348 lines, `commit.rs` 4,410 → 223 lines) into focused domain submodules under `src-tauri/src/commands/{merge,remote,rewrite,commit}/` while preserving all Tauri command signatures and unit tests.
 
 Remaining future work:
 
@@ -376,4 +384,4 @@ Remember: Gitnado's core value proposition is **privacy-first, offline-capable, 
 
 ---
 
-Last updated: 2026-10-23
+Last updated: 2026-11-01

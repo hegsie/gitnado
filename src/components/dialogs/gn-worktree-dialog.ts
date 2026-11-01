@@ -3,8 +3,8 @@
  * Manage git worktrees for working on multiple branches
  */
 
-import { LitElement, html, css } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
@@ -19,11 +19,12 @@ import {
   subscribeRefOps,
 } from '../../utils/ref-lock.ts';
 import { samePath } from '../../utils/path-compare.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 type DialogMode = 'list' | 'add';
 
 @customElement('gn-worktree-dialog')
-export class GnWorktreeDialog extends LitElement {
+export class GnWorktreeDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -347,9 +348,6 @@ export class GnWorktreeDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   @state() private mode: DialogMode = 'list';
   @state() private worktrees: Worktree[] = [];
   @state() private branches: Branch[] = [];
@@ -440,7 +438,8 @@ export class GnWorktreeDialog extends LitElement {
     return this.removingPath !== null;
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
+  override async updated(changedProperties: Map<string, unknown>): Promise<void> {
+    super.updated(changedProperties);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProperties.has('open')) {
       if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
@@ -582,9 +581,7 @@ export class GnWorktreeDialog extends LitElement {
       // "already used by worktree at ..." — and a freed branch stayed missing
       // until the dialog was closed and reopened.
       await this.loadBranches(repoPath);
-      this.dispatchEvent(new CustomEvent('worktrees-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('worktrees-changed', repoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to add worktree';
     }
@@ -702,9 +699,7 @@ export class GnWorktreeDialog extends LitElement {
       this.error = '';
       await this.loadWorktrees(repoPath);
       await this.loadBranches(repoPath);
-      this.dispatchEvent(new CustomEvent('worktrees-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+      this.dispatchRepoEvent('worktrees-changed', repoPath || this.repositoryPath);
     } else {
       this.error = result.error?.message || 'Failed to remove worktree';
     }
@@ -740,9 +735,7 @@ export class GnWorktreeDialog extends LitElement {
       if (result.success) {
         this.success = 'Worktree locked successfully';
         await this.loadWorktrees(repoPath);
-        this.dispatchEvent(new CustomEvent('worktrees-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+        this.dispatchRepoEvent('worktrees-changed', repoPath || this.repositoryPath);
       } else {
         this.error = result.error?.message || 'Failed to lock worktree';
       }
@@ -771,9 +764,7 @@ export class GnWorktreeDialog extends LitElement {
       if (result.success) {
         this.success = 'Worktree unlocked successfully';
         await this.loadWorktrees(repoPath);
-        this.dispatchEvent(new CustomEvent('worktrees-changed', {
-        detail: { repositoryPath: repoPath || this.repositoryPath },
-      }));
+        this.dispatchRepoEvent('worktrees-changed', repoPath || this.repositoryPath);
       } else {
         this.error = result.error?.message || 'Failed to unlock worktree';
       }

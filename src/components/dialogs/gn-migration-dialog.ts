@@ -432,10 +432,12 @@ export class GnMigrationDialog extends LitElement {
   @state() private accountAssignments: Record<string, string> = {}; // accountId -> profileId
   @state() private migrationResult: UnifiedMigrationResult | null = null;
 
+  private previewGeneration = 0;
+
   updated(changedProperties: Map<string, unknown>): void {
     // Announce/withdraw overlay ownership of Escape.
     if (changedProperties.has('open')) {
-      if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
+      if (this.open) { pushOverlay(this); } else { removeOverlay(this); this.previewGeneration++; }
     }
     if (changedProperties.has('open') && this.open) {
       this.resetState();
@@ -443,6 +445,7 @@ export class GnMigrationDialog extends LitElement {
   }
 
   private resetState(): void {
+    this.previewGeneration++;
     this.viewMode = 'intro';
     this.preview = null;
     this.accountAssignments = {};
@@ -478,6 +481,7 @@ export class GnMigrationDialog extends LitElement {
 
   private handleClose(): void {
     if (this.viewMode === 'migrating') return; // Don't allow closing during migration
+    this.previewGeneration++;
     this.open = false;
     this.dispatchEvent(new CustomEvent('close'));
   }
@@ -493,10 +497,12 @@ export class GnMigrationDialog extends LitElement {
   }
 
   private async loadPreview(): Promise<void> {
+    const gen = ++this.previewGeneration;
     this.isLoading = true;
 
     try {
       const preview = await unifiedProfileService.previewUnifiedProfilesMigration();
+      if (gen !== this.previewGeneration || !this.open) return;
       this.preview = preview;
 
       // Initialize assignments for unmatched accounts
@@ -511,12 +517,15 @@ export class GnMigrationDialog extends LitElement {
 
       this.viewMode = 'preview';
     } catch (error) {
+      if (gen !== this.previewGeneration || !this.open) return;
       showToast(
         `Failed to load migration preview: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'error'
       );
     } finally {
-      this.isLoading = false;
+      if (gen === this.previewGeneration) {
+        this.isLoading = false;
+      }
     }
   }
 

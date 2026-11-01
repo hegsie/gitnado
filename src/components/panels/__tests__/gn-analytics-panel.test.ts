@@ -625,5 +625,23 @@ describe('gn-analytics-panel', () => {
       expect(el.shadowRoot!.querySelectorAll('.stat-card').length).to.equal(9);
       expect(el.shadowRoot!.querySelector('.loading')).to.be.null;
     });
+
+    it('clears stats when repositoryPath becomes empty and reloads when the same repo reopens', async () => {
+      const el = await renderPanel();
+      expect(firstStatValue(el)).to.equal('142');
+
+      el.repositoryPath = null;
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.empty-state')).to.not.be.null;
+
+      clearHistory();
+      setupDefaultMocks(UPDATED_STATS);
+      el.repositoryPath = REPO_PATH;
+      await new Promise((r) => setTimeout(r, 50));
+      await el.updateComplete;
+
+      expect(findCommands('get_repo_statistics').length).to.equal(1);
+      expect(firstStatValue(el)).to.equal('143');
+    });
   });
 });

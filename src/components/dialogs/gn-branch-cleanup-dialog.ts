@@ -333,6 +333,8 @@ export class GnBranchCleanupDialog extends LitElement {
   @state() private deleting = false;
   @state() private pruneRemotes = true;
 
+  private loadGeneration = 0;
+
   @query('gn-modal') private modal!: GnModal;
 
   public async open(): Promise<void> {
@@ -351,12 +353,15 @@ export class GnBranchCleanupDialog extends LitElement {
   }
 
   public close(): void {
+    this.loadGeneration++;
     this.isOpen = false;
     this.modal.open = false;
   }
 
   private reset(): void {
+    this.loadGeneration++;
     this.loading = true;
+    this.loadFailed = false;
     this.mergedBranches = [];
     this.staleBranches = [];
     this.goneUpstreamBranches = [];
@@ -367,14 +372,19 @@ export class GnBranchCleanupDialog extends LitElement {
   }
 
   private async loadCleanupData(preserveSelection = false): Promise<void> {
+    const repoPath = this.pinnedRepoPath;
+    const gen = ++this.loadGeneration;
     this.loading = true;
 
     try {
       const { staleBranchDays } = settingsStore.getState();
       const result = await gitService.getCleanupCandidates(
-        this.pinnedRepoPath,
+        repoPath,
         staleBranchDays,
       );
+      if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
 
       if (!result.success || !result.data) {
         showToast('Failed to load cleanup candidates', 'error');
@@ -498,10 +508,16 @@ export class GnBranchCleanupDialog extends LitElement {
 
       this.requestUpdate();
     } catch (err) {
+      if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
       console.error('Failed to load cleanup data:', err);
+      this.loadFailed = true;
       showToast('Failed to load cleanup data', 'error');
     } finally {
-      this.loading = false;
+      if (gen === this.loadGeneration) {
+        this.loading = false;
+      }
     }
   }
 

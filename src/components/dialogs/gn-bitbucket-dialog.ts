@@ -3,15 +3,14 @@
  * Manage Bitbucket connection, view PRs, issues, and pipelines
  */
 
-import { LitElement, html, css, nothing } from 'lit';
+import { html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
-import { showConfirm } from '../../services/dialog.service.ts';
-import { openExternalUrl, handleExternalLink } from '../../utils/index.ts';
+import { handleExternalLink } from '../../utils/index.ts';
 import type {
   BitbucketConnectionStatus,
   DetectedBitbucketRepo,
@@ -28,20 +27,13 @@ import * as credentialService from '../../services/credential.service.ts';
 import * as unifiedProfileService from '../../services/unified-profile.service.ts';
 import { unifiedProfileStore, getAccountsByType, selectDefaultGlobalAccount, getAccountById, getActiveProfilePreferredAccount } from '../../stores/unified-profile.store.ts';
 import type { IntegrationAccount } from '../../types/unified-profile.types.ts';
+import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
 import './gn-modal.ts';
 import './gn-account-selector.ts';
 
-type TabType = 'connection' | 'pull-requests' | 'issues' | 'pipelines' | 'create-pr' | 'create-issue';
+export type { PrReviewComment };
 
-export interface PrReviewComment {
-  id: string;
-  author: string;
-  avatarUrl?: string | null;
-  body: string;
-  createdAt: string;
-  filePath?: string | null;
-  line?: number | null;
-}
+type TabType = 'connection' | 'pull-requests' | 'issues' | 'pipelines' | 'create-pr' | 'create-issue';
 
 /**
  * Page sizes this dialog asks for when listing pull requests, issues and
@@ -53,7 +45,12 @@ const BITBUCKET_LIST_PAGE_SIZE = 30;
 const BITBUCKET_PIPELINE_PAGE_SIZE = 20;
 
 @customElement('gn-bitbucket-dialog')
-export class GnBitbucketDialog extends LitElement {
+export class GnBitbucketDialog extends GnProviderDialogBase<
+  DetectedBitbucketRepo,
+  BitbucketConnectionStatus,
+  TabType
+> {
+  protected readonly providerDisplayName = 'Bitbucket';
   static styles = [
     sharedStyles,
     css`
@@ -728,8 +725,6 @@ export class GnBitbucketDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean }) open = false;
-  @property({ type: String }) repositoryPath = '';
   /**
    * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
    * this dialog was opened with a return target (the profile manager).
@@ -738,14 +733,9 @@ export class GnBitbucketDialog extends LitElement {
   /** Profile name for the "Adding to <name>" breadcrumb; empty when standalone. */
   @property({ type: String }) attachToProfileName = '';
 
-  @state() private activeTab: TabType = 'connection';
-  @state() private connectionStatus: BitbucketConnectionStatus | null = null;
-  @state() private detectedRepo: DetectedBitbucketRepo | null = null;
   @state() private pullRequests: BitbucketPullRequest[] = [];
   @state() private issues: BitbucketIssue[] = [];
   @state() private pipelines: BitbucketPipeline[] = [];
-  @state() private isLoading = false;
-  @state() private error: string | null = null;
   @state() private usernameInput = '';
   @state() private appPasswordInput = '';
   @state() private prFilter: 'OPEN' | 'MERGED' | 'DECLINED' = 'OPEN';
@@ -755,18 +745,8 @@ export class GnBitbucketDialog extends LitElement {
   @state() private oauthState: OAuthFlowState = { status: 'idle' };
   @state() private oauthToken: string | null = null;
 
-  // Integration accounts (global)
-  @state() private accounts: IntegrationAccount[] = [];
-  @state() private selectedAccountId: string | null = null;
-
   private oauthCompleteHandler?: EventListener;
   private oauthStateUnsubscribe?: () => void;
-  private unsubscribeStore?: () => void;
-  private loadGeneration = 0;
-  // Set while the user is mid-"Add account" (selection intentionally cleared so
-  // the next save creates a NEW account). Guards the store subscription from
-  // re-selecting an existing account on a background emit.
-  private isAddingAccount = false;
   // The account the in-flight OAuth flow targets, pinned when the flow STARTS.
   // The browser round-trip is async, so `selectedAccountId` may point at a
   // different account by the time `oauth-complete` lands — writing the new token
@@ -785,15 +765,6 @@ export class GnBitbucketDialog extends LitElement {
   // Create Issue form
   @state() private createIssueTitle = '';
   @state() private createIssueContent = '';
-
-  // PR Review Comments drawer
-  @state() private expandedPrNumber: number | null = null;
-  @state() private prComments: Record<number, PrReviewComment[]> = {};
-  @state() private loadingCommentsForPr: number | null = null;
-  @state() private postingCommentForPr: number | null = null;
-  @state() private commentBodyInput = '';
-  @state() private commentFilePathInput = '';
-  @state() private commentLineInput = '';
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -872,7 +843,15 @@ export class GnBitbucketDialog extends LitElement {
     const next = getAccountsByType('bitbucket');
     if (
       next.length !== this.accounts.length ||
-      next.some((a, i) => a.id !== this.accounts[i]?.id)
+      next.some((a, i) => {
+        const prev = this.accounts[i];
+        if (!prev || a.id !== prev.id || a.name !== prev.name || a.isDefault !== prev.isDefault) {
+          return true;
+        }
+        const nextWs = a.config.type === 'bitbucket' ? a.config.workspace : undefined;
+        const prevWs = prev.config.type === 'bitbucket' ? prev.config.workspace : undefined;
+        return nextWs !== prevWs || a.cachedUser?.username !== prev.cachedUser?.username;
+      })
     ) {
       this.accounts = next;
     }
@@ -889,61 +868,28 @@ export class GnBitbucketDialog extends LitElement {
     this.unsubscribeStore?.();
   }
 
-  async updated(changedProperties: Map<string, unknown>): Promise<void> {
-    if (changedProperties.has('open') && this.open) {
-      // Fresh open: mark not-ready (the async open-load is about to run) and
-      // clear selectedAccountId so loadInitialData() re-derives it from the
-      // active profile's preferred account. The `data-ready` attribute lets
-      // tests/consumers wait for the open-load to settle rather than racing its
-      // re-renders.
-      this.removeAttribute('data-ready');
-      this.selectedAccountId = null;
-      await this.loadInitialData();
-    }
-    if (changedProperties.has('repositoryPath')) {
-      // The dialog is repo-independent (it stays open across the last tab close),
-      // so an empty path must clear the previously detected repo. Otherwise the
-      // repo-backed tabs keep rendering and acting on the closed repository.
-      // The create-* drafts belong to the repository they were typed against,
-      // so they go too -- otherwise a draft left on screen is submitted into
-      // whichever repository the dialog is repointed at.
-      this.resetRepoScopedDrafts();
-      if (!this.repositoryPath) {
-        this.detectedRepo = null;
-      } else if (this.open) {
-        await this.detectRepo();
-      }
-    }
+  protected override onBeforeOpen(): void {
+    this.removeAttribute('data-ready');
   }
 
-  /**
-   * Drop every create-* draft and leave any create-* tab. Called when
-   * repositoryPath changes, because those drafts are scoped to the repository
-   * they were composed against while the create handlers guard only on
-   * detectedRepo, which is re-derived from whatever repository is now current.
-   */
-  private resetRepoScopedDrafts(): void {
+  protected resetProviderRepoScopedState(): void {
     this.createPrTitle = '';
     this.createPrDescription = '';
     this.createPrSource = '';
     this.createPrDestination = '';
     this.createPrCloseSource = false;
+    this.generatingPrDescription = false;
     this.createIssueTitle = '';
     this.createIssueContent = '';
-    this.expandedPrNumber = null;
-    this.prComments = {};
-    this.loadingCommentsForPr = null;
-    this.postingCommentForPr = null;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    if (this.activeTab.startsWith('create-')) {
-      this.activeTab = 'connection';
-    }
+    this.pullRequests = [];
+    this.issues = [];
+    this.pipelines = [];
   }
 
-  private async loadInitialData(): Promise<void> {
+  protected async loadInitialData(): Promise<void> {
     const generation = ++this.loadGeneration;
+    const autoSelectAccount = !this.selectedAccountId && !this.isAddingAccount;
+    this.initInFlight = true;
     this.isLoading = true;
     this.error = null;
 
@@ -963,32 +909,38 @@ export class GnBitbucketDialog extends LitElement {
       // Manual switches set selectedAccountId before calling loadInitialData()
       // and must not be overwritten.
       this.syncBitbucketAccounts();
-      if (this.accounts.length > 0 && !this.selectedAccountId) {
+      if (this.accounts.length > 0 && autoSelectAccount && !this.selectedAccountId && !this.isAddingAccount) {
         const preferred = getActiveProfilePreferredAccount('bitbucket')
           ?? selectDefaultGlobalAccount('bitbucket');
         this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
       }
 
-      // Load OAuth token for selected account
-      if (this.selectedAccountId) {
-        const token = await this.getSelectedAccountToken();
-        if (generation !== this.loadGeneration) return;
-        if (token) {
-          this.oauthToken = token;
+      if (!this.isAddingAccount) {
+        // Load OAuth token for selected account
+        if (this.selectedAccountId) {
+          const token = await this.getSelectedAccountToken();
+          if (generation !== this.loadGeneration) return;
+          if (token) {
+            this.oauthToken = token;
+          }
         }
+
+        await this.checkConnection();
+        if (generation !== this.loadGeneration) return;
       }
 
       if (this.repositoryPath) {
-        await this.detectRepo();
+        await this.detectRepo(true, autoSelectAccount);
         if (generation !== this.loadGeneration) return;
       }
-      await this.checkConnection();
     } catch (err) {
       if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to load data';
     } finally {
       if (generation === this.loadGeneration) {
+        this.initInFlight = false;
         this.isLoading = false;
+        this.isDetectingRepo = false;
         // Signal that the open-load has settled and the DOM is now stable.
         this.setAttribute('data-ready', '');
       }
@@ -1008,14 +960,21 @@ export class GnBitbucketDialog extends LitElement {
   }
 
   private async checkConnection(providedToken?: string | null): Promise<void> {
+    const generation = this.loadGeneration;
+    const accountId = this.selectedAccountId;
+    const isCurrent = () =>
+      generation === this.loadGeneration &&
+      this.selectedAccountId === accountId;
     // Verify the caller's token when it supplied one (e.g. a just-entered app
     // password that isn't persisted yet); otherwise re-read the selected
     // account's credential, refreshing an expiring OAuth token first.
     const token = providedToken ?? await this.getActiveToken();
+    if (!isCurrent()) return;
 
     if (token) {
       // Use OAuth token to check connection
       const result = await gitService.checkBitbucketConnectionWithToken(token);
+      if (!isCurrent()) return;
       if (result.success && result.data?.connected) {
         this.connectionStatus = result.data;
         this.syncSharedConnectionStatus(result.data.connected);
@@ -1033,6 +992,7 @@ export class GnBitbucketDialog extends LitElement {
       } else if (await this.tryMigrateLegacyAppPassword(token)) {
         // Migration succeeded — connection state was set inside the helper.
       } else {
+        if (!isCurrent()) return;
         // Failed check must mark the account as disconnected so dependent UI
         // surfaces (toolbar, selector dot) don't keep a stale connected state.
         this.connectionStatus = { connected: false, user: null };
@@ -1041,6 +1001,7 @@ export class GnBitbucketDialog extends LitElement {
     } else {
       // Fall back to legacy credential check
       const result = await gitService.checkBitbucketConnection();
+      if (!isCurrent()) return;
       if (result.success && result.data) {
         this.connectionStatus = result.data;
       } else {
@@ -1070,7 +1031,9 @@ export class GnBitbucketDialog extends LitElement {
     }
     if (!this.selectedAccountId) return false;
 
-    const account = getAccountById(this.selectedAccountId);
+    const generation = this.loadGeneration;
+    const accountId = this.selectedAccountId;
+    const account = getAccountById(accountId);
     const username = account?.cachedUser?.username;
     if (!username) return false;
 
@@ -1081,13 +1044,19 @@ export class GnBitbucketDialog extends LitElement {
     }
 
     // Persist the migrated credential and adopt it for this session.
-    await credentialService.storeAccountToken('bitbucket', this.selectedAccountId, prefixed);
+    await credentialService.storeAccountToken('bitbucket', accountId, prefixed);
+    if (
+      generation !== this.loadGeneration ||
+      this.selectedAccountId !== accountId
+    ) {
+      return true;
+    }
     this.oauthToken = prefixed;
     this.connectionStatus = retry.data;
     this.syncSharedConnectionStatus(true);
 
     if (retry.data.user) {
-      await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
+      await unifiedProfileService.updateGlobalAccountCachedUser(accountId, {
         username: retry.data.user.username,
         displayName: retry.data.user.displayName ?? null,
         email: null,
@@ -1122,13 +1091,25 @@ export class GnBitbucketDialog extends LitElement {
    * using a token that expired while it was open. Falls back to the token this
    * session's sign-in captured when no account-backed credential exists yet.
    */
-  private async getActiveToken(): Promise<string | null> {
-    const token = await this.getSelectedAccountToken();
-    if (token) {
-      this.oauthToken = token;
-      return token;
+  private async getActiveToken(expectedAccountId = this.selectedAccountId): Promise<string | null> {
+    if (expectedAccountId) {
+      const token = await credentialService.getFreshAccountToken(
+        'bitbucket',
+        expectedAccountId,
+        'bitbucket'
+      );
+      if (this.selectedAccountId !== expectedAccountId) return null;
+      if (token) {
+        this.oauthToken = token;
+        return token;
+      }
+      return this.oauthToken;
     }
     return this.oauthToken;
+  }
+
+  private normalizeWorkspace(workspace?: string | null): string {
+    return (workspace ?? '').trim().toLowerCase();
   }
 
   /**
@@ -1138,11 +1119,10 @@ export class GnBitbucketDialog extends LitElement {
     const { account } = e.detail;
     // The user explicitly selected an existing account — re-enable the
     // subscription's auto-apply branch.
-    this.isAddingAccount = false;
-    this.selectedAccountId = account.id;
-    this.connectionStatus = null;
-    this.error = null;
+    this.beginAccountSwitch(account.id);
     this.oauthToken = null;
+    this.usernameInput = '';
+    this.appPasswordInput = '';
 
     // Re-check connection with new account
     await this.loadInitialData();
@@ -1154,13 +1134,11 @@ export class GnBitbucketDialog extends LitElement {
   private handleAddAccount(): void {
     // Clear selection so the next save creates a new account instead of
     // overwriting the previously-selected account's credentials.
-    this.isAddingAccount = true;
-    this.activeTab = 'connection';
-    this.connectionStatus = null;
-    this.selectedAccountId = null;
+    this.beginAddAccount();
     // Clear any token from the previously-selected account so a verification of
     // the new account can't succeed against the old identity's credentials.
     this.oauthToken = null;
+    this.usernameInput = '';
     this.appPasswordInput = '';
   }
 
@@ -1181,8 +1159,12 @@ export class GnBitbucketDialog extends LitElement {
     );
   }
 
-  private async detectRepo(): Promise<void> {
-    if (!this.repositoryPath) return;
+  protected async detectRepo(loadData = true, allowAccountSwitch = true): Promise<void> {
+    if (!this.repositoryPath) {
+      this.detectGeneration++;
+      this.isDetectingRepo = false;
+      return;
+    }
 
     // The dialog outlives the repository -- it stays open when the last tab
     // closes -- so a detect issued for one path can resolve after the path has
@@ -1190,17 +1172,84 @@ export class GnBitbucketDialog extends LitElement {
     // selected) repository from being re-detected and re-loaded over the
     // current one.
     const requestedPath = this.repositoryPath;
-    const result = await gitService.detectBitbucketRepo(requestedPath);
-    if (this.repositoryPath !== requestedPath) return;
-    if (result.success && result.data) {
-      this.detectedRepo = result.data;
-      if (this.connectionStatus?.connected) {
-        await this.loadAllData();
+    const repoGen = this.repoGeneration;
+    const detectGen = ++this.detectGeneration;
+    this.detectedRepo = null;
+    this.isDetectingRepo = true;
+    try {
+      const result = await gitService.detectBitbucketRepo(requestedPath);
+      if (
+        this.repositoryPath !== requestedPath ||
+        this.repoGeneration !== repoGen ||
+        this.detectGeneration !== detectGen
+      ) {
+        return;
       }
-    } else if (!result.success) {
-      // A genuine backend failure (not merely "this isn't a Bitbucket repo",
-      // which surfaces as success with null data) must not fail silently.
-      this.error = result.error?.message ?? 'Failed to detect Bitbucket repository';
+      this.isDetectingRepo = false;
+      if (result.success && result.data) {
+        this.detectedRepo = result.data;
+        if (loadData && !this.isAddingAccount) {
+          const detectedNorm = this.normalizeWorkspace(result.data.workspace);
+          let accountChanged = false;
+          if (allowAccountSwitch && this.accounts.length > 0 && detectedNorm) {
+            const currentAccount = this.selectedAccountId
+              ? (getAccountById(this.selectedAccountId) ??
+                this.accounts.find((a) => a.id === this.selectedAccountId))
+              : undefined;
+            const currentNorm =
+              currentAccount?.config.type === 'bitbucket'
+                ? this.normalizeWorkspace(currentAccount.config.workspace)
+                : '';
+            if (!currentAccount || currentNorm !== detectedNorm) {
+              const exactWorkspaceAccount = this.accounts.find(
+                (a) =>
+                  a.config.type === 'bitbucket' &&
+                  Boolean(this.normalizeWorkspace(a.config.workspace)) &&
+                  this.normalizeWorkspace(a.config.workspace) === detectedNorm
+              );
+              const fallbackUnscopedAccount = currentNorm
+                ? this.accounts.find(
+                    (a) =>
+                      a.config.type === 'bitbucket' &&
+                      !this.normalizeWorkspace(a.config.workspace)
+                  )
+                : currentAccount;
+              const nextAccount = exactWorkspaceAccount ?? fallbackUnscopedAccount ?? currentAccount;
+              const nextAccountId = nextAccount?.id ?? null;
+              if (this.selectedAccountId !== nextAccountId) {
+                this.selectedAccountId = nextAccountId;
+                this.connectionStatus = null;
+                this.oauthToken = null;
+                accountChanged = true;
+              }
+            }
+          }
+          if (accountChanged) {
+            await this.checkConnection();
+            if (
+              this.repositoryPath !== requestedPath ||
+              this.repoGeneration !== repoGen ||
+              this.detectGeneration !== detectGen
+            ) {
+              return;
+            }
+          }
+          if (this.connectionStatus?.connected) {
+            await this.loadAllData();
+          }
+        }
+      } else {
+        this.detectedRepo = null;
+        if (!result.success) {
+          // A genuine backend failure (not merely "this isn't a Bitbucket repo",
+          // which surfaces as success with null data) must not fail silently.
+          this.error = result.error?.message ?? 'Failed to detect Bitbucket repository';
+        }
+      }
+    } finally {
+      if (this.detectGeneration === detectGen) {
+        this.isDetectingRepo = false;
+      }
     }
   }
 
@@ -1215,18 +1264,28 @@ export class GnBitbucketDialog extends LitElement {
   private async loadPullRequests(): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
     this.isLoading = true;
     this.error = null;
 
     try {
-      const token = await this.getActiveToken();
+      const token = await this.getActiveToken(targetAccountId);
       const result = await gitService.listBitbucketPullRequests(
-        this.detectedRepo.workspace,
-        this.detectedRepo.repoSlug,
+        targetDetectedRepo.workspace,
+        targetDetectedRepo.repoSlug,
         this.prFilter,
         BITBUCKET_LIST_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.pullRequests = result.data;
@@ -1234,111 +1293,91 @@ export class GnBitbucketDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load pull requests';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load pull requests';
     } finally {
-      this.isLoading = false;
-    }
-  }
-
-  private async togglePrComments(prId: number): Promise<void> {
-    if (this.expandedPrNumber === prId) {
-      this.expandedPrNumber = null;
-      return;
-    }
-    this.expandedPrNumber = prId;
-    this.commentBodyInput = '';
-    this.commentFilePathInput = '';
-    this.commentLineInput = '';
-    await this.loadPrComments(prId);
-  }
-
-  private async loadPrComments(prId: number): Promise<void> {
-    if (!this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed('api.bitbucket.org', false)) return;
-
-    this.loadingCommentsForPr = prId;
-    this.error = null;
-
-    try {
-      const token = await this.getActiveToken();
-      const result = await invokeCommand<PrReviewComment[]>('get_bitbucket_pr_comments', {
-        workspace: this.detectedRepo.workspace,
-        repoSlug: this.detectedRepo.repoSlug,
-        prId,
-        token,
-      });
-
-      if (result.success && result.data) {
-        this.prComments = {
-          ...this.prComments,
-          [prId]: result.data,
-        };
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to load PR comments';
-        showToast(this.error, 'error');
+      if (
+        this.repositoryPath === targetRepoPath &&
+        this.detectedRepo === targetDetectedRepo &&
+        this.selectedAccountId === targetAccountId
+      ) {
+        this.isLoading = false;
       }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to load PR comments';
-      showToast(this.error, 'error');
-    } finally {
-      this.loadingCommentsForPr = null;
     }
   }
 
-  private async handleAddPrComment(prId: number): Promise<void> {
-    const content = this.commentBodyInput.trim();
-    if (!content || !this.detectedRepo || !this.connectionStatus?.connected) return;
-    if (await gitService.checkOutboundHostAllowed('api.bitbucket.org', false)) return;
+  protected getCommentsOutboundHost(): string {
+    return 'api.bitbucket.org';
+  }
 
-    const filePath = this.commentFilePathInput.trim() || undefined;
-    const parsedLine = parseInt(this.commentLineInput.trim(), 10);
-    const line = !Number.isNaN(parsedLine) && parsedLine > 0 ? parsedLine : undefined;
+  protected async getTokenForComments(
+    targetAccountId: string | null,
+  ): Promise<string | null | undefined> {
+    return this.getActiveToken(targetAccountId);
+  }
 
-    this.postingCommentForPr = prId;
-    this.error = null;
+  protected fetchPrComments(
+    detectedRepo: DetectedBitbucketRepo,
+    prId: number,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment[]>('get_bitbucket_pr_comments', {
+      workspace: detectedRepo.workspace,
+      repoSlug: detectedRepo.repoSlug,
+      prId,
+      token,
+    });
+  }
 
-    try {
-      const token = await this.getActiveToken();
-      const result = await invokeCommand<PrReviewComment>('add_bitbucket_pr_comment', {
-        workspace: this.detectedRepo.workspace,
-        repoSlug: this.detectedRepo.repoSlug,
-        prId,
-        content,
-        filePath,
-        line,
-        token,
-      });
-
-      if (result.success) {
-        this.commentBodyInput = '';
-        this.commentFilePathInput = '';
-        this.commentLineInput = '';
-        showToast('Comment posted', 'success');
-        await this.loadPrComments(prId);
-      } else if (!gitService.isNetworkGateRefusal(result.error)) {
-        this.error = result.error?.message ?? 'Failed to post PR comment';
-        showToast(this.error, 'error');
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to post PR comment';
-      showToast(this.error, 'error');
-    } finally {
-      this.postingCommentForPr = null;
-    }
+  protected postPrComment(
+    detectedRepo: DetectedBitbucketRepo,
+    prId: number,
+    body: string,
+    filePath: string | undefined,
+    line: number | undefined,
+    _commitId: string | undefined,
+    token: string | null | undefined,
+  ) {
+    return invokeCommand<PrReviewComment>('add_bitbucket_pr_comment', {
+      workspace: detectedRepo.workspace,
+      repoSlug: detectedRepo.repoSlug,
+      prId,
+      content: body,
+      filePath,
+      line,
+      token,
+    });
   }
 
   private async loadIssues(): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
+
     try {
-      const token = await this.getActiveToken();
+      const token = await this.getActiveToken(targetAccountId);
       const result = await gitService.listBitbucketIssues(
-        this.detectedRepo.workspace,
-        this.detectedRepo.repoSlug,
+        targetDetectedRepo.workspace,
+        targetDetectedRepo.repoSlug,
         undefined,
         BITBUCKET_LIST_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.issues = result.data;
@@ -1348,6 +1387,13 @@ export class GnBitbucketDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load issues';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load issues';
     }
   }
@@ -1355,14 +1401,25 @@ export class GnBitbucketDialog extends LitElement {
   private async loadPipelines(): Promise<void> {
     if (!this.detectedRepo || !this.connectionStatus?.connected) return;
 
+    const targetRepoPath = this.repositoryPath;
+    const targetDetectedRepo = this.detectedRepo;
+    const targetAccountId = this.selectedAccountId;
+
     try {
-      const token = await this.getActiveToken();
+      const token = await this.getActiveToken(targetAccountId);
       const result = await gitService.listBitbucketPipelines(
-        this.detectedRepo.workspace,
-        this.detectedRepo.repoSlug,
+        targetDetectedRepo.workspace,
+        targetDetectedRepo.repoSlug,
         BITBUCKET_PIPELINE_PAGE_SIZE,
         token
       );
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
 
       if (result.success && result.data) {
         this.pipelines = result.data;
@@ -1370,6 +1427,13 @@ export class GnBitbucketDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load pipelines';
       }
     } catch (err) {
+      if (
+        this.repositoryPath !== targetRepoPath ||
+        this.detectedRepo !== targetDetectedRepo ||
+        this.selectedAccountId !== targetAccountId
+      ) {
+        return;
+      }
       this.error = err instanceof Error ? err.message : 'Failed to load pipelines';
     }
   }
@@ -1377,16 +1441,22 @@ export class GnBitbucketDialog extends LitElement {
   private async handleSaveCredentials(): Promise<void> {
     if (!this.usernameInput.trim() || !this.appPasswordInput.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const generation = this.beginAccountOp();
+    const usernameToSave = this.usernameInput.trim();
+    const appPasswordToSave = this.appPasswordInput.trim();
+    const targetAccountId = this.selectedAccountId;
+    const targetWasAddingAccount = this.isAddingAccount;
+    const targetDetectedWorkspace = this.detectedRepo?.workspace;
 
     try {
       const storeResult = await gitService.storeBitbucketCredentials(
-        this.usernameInput,
-        this.appPasswordInput
+        usernameToSave,
+        appPasswordToSave
       );
       if (!storeResult.success) {
-        this.error = storeResult.error?.message ?? 'Failed to save credentials';
+        if (generation === this.loadGeneration) {
+          this.error = storeResult.error?.message ?? 'Failed to save credentials';
+        }
         return;
       }
 
@@ -1396,38 +1466,55 @@ export class GnBitbucketDialog extends LitElement {
       // through Basic auth — both this session and on every reopen (where the
       // stored per-account token is what drives checkConnection).
       const appPasswordCredential = credentialService.formatBitbucketAppPasswordCredential(
-        this.usernameInput,
-        this.appPasswordInput
+        usernameToSave,
+        appPasswordToSave
       );
-      this.oauthToken = appPasswordCredential;
 
-      // Verify the JUST-ENTERED credential — it is only persisted below, after
-      // the check succeeds, so a re-read would still see the old stored one.
-      await this.checkConnection(appPasswordCredential);
+      // Verify the JUST-ENTERED credential directly so an account switch mid-flight
+      // cannot substitute another account's connectionStatus.
+      const verifyResult = await gitService.checkBitbucketConnectionWithToken(appPasswordCredential);
 
-      if (this.connectionStatus?.connected) {
-        const user = this.connectionStatus.user;
-        const workspace = this.detectedRepo?.workspace || this.usernameInput;
+      if (verifyResult.success && verifyResult.data?.connected) {
+        const user = verifyResult.data.user;
+        const workspace = targetDetectedWorkspace || usernameToSave;
+        const selectedAccount = targetAccountId
+          ? (getAccountById(targetAccountId) ??
+            this.accounts.find((a) => a.id === targetAccountId))
+          : undefined;
+        const selectedAccountWorkspace =
+          selectedAccount?.config.type === 'bitbucket'
+            ? selectedAccount.config.workspace
+            : undefined;
+        const canUpdateSelectedAccount =
+          Boolean(targetAccountId) &&
+          !targetWasAddingAccount &&
+          (!selectedAccountWorkspace ||
+            !targetDetectedWorkspace ||
+            this.normalizeWorkspace(selectedAccountWorkspace) ===
+              this.normalizeWorkspace(targetDetectedWorkspace));
+
+        let connectedAccountId: string;
 
         // Create or update a global account for app-password connections
-        if (this.selectedAccountId) {
-          await credentialService.storeAccountToken('bitbucket', this.selectedAccountId, appPasswordCredential);
+        if (targetAccountId && canUpdateSelectedAccount) {
+          await credentialService.storeAccountToken('bitbucket', targetAccountId, appPasswordCredential);
           // Refresh cachedUser so the profile manager shows the up-to-date
           // avatar/username immediately instead of waiting for background validation.
           if (user) {
-            await unifiedProfileService.updateGlobalAccountCachedUser(this.selectedAccountId, {
+            await unifiedProfileService.updateGlobalAccountCachedUser(targetAccountId, {
               username: user.username,
               displayName: user.displayName ?? null,
               email: null,
               avatarUrl: user.avatarUrl ?? null,
             });
           }
+          connectedAccountId = targetAccountId;
         } else {
           const { createEmptyIntegrationAccount, generateId } = await import('../../types/unified-profile.types.ts');
           const newAccount: IntegrationAccount = {
             ...createEmptyIntegrationAccount('bitbucket', workspace),
             id: generateId(),
-            name: user?.username ? `Bitbucket (${user.username})` : `Bitbucket (${this.usernameInput})`,
+            name: user?.username ? `Bitbucket (${user.username})` : `Bitbucket (${usernameToSave})`,
             isDefault: this.accounts.length === 0,
             cachedUser: user ? {
               username: user.username,
@@ -1439,110 +1526,106 @@ export class GnBitbucketDialog extends LitElement {
 
           const savedAccount = await unifiedProfileService.saveGlobalAccount(newAccount);
           await credentialService.storeAccountToken('bitbucket', savedAccount.id, appPasswordCredential);
-          this.selectedAccountId = savedAccount.id;
-          // The new account now exists and is selected — the add flow is complete.
-          this.isAddingAccount = false;
+          connectedAccountId = savedAccount.id;
+          if (
+            this.selectedAccountId === targetAccountId &&
+            this.isAddingAccount === targetWasAddingAccount
+          ) {
+            this.selectedAccountId = savedAccount.id;
+            // The new account now exists and is selected — the add flow is complete.
+            this.isAddingAccount = false;
+          }
 
           // Refresh accounts list
           await unifiedProfileService.loadUnifiedProfiles();
           this.syncBitbucketAccounts();
         }
 
-        this.syncSharedConnectionStatus(true);
-        this.usernameInput = '';
-        this.appPasswordInput = '';
+        unifiedProfileStore
+          .getState()
+          .setAccountConnectionStatus(connectedAccountId, 'connected');
+        if (this.usernameInput.trim() === usernameToSave) {
+          this.usernameInput = '';
+        }
+        if (this.appPasswordInput.trim() === appPasswordToSave) {
+          this.appPasswordInput = '';
+        }
+        if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+        this.oauthToken = appPasswordCredential;
+        this.connectionStatus = verifyResult.data;
+        if (this.repositoryPath && !this.detectedRepo) {
+          await this.detectRepo(false, false);
+          if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
+        }
         if (this.detectedRepo) {
           await this.loadAllData();
         }
-      } else {
+      } else if (generation === this.loadGeneration) {
+        if (this.selectedAccountId === targetAccountId) {
+          this.connectionStatus = { connected: false, user: null };
+        }
+        if (targetAccountId) {
+          unifiedProfileStore
+            .getState()
+            .setAccountConnectionStatus(targetAccountId, 'disconnected');
+        }
         this.error = 'Failed to connect. Please check your credentials.';
       }
     } catch (err) {
+      if (generation !== this.loadGeneration) return;
       this.error = err instanceof Error ? err.message : 'Failed to connect';
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(generation);
     }
   }
 
   private async handleDisconnect(): Promise<void> {
-    this.isLoading = true;
-    this.error = null;
+    const targetAccountId = this.selectedAccountId;
 
-    try {
-      // Delete account-specific token if available
-      if (this.selectedAccountId) {
-        await credentialService.deleteAccountToken('bitbucket', this.selectedAccountId);
-      }
-      // Also delete legacy credentials
-      await gitService.deleteBitbucketCredentials();
-      this.syncSharedConnectionStatus(false);
-      this.connectionStatus = null;
-      this.oauthToken = null;
-      this.pullRequests = [];
-      this.issues = [];
-      this.pipelines = [];
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to disconnect';
-      showToast(this.error, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+    await this.runDisconnectOperation(
+      async () => {
+        if (targetAccountId) {
+          await credentialService.deleteAccountToken('bitbucket', targetAccountId);
+        }
+        await gitService.deleteBitbucketCredentials();
+      },
+      () => {
+        this.oauthToken = null;
+        this.pullRequests = [];
+        this.issues = [];
+        this.pipelines = [];
+      },
+    );
   }
 
   private async handleDeleteIntegration(): Promise<void> {
-    if (!this.selectedAccountId) return;
-
-    const selected = this.accounts.find((a) => a.id === this.selectedAccountId);
-    const accountName = selected?.name ?? 'this account';
-    const confirmed = await showConfirm(
-      'Delete Bitbucket Integration',
-      `Delete ${accountName}? The stored credentials will be removed and any profile that uses this account as its default will lose that reference.`,
-      'warning',
-    );
-    if (!confirmed) return;
-
-    this.isLoading = true;
-    this.error = null;
-
-    // Delete the account record (source of truth) FIRST, then best-effort token
-    // cleanup, matching GitHub/GitLab/OIDC. Deleting the token first leaves a
-    // zombie account on a partial failure.
     const accountId = this.selectedAccountId;
-    try {
-      await unifiedProfileService.deleteGlobalAccount(accountId);
+    const account = accountId
+      ? (this.accounts.find((a) => a.id === accountId) ??
+        ({ id: accountId, name: 'this account' } as IntegrationAccount))
+      : undefined;
 
-      await unifiedProfileService.loadUnifiedProfiles();
-      this.syncBitbucketAccounts();
+    await this.runDeleteIntegrationOperation({
+      account,
+      providerLabel: 'Bitbucket',
+      deleteCredentials: async (target) => {
+        await credentialService.deleteAccountToken('bitbucket', target.id);
+      },
+      getRemainingAccounts: () => {
+        this.syncBitbucketAccounts();
+        return this.accounts;
+      },
+      onDeleted: async (nextAccountId) => {
+        this.oauthToken = null;
+        this.pullRequests = [];
+        this.issues = [];
+        this.pipelines = [];
 
-      this.selectedAccountId = this.accounts.length > 0 ? this.accounts[0].id : null;
-      this.connectionStatus = null;
-      // Drop the deleted account's token so a stale identity can't leak into a
-      // verification of the next selected account.
-      this.oauthToken = null;
-      this.pullRequests = [];
-      this.issues = [];
-      this.pipelines = [];
-
-      try {
-        await credentialService.deleteAccountToken('bitbucket', accountId);
-      } catch (tokenErr) {
-        const msg =
-          tokenErr instanceof Error
-            ? `Account deleted, but its stored token could not be removed: ${tokenErr.message}`
-            : 'Account deleted, but its stored token could not be removed.';
-        this.error = msg;
-        showToast(msg, 'error');
-      }
-
-      if (this.accounts.length > 0) {
-        await this.loadInitialData();
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to delete integration';
-      showToast(this.error, 'error');
-    } finally {
-      this.isLoading = false;
-    }
+        if (nextAccountId) {
+          await this.loadInitialData();
+        }
+      },
+    });
   }
 
   /**
@@ -1597,14 +1680,14 @@ export class GnBitbucketDialog extends LitElement {
     this.oauthTargetAccountId = undefined;
     this.oauthTargetWasAddingAccount = undefined;
 
-    this.isLoading = true;
-    this.error = null;
-    const targetAccountExists = (): boolean =>
-      !targetAccountId ||
-      getAccountsByType('bitbucket').some((account) => account.id === targetAccountId);
     const selectionChangedDuringOAuth = (): boolean =>
       this.selectedAccountId !== targetAccountId ||
       this.isAddingAccount !== targetWasAddingAccount;
+    const invalidatedLoad = !selectionChangedDuringOAuth();
+    const generation = this.beginAccountOp(invalidatedLoad);
+    const targetAccountExists = (): boolean =>
+      !targetAccountId ||
+      getAccountsByType('bitbucket').some((account) => account.id === targetAccountId);
     let applyOAuthResultToSelection = false;
     let connectedAccountId: string | undefined;
 
@@ -1754,16 +1837,23 @@ export class GnBitbucketDialog extends LitElement {
       }
 
       // Load data if connected and repo detected
+      if (wasOpen && this.repositoryPath && !this.detectedRepo) {
+        await this.detectRepo(false, false);
+      }
+
+      if (generation !== this.loadGeneration || this.selectedAccountId !== connectedAccountId) return;
       if (wasOpen && this.connectionStatus?.connected && this.detectedRepo) {
         await this.loadAllData();
       }
     } catch (err) {
-      if (targetAccountId && !targetAccountExists()) {
+      if (targetAccountId && connectedAccountId === targetAccountId && !targetAccountExists()) {
         await credentialService.deleteAccountToken('bitbucket', targetAccountId);
       }
-      this.error = err instanceof Error ? err.message : 'Failed to complete OAuth';
+      if (invalidatedLoad && generation === this.loadGeneration) {
+        this.error = err instanceof Error ? err.message : 'Failed to complete OAuth';
+      }
     } finally {
-      this.isLoading = false;
+      this.finishAccountOp(invalidatedLoad ? generation : undefined);
     }
   }
 
@@ -1775,46 +1865,53 @@ export class GnBitbucketDialog extends LitElement {
   private async handleGeneratePrDescription(): Promise<void> {
     if (!this.repositoryPath || !this.createPrSource || !this.createPrDestination) return;
 
+    const repoPath = this.repositoryPath;
+    const repoGen = this.repoGeneration;
     this.generatingPrDescription = true;
-    const result = await aiService.generatePrDescription(
-      this.repositoryPath,
-      this.createPrDestination,
-      this.createPrSource,
-      this.createPrTitle || 'Untitled PR',
-    );
+    try {
+      const result = await aiService.generatePrDescription(
+        repoPath,
+        this.createPrDestination,
+        this.createPrSource,
+        this.createPrTitle || 'Untitled PR',
+      );
+      if (this.repositoryPath !== repoPath || this.repoGeneration !== repoGen) return;
 
-    if (result.success && result.data) {
-      this.createPrDescription = result.data.body;
-    } else {
-      showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      if (result.success && result.data) {
+        this.createPrDescription = result.data.body;
+      } else {
+        showToast(result.error?.message ?? 'Failed to generate description', 'error');
+      }
+    } finally {
+      if (this.repositoryPath === repoPath && this.repoGeneration === repoGen) {
+        this.generatingPrDescription = false;
+      }
     }
-    this.generatingPrDescription = false;
   }
 
   private async handleCreatePr(): Promise<void> {
     if (!this.detectedRepo || !this.createPrTitle.trim() || !this.createPrSource.trim() || !this.createPrDestination.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateBitbucketPullRequestInput = {
+      title: this.createPrTitle,
+      description: this.createPrDescription || undefined,
+      sourceBranch: this.createPrSource,
+      destinationBranch: this.createPrDestination,
+      closeSourceBranch: this.createPrCloseSource,
+    };
 
-    try {
-      const input: CreateBitbucketPullRequestInput = {
-        title: this.createPrTitle,
-        description: this.createPrDescription || undefined,
-        sourceBranch: this.createPrSource,
-        destinationBranch: this.createPrDestination,
-        closeSourceBranch: this.createPrCloseSource,
-      };
-
-      const token = await this.getActiveToken();
-      const result = await gitService.createBitbucketPullRequest(
-        this.detectedRepo.workspace,
-        this.detectedRepo.repoSlug,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
+    await this.runCreateOperation({
+      successMessage: 'Pull request created successfully',
+      failureMessage: 'Failed to create pull request',
+      getToken: (targetAccountId) => this.getActiveToken(targetAccountId),
+      execute: (repo, token) =>
+        gitService.createBitbucketPullRequest(
+          repo.workspace,
+          repo.repoSlug,
+          input,
+          token,
+        ),
+      onSuccess: async () => {
         this.createPrTitle = '';
         this.createPrDescription = '';
         this.createPrSource = '';
@@ -1822,81 +1919,40 @@ export class GnBitbucketDialog extends LitElement {
         this.createPrCloseSource = false;
         this.activeTab = 'pull-requests';
         await this.loadPullRequests();
-        showToast('Pull request created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create pull request';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create pull request';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private async handleCreateIssue(): Promise<void> {
     if (!this.detectedRepo || !this.createIssueTitle.trim()) return;
 
-    this.isLoading = true;
-    this.error = null;
+    const input: CreateBitbucketIssueInput = {
+      title: this.createIssueTitle,
+      content: this.createIssueContent || undefined,
+    };
 
-    try {
-      const input: CreateBitbucketIssueInput = {
-        title: this.createIssueTitle,
-        content: this.createIssueContent || undefined,
-      };
-
-      const token = await this.getActiveToken();
-      const result = await gitService.createBitbucketIssue(
-        this.detectedRepo.workspace,
-        this.detectedRepo.repoSlug,
-        input,
-        token
-      );
-
-      if (result.success && result.data) {
+    await this.runCreateOperation({
+      successMessage: 'Issue created successfully',
+      failureMessage: 'Failed to create issue',
+      getToken: (targetAccountId) => this.getActiveToken(targetAccountId),
+      execute: (repo, token) =>
+        gitService.createBitbucketIssue(
+          repo.workspace,
+          repo.repoSlug,
+          input,
+          token,
+        ),
+      onSuccess: async () => {
         this.createIssueTitle = '';
         this.createIssueContent = '';
         this.activeTab = 'issues';
         await this.loadIssues();
-        showToast('Issue created successfully', 'success');
-      } else {
-        this.error = result.error?.message ?? 'Failed to create issue';
-      }
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Failed to create issue';
-    } finally {
-      this.isLoading = false;
-    }
+      },
+    });
   }
 
   private handleClose(): void {
     this.dispatchEvent(new CustomEvent('close'));
-  }
-
-  private openInBrowser(url: string): void {
-    openExternalUrl(url);
-  }
-
-  private formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-    if (days === 0) return 'today';
-    if (days === 1) return 'yesterday';
-    if (days < 7) return `${days} days ago`;
-    if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
-    return date.toLocaleDateString();
-  }
-
-  private getInitials(name: string): string {
-    return name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .substring(0, 2)
-      .toUpperCase();
   }
 
   private renderConnectionTab() {
@@ -2096,79 +2152,6 @@ export class GnBitbucketDialog extends LitElement {
     `;
   }
 
-  private renderPrCommentsDrawer(prId: number) {
-    const comments = this.prComments[prId] ?? [];
-    const isLoadingComments = this.loadingCommentsForPr === prId;
-    const isPosting = this.postingCommentForPr === prId;
-
-    return html`
-      <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${prId}" @click=${(e: Event) => e.stopPropagation()}>
-        ${isLoadingComments ? html`
-          <div class="pr-comments-empty">Loading comments...</div>
-        ` : comments.length === 0 ? html`
-          <div class="pr-comments-empty">No comments yet</div>
-        ` : html`
-          <div class="pr-comments-list">
-            ${comments.map(c => html`
-              <div class="pr-comment-item" data-testid="pr-comment-item-${c.id}">
-                <div class="pr-comment-header">
-                  <span class="pr-comment-author">${c.author}</span>
-                  ${c.filePath ? html`
-                    <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
-                  ` : nothing}
-                  <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
-                </div>
-                <div class="pr-comment-body">${c.body}</div>
-              </div>
-            `)}
-          </div>
-        `}
-        <div class="pr-comment-form">
-          <div class="pr-comment-inline-fields">
-            <input
-              type="text"
-              class="pr-comment-file-input"
-              placeholder="File path (optional, for inline comment)"
-              .value=${this.commentFilePathInput}
-              @input=${(e: Event) => {
-                this.commentFilePathInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-            <input
-              type="number"
-              min="1"
-              class="pr-comment-line-input"
-              placeholder="Line #"
-              .value=${this.commentLineInput}
-              @input=${(e: Event) => {
-                this.commentLineInput = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </div>
-          <div class="pr-comment-input-row">
-            <textarea
-              class="pr-comment-body-input"
-              rows="2"
-              placeholder="Write a review comment..."
-              .value=${this.commentBodyInput}
-              @input=${(e: Event) => {
-                this.commentBodyInput = (e.target as HTMLTextAreaElement).value;
-              }}
-            ></textarea>
-            <button
-              class="btn btn-primary pr-comment-submit"
-              data-testid="pr-comment-submit-${prId}"
-              ?disabled=${!this.commentBodyInput.trim() || isPosting}
-              @click=${() => this.handleAddPrComment(prId)}
-            >
-              ${isPosting ? 'Posting...' : 'Post Comment'}
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
   private renderIssuesTab() {
     if (!this.connectionStatus?.connected) {
       return this.renderNotConnected('issues');
@@ -2361,7 +2344,7 @@ export class GnBitbucketDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreatePr}
-            ?disabled=${this.isLoading || !this.createPrTitle.trim() || !this.createPrSource.trim() || !this.createPrDestination.trim()}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createPrTitle.trim() || !this.createPrSource.trim() || !this.createPrDestination.trim()}
           >
             Create Pull Request
           </button>
@@ -2397,7 +2380,7 @@ export class GnBitbucketDialog extends LitElement {
           <button
             class="btn btn-primary"
             @click=${this.handleCreateIssue}
-            ?disabled=${this.isLoading || !this.createIssueTitle.trim()}
+            ?disabled=${this.isLoading || !this.detectedRepo || !this.createIssueTitle.trim()}
           >
             Create Issue
           </button>
@@ -2413,19 +2396,6 @@ export class GnBitbucketDialog extends LitElement {
           <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
         </svg>
         <p>Connect to Bitbucket to view ${feature}</p>
-      </div>
-    `;
-  }
-
-  private renderNoRepo() {
-    return html`
-      <div class="empty-state">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-          <line x1="12" y1="17" x2="12.01" y2="17"></line>
-        </svg>
-        <p>No Bitbucket repository detected</p>
       </div>
     `;
   }

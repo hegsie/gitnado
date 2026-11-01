@@ -756,6 +756,27 @@ describe('gn-reflog-dialog', () => {
           'a page nobody is watching must not raise a toast'
         ).to.be.false;
       });
+
+      it('includes the pinned repositoryPath on show-commit events', async () => {
+        const calls: Array<{ limit?: number }> = [];
+        mockReflogOfSize(3, calls);
+        const el = await openDialog('/repo/a');
+        el.repositoryPath = '/repo/b';
+        await el.updateComplete;
+
+        let detail: { oid?: string; repositoryPath?: string } | null = null;
+        el.addEventListener('show-commit', (e) => {
+          detail = (e as CustomEvent<{ oid?: string; repositoryPath?: string }>).detail;
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dialog = el as any;
+        dialog.contextMenu = { visible: true, x: 0, y: 0, entry: dialog.entries[0] };
+        dialog.handleContextShowCommit();
+
+        expect(detail).to.not.be.null;
+        expect(detail!.repositoryPath).to.equal('/repo/a');
+      });
     });
   });
 });

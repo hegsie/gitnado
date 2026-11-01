@@ -3,19 +3,20 @@
  * Add, edit, remove, and rename git remotes
  */
 
-import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { html, css, nothing } from 'lit';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import type { Remote } from '../../types/git.types.ts';
 import { pushOverlay, removeOverlay, isTopOverlay } from '../../utils/overlay-stack.ts';
+import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 type DialogMode = 'list' | 'add' | 'edit' | 'rename';
 
 @customElement('gn-remote-dialog')
-export class GnRemoteDialog extends LitElement {
+export class GnRemoteDialog extends GnRepoScopedDialogBase {
   static styles = [
     sharedStyles,
     css`
@@ -367,9 +368,6 @@ export class GnRemoteDialog extends LitElement {
     `,
   ];
 
-  @property({ type: Boolean, reflect: true }) open = false;
-  @property({ type: String }) repositoryPath = '';
-
   @state() private remotes: Remote[] = [];
   @state() private loading = false;
   @state() private error: string | null = null;
@@ -415,10 +413,11 @@ export class GnRemoteDialog extends LitElement {
     );
   }
 
-  async updated(changedProps: Map<string, unknown>): Promise<void> {
+  override async updated(changedProps: Map<string, unknown>): Promise<void> {
+    super.updated(changedProps);
     // Announce/withdraw overlay ownership of Escape.
     if (changedProps.has('open')) {
-      if (this.open) { pushOverlay(this); } else { removeOverlay(this); }
+      if (this.open) { pushOverlay(this); } else { removeOverlay(this); this.loadGeneration++; }
     }
     if (changedProps.has('open') && this.open) {
       this.pinnedRepoPath = this.repositoryPath;
@@ -427,15 +426,17 @@ export class GnRemoteDialog extends LitElement {
     }
   }
 
-  private async loadRemotes(repoPath: string = this.pinnedRepoPath): Promise<void> {
-    if (!repoPath || repoPath !== this.pinnedRepoPath) return;
+  private async loadRemotes(repoPath: string = this.pinnedRepoPath || this.repositoryPath): Promise<void> {
+    const targetRepo = repoPath || this.repositoryPath;
+    if (!targetRepo || (this.pinnedRepoPath && targetRepo !== this.pinnedRepoPath)) return;
 
+    const gen = this.nextLoadGeneration();
     this.loading = true;
     this.error = null;
 
     try {
-      const result = await gitService.getRemotes(repoPath);
-      if (repoPath !== this.pinnedRepoPath) return;
+      const result = await gitService.getRemotes(targetRepo);
+      if (!this.isCurrentRepoLoad(gen, targetRepo) || (this.pinnedRepoPath && targetRepo !== this.pinnedRepoPath)) return;
       if (result.success && result.data) {
         this.remotes = result.data;
       } else {
@@ -443,11 +444,11 @@ export class GnRemoteDialog extends LitElement {
         this.error = result.error?.message ?? 'Failed to load remotes';
       }
     } catch (err) {
-      if (repoPath !== this.pinnedRepoPath) return;
+      if (!this.isCurrentRepoLoad(gen, targetRepo) || (this.pinnedRepoPath && targetRepo !== this.pinnedRepoPath)) return;
       this.remotes = [];
       this.error = err instanceof Error ? err.message : 'Unknown error';
     } finally {
-      if (repoPath === this.pinnedRepoPath) {
+      if (this.isCurrentRepoLoad(gen, targetRepo) && (!this.pinnedRepoPath || targetRepo === this.pinnedRepoPath)) {
         this.loading = false;
       }
     }
@@ -526,7 +527,7 @@ export class GnRemoteDialog extends LitElement {
   private async handleAdd(): Promise<void> {
     if (!this.formName.trim() || !this.formUrl.trim()) return;
 
-    const repoPath = this.pinnedRepoPath;
+    const targetRepo = this.pinnedRepoPath || this.repositoryPath;
     const remoteName = this.formName.trim();
     const remoteUrl = this.formUrl.trim();
 
@@ -535,22 +536,22 @@ export class GnRemoteDialog extends LitElement {
 
     try {
       const result = await gitService.addRemote(
-        repoPath,
+        targetRepo,
         remoteName,
         remoteUrl
       );
 
       if (result.success) {
-        if (repoPath === this.pinnedRepoPath) {
+        if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
           this.resetForm();
         }
-        await this.loadRemotes(repoPath);
-        this.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
-      } else if (repoPath === this.pinnedRepoPath) {
+        await this.loadRemotes(targetRepo);
+        this.dispatchRepoEvent('remotes-changed', targetRepo);
+      } else if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
         this.error = result.error?.message ?? 'Failed to add remote';
       }
     } catch (err) {
-      if (repoPath === this.pinnedRepoPath) {
+      if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
         this.error = err instanceof Error ? err.message : 'Unknown error';
       }
     } finally {
@@ -561,7 +562,7 @@ export class GnRemoteDialog extends LitElement {
   private async handleSaveUrl(): Promise<void> {
     if (!this.editingRemote || !this.formUrl.trim()) return;
 
-    const repoPath = this.pinnedRepoPath;
+    const targetRepo = this.pinnedRepoPath || this.repositoryPath;
     const editingRemote = this.editingRemote;
     const fetchUrl = this.formUrl.trim();
     const pushUrl = this.formPushUrl.trim();
@@ -572,14 +573,14 @@ export class GnRemoteDialog extends LitElement {
     try {
       // Update fetch URL
       let result = await gitService.setRemoteUrl(
-        repoPath,
+        targetRepo,
         editingRemote.name,
         fetchUrl,
         false
       );
 
       if (!result.success) {
-        if (repoPath === this.pinnedRepoPath) {
+        if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
           this.error = result.error?.message ?? 'Failed to update URL';
         }
         return;
@@ -594,14 +595,14 @@ export class GnRemoteDialog extends LitElement {
 
       if (wantsPushUrl || hadPushUrl) {
         result = await gitService.setRemoteUrl(
-          repoPath,
+          targetRepo,
           editingRemote.name,
           wantsPushUrl ? pushUrl : '',
           true
         );
 
         if (!result.success) {
-          if (repoPath === this.pinnedRepoPath) {
+          if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
             this.error =
               result.error?.message ??
               (wantsPushUrl ? 'Failed to update push URL' : 'Failed to clear push URL');
@@ -610,13 +611,13 @@ export class GnRemoteDialog extends LitElement {
         }
       }
 
-      if (repoPath === this.pinnedRepoPath) {
+      if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
         this.resetForm();
       }
-      await this.loadRemotes(repoPath);
-      this.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
+      await this.loadRemotes(targetRepo);
+      this.dispatchRepoEvent('remotes-changed', targetRepo);
     } catch (err) {
-      if (repoPath === this.pinnedRepoPath) {
+      if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
         this.error = err instanceof Error ? err.message : 'Unknown error';
       }
     } finally {
@@ -631,7 +632,7 @@ export class GnRemoteDialog extends LitElement {
       return;
     }
 
-    const repoPath = this.pinnedRepoPath;
+    const targetRepo = this.pinnedRepoPath || this.repositoryPath;
     const oldName = this.editingRemote.name;
     const newName = this.formName.trim();
 
@@ -640,22 +641,22 @@ export class GnRemoteDialog extends LitElement {
 
     try {
       const result = await gitService.renameRemote(
-        repoPath,
+        targetRepo,
         oldName,
         newName
       );
 
       if (result.success) {
-        if (repoPath === this.pinnedRepoPath) {
+        if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
           this.resetForm();
         }
-        await this.loadRemotes(repoPath);
-        this.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
-      } else if (repoPath === this.pinnedRepoPath) {
+        await this.loadRemotes(targetRepo);
+        this.dispatchRepoEvent('remotes-changed', targetRepo);
+      } else if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
         this.error = result.error?.message ?? 'Failed to rename remote';
       }
     } catch (err) {
-      if (repoPath === this.pinnedRepoPath) {
+      if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
         this.error = err instanceof Error ? err.message : 'Unknown error';
       }
     } finally {
@@ -664,17 +665,17 @@ export class GnRemoteDialog extends LitElement {
   }
 
   private async handleFetchRemote(remote: Remote): Promise<void> {
-    const repoPath = this.pinnedRepoPath;
+    const targetRepo = this.pinnedRepoPath || this.repositoryPath;
     this.fetchingRemote = remote.name;
     try {
       const result = await gitService.fetch({
-        path: repoPath,
+        path: targetRepo,
         remote: remote.name,
         silent: true,
       });
       if (result.success) {
         showToast(`Fetched from ${remote.name}`, 'success');
-        this.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
+        this.dispatchRepoEvent('remotes-changed', targetRepo);
       } else if (!gitService.isNetworkGateRefusal(result.error)) {
         // A gate refusal already announced itself, and a declined confirm is
         // the user's own decision — reporting either back is a lie.
@@ -688,11 +689,11 @@ export class GnRemoteDialog extends LitElement {
   }
 
   private async handlePruneRemote(remote: Remote): Promise<void> {
-    const repoPath = this.pinnedRepoPath;
+    const targetRepo = this.pinnedRepoPath || this.repositoryPath;
     this.pruningRemote = remote.name;
     try {
       const result = await gitService.pruneRemoteTrackingBranches(
-        repoPath,
+        targetRepo,
         remote.name,
       );
       if (result.success && result.data) {
@@ -701,8 +702,8 @@ export class GnRemoteDialog extends LitElement {
           showToast(`Nothing to prune from ${remote.name}`, 'info');
         } else {
           showToast(`Pruned ${count} stale tracking branch${count !== 1 ? 'es' : ''} from ${remote.name}`, 'success');
-          await this.loadRemotes(repoPath);
-          this.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
+          await this.loadRemotes(targetRepo);
+          this.dispatchRepoEvent('remotes-changed', targetRepo);
         }
       } else if (!gitService.isNetworkGateRefusal(result.error)) {
         showToast(`Prune failed: ${result.error?.message ?? 'Unknown error'}`, 'error');
@@ -727,7 +728,7 @@ export class GnRemoteDialog extends LitElement {
     // The repo the listed remotes were read from — NOT the live prop, which
     // rebinds on a tab switch and would remove "origin" from the repo the
     // user switched to while this list still showed the old one's.
-    const repoPath = this.pinnedRepoPath;
+    const targetRepo = this.pinnedRepoPath || this.repositoryPath;
 
     const confirmed = await showConfirm(
       'Remove Remote',
@@ -743,14 +744,16 @@ export class GnRemoteDialog extends LitElement {
     // Clear any inline error left over from a previous form action (add /
     // edit / rename) — the template still renders this.error and a stale
     // banner would persist across the toast-based remove flow otherwise.
-    this.error = null;
+    if (targetRepo === this.pinnedRepoPath && this.repositoryPath === targetRepo) {
+      this.error = null;
+    }
 
     try {
-      const result = await gitService.removeRemote(repoPath, remote.name);
+      const result = await gitService.removeRemote(targetRepo, remote.name);
 
       if (result.success) {
-        await this.loadRemotes(repoPath);
-        this.dispatchEvent(new CustomEvent('remotes-changed', { bubbles: true, composed: true }));
+        await this.loadRemotes(targetRepo);
+        this.dispatchRepoEvent('remotes-changed', targetRepo);
         showToast(`Removed remote ${remote.name}`, 'success');
       } else {
         // Match the toast pattern used by sibling list-row actions

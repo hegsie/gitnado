@@ -1527,5 +1527,41 @@ describe('gn-branch-cleanup-dialog (fixture)', () => {
       expect(footer).to.not.be.null;
       expect(footer!.textContent).to.include('2 branches selected');
     });
+
+    it('discards a stale scan when closed and reopened on another repository', async () => {
+      let resolveFirst: (v: unknown) => void = () => {};
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'get_cleanup_candidates') {
+          const path = (args as { path?: string })?.path;
+          if (path === '/repo/a') {
+            return new Promise((r) => {
+              resolveFirst = r;
+            });
+          }
+          return [createCandidate('feature/repo-b', 'merged')];
+        }
+        return null;
+      };
+
+      const el = await fixture<GnBranchCleanupDialog>(
+        html`<gn-branch-cleanup-dialog .repositoryPath=${'/repo/a'}></gn-branch-cleanup-dialog>`,
+      );
+      const firstOpen = el.open();
+      await el.updateComplete;
+
+      el.close();
+      el.repositoryPath = '/repo/b';
+      await el.open();
+      await settle(el);
+
+      resolveFirst([createCandidate('feature/repo-a', 'merged')]);
+      await firstOpen;
+      await settle(el);
+
+      const names = Array.from(el.shadowRoot!.querySelectorAll('.branch-name')).map((n) =>
+        n.textContent!.trim(),
+      );
+      expect(names).to.deep.equal(['feature/repo-b']);
+    });
   });
 });
