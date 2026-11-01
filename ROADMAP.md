@@ -4,7 +4,7 @@ This document outlines the strategic vision and planned features for Gitnado. Fo
 
 ## Vision
 
-Gitnado is transitioning from a "Git GUI with AI" to a **Local-First AI Development Hub**. The goal is to move beyond simple commit message generation and leverage Gitnado's unique position inside the user's filesystem and Git history.
+Gitnado is transitioning from a "Git GUI with AI" to a **Local-First AI Development Hub**, and next to the place where developers supervise, review and ship work done by both humans and AI coding agents. The goal is to move beyond simple commit message generation and leverage Gitnado's unique position inside the user's filesystem and Git history.
 
 Unlike commercial alternatives, Gitnado:
 
@@ -187,6 +187,87 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 ---
 
+### 4. Next: The Agent-Era Git Workstation (2027) 🚧
+
+**Goal:** Close the gaps opened by the latest wave of Git clients and make Gitnado the best place to *supervise* code written by both humans and AI agents, without giving up local-first, no-account, no-telemetry defaults.
+
+**Test:** "Can I run three coding agents in parallel, review and reshape what they produced, and ship it as a clean stack of PRs, without leaving Gitnado or sending code anywhere I didn't choose?"
+
+#### Where the market moved (2025–2026)
+
+| Client | What they shipped recently | Gitnado today |
+|--------|----------------------------|---------------|
+| GitKraken Desktop 12.x | Agent Mode and an Agent Sessions panel tracking Claude Code / Copilot CLI / Codex across worktrees; AI Commit Composer ("compose / recompose commits with AI"); Launchpad PR and issue dashboard; MCP server | Worktrees, read-only MCP host, AI split suggestions for staged changes. No agent supervision, no history recompose, no cross-provider inbox |
+| Tower | Stacked branches with one-click restack and stack merge; better "fully merged" detection for squash and rebase merges; archived and pinned branches | Merged and stale detection. No stacks |
+| GitButler | Parallel (virtual) branches, stacked branches, an Agents tab with one branch per agent, Claude Code hooks, operations-log undo | Undo/redo history plus semantic undo. No parallel branches, no agent hooks |
+| GitHub Desktop / JetBrains | Copilot commit messages; AI conflict resolution in the IDE | Already matched, and runs locally |
+
+Gitnado's advantage stays the same: everything above runs **locally, with no account, and with any model you choose**. The work below is about doing those things better, not copying them.
+
+#### 4.1 Agent Supervision ("Mission Control")
+
+- **Agent Sessions panel:** detect Claude Code, Codex CLI, Copilot CLI, Gemini CLI, Aider and other terminal agents running against an open repo or any of its worktrees. Show each session's state (working / waiting for input / done / errored), branch, changed files and elapsed time.
+- **One-click "Start agent on a task":** create a worktree and branch (optionally from a Jira, GitHub, GitLab or Azure DevOps issue), then launch the chosen agent CLI in the embedded terminal (see 4.6) with the issue as context.
+- **Live change feed:** a per-session diff stream with "accept hunk", "revert hunk" and "send feedback to agent" actions, so reviewing agent output is as easy as reviewing a staged diff.
+- **Agent checkpoints:** automatically snapshot the working tree (hidden refs under `refs/gitnado/checkpoints/*`) before and after each agent turn. Any turn can be rolled back from the timeline without touching the reflog by hand.
+- **Agent hooks bridge:** an optional hook installer (e.g. Claude Code `PreToolUse` / `Stop` hooks) that tags commits and checkpoints with the session ID so you can see which agent wrote which code.
+- **Guardrails:** run the existing "Vibe Check" secret and risk scan automatically when an agent finishes. Block or warn before agent output is pushed. Paranoid mode applies to agents too.
+
+#### 4.2 MCP 2.0: Gitnado as the Agent's Git Brain
+
+- **Write tools behind a consent gate:** `stage`, `commit`, `create_branch`, `create_worktree`, `stash`, `checkout`. Every write is either previewed in the UI and approved, or allowed by a per-repo policy ("agents may commit on `agent/*` branches only").
+- **Higher-level read tools:** `semantic_search_history`, `explain_commit`, `predict_rebase_conflicts`, `get_conflicts`, `get_pr_comments`. These expose Gitnado's existing AI and analysis features to any MCP client.
+- **Transport and setup:** stdio and Streamable HTTP transports, a per-client token list with revoke, and one-click "Add to Claude Code / Cursor / VS Code" config snippets.
+- **MCP client mode:** let Gitnado's own AI features call user-configured MCP servers (issue trackers, docs, internal tools) for richer commit, PR and review context.
+
+#### 4.3 Stacked Branches & Stacked PRs
+
+- **First-class stacks:** declare a branch as stacked on another, see the stack as a single lane in the graph and branch list, and navigate up and down the stack.
+- **Restack:** one-click restack of the entire stack after the base moves, using Ghost Rebase to predict conflicts before running it. Also handles a lower branch being squash-merged.
+- **Stacked PRs:** create and update one PR/MR per stack level on GitHub, GitLab, Bitbucket and Azure DevOps with correct base branches and an auto-maintained stack table in each description. Merge from the bottom and retarget the rest automatically.
+- **Better merged detection:** detect squash-merged and rebase-merged branches (patch-id / tree comparison) for branch cleanup and stack pruning.
+
+#### 4.4 AI History Editing
+
+- **Commit Composer / Recompose:** select a range of commits (or the working tree) and let AI propose a new, logically grouped commit series with messages. Show a before/after preview, apply it through the existing interactive-rebase engine, and keep a one-click undo.
+- **Hunk-level split suggestions:** extend AI-Assisted Staging from file groups to hunk and line groups.
+- **AI fixup targeting:** for each staged hunk, suggest the commit it most likely belongs to (`git absorb`-style, AI-ranked) and create `fixup!` commits automatically.
+- **Explain anything:** "Explain this commit / branch / PR / file history" in plain language, with streaming output, from the graph, blame and PR views.
+- **AI stash and branch naming:** generate stash messages and branch names from the diff or the linked issue.
+
+#### 4.5 AI Review & Collaboration
+
+- **Local AI PR review:** run a full review of any PR/MR branch (yours or a teammate's) using a local or BYO model. Show findings inline in the diff view and optionally post them as review comments through the existing provider integrations.
+- **Review comment resolution:** turn a PR review comment into a suggested patch (or an agent task) and push the fix.
+- **Unified Launchpad:** a single inbox of PRs to review, PRs with failing CI, assigned issues and mentions across GitHub, GitLab, Bitbucket, Azure DevOps and Jira, with snooze and pin. Fetched directly from providers, with no Gitnado cloud involved.
+- **CI awareness:** show pipeline status per commit and branch in the graph. "Explain this CI failure" summarizes job logs with AI and offers a fix.
+- **Shareable patches without a cloud:** share a working-tree change as a signed patch file, bundle or provider gist/snippet, as an offline-friendly alternative to cloud patch services.
+
+#### 4.6 Core Platform Gaps
+
+- **Embedded PTY terminal:** a full in-app terminal panel (per repo and per worktree), required for agent sessions. Replaces "open external terminal" as the default.
+- **Parallel work without context switches:** a worktree-first UX (create, switch and clean up worktrees from the branch list) and, as an exploration, GitButler-style parallel branches applied to one working tree.
+- **Operation timeline:** unify undo/redo, reflog, agent checkpoints and stash into one browsable timeline with diff previews (in the spirit of jj's operation log).
+- **SSH commit signing and signature verification badges** across the graph, alongside the existing GPG support.
+- **Repository insights (local-only):** commit and PR cycle-time, churn hotspots, ownership and bus-factor maps computed from local history. No telemetry.
+- **Dedicated CUDA/Vulkan release builds** in the CI matrix.
+
+#### 4.7 Local AI Refresh
+
+- **Model catalog refresh:** move tier defaults to current small and coding models (e.g. Gemma 3n / newer Qwen Coder and Phi releases) and refresh the hardware and latency table below.
+- **Code-aware embeddings:** index diffs and code, not just commit messages, for semantic search. Add hybrid (BM25 + vector) ranking.
+- **Speculative decoding and KV-cache reuse** for faster local generation. NPU execution paths where the runtime supports them.
+- **Per-feature model routing:** pick a model per task (tiny local model for commit messages, larger local or BYO cloud model for review and composition) with a visible cost/privacy indicator for each request.
+- **AI privacy ledger:** a local, inspectable log of every AI request: which provider, what context was sent, and token counts. Cloud providers stay strictly opt-in.
+
+#### Guiding principles for Phase 4
+
+1. **Agents are guests:** every agent write is reviewable, attributable and undoable.
+2. **Local by default, BYO everything:** no Gitnado account, no Gitnado cloud, any model, any agent.
+3. **AI is optional:** every AI-assisted flow has a fully working non-AI path.
+
+---
+
 ## Detailed Feature Backlog
 
 ### UI/UX Enhancements
@@ -306,6 +387,8 @@ Our north star: *A privacy-first, AI-native Git workstation where intelligence r
 
 #### Hardware & Model Specs (2026-2027)
 
+> Due for a refresh under Phase 4.7.
+
 | Feature | Model Recommendation | Est. RAM Usage | Latency Goal |
 |---------|---------------------|---------------|--------------|
 | **Commit Messages** | Gemma 3 1B | 1.2 GB | < 500ms |
@@ -360,10 +443,7 @@ Recently shipped milestones (as of 2026-10-23):
 - ✅ **Provider Stack Phase 2 — Shared Auth Lifecycle & Rust HTTP Layer (`arch-3`)** — Extracted `runDisconnectOperation` and `runDeleteIntegrationOperation` into `GnProviderDialogBase` across GitHub, GitLab, Bitbucket, and Azure DevOps dialogs, and extracted `src-tauri/src/services/provider_http.rs` for shared `reqwest::Client` construction, outbound-host security checks, auth header builders, and HTTP status/rate-limit error formatting across `commands/{github,gitlab,bitbucket,azure_devops}.rs`.
 - ✅ **Rust Mega-Commands Modularization (`arch-4`)** — Decomposed monolithic Rust command files (`merge.rs` 7,891 → 873 lines, `remote.rs` 5,487 → 475 lines, `rewrite.rs` 4,612 → 348 lines, `commit.rs` 4,410 → 223 lines) into focused domain submodules under `src-tauri/src/commands/{merge,remote,rewrite,commit}/` while preserving all Tauri command signatures and unit tests.
 
-Remaining future work:
-
-- **In-app PTY terminal emulator** — `open_terminal` launches the external OS terminal from the toolbar or Output panel; a full embedded PTY terminal panel remains a future enhancement.
-- **Dedicated Vulkan/CUDA release binary variants in CI** — `.github/workflows/build.yml` builds default release artifacts; separate prebuilt CUDA/Vulkan installer matrix targets remain planned.
+Remaining future work is tracked in [Phase 4: The Agent-Era Git Workstation](#4-next-the-agent-era-git-workstation-2027-). The previously listed items (embedded PTY terminal, dedicated CUDA/Vulkan release builds) are now part of 4.6.
 
 Apple Silicon only on macOS is a deliberate choice, not a gap: Apple is winding down Intel
 support across macOS, so `.github/workflows/build.yml` targets `aarch64-apple-darwin` alone and
