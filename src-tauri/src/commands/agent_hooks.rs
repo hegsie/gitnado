@@ -288,7 +288,7 @@ pub fn install_in(repo: &Repository) -> Result<AgentHooksStatus> {
         groups.retain(|g| {
             g.get("hooks")
                 .and_then(Value::as_array)
-                .map_or(true, |hs| !hs.is_empty())
+                .is_none_or(|hs| !hs.is_empty())
         });
         groups.push(json!({
             "hooks": [{
@@ -322,7 +322,7 @@ pub fn uninstall_in(repo: &Repository) -> Result<AgentHooksStatus> {
                     groups.retain(|g| {
                         g.get("hooks")
                             .and_then(Value::as_array)
-                            .map_or(true, |hs| !hs.is_empty())
+                            .is_none_or(|hs| !hs.is_empty())
                     });
                     if groups.is_empty() {
                         hooks.remove(event);
