@@ -1352,11 +1352,12 @@ mod tests {
             .repo()
             .find_branch("agent/fix", git2::BranchType::Local)
             .is_ok());
-        let events = events.lock().unwrap();
-        assert_eq!(events.len(), 1, "no prompt, one applied event: {events:?}");
-        assert_eq!(events[0].0, write::WRITE_APPLIED_EVENT);
-        assert_eq!(events[0].1["byPolicy"], true);
-        drop(events);
+        {
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 1, "no prompt, one applied event: {events:?}");
+            assert_eq!(events[0].0, write::WRITE_APPLIED_EVENT);
+            assert_eq!(events[0].1["byPolicy"], true);
+        }
 
         // A branch outside the pattern needs approval; with no UI it is denied.
         let gate_no_ui = WriteGate::in_memory(gate.settings(), Duration::from_secs(1));
