@@ -394,6 +394,13 @@ pub struct McpServer {
 /// Shared MCP server state
 pub type McpState = Arc<RwLock<McpServer>>;
 
+/// What every request handler needs besides the open-repository list.
+#[derive(Clone)]
+struct RequestServices {
+    gate: Arc<WriteGate>,
+    context: Arc<McpContext>,
+}
+
 /// Create a new MCP server state instance backed by the saved configuration
 pub fn create_mcp_state(config_dir: PathBuf) -> McpState {
     Arc::new(RwLock::new(McpServer::new(config_dir)))
@@ -487,8 +494,10 @@ impl McpServer {
 
         let open_repos = self.open_repos.clone();
         let auth = self.auth.clone();
-        let gate = self.write_gate.clone();
-        let context = self.context.clone();
+        let services = RequestServices {
+            gate: self.write_gate.clone(),
+            context: self.context.clone(),
+        };
 
         tokio::spawn(async move {
             Self::run_server(
@@ -497,8 +506,7 @@ impl McpServer {
                 shutdown_rx,
                 open_repos,
                 auth,
-                gate,
-                context,
+                services,
                 limits,
             )
             .await;
@@ -598,8 +606,7 @@ impl McpServer {
         mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
-        gate: Arc<WriteGate>,
-        context: Arc<McpContext>,
+        services: RequestServices,
         limits: ConnectionLimits,
     ) {
         // One permit per in-flight connection; the permit is released when the
@@ -629,13 +636,10 @@ impl McpServer {
                             };
                             let repos = open_repos.clone();
                             let auth = auth.clone();
-                            let gate = gate.clone();
-                            let context = context.clone();
+                            let services = services.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
-                                if let Err(e) = Self::handle_connection(
-                                    stream, repos, auth, gate, context, limits,
-                                )
+                                if let Err(e) = Self::handle_connection(stream, repos, auth, services, limits)
                                 .await
                                 {
                                     tracing::warn!("MCP connection error: {}", e);
@@ -656,8 +660,7 @@ impl McpServer {
         mut stream: tokio::net::TcpStream,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
-        gate: Arc<WriteGate>,
-        context: Arc<McpContext>,
+        services: RequestServices,
         limits: ConnectionLimits,
     ) -> Result<(), String> {
         // Snapshot the auth rules once per connection so the lock is never held
@@ -822,7 +825,8 @@ impl McpServer {
         // Snapshot the list: a write tool may wait minutes for the user, and
         // must not hold the lock that opening a repository needs meanwhile.
         let repos = open_repos.read().await.clone();
-        let response = Self::handle_rpc_request(&rpc_request, &repos, &gate, &context).await;
+        let response =
+            Self::handle_rpc_request(&rpc_request, &repos, &services.gate, &services.context).await;
         let response_json = serde_json::to_string(&response).unwrap_or_default();
 
         Self::send_http_response(&mut stream, 200, &response_json, &allow_origin).await
@@ -1474,6 +1478,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_unknown_method() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
@@ -1493,6 +1500,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_tools_call_missing_params() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
@@ -1512,6 +1522,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_tools_call_missing_name() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
@@ -2236,6 +2249,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_running_server_rejects_requests_without_a_token() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server(&dir, Vec::new()).await;
 
@@ -2261,6 +2277,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_regenerating_the_token_invalidates_the_old_one_immediately() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, old_token) = started_server(&dir, Vec::new()).await;
 
@@ -2282,6 +2301,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_running_server_enforces_allowed_origins() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) =
             started_server(&dir, vec!["http://localhost:5173".to_string()]).await;
@@ -2309,6 +2331,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_preflight_is_answered_without_a_token() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, _token) = started_server(&dir, Vec::new()).await;
 
@@ -2323,6 +2348,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_post_requests_still_require_a_token() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server(&dir, Vec::new()).await;
 
@@ -2344,6 +2372,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_client_that_sends_nothing_is_dropped_after_the_deadline() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, _token) = started_server_with_limits(
             &dir,
@@ -2368,6 +2399,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_client_that_stalls_mid_request_is_dropped_after_the_deadline() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server_with_limits(
             &dir,
@@ -2405,6 +2439,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_slow_but_legitimate_client_is_still_served() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server_with_limits(
             &dir,
@@ -2443,6 +2480,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_connections_past_the_cap_are_closed_and_the_slots_come_back() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         // A deadline long enough that the two silent holders keep their slots
         // for the whole test
