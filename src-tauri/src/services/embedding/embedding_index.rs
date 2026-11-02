@@ -263,8 +263,7 @@ fn collect_commits(repo_path: &str) -> Result<Vec<(String, String, String)>, Str
         .revwalk()
         .map_err(|e| format!("Failed to create revwalk: {}", e))?;
 
-    revwalk
-        .push_glob("refs/*")
+    crate::utils::push_visible_refs(&repo, &mut revwalk)
         .map_err(|e| format!("Failed to push refs: {}", e))?;
     revwalk
         .set_sorting(git2::Sort::TIME)

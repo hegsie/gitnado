@@ -49,6 +49,10 @@ fn refs_snapshot(repo: &git2::Repository) -> (u64, Vec<git2::Oid>) {
 
     if let Ok(refs) = repo.references() {
         for reference in refs.flatten() {
+            // Checkpoints are Gitnado's bookkeeping, not history the user made.
+            if reference.name().is_ok_and(crate::utils::is_internal_ref) {
+                continue;
+            }
             reference.name().unwrap_or("").hash(&mut hasher);
             if let Some(oid) = reference.target() {
                 oid.as_bytes().hash(&mut hasher);
@@ -234,6 +238,9 @@ pub async fn search_commits(
         } else {
             // Push all branch heads for complete search
             for reference in repo.references()?.flatten() {
+                if reference.name().is_ok_and(crate::utils::is_internal_ref) {
+                    continue;
+                }
                 if let Some(oid) = reference.target() {
                     let _ = revwalk.push(oid);
                 }

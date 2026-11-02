@@ -90,6 +90,7 @@ import './components/dialogs/gn-conflict-resolution-dialog.ts';
 import type { GitflowFinishContext } from './components/dialogs/gn-conflict-resolution-dialog.ts';
 import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
+import './components/dialogs/gn-checkpoints-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -1765,6 +1766,11 @@ export class AppShell extends LitElement {
           'gn-export-import-dialog': {
             dismissed: 'export/import cancelled',
             running: 'patch/bundle operation',
+          },
+          'gn-checkpoints-dialog': {
+            dismissed: 'checkpoints closed',
+            running: 'checkpoint restore',
+            clearFlag: () => { dialogs.close('checkpoints'); },
           },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
@@ -6607,6 +6613,19 @@ export class AppShell extends LitElement {
       ></gn-command-palette>
 
       ${this.activeRepository ? html`
+        <gn-checkpoints-dialog
+          ?open=${dialogs.isOpen('checkpoints')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { dialogs.close('checkpoints'); }}
+          @checkpoints-changed=${(e: CustomEvent<{ repositoryPath?: string; workingTreeChanged?: boolean }>) => {
+            // Only a restore rewrites the working tree; creating or deleting a
+            // checkpoint touches nothing the rest of the UI shows.
+            if (e.detail?.workingTreeChanged) {
+              this.refreshConflictDialogRepo(e.detail.repositoryPath ?? null);
+            }
+          }}
+        ></gn-checkpoints-dialog>
+
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}

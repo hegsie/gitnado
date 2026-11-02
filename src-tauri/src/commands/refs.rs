@@ -59,7 +59,8 @@ pub async fn get_refs_by_commit(path: String) -> Result<HashMap<String, Vec<RefI
         };
 
         // Skip HEAD and other special refs
-        if name == "HEAD" || name.starts_with("refs/stash") {
+        if name == "HEAD" || name.starts_with("refs/stash") || crate::utils::is_internal_ref(&name)
+        {
             continue;
         }
 

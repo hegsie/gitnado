@@ -57,7 +57,7 @@ impl CommitIndex {
         let mut revwalk = repo.revwalk()?;
 
         // Walk all refs
-        revwalk.push_glob("refs/*")?;
+        crate::utils::push_visible_refs(&repo, &mut revwalk)?;
         revwalk.set_sorting(git2::Sort::TIME)?;
 
         let mut commits = Vec::new();
@@ -180,7 +180,7 @@ impl CommitIndex {
         let repo = git2::Repository::open(repo_path)?;
         let mut revwalk = repo.revwalk()?;
 
-        revwalk.push_glob("refs/*")?;
+        crate::utils::push_visible_refs(&repo, &mut revwalk)?;
         revwalk.set_sorting(git2::Sort::TIME)?;
 
         let mut new_commits = Vec::new();

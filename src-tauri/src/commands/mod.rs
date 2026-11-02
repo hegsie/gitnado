@@ -14,6 +14,7 @@ pub mod branch_cleanup;
 pub mod branch_rules;
 pub mod bundle;
 pub mod checkout_file;
+pub mod checkpoint;
 pub mod clean;
 pub mod clipboard;
 pub mod commit;

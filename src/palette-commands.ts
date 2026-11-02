@@ -18,6 +18,7 @@ import {
   openRepositoryInFileManager,
   openRepositoryInTerminal,
 } from './services/open-location.service.ts';
+import { createCheckpoint } from './services/git/checkpoints.ts';
 
 /**
  * What the command table needs from app-shell.
@@ -527,6 +528,32 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       icon: 'refresh',
       shortcut: `${mod}Z`,
       action: shell.requiresRepository(() => { dialogs.open('reflog'); }),
+    },
+    {
+      id: 'checkpoints',
+      label: 'Checkpoints (working tree snapshots)',
+      category: 'action',
+      icon: 'refresh',
+      action: shell.requiresRepository(() => { dialogs.open('checkpoints'); }),
+    },
+    {
+      id: 'create-checkpoint',
+      label: 'Create checkpoint',
+      category: 'action',
+      icon: 'refresh',
+      action: shell.requiresRepository(() => {
+        const repoPath = shell.activeRepository!.repository.path;
+        void createCheckpoint(repoPath).then((result) => {
+          if (result.success && result.data) {
+            showToast(`Checkpoint "${result.data.label}" created`, 'success');
+          } else {
+            showToast(
+              `Failed to create checkpoint: ${result.error?.message ?? 'Unknown error'}`,
+              'error',
+            );
+          }
+        });
+      }),
     },
     {
       id: 'describe',

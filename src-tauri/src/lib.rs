@@ -834,6 +834,11 @@ pub fn run() {
             commands::hooks::clear_hook_execution_logs,
             // Terminal integration
             commands::terminal::open_terminal,
+            commands::checkpoint::create_checkpoint,
+            commands::checkpoint::list_checkpoints,
+            commands::checkpoint::get_checkpoint_files,
+            commands::checkpoint::restore_checkpoint,
+            commands::checkpoint::delete_checkpoint,
             commands::terminal::open_file_manager,
             commands::terminal::open_in_editor,
             // Repository statistics
