@@ -2326,7 +2326,7 @@ mod tests {
         let created = server.clients().create("Cursor").unwrap();
         let auth = format!("Authorization: Bearer {}", created.token);
 
-        let response = send_raw(port, &tools_list_request(&[auth.clone()])).await;
+        let response = send_raw(port, &tools_list_request(std::slice::from_ref(&auth))).await;
         assert!(response.starts_with("HTTP/1.1 200"), "got: {response}");
         assert!(server.clients().list()[0].last_used_at.is_some());
 
@@ -2369,7 +2369,7 @@ mod tests {
             port,
             &rpc_post(
                 r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-                &[auth.clone()],
+                std::slice::from_ref(&auth),
             ),
         )
         .await;
@@ -2388,7 +2388,7 @@ mod tests {
             let body = format!(
                 r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"{asked}","capabilities":{{}},"clientInfo":{{"name":"t","version":"1"}}}}}}"#
             );
-            let response = send_raw(port, &rpc_post(&body, &[auth.clone()])).await;
+            let response = send_raw(port, &rpc_post(&body, std::slice::from_ref(&auth))).await;
             assert!(
                 response.contains(&format!("\"protocolVersion\":\"{expected}\"")),
                 "asked {asked}: {response}"
