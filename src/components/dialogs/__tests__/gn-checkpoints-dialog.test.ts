@@ -46,6 +46,9 @@ interface MockState {
   restore?: { restored: Checkpoint; backup: Checkpoint } | Error;
   deleteError?: string;
   files?: unknown;
+  hooks?: unknown;
+  hooksError?: string;
+  installResult?: unknown;
 }
 
 let state: MockState;
@@ -68,6 +71,13 @@ function install(): void {
       case 'get_checkpoint_files':
         if (state.files instanceof Error) throw state.files;
         return state.files ?? [];
+      case 'get_agent_hooks_status':
+        if (state.hooksError) throw new Error(state.hooksError);
+        return state.hooks ?? { installed: false, partial: false, settingsPath: '/repo/a/.claude/settings.local.json', scriptPath: '/repo/a/.git/gitnado/agent-checkpoint.sh' };
+      case 'install_agent_hooks':
+      case 'uninstall_agent_hooks':
+        if (state.installResult instanceof Error) throw state.installResult;
+        return state.installResult;
       case 'plugin:dialog|message':
         return state.confirm ? 'Ok' : 'Cancel';
       case 'plugin:notification|is_permission_granted':
@@ -272,5 +282,61 @@ describe('gn-checkpoints-dialog', () => {
     el.close();
     await el.updateComplete;
     expect(el.pinnedRepositoryPathIfOpen).to.be.null;
+  });
+
+  describe('Claude Code hooks', () => {
+    const paths = { settingsPath: '/repo/a/.claude/settings.local.json', scriptPath: '/x' };
+
+    it('offers to turn automatic checkpoints on, and reports success', async () => {
+      state.installResult = { installed: true, partial: false, ...paths };
+      const el = await render();
+      await waitUntil(() => $(el, '.hooks-btn'), 'no hooks button');
+      expect($(el, '.hooks-status')!.textContent).to.contain('Off');
+      expect($(el, '.hooks-btn')!.textContent).to.equal('Turn On');
+
+      $(el, '.hooks-btn')!.click();
+      await waitUntil(() => toasts('success').length > 0);
+      expect(calls('install_agent_hooks')[0].args).to.deep.equal({ path: REPO });
+      expect(toasts('success')[0]).to.contain('before and after every turn');
+      await el.updateComplete;
+      expect($(el, '.hooks-status')!.textContent).to.contain('On');
+      expect($(el, '.hooks-btn')!.textContent).to.equal('Turn Off');
+    });
+
+    it('turns them off again', async () => {
+      state.hooks = { installed: true, partial: false, ...paths };
+      state.installResult = { installed: false, partial: false, ...paths };
+      const el = await render();
+      await waitUntil(() => $(el, '.hooks-btn')?.textContent === 'Turn Off');
+      $(el, '.hooks-btn')!.click();
+      await waitUntil(() => toasts('success').length > 0);
+      expect(calls('uninstall_agent_hooks')).to.have.length(1);
+      expect(toasts('success')[0]).to.contain('turned off');
+    });
+
+    it('offers a repair for a partial install', async () => {
+      state.hooks = { installed: false, partial: true, ...paths };
+      const el = await render();
+      await waitUntil(() => $(el, '.hooks-btn')?.textContent === 'Repair');
+      expect($(el, '.hooks-status')!.textContent).to.contain('Incomplete');
+    });
+
+    it('reports a failed install without changing the status', async () => {
+      state.installResult = new Error('.claude/settings.local.json is not a valid JSON object');
+      const el = await render();
+      await waitUntil(() => $(el, '.hooks-btn'));
+      $(el, '.hooks-btn')!.click();
+      await waitUntil(() => toasts('error').length > 0);
+      expect(toasts('error')[0]).to.contain('not a valid JSON object');
+      expect($(el, '.hooks-btn')!.textContent).to.equal('Turn On');
+    });
+
+    it('shows why the status could not be read', async () => {
+      state.hooksError = 'Agent hooks need a working tree';
+      const el = await render();
+      await waitUntil(() => $(el, '.hooks-row.error'), 'no error state');
+      expect($(el, '.hooks-status')!.textContent).to.contain('need a working tree');
+      expect($(el, '.hooks-btn')).to.be.null;
+    });
   });
 });

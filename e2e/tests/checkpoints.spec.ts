@@ -127,4 +127,40 @@ test.describe('Checkpoints', () => {
     await expect(page.locator('.toast.success')).toContainText('Checkpoint "Checkpoint" created');
     await expect(dialog(page).locator('.checkpoint')).toHaveCount(0);
   });
+
+  test('turning on automatic Claude Code checkpoints', async ({ page }) => {
+    const paths = {
+      settingsPath: '/tmp/test-repo/.claude/settings.local.json',
+      scriptPath: '/tmp/test-repo/.git/gitnado/agent-checkpoint.sh',
+    };
+    await startCommandCaptureWithMocks(page, {
+      list_checkpoints: [],
+      install_agent_hooks: { installed: true, partial: false, ...paths },
+      uninstall_agent_hooks: { installed: false, partial: false, ...paths },
+    });
+    await openViaCommandPalette(page, 'Checkpoints');
+
+    const row = dialog(page).locator('.hooks-row');
+    await expect(row).toContainText('Off');
+    await row.locator('.hooks-btn').click();
+
+    await expect(page.locator('.toast.success')).toContainText('before and after every turn');
+    await expect(row).toContainText('On');
+    expect((await findCommand(page, 'install_agent_hooks'))[0].args).toEqual({ path: '/tmp/test-repo' });
+
+    await row.locator('.hooks-btn').click();
+    await expect(row).toContainText('Off');
+    expect(await findCommand(page, 'uninstall_agent_hooks')).toHaveLength(1);
+  });
+
+  test('a failed hook install is reported', async ({ page }) => {
+    await startCommandCaptureWithMocks(page, { list_checkpoints: [] });
+    await injectCommandError(page, 'install_agent_hooks', '.claude/settings.local.json is not a valid JSON object');
+    await openViaCommandPalette(page, 'Checkpoints');
+
+    await dialog(page).locator('.hooks-btn').click();
+
+    await expect(page.locator('.toast.error')).toContainText('not a valid JSON object');
+    await expect(dialog(page).locator('.hooks-row')).toContainText('Off');
+  });
 });

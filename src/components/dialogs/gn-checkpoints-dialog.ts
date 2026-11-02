@@ -11,7 +11,11 @@ import { html, css, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles, buttonStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
-import type { Checkpoint, CheckpointFile } from '../../services/git.service.ts';
+import type {
+  AgentHooksStatus,
+  Checkpoint,
+  CheckpointFile,
+} from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { tryAcquireRefOpOrWarn, releaseRefOp } from '../../utils/ref-lock.ts';
@@ -153,6 +157,44 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
         color: var(--color-error);
       }
 
+      .hooks-row {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-md);
+        padding: var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-secondary);
+      }
+
+      .hooks-row.error .hooks-status {
+        color: var(--color-error);
+      }
+
+      .hooks-text {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .hooks-title {
+        font-size: var(--font-size-sm);
+        font-weight: var(--font-weight-medium);
+        color: var(--color-text-primary);
+      }
+
+      .hooks-status {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-secondary);
+      }
+
+      .hooks-btn {
+        flex-shrink: 0;
+        padding: 2px 10px;
+        font-size: var(--font-size-xs);
+      }
+
       .checkpoint-row .btn {
         padding: 2px 10px;
         font-size: var(--font-size-xs);
@@ -172,6 +214,9 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
   @state() private busy = false;
   @state() private expandedId: string | null = null;
   @state() private files = new Map<string, CheckpointFile[] | 'error'>();
+  @state() private hooksStatus: AgentHooksStatus | null = null;
+  @state() private hooksError: string | null = null;
+  @state() private hooksBusy = false;
 
   /** Repository captured at open(); every action targets it. */
   private pinnedRepoPath = '';
@@ -181,7 +226,7 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
   }
 
   public get operationInFlight(): boolean {
-    return this.busy;
+    return this.busy || this.hooksBusy;
   }
 
   override updated(changed: Map<string, unknown>): void {
@@ -191,12 +236,58 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
       this.expandedId = null;
       this.files = new Map();
       this.newLabel = '';
+      this.hooksStatus = null;
+      this.hooksError = null;
       void this.load();
+      void this.loadHooksStatus();
+    }
+  }
+
+  private async loadHooksStatus(): Promise<void> {
+    const repoPath = this.pinnedRepoPath;
+    const result = await gitService.getAgentHooksStatus(repoPath);
+    if (repoPath !== this.pinnedRepoPath) return;
+    if (result.success && result.data) {
+      this.hooksStatus = result.data;
+      this.hooksError = null;
+    } else {
+      this.hooksStatus = null;
+      this.hooksError = result.error?.message ?? 'Could not read the Claude Code hook settings';
+    }
+  }
+
+  private async handleToggleHooks(enable: boolean): Promise<void> {
+    if (this.hooksBusy) return;
+    const repoPath = this.pinnedRepoPath;
+    this.hooksBusy = true;
+    try {
+      const result = enable
+        ? await gitService.installAgentHooks(repoPath)
+        : await gitService.uninstallAgentHooks(repoPath);
+      if (!result.success || !result.data) {
+        showToast(
+          `Failed to ${enable ? 'enable' : 'disable'} Claude Code checkpoints: ${result.error?.message ?? 'Unknown error'}`,
+          'error',
+        );
+        return;
+      }
+      if (repoPath === this.pinnedRepoPath) {
+        this.hooksStatus = result.data;
+        this.hooksError = null;
+      }
+      showToast(
+        enable
+          ? 'Claude Code will now take a checkpoint before and after every turn in this repository'
+          : 'Automatic Claude Code checkpoints turned off',
+        'success',
+      );
+    } finally {
+      this.hooksBusy = false;
     }
   }
 
   close(): void {
-    if (this.busy) return;
+    if (this.busy || this.hooksBusy) return;
     this.open = false;
     this.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
   }
@@ -333,6 +424,42 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
     `;
   }
 
+  private renderHooks() {
+    const status = this.hooksStatus;
+    let text: string;
+    let action: 'enable' | 'disable' | 'repair' | null = null;
+    if (this.hooksError) {
+      text = this.hooksError;
+    } else if (!status) {
+      text = 'Checking Claude Code hooks…';
+    } else if (status.installed) {
+      text = 'On — Claude Code takes a checkpoint before and after every turn, and its commits are marked with the session.';
+      action = 'disable';
+    } else if (status.partial) {
+      text = 'Incomplete — part of the Claude Code hook setup is missing.';
+      action = 'repair';
+    } else {
+      text = 'Off — turn on to take a checkpoint before and after every Claude Code turn.';
+      action = 'enable';
+    }
+    return html`
+      <div class="hooks-row ${this.hooksError ? 'error' : ''}">
+        <div class="hooks-text">
+          <span class="hooks-title">Automatic checkpoints for Claude Code</span>
+          <span class="hooks-status">${text}</span>
+        </div>
+        ${action
+          ? html`<button
+              class="btn ${action === 'disable' ? 'btn-secondary' : 'btn-primary'} hooks-btn"
+              ?disabled=${this.hooksBusy}
+              title=${status?.settingsPath ?? ''}
+              @click=${() => void this.handleToggleHooks(action !== 'disable')}
+            >${action === 'enable' ? 'Turn On' : action === 'repair' ? 'Repair' : 'Turn Off'}</button>`
+          : nothing}
+      </div>
+    `;
+  }
+
   private renderList() {
     if (this.loading && this.checkpoints.length === 0) {
       return html`<div class="loading">Loading checkpoints…</div>`;
@@ -398,7 +525,7 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
         .open=${this.open}
         modalTitle="Checkpoints"
         @close=${() => {
-          if (this.busy) {
+          if (this.busy || this.hooksBusy) {
             // Keep the modal up: a restore is rewriting the working tree.
             this.requestUpdate();
             return;
@@ -411,6 +538,7 @@ export class GnCheckpointsDialog extends GnRepoScopedDialogBase {
             Snapshots of the working tree, including untracked files. Restoring one never
             changes your commits.
           </p>
+          ${this.renderHooks()}
           <div class="create-row">
             <input
               type="text"

@@ -728,6 +728,14 @@ function createMockHandler(mocks: typeof defaultMockData) {
       case 'check_bitbucket_connection_with_token':
         return { connected: false, user: null };
 
+      // Checkpoints and the Claude Code hooks bridge (#607, #608)
+      case 'list_checkpoints':
+        return [];
+      case 'get_agent_hooks_status':
+        return { installed: false, partial: false, settingsPath: '/tmp/test-repo/.claude/settings.local.json', scriptPath: '/tmp/test-repo/.git/gitnado/agent-checkpoint.sh' };
+      case 'get_agent_attribution':
+        return null;
+
       // Default - log unmocked commands
       default:
         console.warn(`[Tauri Mock] Unmocked command: ${command}`, args);
@@ -1337,6 +1345,14 @@ export async function setupTauriMocks(
           case 'check_bitbucket_connection':
           case 'check_bitbucket_connection_with_token':
             return { connected: false, user: null };
+
+          // Checkpoints and the Claude Code hooks bridge (#607, #608)
+          case 'list_checkpoints':
+            return [];
+          case 'get_agent_hooks_status':
+            return { installed: false, partial: false, settingsPath: '/tmp/test-repo/.claude/settings.local.json', scriptPath: '/tmp/test-repo/.git/gitnado/agent-checkpoint.sh' };
+          case 'get_agent_attribution':
+            return null;
 
           default:
             console.warn(`[Tauri Mock] Unmocked command: ${command}`, args);

@@ -9,10 +9,13 @@
 
 /// Namespace for Gitnado's internal refs.
 pub const INTERNAL_REF_PREFIX: &str = "refs/gitnado/";
+/// Gitnado's notes refs. `git notes` refuses to write outside refs/notes/,
+/// so these cannot live under [`INTERNAL_REF_PREFIX`].
+pub const INTERNAL_NOTES_PREFIX: &str = "refs/notes/gitnado/";
 
 /// True for refs Gitnado owns and never shows the user.
 pub fn is_internal_ref(name: &str) -> bool {
-    name.starts_with(INTERNAL_REF_PREFIX)
+    name.starts_with(INTERNAL_REF_PREFIX) || name.starts_with(INTERNAL_NOTES_PREFIX)
 }
 
 /// Push every user-visible ref onto `revwalk` — the replacement for
@@ -42,6 +45,8 @@ mod tests {
     #[test]
     fn recognises_internal_refs() {
         assert!(is_internal_ref("refs/gitnado/checkpoints/1"));
+        assert!(is_internal_ref("refs/notes/gitnado/agents"));
+        assert!(!is_internal_ref("refs/notes/commits"));
         assert!(!is_internal_ref("refs/heads/gitnado/feature"));
         assert!(!is_internal_ref("refs/heads/main"));
     }

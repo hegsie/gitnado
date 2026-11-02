@@ -834,6 +834,10 @@ pub fn run() {
             commands::hooks::clear_hook_execution_logs,
             // Terminal integration
             commands::terminal::open_terminal,
+            commands::agent_hooks::get_agent_hooks_status,
+            commands::agent_hooks::install_agent_hooks,
+            commands::agent_hooks::uninstall_agent_hooks,
+            commands::agent_hooks::get_agent_attribution,
             commands::checkpoint::create_checkpoint,
             commands::checkpoint::list_checkpoints,
             commands::checkpoint::get_checkpoint_files,
