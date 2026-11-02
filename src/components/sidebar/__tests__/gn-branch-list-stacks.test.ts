@@ -81,11 +81,12 @@ function openMenuFor(el: GnBranchList, name: string): void {
 }
 
 async function answerPrompt(value: string | null): Promise<void> {
-  let dialog: (Element & { value: string; resolve?: unknown }) | null = null;
-  for (let i = 0; i < 50; i++) {
+  type PromptEl = Element & { value: string; resolve?: unknown };
+  const find = (): PromptEl | null => document.querySelector('gn-prompt-dialog') as unknown as PromptEl | null;
+  let dialog = find();
+  for (let i = 0; i < 50 && !dialog?.resolve; i++) {
     await new Promise((r) => setTimeout(r, 10));
-    dialog = document.querySelector('gn-prompt-dialog');
-    if (dialog?.resolve) break;
+    dialog = find();
   }
   expect(dialog, 'prompt dialog mounted').to.not.be.null;
   if (value === null) {
