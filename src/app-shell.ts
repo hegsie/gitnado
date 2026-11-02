@@ -90,6 +90,7 @@ import './components/dialogs/gn-conflict-resolution-dialog.ts';
 import type { GitflowFinishContext } from './components/dialogs/gn-conflict-resolution-dialog.ts';
 import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
+import './components/dialogs/gn-agent-sessions-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -1765,6 +1766,11 @@ export class AppShell extends LitElement {
           'gn-export-import-dialog': {
             dismissed: 'export/import cancelled',
             running: 'patch/bundle operation',
+          },
+          'gn-agent-sessions-dialog': {
+            dismissed: 'agent sessions closed',
+            running: 'agent session refresh',
+            clearFlag: () => { dialogs.close('agentSessions'); },
           },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
@@ -6607,6 +6613,12 @@ export class AppShell extends LitElement {
       ></gn-command-palette>
 
       ${this.activeRepository ? html`
+        <gn-agent-sessions-dialog
+          ?open=${dialogs.isOpen('agentSessions')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { dialogs.close('agentSessions'); }}
+        ></gn-agent-sessions-dialog>
+
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}

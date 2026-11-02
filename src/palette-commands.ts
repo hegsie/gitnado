@@ -529,6 +529,13 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => { dialogs.open('reflog'); }),
     },
     {
+      id: 'agent-sessions',
+      label: 'Agent Sessions (running coding agents)',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(() => { dialogs.open('agentSessions'); }),
+    },
+    {
       id: 'describe',
       label: 'Describe commit (git describe)',
       category: 'action',

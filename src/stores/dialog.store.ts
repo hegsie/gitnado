@@ -86,6 +86,7 @@ export const DIALOG_REGISTRY = {
   outputPanel: { repoScoped: true },
   conflict: { repoScoped: true },
   reflog: { repoScoped: true },
+  agentSessions: { repoScoped: true },
   search: { repoScoped: true },
   remotes: { repoScoped: true },
   clean: { repoScoped: true },

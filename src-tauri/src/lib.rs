@@ -834,6 +834,7 @@ pub fn run() {
             commands::hooks::clear_hook_execution_logs,
             // Terminal integration
             commands::terminal::open_terminal,
+            commands::agent_sessions::list_agent_sessions,
             commands::terminal::open_file_manager,
             commands::terminal::open_in_editor,
             // Repository statistics
