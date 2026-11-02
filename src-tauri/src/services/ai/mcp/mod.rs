@@ -3,6 +3,7 @@
 //! Allows external tools to query Gitnado's Git repository context
 //! via the MCP protocol over HTTP/SSE.
 
+pub mod insight;
 pub mod server;
 pub mod tools;
 pub mod write;

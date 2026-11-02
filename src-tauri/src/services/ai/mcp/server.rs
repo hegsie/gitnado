@@ -16,6 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
+use super::insight::{self, McpContext};
 use super::tools;
 use super::write::{self, Decision, WriteGate};
 
@@ -386,6 +387,8 @@ pub struct McpServer {
     auth: Arc<StdRwLock<AuthSettings>>,
     /// Write tools: on/off, saved policies and pending consent requests
     write_gate: Arc<WriteGate>,
+    /// App services (AI, semantic index) the insight tools call into
+    context: Arc<McpContext>,
 }
 
 /// Shared MCP server state
@@ -412,6 +415,7 @@ impl McpServer {
         let server = Self {
             auth: Arc::new(StdRwLock::new(AuthSettings::from_config(&config))),
             write_gate: Arc::new(WriteGate::load(&config_dir)),
+            context: Arc::new(McpContext::default()),
             config,
             config_dir,
             running: Arc::new(AtomicBool::new(false)),
@@ -484,6 +488,7 @@ impl McpServer {
         let open_repos = self.open_repos.clone();
         let auth = self.auth.clone();
         let gate = self.write_gate.clone();
+        let context = self.context.clone();
 
         tokio::spawn(async move {
             Self::run_server(
@@ -493,6 +498,7 @@ impl McpServer {
                 open_repos,
                 auth,
                 gate,
+                context,
                 limits,
             )
             .await;
@@ -548,6 +554,11 @@ impl McpServer {
         self.write_gate.clone()
     }
 
+    /// App services available to the insight tools
+    pub fn context(&self) -> Arc<McpContext> {
+        self.context.clone()
+    }
+
     /// Get the current configuration
     pub fn get_config(&self) -> &McpConfig {
         &self.config
@@ -588,6 +599,7 @@ impl McpServer {
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
         gate: Arc<WriteGate>,
+        context: Arc<McpContext>,
         limits: ConnectionLimits,
     ) {
         // One permit per in-flight connection; the permit is released when the
@@ -618,10 +630,13 @@ impl McpServer {
                             let repos = open_repos.clone();
                             let auth = auth.clone();
                             let gate = gate.clone();
+                            let context = context.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
-                                if let Err(e) =
-                                    Self::handle_connection(stream, repos, auth, gate, limits).await
+                                if let Err(e) = Self::handle_connection(
+                                    stream, repos, auth, gate, context, limits,
+                                )
+                                .await
                                 {
                                     tracing::warn!("MCP connection error: {}", e);
                                 }
@@ -642,6 +657,7 @@ impl McpServer {
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
         gate: Arc<WriteGate>,
+        context: Arc<McpContext>,
         limits: ConnectionLimits,
     ) -> Result<(), String> {
         // Snapshot the auth rules once per connection so the lock is never held
@@ -806,7 +822,7 @@ impl McpServer {
         // Snapshot the list: a write tool may wait minutes for the user, and
         // must not hold the lock that opening a repository needs meanwhile.
         let repos = open_repos.read().await.clone();
-        let response = Self::handle_rpc_request(&rpc_request, &repos, &gate).await;
+        let response = Self::handle_rpc_request(&rpc_request, &repos, &gate, &context).await;
         let response_json = serde_json::to_string(&response).unwrap_or_default();
 
         Self::send_http_response(&mut stream, 200, &response_json, &allow_origin).await
@@ -817,11 +833,12 @@ impl McpServer {
         request: &JsonRpcRequest,
         open_repos: &[String],
         gate: &WriteGate,
+        context: &McpContext,
     ) -> JsonRpcResponse {
         match request.method.as_str() {
             "initialize" => Self::handle_initialize(request),
             "tools/list" => Self::handle_tools_list(request, gate.enabled()),
-            "tools/call" => Self::handle_tools_call(request, open_repos, gate).await,
+            "tools/call" => Self::handle_tools_call(request, open_repos, gate, context).await,
             _ => JsonRpcResponse::error(
                 request.id.clone(),
                 -32601,
@@ -848,6 +865,7 @@ impl McpServer {
     /// Handle the `tools/list` method
     fn handle_tools_list(request: &JsonRpcRequest, writes_enabled: bool) -> JsonRpcResponse {
         let mut tool_list = tools::get_tool_list();
+        tool_list.extend(insight::insight_tool_list());
         // Write tools are only advertised while the user has turned them on.
         if writes_enabled {
             tool_list.extend(write::write_tool_list());
@@ -856,6 +874,21 @@ impl McpServer {
             "tools": tool_list
         });
         JsonRpcResponse::success(request.id.clone(), result)
+    }
+
+    /// Run one of the higher-level read tools.
+    async fn call_insight_tool(
+        tool: &str,
+        arguments: &Value,
+        open_repos: &[String],
+        context: &McpContext,
+    ) -> Result<Value, String> {
+        let repo_path = arguments
+            .get("repo_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Missing required argument: repo_path".to_string())?;
+        tools::validate_repo_path(repo_path, open_repos)?;
+        insight::call(tool, arguments, repo_path, context).await
     }
 
     /// Run a write tool through the consent gate.
@@ -921,6 +954,7 @@ impl McpServer {
         request: &JsonRpcRequest,
         open_repos: &[String],
         gate: &WriteGate,
+        context: &McpContext,
     ) -> JsonRpcResponse {
         let params = match &request.params {
             Some(p) => p,
@@ -951,6 +985,8 @@ impl McpServer {
 
         let outcome = if write::is_write_tool(tool_name) {
             Self::call_write_tool(tool_name, &arguments, open_repos, gate).await
+        } else if insight::is_insight_tool(tool_name) {
+            Self::call_insight_tool(tool_name, &arguments, open_repos, context).await
         } else {
             tools::call_tool(tool_name, &arguments, open_repos).await
         };
@@ -1267,6 +1303,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn insight_tools_are_listed_and_confined_to_open_repositories() {
+        let list = McpServer::handle_tools_list(&rpc("tools/list", None), false);
+        let names: Vec<String> = list.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        for tool in insight::INSIGHT_TOOLS {
+            assert!(names.iter().any(|n| n == tool), "{tool} missing");
+        }
+
+        let open = crate::test_utils::TestRepo::with_initial_commit();
+        let other = crate::test_utils::TestRepo::with_initial_commit();
+        let gate = WriteGate::in_memory(Default::default(), Duration::from_secs(1));
+        let ctx = McpContext::default();
+
+        let call = |repo: String| {
+            rpc(
+                "tools/call",
+                Some(
+                    serde_json::json!({ "name": "get_conflicts", "arguments": { "repo_path": repo } }),
+                ),
+            )
+        };
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call(open.path_str()), &[open.path_str()], &gate, &ctx)
+                .await,
+        );
+        assert!(!is_error, "{text}");
+        assert!(text.contains("\"count\": 0"), "{text}");
+
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(
+                &call(other.path_str()),
+                &[open.path_str()],
+                &gate,
+                &ctx,
+            )
+            .await,
+        );
+        assert!(is_error);
+        assert!(text.contains("not an open repository"), "{text}");
+    }
+
+    #[tokio::test]
     async fn write_tools_are_listed_only_when_enabled() {
         let names = |resp: JsonRpcResponse| -> Vec<String> {
             resp.result.unwrap()["tools"]
@@ -1298,8 +1380,10 @@ mod tests {
         );
 
         let off = WriteGate::in_memory(Default::default(), Duration::from_secs(1));
-        let (text, is_error) =
-            tool_text(&McpServer::handle_rpc_request(&call, &[t.path_str()], &off).await);
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call, &[t.path_str()], &off, &McpContext::default())
+                .await,
+        );
         assert!(is_error);
         assert!(text.contains("turned off"), "{text}");
 
@@ -1310,7 +1394,9 @@ mod tests {
             },
             Duration::from_secs(1),
         );
-        let (text, is_error) = tool_text(&McpServer::handle_rpc_request(&call, &[], &on).await);
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call, &[], &on, &McpContext::default()).await,
+        );
         assert!(is_error);
         assert!(text.contains("No repositories are open"), "{text}");
         assert!(t
@@ -1345,8 +1431,10 @@ mod tests {
                 serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "agent/fix" } }),
             ),
         );
-        let (text, is_error) =
-            tool_text(&McpServer::handle_rpc_request(&call, &[t.path_str()], &gate).await);
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call, &[t.path_str()], &gate, &McpContext::default())
+                .await,
+        );
         assert!(!is_error, "{text}");
         assert!(t
             .repo()
@@ -1367,8 +1455,15 @@ mod tests {
                 serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "main-copy" } }),
             ),
         );
-        let (text, is_error) =
-            tool_text(&McpServer::handle_rpc_request(&call, &[t.path_str()], &gate_no_ui).await);
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(
+                &call,
+                &[t.path_str()],
+                &gate_no_ui,
+                &McpContext::default(),
+            )
+            .await,
+        );
         assert!(is_error);
         assert!(text.contains("declined"), "{text}");
         assert!(t
@@ -1389,6 +1484,7 @@ mod tests {
             &request,
             &[],
             &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+            &McpContext::default(),
         )
         .await;
         assert!(response.error.is_some());
@@ -1407,6 +1503,7 @@ mod tests {
             &request,
             &[],
             &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+            &McpContext::default(),
         )
         .await;
         assert!(response.error.is_some());
@@ -1425,6 +1522,7 @@ mod tests {
             &request,
             &[],
             &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+            &McpContext::default(),
         )
         .await;
         assert!(response.error.is_some());

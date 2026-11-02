@@ -235,12 +235,24 @@ pub fn run() {
                 .app_data_dir()
                 .unwrap_or_default()
                 .join("embedding-indexes");
-            app.manage(std::sync::Arc::new(tokio::sync::RwLock::new(
-                crate::services::embedding::EmbeddingIndexState::new(
-                    embedding_models_dir,
-                    embedding_indexes_dir,
-                ),
-            )));
+            let embedding_index: crate::services::embedding::embedding_index::SharedEmbeddingIndex =
+                std::sync::Arc::new(tokio::sync::RwLock::new(
+                    crate::services::embedding::EmbeddingIndexState::new(
+                        embedding_models_dir,
+                        embedding_indexes_dir,
+                    ),
+                ));
+            app.manage(embedding_index.clone());
+
+            // Let the MCP insight tools (explain_commit, semantic_search_history)
+            // use the same AI service and semantic index as the UI.
+            {
+                let ai_state: tauri::State<'_, AiState> = app.state();
+                let mcp: tauri::State<'_, services::ai::mcp::McpState> = app.state();
+                let context = mcp.blocking_read().context();
+                context.set_ai(ai_state.inner().clone());
+                context.set_embeddings(embedding_index);
+            }
 
             tracing::info!("Application setup complete");
 
