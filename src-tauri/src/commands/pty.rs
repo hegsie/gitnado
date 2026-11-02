@@ -18,9 +18,7 @@ struct TauriPtySink(AppHandle);
 
 impl PtySink for TauriPtySink {
     fn output(&self, id: u32, data: String) {
-        let _ = self
-            .0
-            .emit(PTY_OUTPUT_EVENT, PtyOutputPayload { id, data });
+        let _ = self.0.emit(PTY_OUTPUT_EVENT, PtyOutputPayload { id, data });
     }
 
     fn exit(&self, id: u32, exit_code: Option<i32>) {

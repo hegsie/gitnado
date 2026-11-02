@@ -271,10 +271,7 @@ impl PtyRegistry {
                 if !carry.is_empty() {
                     sink.output(id, String::from_utf8_lossy(&carry).into_owned());
                 }
-                let exit_code = child
-                    .wait()
-                    .ok()
-                    .map(|status| status.exit_code() as i32);
+                let exit_code = child.wait().ok().map(|status| status.exit_code() as i32);
                 if let Some(inner) = inner.upgrade() {
                     if let Ok(mut sessions) = inner.sessions.lock() {
                         sessions.remove(&id);
@@ -421,7 +418,11 @@ mod tests {
 
         let (out, code) = drain(&rx, info.id);
         let canonical = dir.path().canonicalize().unwrap();
-        let name = canonical.file_name().unwrap().to_string_lossy().into_owned();
+        let name = canonical
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert!(out.contains(&name), "pwd output {out:?} should name {name}");
         assert_eq!(code, Some(3));
         assert!(registry.list().is_empty(), "exited session is removed");
