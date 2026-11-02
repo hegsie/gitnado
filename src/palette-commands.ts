@@ -154,6 +154,13 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => { dialogs.open('startAgent'); }),
     },
     {
+      id: 'agent-change-feed',
+      label: 'Review agent changes (live feed)',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(() => { dialogs.open('changeFeed'); }),
+    },
+    {
       id: 'new-terminal',
       label: 'New Terminal',
       category: 'action',

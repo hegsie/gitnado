@@ -93,6 +93,7 @@ export const DIALOG_REGISTRY = {
   conflict: { repoScoped: true },
   reflog: { repoScoped: true },
   startAgent: { repoScoped: true },
+  changeFeed: { repoScoped: true },
   search: { repoScoped: true },
   remotes: { repoScoped: true },
   clean: { repoScoped: true },

@@ -402,6 +402,7 @@ pub fn run() {
             commands::staging::read_file_content,
             commands::staging::get_file_hunks,
             commands::staging::stage_hunk_by_index,
+            commands::staging::discard_hunk_by_index,
             commands::staging::unstage_hunk_by_index,
             commands::staging::stage_lines,
             commands::staging::strip_trailing_whitespace,

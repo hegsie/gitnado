@@ -93,6 +93,7 @@ import type { GitflowFinishContext } from './components/dialogs/gn-conflict-reso
 import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
 import './components/dialogs/gn-start-agent-dialog.ts';
+import './components/dialogs/gn-change-feed-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -1788,6 +1789,11 @@ export class AppShell extends LitElement {
             dismissed: 'agent task cancelled',
             running: 'agent worktree setup',
             clearFlag: () => { dialogs.close('startAgent'); },
+          },
+          'gn-change-feed-dialog': {
+            dismissed: 'agent change feed closed',
+            running: 'accept/revert of an agent change',
+            clearFlag: () => { dialogs.close('changeFeed'); },
           },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
@@ -6665,6 +6671,15 @@ export class AppShell extends LitElement {
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
         ></gn-start-agent-dialog>
+
+        <gn-change-feed-dialog
+          ?open=${dialogs.isOpen('changeFeed')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { dialogs.close('changeFeed'); }}
+          @change-feed-applied=${(e: CustomEvent<{ repositoryPath?: string }>) => {
+            this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
+          }}
+        ></gn-change-feed-dialog>
 
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
