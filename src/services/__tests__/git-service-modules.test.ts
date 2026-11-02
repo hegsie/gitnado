@@ -14,6 +14,7 @@ import * as remotesModule from "../git/remotes.ts";
 import * as securityCredentialsModule from "../git/security-credentials.ts";
 import * as providersModule from "../git/providers.ts";
 import * as aiWorkspaceModule from "../git/ai-workspace.ts";
+import * as checkpointsModule from "../git/checkpoints.ts";
 
 describe("git service domain modules", () => {
   it("shared.ts exports network gate and shared helper functions", () => {
@@ -401,7 +402,7 @@ describe("git service domain modules", () => {
     }
   });
 
-  it("git.service.ts barrel re-exports every runtime symbol from all domain modules (435 functions)", () => {
+  it("git.service.ts barrel re-exports every runtime symbol from all domain modules (440 functions)", () => {
     const domainModules = [
       repositoryModule,
       branchesTagsModule,
@@ -411,6 +412,7 @@ describe("git service domain modules", () => {
       securityCredentialsModule,
       providersModule,
       aiWorkspaceModule,
+      checkpointsModule,
     ];
 
     let totalDomainExports = 0;
@@ -433,6 +435,6 @@ describe("git service domain modules", () => {
     }
 
     expect(Object.keys(gitService).length).to.equal(totalDomainExports + publicSharedFunctions.length);
-    expect(Object.keys(gitService).length).to.equal(435);
+    expect(Object.keys(gitService).length).to.equal(440);
   });
 });

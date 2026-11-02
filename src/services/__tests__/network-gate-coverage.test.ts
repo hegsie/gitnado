@@ -203,6 +203,9 @@ const NETWORK_COMMANDS = new Set([
  * readers, latent only because nothing calls them yet.
  */
 const LOCAL_COMMANDS = new Set([
+  // Working-tree checkpoints: snapshots under refs/gitnado/, purely local.
+  'create_checkpoint', 'list_checkpoints', 'get_checkpoint_files',
+  'restore_checkpoint', 'delete_checkpoint',
   // keyring reads/writes and the local-AI + embedding operations that only
   // touch this machine. Gating any of these would make offline mode hide the
   // controls that turn offline mode off, or refuse an already-downloaded model.
