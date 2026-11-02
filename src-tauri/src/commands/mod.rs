@@ -54,6 +54,7 @@ pub mod refs;
 pub mod remote;
 pub mod repo_scan;
 pub mod repository;
+pub mod pty;
 pub mod rewrite;
 pub mod search;
 pub mod search_index;

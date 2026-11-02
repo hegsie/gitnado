@@ -143,6 +143,7 @@ pub fn run() {
         .manage(create_update_state())
         .manage(CancellationRegistry::default())
         .manage(RemoteOpRegistry::default())
+        .manage(services::pty::PtyRegistry::default())
         .manage(SharedCommitIndex::default())
         // Offline mode and the remote allowlist, enforced backend-side. The
         // same handle `services::security::global()` hands the guards, so a
@@ -834,6 +835,11 @@ pub fn run() {
             commands::hooks::clear_hook_execution_logs,
             // Terminal integration
             commands::terminal::open_terminal,
+            commands::pty::pty_spawn,
+            commands::pty::pty_write,
+            commands::pty::pty_resize,
+            commands::pty::pty_kill,
+            commands::pty::pty_list,
             commands::terminal::open_file_manager,
             commands::terminal::open_in_editor,
             // Repository statistics

@@ -245,7 +245,7 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 
 #### 4.6 Core Platform Gaps
 
-- **Embedded PTY terminal:** a full in-app terminal panel (per repo and per worktree), required for agent sessions. Replaces "open external terminal" as the default.
+- ✅ **Embedded PTY terminal:** a full in-app terminal panel (per repo and per worktree), required for agent sessions. Replaces "open external terminal" as the default.
 - **Parallel work without context switches:** a worktree-first UX (create, switch and clean up worktrees from the branch list) and, as an exploration, GitButler-style parallel branches applied to one working tree.
 - **Operation timeline:** unify undo/redo, reflog, agent checkpoints and stash into one browsable timeline with diff previews (in the spirit of jj's operation log).
 - **SSH commit signing and signature verification badges** across the graph, alongside the existing GPG support.

@@ -63,6 +63,8 @@ export interface PaletteCommandHost {
   refreshConflictDialogRepo(pinnedPath: string | null): void;
   revealCommitInGraph(oid: string): void;
   toggleLeftPanel(): void;
+  toggleTerminalPanel(): void;
+  openNewTerminal(): void;
 }
 
 /**
@@ -136,6 +138,20 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => {
         dialogs.setOpen('outputPanel', !dialogs.isOpen('outputPanel'));
       }),
+    },
+    {
+      id: 'toggle-terminal',
+      label: 'Toggle Terminal',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(() => shell.toggleTerminalPanel()),
+    },
+    {
+      id: 'new-terminal',
+      label: 'New Terminal',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(() => shell.openNewTerminal()),
     },
     {
       id: 'stash',

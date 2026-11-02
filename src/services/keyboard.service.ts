@@ -551,6 +551,17 @@ class KeyboardService {
       return; // Let the local component handle it
     }
 
+    // The embedded terminal owns the keyboard. Ctrl+R (history search),
+    // Ctrl+B, Ctrl+J and the rest are shell and editor keys there, so only the
+    // shortcut that hides the terminal again — and Cmd combos on macOS, which
+    // terminals never receive — may act as app shortcuts while it has focus.
+    const isInTerminal = path.some(
+      (el) => el instanceof HTMLElement && el.tagName.toLowerCase() === 'gn-terminal-panel',
+    );
+    if (isInTerminal && !e.metaKey && this.keyToId.get(this.getShortcutKey(e)) !== 'toggle-terminal') {
+      return;
+    }
+
     // Try vim navigation first (only when not in a local keyboard handler)
     if (this.handleVimKey(e)) {
       return;
@@ -710,6 +721,7 @@ export function registerDefaultShortcuts(actions: {
   openShortcuts?: () => void;
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
+  toggleTerminal?: () => void;
   openCommandPalette?: () => void;
   openReflog?: () => void;
   fetch?: () => void;
@@ -928,6 +940,16 @@ export function registerDefaultShortcuts(actions: {
     description: 'Toggle right panel',
     category: 'View',
   });
+
+  if (actions.toggleTerminal) {
+    keyboardService.register('toggle-terminal', {
+      key: '`',
+      ctrl: true,
+      action: actions.toggleTerminal,
+      description: 'Toggle terminal',
+      category: 'View',
+    });
+  }
 
   if (actions.closeDiff) {
     keyboardService.register('close-diff', {

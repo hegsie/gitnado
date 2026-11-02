@@ -519,6 +519,9 @@ const SKIP_PREFIXES = [
   'preview_',
   'is_',
   'plugin:',
+  // Embedded terminal plumbing. pty_write carries raw keystrokes — passwords
+  // typed at a prompt included — so it must never reach the output log.
+  'pty_',
 ];
 const SKIP_COMMANDS = new Set([
   'start_watching',
