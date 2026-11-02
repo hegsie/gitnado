@@ -653,6 +653,27 @@ export interface Stack {
   branches: StackBranch[];
 }
 
+/** What restacking does to one branch (see `preview_restack`). */
+export interface RestackStep {
+  branch: string;
+  /** The parent it is replayed onto (after skipping merged branches). */
+  onto: string;
+  status: 'upToDate' | 'restacked' | 'merged' | 'conflict' | 'blocked';
+  commits: number;
+  conflictFiles: string[];
+  conflictCommit: string | null;
+}
+
+/** A predicted or applied restack of one stack. */
+export interface RestackPlan {
+  base: string;
+  steps: RestackStep[];
+  /** Nothing conflicts, so a restack would apply. */
+  canApply: boolean;
+  /** A restack would change at least one branch. */
+  hasChanges: boolean;
+}
+
 /**
  * A workspace grouping related repositories
  */

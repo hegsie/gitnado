@@ -16,6 +16,7 @@ import type {
   UndoHistory,
   CleanupCandidate,
   Stack,
+  RestackPlan,
 } from "../../types/git.types.ts";
 import type {
   CreateBranchCommand,
@@ -176,6 +177,29 @@ export async function getStacks(
   path: string,
 ): Promise<CommandResult<Stack[]>> {
   return invokeCommand<Stack[]>("get_stacks", { path });
+}
+
+/**
+ * Predict restacking the stack based on `base` (a ghost run that changes
+ * nothing): per branch, whether it is up to date, replays cleanly, conflicts
+ * or is already merged.
+ */
+export async function previewRestack(
+  path: string,
+  base: string,
+): Promise<CommandResult<RestackPlan>> {
+  return invokeCommand<RestackPlan>("preview_restack", { path, base });
+}
+
+/**
+ * Replay every branch of the stack based on `base` onto its parent's tip.
+ * All-or-nothing: a conflict anywhere changes nothing.
+ */
+export async function restackStack(
+  path: string,
+  base: string,
+): Promise<CommandResult<RestackPlan>> {
+  return invokeCommand<RestackPlan>("restack", { path, base });
 }
 
 /**

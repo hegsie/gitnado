@@ -23,7 +23,7 @@ import { uiStore } from '../../../stores/ui.store.ts';
 import type { GnBranchList } from '../gn-branch-list.ts';
 import '../gn-branch-list.ts';
 import { resetRefOpLocks } from '../../../utils/ref-lock.ts';
-import type { Branch, Stack } from '../../../types/git.types.ts';
+import type { Branch, RestackPlan, Stack } from '../../../types/git.types.ts';
 
 const REPO_PATH = '/test/repo';
 
@@ -54,6 +54,7 @@ function mocks(overrides: Record<string, unknown> = {}): void {
       case 'get_remotes':
       case 'get_hidden_branches': return [];
       case 'get_branch_sort_mode': return 'name';
+      case 'plugin:dialog|message': return 'Ok';
       default: return null;
     }
   };
@@ -232,5 +233,124 @@ describe('gn-branch-list stacks', () => {
     openMenuFor(el, 'feat-b');
     await (el as unknown as Internals).handleRemoveFromStack();
     expect(toastMessages().some((m) => m.startsWith('error:') && m.includes('config locked'))).to.be.true;
+  });
+
+  describe('restack', () => {
+    const PLAN: RestackPlan = {
+      base: 'main',
+      canApply: true,
+      hasChanges: true,
+      steps: [
+        { branch: 'feat-a', onto: 'main', status: 'upToDate', commits: 2, conflictFiles: [], conflictCommit: null },
+        { branch: 'feat-b', onto: 'feat-a', status: 'restacked', commits: 1, conflictFiles: [], conflictCommit: null },
+      ],
+    };
+    const restackBtn = (el: GnBranchList) =>
+      el.shadowRoot!.querySelector('.restack-btn[data-base="main"]') as HTMLButtonElement | null;
+    const settle = async (el: GnBranchList, done: () => boolean) => {
+      for (let i = 0; i < 100 && !done(); i++) await new Promise((r) => setTimeout(r, 10));
+      await el.updateComplete;
+    };
+
+    it('offers Restack only when a branch is behind its parent', async () => {
+      const el = await createList();
+      expect(restackBtn(el)).to.not.be.null;
+      mocks({ get_stacks: [{ base: 'main', branches: [{ ...STACKS[0].branches[0] }] }] });
+      const el2 = await createList();
+      expect(restackBtn(el2)).to.be.null;
+    });
+
+    it('previews, confirms with the plan, restacks, reloads and dispatches branches-changed', async () => {
+      let confirmText = '';
+      mocks({
+        preview_restack: PLAN,
+        restack: PLAN,
+        'plugin:dialog|message': () => 'Ok',
+      });
+      const inner = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'plugin:dialog|message') confirmText = JSON.stringify(args);
+        return inner(command, args);
+      };
+      const el = await createList();
+      let changed = false;
+      el.addEventListener('branches-changed', () => { changed = true; });
+      invokeCalls.length = 0;
+      restackBtn(el)!.click();
+      await settle(el, () => toastMessages().length > 0);
+
+      expect(invokeCalls.find((c) => c.command === 'preview_restack')!.args).to.deep.equal({ path: REPO_PATH, base: 'main' });
+      expect(confirmText).to.contain('feat-b → onto feat-a (1 commit)');
+      expect(confirmText).to.not.contain('feat-a → onto');
+      expect(invokeCalls.find((c) => c.command === 'restack')!.args).to.deep.equal({ path: REPO_PATH, base: 'main' });
+      expect(toastMessages()).to.include('success:Restacked 1 branch on main');
+      expect(changed).to.be.true;
+      expect(invokeCalls.filter((c) => c.command === 'get_stacks').length).to.be.greaterThan(0);
+    });
+
+    it('explains a predicted conflict and never restacks', async () => {
+      mocks({
+        preview_restack: {
+          ...PLAN,
+          canApply: false,
+          steps: [
+            { ...PLAN.steps[0], status: 'conflict', conflictFiles: ['a.ts'], conflictCommit: 'edit a' },
+            { ...PLAN.steps[1], status: 'blocked' },
+          ],
+        },
+      });
+      const el = await createList();
+      invokeCalls.length = 0;
+      restackBtn(el)!.click();
+      await settle(el, () => toastMessages().length > 0);
+      expect(toastMessages()[0]).to.match(/^error:Restacking would conflict: feat-a at "edit a" in a\.ts/);
+      expect(invokeCalls.some((c) => c.command === 'restack')).to.be.false;
+      expect(invokeCalls.some((c) => c.command === 'plugin:dialog|message')).to.be.false;
+    });
+
+    it('does nothing when the confirm is declined', async () => {
+      mocks({ preview_restack: PLAN, 'plugin:dialog|message': 'Cancel' });
+      const el = await createList();
+      invokeCalls.length = 0;
+      restackBtn(el)!.click();
+      await settle(el, () => invokeCalls.some((c) => c.command === 'plugin:dialog|message'));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(invokeCalls.some((c) => c.command === 'restack')).to.be.false;
+      expect(uiStore.getState().toasts).to.have.length(0);
+    });
+
+    it('reports an up-to-date stack without confirming', async () => {
+      mocks({ preview_restack: { ...PLAN, hasChanges: false } });
+      const el = await createList();
+      restackBtn(el)!.click();
+      await settle(el, () => toastMessages().length > 0);
+      expect(toastMessages()).to.include('info:The stack on main is already up to date');
+    });
+
+    it('reports preview and restack failures', async () => {
+      mocks({ preview_restack: new Error('scratch worktree failed') });
+      const el = await createList();
+      restackBtn(el)!.click();
+      await settle(el, () => toastMessages().length > 0);
+      expect(toastMessages()[0]).to.equal('error:Could not check the stack: scratch worktree failed');
+
+      uiStore.setState({ toasts: [] });
+      mocks({ preview_restack: PLAN, restack: new Error('b is checked out in another worktree') });
+      const el2 = await createList();
+      restackBtn(el2)!.click();
+      await settle(el2, () => toastMessages().length > 0);
+      expect(toastMessages()[0]).to.equal('error:Restack failed: b is checked out in another worktree');
+    });
+
+    it('releases the ref lock so a second restack can run', async () => {
+      mocks({ preview_restack: { ...PLAN, hasChanges: false } });
+      const el = await createList();
+      restackBtn(el)!.click();
+      await settle(el, () => toastMessages().length > 0);
+      uiStore.setState({ toasts: [] });
+      restackBtn(el)!.click();
+      await settle(el, () => toastMessages().length > 0);
+      expect(toastMessages()).to.include('info:The stack on main is already up to date');
+    });
   });
 });

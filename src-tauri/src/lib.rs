@@ -837,6 +837,8 @@ pub fn run() {
             commands::stack::set_branch_parent,
             commands::stack::clear_branch_parent,
             commands::stack::get_stacks,
+            commands::restack::preview_restack,
+            commands::restack::restack,
             commands::terminal::open_file_manager,
             commands::terminal::open_in_editor,
             // Repository statistics

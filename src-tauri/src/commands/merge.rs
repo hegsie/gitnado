@@ -692,7 +692,7 @@ async fn commit_merge_signed(path: &str, message: &str, is_squash: bool) -> Resu
 /// of stderr whenever stdout does not end in a newline — and git does not always
 /// end it with one. The line that gets mangled is exactly the kind being matched
 /// here (`error: could not apply ...`), so the separator is not cosmetic.
-fn join_output(stdout: &str, stderr: &str) -> String {
+pub(crate) fn join_output(stdout: &str, stderr: &str) -> String {
     if stdout.is_empty() {
         return stderr.to_string();
     }
@@ -712,8 +712,10 @@ fn join_output(stdout: &str, stderr: &str) -> String {
 /// Best-effort and cosmetic: git translates this line, so a localized git
 /// yields None and the conflict is reported without a commit summary — which is
 /// what the field held for every conflict before.
-fn stopped_commit_summary(output: &str) -> Option<String> {
-    output.lines().find_map(|line| {
+pub(crate) fn stopped_commit_summary(output: &str) -> Option<String> {
+    // git redraws its "Rebasing (n/m)" progress with a bare carriage return,
+    // so the error lands on the same \n-terminated line as the progress text.
+    output.split(['\n', '\r']).find_map(|line| {
         let rest = line.trim().strip_prefix("error: could not apply ")?;
         let (_sha, summary) = rest.split_once(' ')?;
         let summary = summary.trim();

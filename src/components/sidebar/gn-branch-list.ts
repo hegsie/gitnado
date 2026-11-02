@@ -20,6 +20,7 @@ import '../dialogs/gn-branch-cleanup-dialog.ts';
 import type { GnBranchCleanupDialog } from '../dialogs/gn-branch-cleanup-dialog.ts';
 import type { Branch, Stack } from '../../types/git.types.ts';
 import { findStackBranch } from '../../utils/stack-navigation.ts';
+import { restackConflictMessage, restackSummaryLines, restackedCount } from '../../utils/restack-plan.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
 import { rebasedOntoMessage } from '../../utils/rebase-messages.ts';
 import {
@@ -313,6 +314,27 @@ export class GnBranchList extends LitElement {
         padding: 2px 12px;
         font-size: var(--font-size-xs, 11px);
         color: var(--color-text-secondary);
+      }
+      .stack-base {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .restack-btn {
+        font-size: var(--font-size-xs, 11px);
+        padding: 0 6px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm, 3px);
+        background: transparent;
+        color: var(--color-text-primary);
+        cursor: pointer;
+      }
+      .restack-btn:hover:not([disabled]) {
+        background: var(--color-bg-hover);
+      }
+      .restack-btn[disabled] {
+        opacity: 0.5;
+        cursor: default;
       }
       .stack-ahead {
         margin-left: auto;
@@ -1863,6 +1885,52 @@ export class GnBranchList extends LitElement {
     }
   }
 
+  /**
+   * "Restack": predict the whole restack in a scratch worktree first, explain
+   * a conflict without touching anything, otherwise confirm what will move and
+   * apply it all at once.
+   */
+  private async handleRestack(base: string): Promise<void> {
+    const repoPath = this.repositoryPath;
+    if (!this.claimOperation(repoPath)) return;
+    try {
+      const preview = await gitService.previewRestack(repoPath, base);
+      if (!preview.success || !preview.data) {
+        showToast(`Could not check the stack: ${preview.error?.message ?? 'Unknown error'}`, 'error');
+        return;
+      }
+      const plan = preview.data;
+      const conflict = restackConflictMessage(plan);
+      if (conflict) {
+        showToast(conflict, 'error');
+        return;
+      }
+      if (!plan.hasChanges) {
+        showToast(`The stack on ${base} is already up to date`, 'info');
+        await this.loadBranches();
+        return;
+      }
+      const confirmed = await showConfirm(
+        'Restack',
+        `Restack the branches on ${base}?\n\n${restackSummaryLines(plan).join('\n')}\n\nThis rewrites their commits.`,
+        'warning',
+      );
+      if (!confirmed) return;
+
+      const result = await gitService.restackStack(repoPath, base);
+      if (result.success && result.data) {
+        const n = restackedCount(result.data);
+        showToast(n > 0 ? `Restacked ${n} branch${n === 1 ? '' : 'es'} on ${base}` : `Stack on ${base} updated`, 'success');
+        await this.loadBranches();
+        this.dispatchBranchesChanged(repoPath);
+      } else {
+        showToast(`Restack failed: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      }
+    } finally {
+      this.releaseOperation(repoPath);
+    }
+  }
+
   /** Context menu "Remove from stack": forget the branch's declared parent. */
   private async handleRemoveFromStack(): Promise<void> {
     const branch = this.contextMenu.branch;
@@ -2778,7 +2846,18 @@ export class GnBranchList extends LitElement {
         </div>
         ${expanded ? this.stacks.map((stack) => html`
           <ul class="stack" role="list" aria-label="Stack on ${stack.base}">
-            <li class="stack-base" role="listitem">on ${stack.base}</li>
+            <li class="stack-base" role="listitem">
+              <span>on ${stack.base}</span>
+              ${stack.branches.some((b) => b.behind > 0 && !b.parentMissing) ? html`
+                <button
+                  class="restack-btn"
+                  data-base=${stack.base}
+                  ?disabled=${this.operationInProgress}
+                  title="Replay every branch of this stack onto its parent's latest commit"
+                  @click=${() => this.handleRestack(stack.base)}
+                >Restack</button>
+              ` : nothing}
+            </li>
             ${stack.branches.map((entry) => {
               const branch = this.localBranchesByName.get(entry.name);
               return html`
