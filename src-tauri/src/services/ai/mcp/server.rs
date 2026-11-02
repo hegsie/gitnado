@@ -16,6 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
+use super::clients::ClientRegistry;
 use super::insight::{self, McpContext};
 use super::tools;
 use super::write::{self, Decision, WriteGate};
@@ -210,6 +211,16 @@ fn header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// The token of an `Authorization: Bearer <token>` header, if present.
+fn bearer_token(request: &str) -> Option<&str> {
+    let header = header_value(request, "authorization")?;
+    let (scheme, token) = header.split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|t| !t.is_empty())
+}
+
 /// Compare a presented secret against the expected one without leaking its
 /// contents through timing.
 ///
@@ -313,6 +324,9 @@ pub fn redact_authorization(request: &str) -> String {
         .join("\n")
 }
 
+/// MCP protocol revisions this server speaks, newest first.
+pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
 /// MCP server status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -329,6 +343,8 @@ pub struct McpStatus {
 struct JsonRpcRequest {
     #[allow(dead_code)]
     jsonrpc: String,
+    /// Absent on notifications.
+    #[serde(default)]
     id: Value,
     method: String,
     params: Option<Value>,
@@ -389,6 +405,8 @@ pub struct McpServer {
     write_gate: Arc<WriteGate>,
     /// App services (AI, semantic index) the insight tools call into
     context: Arc<McpContext>,
+    /// Named per-client tokens accepted alongside the master token
+    clients: Arc<ClientRegistry>,
 }
 
 /// Shared MCP server state
@@ -399,6 +417,7 @@ pub type McpState = Arc<RwLock<McpServer>>;
 struct RequestServices {
     gate: Arc<WriteGate>,
     context: Arc<McpContext>,
+    clients: Arc<ClientRegistry>,
 }
 
 /// Create a new MCP server state instance backed by the saved configuration
@@ -423,6 +442,7 @@ impl McpServer {
             auth: Arc::new(StdRwLock::new(AuthSettings::from_config(&config))),
             write_gate: Arc::new(WriteGate::load(&config_dir)),
             context: Arc::new(McpContext::default()),
+            clients: Arc::new(ClientRegistry::load(&config_dir)),
             config,
             config_dir,
             running: Arc::new(AtomicBool::new(false)),
@@ -497,6 +517,7 @@ impl McpServer {
         let services = RequestServices {
             gate: self.write_gate.clone(),
             context: self.context.clone(),
+            clients: self.clients.clone(),
         };
 
         tokio::spawn(async move {
@@ -565,6 +586,11 @@ impl McpServer {
     /// App services available to the insight tools
     pub fn context(&self) -> Arc<McpContext> {
         self.context.clone()
+    }
+
+    /// Named per-client tokens
+    pub fn clients(&self) -> Arc<ClientRegistry> {
+        self.clients.clone()
     }
 
     /// Get the current configuration
@@ -772,7 +798,20 @@ impl McpServer {
 
         // Every other request must authenticate before it can reach the tools,
         // which expose the contents and history of every open repository
-        if let Err(rejection) = authorize_request(&request_str, &settings) {
+        // The master token, or a named client token. A client token never
+        // bypasses the origin check: only a 401 is retried against clients.
+        let auth = authorize_request(&request_str, &settings).or_else(|rejection| {
+            if rejection.status == 401 {
+                if let Some(id) =
+                    bearer_token(&request_str).and_then(|t| services.clients.verify(t))
+                {
+                    services.clients.touch(&id);
+                    return Ok(());
+                }
+            }
+            Err(rejection)
+        });
+        if let Err(rejection) = auth {
             // The head is logged with the Authorization value stripped: the
             // token must never reach the log
             tracing::warn!(
@@ -821,6 +860,12 @@ impl McpServer {
             }
         };
 
+        // Notifications (no id) get no JSON-RPC response; Streamable HTTP
+        // answers them with 202 Accepted and an empty body.
+        if rpc_request.id.is_null() && rpc_request.method.starts_with("notifications/") {
+            return Self::send_http_response(&mut stream, 202, "", &allow_origin).await;
+        }
+
         // Route to handler
         // Snapshot the list: a write tool may wait minutes for the user, and
         // must not hold the lock that opening a repository needs meanwhile.
@@ -853,8 +898,18 @@ impl McpServer {
 
     /// Handle the `initialize` method
     fn handle_initialize(request: &JsonRpcRequest) -> JsonRpcResponse {
+        // Answer with the client's protocol version when we speak it, else
+        // our newest; the client decides whether it can continue.
+        let requested = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("protocolVersion"))
+            .and_then(Value::as_str);
+        let version = requested
+            .filter(|v| SUPPORTED_PROTOCOL_VERSIONS.contains(v))
+            .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0]);
         let result = serde_json::json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": version,
             "capabilities": {
                 "tools": {}
             },
@@ -1028,6 +1083,7 @@ impl McpServer {
         let status_text = match status {
             200 => "OK",
             400 => "Bad Request",
+            202 => "Accepted",
             401 => "Unauthorized",
             403 => "Forbidden",
             405 => "Method Not Allowed",
@@ -1266,7 +1322,8 @@ mod tests {
         let response = McpServer::handle_initialize(&request);
         assert!(response.result.is_some());
         let result = response.result.unwrap();
-        assert_eq!(result["protocolVersion"], "2024-11-05");
+        // No version requested: answer with the newest one supported.
+        assert_eq!(result["protocolVersion"], SUPPORTED_PROTOCOL_VERSIONS[0]);
         assert_eq!(result["serverInfo"]["name"], "gitnado");
         assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     }
@@ -2245,6 +2302,153 @@ mod tests {
             Ok(Err(e)) => panic!("Failed to read response: {}", e),
             Err(_) => None,
         }
+    }
+
+    fn rpc_post(body: &str, headers: &[String]) -> String {
+        let mut request = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for h in headers {
+            request.push_str(h);
+            request.push_str("\r\n");
+        }
+        request.push_str("\r\n");
+        request.push_str(body);
+        request
+    }
+
+    #[tokio::test]
+    async fn client_tokens_authenticate_until_revoked() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _master) = started_server(&dir, Vec::new()).await;
+        let created = server.clients().create("Cursor").unwrap();
+        let auth = format!("Authorization: Bearer {}", created.token);
+
+        let response = send_raw(port, &tools_list_request(&[auth.clone()])).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "got: {response}");
+        assert!(server.clients().list()[0].last_used_at.is_some());
+
+        server.clients().revoke(&created.client.id).unwrap();
+        let response = send_raw(port, &tools_list_request(&[auth])).await;
+        assert!(
+            response.starts_with("HTTP/1.1 401"),
+            "revoked token must stop working at once: {response}"
+        );
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_tokens_do_not_bypass_the_origin_check() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _) =
+            started_server(&dir, vec!["https://allowed.example".to_string()]).await;
+        let created = server.clients().create("Browser tool").unwrap();
+        let response = send_raw(
+            port,
+            &tools_list_request(&[
+                format!("Authorization: Bearer {}", created.token),
+                "Origin: https://evil.example".to_string(),
+            ]),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 403"), "got: {response}");
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn notifications_get_202_and_initialize_negotiates_the_version() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, token) = started_server(&dir, Vec::new()).await;
+        let auth = format!("Authorization: Bearer {token}");
+
+        let response = send_raw(
+            port,
+            &rpc_post(
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                &[auth.clone()],
+            ),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 202"), "got: {response}");
+        assert!(
+            response.ends_with("\r\n\r\n"),
+            "202 has no body: {response:?}"
+        );
+
+        for (asked, expected) in [
+            ("2025-06-18", "2025-06-18"),
+            ("2025-03-26", "2025-03-26"),
+            ("2024-11-05", "2024-11-05"),
+            ("1999-01-01", "2025-06-18"),
+        ] {
+            let body = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"{asked}","capabilities":{{}},"clientInfo":{{"name":"t","version":"1"}}}}}}"#
+            );
+            let response = send_raw(port, &rpc_post(&body, &[auth.clone()])).await;
+            assert!(
+                response.contains(&format!("\"protocolVersion\":\"{expected}\"")),
+                "asked {asked}: {response}"
+            );
+        }
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stdio_bridge_round_trips_through_a_running_server() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _) = started_server(&dir, Vec::new()).await;
+        let created = server.clients().create("stdio client").unwrap();
+        let input = concat!(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            "\n"
+        );
+        let mut out = Vec::new();
+        super::super::stdio::bridge(
+            input.as_bytes(),
+            &mut out,
+            &format!("http://127.0.0.1:{port}/mcp"),
+            &created.token,
+        )
+        .await
+        .unwrap();
+        let lines: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "the notification produces no output: {lines:?}"
+        );
+        assert_eq!(lines[0]["id"], 1);
+        assert_eq!(lines[0]["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(lines[1]["id"], 2);
+        assert!(lines[1]["result"]["tools"].as_array().unwrap().len() > 5);
+
+        // A wrong token comes back as a JSON-RPC error carrying the id.
+        let mut out = Vec::new();
+        super::super::stdio::bridge(
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/list"}"#.as_bytes(),
+            &mut out,
+            &format!("http://127.0.0.1:{port}/mcp"),
+            "gnc_wrong",
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(String::from_utf8(out).unwrap().trim()).unwrap();
+        assert_eq!(v["id"], 9);
+        assert!(v["error"].is_object(), "{v}");
+        server.stop().await.unwrap();
     }
 
     #[tokio::test]

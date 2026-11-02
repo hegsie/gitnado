@@ -30,6 +30,11 @@ use services::{
 
 /// Initialize the application
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// `gitnado --mcp-stdio`: bridge stdio JSON-RPC to the running MCP server.
+pub fn run_mcp_stdio_bridge() -> i32 {
+    services::ai::mcp::stdio::run_from_env()
+}
+
 pub fn run() {
     // Set up panic hook FIRST to capture crash information before abort
     // This runs even with panic="abort" in release builds
@@ -802,6 +807,10 @@ pub fn run() {
             commands::mcp::set_mcp_write_settings,
             commands::mcp::get_pending_mcp_consents,
             commands::mcp::respond_mcp_consent,
+            commands::mcp::list_mcp_clients,
+            commands::mcp::create_mcp_client,
+            commands::mcp::revoke_mcp_client,
+            commands::mcp::get_mcp_stdio_command,
             // OAuth authentication
             commands::oauth::oauth_get_authorize_url,
             commands::oauth::oauth_start_github_flow,

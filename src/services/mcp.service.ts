@@ -142,3 +142,39 @@ export async function respondMcpConsent(
 ): Promise<CommandResult<void>> {
   return invokeCommand<void>('respond_mcp_consent', { id, approve, alwaysAllowPattern });
 }
+
+/** A named MCP client token (the token itself is only ever shown once). */
+export interface McpClientInfo {
+  id: string;
+  name: string;
+  /** Unix seconds. */
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+export interface CreatedMcpClient {
+  client: McpClientInfo;
+  token: string;
+}
+
+/** `gitnado --mcp-stdio`: how to launch the stdio bridge. */
+export interface McpStdioCommand {
+  program: string;
+  args: string[];
+}
+
+export async function listMcpClients(): Promise<CommandResult<McpClientInfo[]>> {
+  return invokeCommand<McpClientInfo[]>('list_mcp_clients');
+}
+
+export async function createMcpClient(name: string): Promise<CommandResult<CreatedMcpClient>> {
+  return invokeCommand<CreatedMcpClient>('create_mcp_client', { name });
+}
+
+export async function revokeMcpClient(id: string): Promise<CommandResult<void>> {
+  return invokeCommand<void>('revoke_mcp_client', { id });
+}
+
+export async function getMcpStdioCommand(): Promise<CommandResult<McpStdioCommand>> {
+  return invokeCommand<McpStdioCommand>('get_mcp_stdio_command');
+}
