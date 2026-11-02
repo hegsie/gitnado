@@ -92,6 +92,7 @@ import './components/dialogs/gn-conflict-resolution-dialog.ts';
 import type { GitflowFinishContext } from './components/dialogs/gn-conflict-resolution-dialog.ts';
 import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
+import './components/dialogs/gn-start-agent-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -1782,6 +1783,11 @@ export class AppShell extends LitElement {
           'gn-export-import-dialog': {
             dismissed: 'export/import cancelled',
             running: 'patch/bundle operation',
+          },
+          'gn-start-agent-dialog': {
+            dismissed: 'agent task cancelled',
+            running: 'agent worktree setup',
+            clearFlag: () => { dialogs.close('startAgent'); },
           },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
@@ -6650,6 +6656,16 @@ export class AppShell extends LitElement {
       ></gn-command-palette>
 
       ${this.activeRepository ? html`
+        <gn-start-agent-dialog
+          ?open=${dialogs.isOpen('startAgent')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          .defaultBaseRef=${this.activeRepository.currentBranch?.shorthand ?? 'HEAD'}
+          @close=${() => { dialogs.close('startAgent'); }}
+          @worktrees-changed=${(e: CustomEvent<{ repositoryPath?: string }>) => {
+            this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
+          }}
+        ></gn-start-agent-dialog>
+
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}

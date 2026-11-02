@@ -204,8 +204,15 @@ export class GnTerminalPanel extends LitElement {
   }
 
   private syncSessions(): void {
+    const previous = new Set(this.sessions.map((s) => s.key));
+    const repoChanged = this.sessions.some((s) => s.repoPath !== this.repositoryPath);
     this.sessions = getTerminalSessions(this.repositoryPath);
-    if (!this.sessions.some((s) => s.key === this.activeKey)) {
+    // A session that just appeared — from the + button, the palette, or an
+    // agent started on a task — is the one the user wants to see.
+    const added = repoChanged ? undefined : this.sessions.filter((s) => !previous.has(s.key)).at(-1);
+    if (added) {
+      this.activeKey = added.key;
+    } else if (!this.sessions.some((s) => s.key === this.activeKey)) {
       this.activeKey = this.sessions.at(-1)?.key ?? null;
     }
     this.requestUpdate();

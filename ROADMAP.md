@@ -207,7 +207,7 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 #### 4.1 Agent Supervision ("Mission Control")
 
 - **Agent Sessions panel:** detect Claude Code, Codex CLI, Copilot CLI, Gemini CLI, Aider and other terminal agents running against an open repo or any of its worktrees. Show each session's state (working / waiting for input / done / errored), branch, changed files and elapsed time.
-- **One-click "Start agent on a task":** create a worktree and branch (optionally from a Jira, GitHub, GitLab or Azure DevOps issue), then launch the chosen agent CLI in the embedded terminal (see 4.6) with the issue as context.
+- ✅ **One-click "Start agent on a task":** create a worktree and branch (optionally from a Jira, GitHub, GitLab or Azure DevOps issue), then launch the chosen agent CLI in the embedded terminal (see 4.6) with the issue as context.
 - **Live change feed:** a per-session diff stream with "accept hunk", "revert hunk" and "send feedback to agent" actions, so reviewing agent output is as easy as reviewing a staged diff.
 - **Agent checkpoints:** automatically snapshot the working tree (hidden refs under `refs/gitnado/checkpoints/*`) before and after each agent turn. Any turn can be rolled back from the timeline without touching the reflog by hand.
 - **Agent hooks bridge:** an optional hook installer (e.g. Claude Code `PreToolUse` / `Stop` hooks) that tags commits and checkpoints with the session ID so you can see which agent wrote which code.

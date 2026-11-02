@@ -67,6 +67,8 @@ export interface CreateTerminalOptions {
   label?: string;
   /** Program and arguments to run instead of the user's shell. */
   command?: string[];
+  /** Extra environment variables for the session. */
+  env?: Record<string, string>;
 }
 
 type Listener = () => void;
@@ -237,6 +239,7 @@ export async function createTerminalSession(
       cols: term.cols,
       rows: term.rows,
       command: options.command,
+      env: options.env,
     },
   });
 
@@ -311,6 +314,16 @@ function syncSize(session: TerminalSession): void {
     cols: session.term.cols,
     rows: session.term.rows,
   });
+}
+
+/**
+ * Send text to a running session as if typed. Returns false when the session
+ * is not running (still starting, exited or failed).
+ */
+export async function writeToTerminal(session: TerminalSession, data: string): Promise<boolean> {
+  if (session.status !== 'running' || session.ptyId === null) return false;
+  const result = await invokeCommand<void>('pty_write', { id: session.ptyId, data });
+  return result.success;
 }
 
 /** Terminate (if running) and discard a session. */

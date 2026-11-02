@@ -92,6 +92,7 @@ export const DIALOG_REGISTRY = {
   terminalPanel: { repoScoped: true },
   conflict: { repoScoped: true },
   reflog: { repoScoped: true },
+  startAgent: { repoScoped: true },
   search: { repoScoped: true },
   remotes: { repoScoped: true },
   clean: { repoScoped: true },

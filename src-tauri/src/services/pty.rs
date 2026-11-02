@@ -67,6 +67,11 @@ pub struct PtySpawnOptions {
     /// Program and arguments to run instead of the user's login shell.
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    /// Extra environment variables for the session. Used to hand text (an
+    /// agent's task prompt) to the shell without quoting it into a command
+    /// line. Names must be plain identifiers.
+    #[serde(default)]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Public description of a running session.
@@ -195,6 +200,19 @@ impl PtyRegistry {
             None => CommandBuilder::new_default_prog(),
         };
         cmd.cwd(cwd);
+        if let Some(env) = &opts.env {
+            for (key, value) in env {
+                let valid = !key.is_empty()
+                    && !key.starts_with(|c: char| c.is_ascii_digit())
+                    && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if !valid {
+                    return Err(GitnadoError::OperationFailed(format!(
+                        "Invalid environment variable name: {key}"
+                    )));
+                }
+                cmd.env(key, value);
+            }
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "gitnado");
@@ -402,6 +420,7 @@ mod tests {
             cols: 80,
             rows: 24,
             command: Some(command.iter().map(|s| s.to_string()).collect()),
+            env: None,
         }
     }
 
@@ -499,6 +518,7 @@ mod tests {
             cols: 80,
             rows: 24,
             command: None,
+            env: None,
         };
         assert!(matches!(
             registry.spawn(missing, s.clone()),
@@ -523,6 +543,34 @@ mod tests {
                 let (_, code) = drain(&rx, info.id);
                 assert_ne!(code, Some(0));
             }
+        }
+    }
+
+    #[test]
+    fn env_reaches_the_process_without_shell_quoting() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = PtyRegistry::default();
+        let (sink, rx) = sink();
+        let mut o = opts(
+            dir.path(),
+            &["/bin/sh", "-c", "printf '[%s]' \"$GITNADO_TASK_PROMPT\""],
+        );
+        let tricky = "fix it; rm -rf / $(whoami) \"quoted\" 'single'";
+        o.env = Some([("GITNADO_TASK_PROMPT".to_string(), tricky.to_string())].into());
+        let info = registry.spawn(o, sink).unwrap();
+        let (out, _) = drain(&rx, info.id);
+        assert!(out.contains(&format!("[{tricky}]")), "output: {out:?}");
+    }
+
+    #[test]
+    fn rejects_invalid_env_names() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = PtyRegistry::default();
+        let (s, _rx) = sink();
+        for bad in ["", "A=B", "1X", "X Y"] {
+            let mut o = opts(dir.path(), &["/bin/true"]);
+            o.env = Some([(bad.to_string(), "v".to_string())].into());
+            assert!(registry.spawn(o, s.clone()).is_err(), "{bad:?}");
         }
     }
 
@@ -570,5 +618,6 @@ mod tests {
         let opts: PtySpawnOptions =
             serde_json::from_str(r#"{"cwd":"/x","cols":80,"rows":24}"#).unwrap();
         assert!(opts.command.is_none());
+        assert!(opts.env.is_none());
     }
 }

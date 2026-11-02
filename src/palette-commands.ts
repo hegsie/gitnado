@@ -147,6 +147,13 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => shell.toggleTerminalPanel()),
     },
     {
+      id: 'start-agent-task',
+      label: 'Start agent on a task',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(() => { dialogs.open('startAgent'); }),
+    },
+    {
       id: 'new-terminal',
       label: 'New Terminal',
       category: 'action',
