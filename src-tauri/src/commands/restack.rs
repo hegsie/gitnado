@@ -133,6 +133,10 @@ fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run git: {e}")))
 }
 
+/// A replay's outcome: the new tip, or the conflicting files and the commit
+/// the rebase stopped on.
+type Replay = std::result::Result<Oid, (Vec<String>, Option<String>)>;
+
 /// A detached throwaway worktree, removed on drop.
 struct GhostWorktree {
     repo_path: std::path::PathBuf,
@@ -165,12 +169,7 @@ impl GhostWorktree {
     }
 
     /// Replay `fork..tip` onto `onto`. Ok(new tip) or Err((files, commit)).
-    fn replay(
-        &self,
-        tip: Oid,
-        fork: Oid,
-        onto: Oid,
-    ) -> Result<std::result::Result<Oid, (Vec<String>, Option<String>)>> {
+    fn replay(&self, tip: Oid, fork: Oid, onto: Oid) -> Result<Replay> {
         let out = git(
             &self.path,
             &["checkout", "--detach", "--quiet", &tip.to_string()],
