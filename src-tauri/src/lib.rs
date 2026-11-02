@@ -200,6 +200,11 @@ pub fn run() {
             }
 
             // Initialize MCP server state from the saved configuration
+            // External MCP servers the AI features may call for context.
+            app.manage(std::sync::Arc::new(
+                services::ai::mcp_client::ExternalServers::load(&config_dir),
+            ));
+
             let mcp_state = create_mcp_state(config_dir);
             app.manage(mcp_state.clone());
 
@@ -766,6 +771,11 @@ pub fn run() {
             commands::local_ai::unload_model,
             commands::local_ai::import_custom_model,
             // MCP server
+            commands::mcp_client::list_external_mcp_servers,
+            commands::mcp_client::save_external_mcp_server,
+            commands::mcp_client::remove_external_mcp_server,
+            commands::mcp_client::list_external_mcp_tools,
+            commands::mcp_client::preview_external_mcp_context,
             commands::mcp::start_mcp_server,
             commands::mcp::stop_mcp_server,
             commands::mcp::get_mcp_status,

@@ -40,6 +40,7 @@ pub mod lfs;
 pub mod local_ai;
 pub mod maintenance;
 pub mod mcp;
+pub mod mcp_client;
 pub mod menu;
 pub mod merge;
 pub mod merge_tool;

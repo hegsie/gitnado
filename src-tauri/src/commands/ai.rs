@@ -3,6 +3,7 @@
 //! Provides commands for managing AI providers and generating commit messages.
 
 use crate::error::{GitnadoError, Result};
+use crate::services::ai::mcp_client::{self, SharedExternalServers};
 use crate::services::ai::{
     AiProviderInfo, AiProviderType, AiService, AiState, AiUnavailable, AnalysisFinding,
     CommitSplitSuggestion, ConflictExplanation, ConflictResolutionSuggestion, FindingCategory,
@@ -104,6 +105,7 @@ pub async fn auto_detect_ai_providers(state: State<'_, AiState>) -> Result<Vec<A
 #[command]
 pub async fn generate_commit_message(
     state: State<'_, AiState>,
+    external: State<'_, SharedExternalServers>,
     repo_path: String,
 ) -> Result<GeneratedCommitMessage> {
     // Get staged diff
@@ -114,6 +116,16 @@ pub async fn generate_commit_message(
             "No staged changes to generate commit message for".to_string(),
         ));
     }
+
+    // Context from configured MCP servers (e.g. the linked issue) goes ahead
+    // of the diff so it survives diff truncation.
+    let context =
+        mcp_client::render_context(&mcp_client::gather_context(&external, &repo_path).await);
+    let diff = if context.is_empty() {
+        diff
+    } else {
+        format!("{context}\n\nStaged changes:\n{diff}")
+    };
 
     // Generate message using the active provider
     let service = state.read().await;
@@ -518,6 +530,7 @@ pub async fn analyze_staged_changes(
 #[command]
 pub async fn generate_pr_description(
     state: State<'_, AiState>,
+    external: State<'_, SharedExternalServers>,
     repo_path: String,
     base_ref: String,
     head_ref: String,
@@ -535,7 +548,16 @@ pub async fn generate_pr_description(
     // Get diff stats
     let stats = get_diff_stats(&repo_path, &base_ref, &head_ref)?;
 
-    let user_prompt = format!("{}\n\nDiff statistics:\n{}", commits_text, stats);
+    let context =
+        mcp_client::render_context(&mcp_client::gather_context(&external, &repo_path).await);
+    let user_prompt = if context.is_empty() {
+        format!("{}\n\nDiff statistics:\n{}", commits_text, stats)
+    } else {
+        format!(
+            "{}\n\n{}\n\nDiff statistics:\n{}",
+            context, commits_text, stats
+        )
+    };
     let truncated = truncate_content(&user_prompt, MAX_CHANGELOG_BYTES);
 
     // Replace {title} placeholder in prompt
