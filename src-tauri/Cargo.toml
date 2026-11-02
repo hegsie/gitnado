@@ -101,7 +101,7 @@ candle-transformers = { version = "0.11", features = ["metal", "accelerate"] }
 # struct literal on Linux; rust-ini 0.21.2+ added two public fields to
 # `ParseOption`, breaking Linux compilation unless pinned to 0.21.1.
 [target.'cfg(target_os = "linux")'.dependencies]
-rust-ini = "=0.21.1"
+rust-ini = "=0.21.3"
 
 [dev-dependencies]
 tempfile = "3"
