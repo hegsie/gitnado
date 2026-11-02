@@ -747,6 +747,7 @@ pub fn run() {
             commands::ai::suggest_conflict_resolution,
             commands::ai::generate_changelog,
             commands::ai::analyze_staged_changes,
+            commands::guardrail::scan_outgoing_changes,
             commands::ai::generate_pr_description,
             commands::ai::suggest_commit_splits,
             commands::ai::explain_conflict,

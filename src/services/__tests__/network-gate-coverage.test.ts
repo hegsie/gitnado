@@ -290,7 +290,7 @@ const LOCAL_COMMANDS = new Set([
   'get_assigned_unified_profile', 'get_available_helpers', 'get_available_merge_tools',
   'get_avatar_url', 'get_avatar_urls', 'get_bisect_status', 'get_blob_content',
   'get_bookmarks', 'get_branch_diff_commits', 'get_branch_rules', 'get_branch_tracking_info',
-  'get_branches', 'get_cleanable_files', 'get_cleanup_candidates', 'get_clone_filter_info',
+  'get_branches', 'get_cleanable_files', 'get_cleanup_candidates', 'scan_outgoing_changes', 'get_clone_filter_info',
   'get_commit', 'get_commit_file_diff', 'get_commit_files', 'get_commit_history',
   'get_commit_info_for_copy', 'get_commit_message', 'get_commit_message_rules',
   'get_commit_template', 'get_commit_total', 'get_commits_signature_info',

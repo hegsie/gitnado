@@ -38,6 +38,7 @@
  * called, so every caller gets them whether or not it remembers to.
  */
 
+import { checkPushGuardrail } from './push-guardrail.service.ts';
 import {
   fetch as gitFetch,
   pull as gitPull,
@@ -354,6 +355,18 @@ async function runRemoteOperation(
   // push to an unreachable remote is indistinguishable from a hang. This is
   // the same choice the backend registry documents.
   if (!claim) return;
+
+  // Agent guardrails: scan what the push would publish first. Under the push
+  // claim, so a double-click cannot run two scans and two prompts.
+  if (kind === 'push') {
+    let proceed = false;
+    try {
+      proceed = await checkPushGuardrail(repoPath);
+    } finally {
+      if (!proceed) claim.release();
+    }
+    if (!proceed) return;
+  }
 
   // `cancellable: true` is what puts the Cancel button on the row; without it
   // the button is unreachable dead code and the operation cannot be stopped.

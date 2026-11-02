@@ -211,7 +211,7 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 - **Live change feed:** a per-session diff stream with "accept hunk", "revert hunk" and "send feedback to agent" actions, so reviewing agent output is as easy as reviewing a staged diff.
 - **Agent checkpoints:** automatically snapshot the working tree (hidden refs under `refs/gitnado/checkpoints/*`) before and after each agent turn. Any turn can be rolled back from the timeline without touching the reflog by hand.
 - **Agent hooks bridge:** an optional hook installer (e.g. Claude Code `PreToolUse` / `Stop` hooks) that tags commits and checkpoints with the session ID so you can see which agent wrote which code.
-- **Guardrails:** run the existing "Vibe Check" secret and risk scan automatically when an agent finishes. Block or warn before agent output is pushed. Paranoid mode applies to agents too.
+- **Guardrails:** run the existing "Vibe Check" secret and risk scan automatically when an agent finishes. Block or warn before agent output is pushed. Paranoid mode applies to agents too. _(Block-or-warn before push is shipped: a local secret scan of the outgoing commits on agent branches, set in Settings → Agent Guardrails. Scanning automatically when an agent finishes follows once agent sessions land.)_
 
 #### 4.2 MCP 2.0: Gitnado as the Agent's Git Brain
 

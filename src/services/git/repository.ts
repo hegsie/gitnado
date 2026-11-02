@@ -1138,3 +1138,24 @@ export async function setCommitMessageRules(
     rules,
   });
 }
+
+/** A scan of the commits a push of `branch` would publish. */
+export interface OutgoingScan {
+  branch: string;
+  commits: number;
+  findings: Array<{ category: string; severity: 'info' | 'warning' | 'error'; message: string; filePath: string | null }>;
+  riskLevel: 'low' | 'medium' | 'high';
+  /** The outgoing diff exceeded the scan limit; its tail was not scanned. */
+  truncated: boolean;
+}
+
+/**
+ * Scan the commits a push of `branch` would publish (those no remote has yet)
+ * for secrets. Local only: the Vibe Check's regex scan, no model.
+ */
+export async function scanOutgoingChanges(
+  path: string,
+  branch: string,
+): Promise<CommandResult<OutgoingScan>> {
+  return invokeCommand<OutgoingScan>("scan_outgoing_changes", { path, branch });
+}

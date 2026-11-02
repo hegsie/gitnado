@@ -61,6 +61,11 @@ export function getDiffWhitespaceModes(): { value: DiffWhitespaceMode; label: st
   ];
 }
 
+/** What happens when a push would publish possible secrets. */
+export type PushGuardrailMode = 'off' | 'warn' | 'block';
+/** Which pushes the guardrail scans. */
+export type PushGuardrailScope = 'agent' | 'all';
+
 export interface SettingsState {
   // Appearance
   language: Locale;
@@ -104,6 +109,13 @@ export interface SettingsState {
   // Branch settings
   staleBranchDays: number; // Days without commits before a branch is considered stale (0 = disabled)
 
+  // Agent guardrails: scan what a push publishes for secrets first.
+  pushGuardrail: PushGuardrailMode;
+  /** Which pushes are scanned: branches matching agentBranchPattern, or all. */
+  pushGuardrailScope: PushGuardrailScope;
+  /** Comma-separated globs naming agent branches, e.g. "agent/*". */
+  agentBranchPattern: string;
+
   // Network settings
   networkOperationTimeout: number; // Seconds before network operations time out (0 = disabled)
 
@@ -144,6 +156,9 @@ export interface SettingsState {
   setAutoStashOnCheckout: (enabled: boolean) => void;
   setAlwaysSignOff: (enabled: boolean) => void;
   setStaleBranchDays: (days: number) => void;
+  setPushGuardrail: (mode: PushGuardrailMode) => void;
+  setPushGuardrailScope: (scope: PushGuardrailScope) => void;
+  setAgentBranchPattern: (pattern: string) => void;
   setNetworkOperationTimeout: (timeout: number) => void;
   setOfflineMode: (enabled: boolean) => void;
   setConfirmNetworkOps: (enabled: boolean) => void;
@@ -189,6 +204,11 @@ const defaultSettings = {
   // adding a trailer nobody asked for would rewrite every commit message.
   alwaysSignOff: false,
   staleBranchDays: 90,
+  // Warn, not block, by default and only on agent branches: a guardrail that
+  // interrupts every push of a person's own work gets switched off.
+  pushGuardrail: 'warn' as PushGuardrailMode,
+  pushGuardrailScope: 'agent' as PushGuardrailScope,
+  agentBranchPattern: 'agent/*',
   networkOperationTimeout: 300,
   offlineMode: false,
   confirmNetworkOps: false,
@@ -370,6 +390,9 @@ export const settingsStore = createStore<SettingsState>()(
       setAlwaysSignOff: (alwaysSignOff) => set({ alwaysSignOff }),
 
       setStaleBranchDays: (staleBranchDays) => set({ staleBranchDays }),
+      setPushGuardrail: (pushGuardrail) => set({ pushGuardrail }),
+      setPushGuardrailScope: (pushGuardrailScope) => set({ pushGuardrailScope }),
+      setAgentBranchPattern: (agentBranchPattern) => set({ agentBranchPattern }),
 
       setNetworkOperationTimeout: (networkOperationTimeout) => set({ networkOperationTimeout }),
 
