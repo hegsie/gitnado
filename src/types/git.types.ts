@@ -630,6 +630,30 @@ export interface CleanupCandidate {
 }
 
 /**
+ * One branch in a stack of dependent branches (see `get_stacks`).
+ */
+export interface StackBranch {
+  name: string;
+  /** The branch this one is stacked on. */
+  parent: string;
+  /** 1 for a branch directly on the stack's base, 2 above that, … */
+  depth: number;
+  /** Commits on this branch its parent does not have. */
+  ahead: number;
+  /** Commits on the parent this branch lacks: > 0 means it needs a restack. */
+  behind: number;
+  isHead: boolean;
+  /** The parent branch no longer exists. */
+  parentMissing: boolean;
+}
+
+/** A base branch and the branches stacked on it, bottom to top. */
+export interface Stack {
+  base: string;
+  branches: StackBranch[];
+}
+
+/**
  * A workspace grouping related repositories
  */
 export interface Workspace {

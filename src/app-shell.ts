@@ -156,6 +156,7 @@ import type { Commit, RefInfo, StatusEntry, Tag, Branch, RepositoryState } from 
 import type { SearchFilter } from './components/toolbar/gn-search-bar.ts';
 import type { PaletteCommand } from './components/dialogs/gn-command-palette.ts';
 import { buildPaletteCommands, type PaletteCommandHost } from './palette-commands.ts';
+import { stackStep } from './utils/stack-navigation.ts';
 import * as gitService from './services/git.service.ts';
 import * as updateService from './services/update.service.ts';
 import * as unifiedProfileService from './services/unified-profile.service.ts';
@@ -1168,6 +1169,30 @@ export class AppShell extends LitElement {
       await panel?.updateComplete;
     }
     window.dispatchEvent(new CustomEvent('open-branch-cleanup'));
+  }
+
+  /**
+   * Palette "Stack: check out the branch above/below". Resolves the neighbour
+   * from the repository's declared stacks and checks it out through the same
+   * locked, auto-stashing path the palette's branch checkout uses.
+   */
+  async navigateStack(direction: 'up' | 'down'): Promise<void> {
+    const repo = this.activeRepository;
+    if (!repo) return;
+    const repoPath = repo.repository.path;
+    const result = await gitService.getStacks(repoPath);
+    if (!result.success) {
+      showToast(`Could not read stacks: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      return;
+    }
+    const step = stackStep(result.data ?? [], repo.currentBranch?.name ?? null, direction);
+    if (step.target === undefined) {
+      showToast(step.reason, 'info');
+      return;
+    }
+    const target = step.target;
+    if (step.note) showToast(step.note, 'info');
+    await this.runRefExclusive(repoPath, () => this.checkoutBranchFromPalette(repoPath, target));
   }
 
   private cycleRepositoryTab(offset: number): void {

@@ -62,6 +62,7 @@ pub mod signature;
 pub mod sparse_checkout;
 pub mod squash;
 pub mod ssh;
+pub mod stack;
 pub mod staging;
 pub mod stash;
 pub mod stats;

@@ -1,0 +1,235 @@
+/**
+ * Stacked branches in the branch list (roadmap 4.3, #614): the Stacks
+ * section, and the "Stack on…" / "Remove from Stack" context-menu actions.
+ */
+
+// ── Tauri mock (must be set before any imports) ────────────────────────────
+type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
+
+let cbId = 0;
+let mockInvoke: MockInvoke = () => Promise.resolve(null);
+const invokeCalls: Array<{ command: string; args?: unknown }> = [];
+
+(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {
+  invoke: (command: string, args?: unknown) => {
+    invokeCalls.push({ command, args });
+    return mockInvoke(command, args);
+  },
+  transformCallback: () => cbId++,
+};
+
+import { expect, fixture, html } from '@open-wc/testing';
+import { uiStore } from '../../../stores/ui.store.ts';
+import type { GnBranchList } from '../gn-branch-list.ts';
+import '../gn-branch-list.ts';
+import { resetRefOpLocks } from '../../../utils/ref-lock.ts';
+import type { Branch, Stack } from '../../../types/git.types.ts';
+
+const REPO_PATH = '/test/repo';
+
+const BRANCHES = [
+  { name: 'main', shorthand: 'main', isHead: true, isRemote: false, upstream: null },
+  { name: 'feat-a', shorthand: 'feat-a', isHead: false, isRemote: false, upstream: null },
+  { name: 'feat-b', shorthand: 'feat-b', isHead: false, isRemote: false, upstream: null },
+];
+
+const STACKS: Stack[] = [{
+  base: 'main',
+  branches: [
+    { name: 'feat-a', parent: 'main', depth: 1, ahead: 2, behind: 0, isHead: false, parentMissing: false },
+    { name: 'feat-b', parent: 'feat-a', depth: 2, ahead: 1, behind: 3, isHead: false, parentMissing: false },
+  ],
+}];
+
+function mocks(overrides: Record<string, unknown> = {}): void {
+  mockInvoke = async (command: string) => {
+    if (command in overrides) {
+      const value = overrides[command];
+      if (value instanceof Error) throw value.message;
+      return typeof value === 'function' ? (value as () => unknown)() : value;
+    }
+    switch (command) {
+      case 'get_branches': return BRANCHES;
+      case 'get_stacks': return STACKS;
+      case 'get_remotes':
+      case 'get_hidden_branches': return [];
+      case 'get_branch_sort_mode': return 'name';
+      default: return null;
+    }
+  };
+}
+
+async function createList(): Promise<GnBranchList> {
+  const el = await fixture<GnBranchList>(
+    html`<gn-branch-list .repositoryPath=${REPO_PATH}></gn-branch-list>`,
+  );
+  await el.updateComplete;
+  await new Promise((r) => setTimeout(r, 50));
+  await el.updateComplete;
+  return el;
+}
+
+type Internals = {
+  contextMenu: { visible: boolean; x: number; y: number; branch: Branch | null };
+  handleStackOn: () => Promise<void>;
+  handleRemoveFromStack: () => Promise<void>;
+};
+
+function openMenuFor(el: GnBranchList, name: string): void {
+  const branch = BRANCHES.find((b) => b.name === name) as unknown as Branch;
+  (el as unknown as Internals).contextMenu = { visible: true, x: 0, y: 0, branch };
+}
+
+async function answerPrompt(value: string | null): Promise<void> {
+  let dialog: (Element & { value: string; resolve?: unknown }) | null = null;
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 10));
+    dialog = document.querySelector('gn-prompt-dialog');
+    if (dialog?.resolve) break;
+  }
+  expect(dialog, 'prompt dialog mounted').to.not.be.null;
+  if (value === null) {
+    (dialog!.shadowRoot!.querySelector('.btn-secondary, .btn:not(.btn-primary)') as HTMLButtonElement).click();
+    return;
+  }
+  dialog!.value = value;
+  await (dialog as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+  (dialog!.shadowRoot!.querySelector('.btn-primary') as HTMLButtonElement).click();
+}
+
+const toastMessages = () => uiStore.getState().toasts.map((t) => `${t.type}:${t.message}`);
+
+describe('gn-branch-list stacks', () => {
+  beforeEach(() => {
+    resetRefOpLocks();
+    invokeCalls.length = 0;
+    uiStore.setState({ toasts: [] });
+    mocks();
+  });
+
+  afterEach(() => {
+    document.querySelectorAll('gn-prompt-dialog').forEach((d) => d.remove());
+  });
+
+  it('renders each stack bottom-to-top with depth, ahead count and restack badge', async () => {
+    const el = await createList();
+    const rows = Array.from(el.shadowRoot!.querySelectorAll('.stack-branch')) as HTMLElement[];
+    expect(rows.map((r) => r.dataset.branch)).to.deep.equal(['feat-a', 'feat-b']);
+    expect(el.shadowRoot!.querySelector('.stack-base')!.textContent).to.contain('on main');
+    expect(rows[0].textContent).to.contain('+2');
+    expect(rows[0].querySelector('.stack-badge')).to.be.null;
+    expect(rows[1].querySelector('.stack-badge')!.textContent).to.contain('needs restack');
+    expect(parseInt(rows[1].style.paddingLeft)).to.be.greaterThan(parseInt(rows[0].style.paddingLeft));
+  });
+
+  it('flags a branch whose parent is gone', async () => {
+    mocks({
+      get_stacks: [{ base: 'gone', branches: [{ ...STACKS[0].branches[0], parent: 'gone', parentMissing: true }] }],
+    });
+    const el = await createList();
+    expect(el.shadowRoot!.querySelector('.stack-badge.warning')!.textContent).to.contain('parent missing');
+  });
+
+  it('shows no Stacks section when nothing is stacked', async () => {
+    mocks({ get_stacks: [] });
+    const el = await createList();
+    expect(el.shadowRoot!.querySelector('.stacks-group')).to.be.null;
+    expect(el.shadowRoot!.querySelectorAll('.branch-item').length).to.be.greaterThan(0);
+  });
+
+  it('reports a stacks read failure without hiding the branches', async () => {
+    mocks({ get_stacks: new Error('config locked') });
+    const el = await createList();
+    expect(el.shadowRoot!.querySelector('.stacks-error')!.textContent).to.contain('config locked');
+    expect(el.shadowRoot!.querySelectorAll('.branch-item').length).to.equal(3);
+  });
+
+  it('double-clicking a stack row checks that branch out', async () => {
+    const el = await createList();
+    invokeCalls.length = 0;
+    const row = el.shadowRoot!.querySelector('.stack-branch[data-branch="feat-b"]') as HTMLElement;
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, composed: true }));
+    for (let i = 0; i < 50 && !invokeCalls.some((c) => c.command.startsWith('checkout')); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const call = invokeCalls.find((c) => c.command.startsWith('checkout'));
+    expect(call, 'checkout invoked').to.not.be.undefined;
+    expect(JSON.stringify(call!.args)).to.contain('feat-b');
+  });
+
+  it('menu offers Stack on / Remove from Stack depending on membership', async () => {
+    const el = await createList();
+    openMenuFor(el, 'feat-b');
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-action="stack-on"]')!.textContent).to.contain('Change Stack Parent');
+    expect(el.shadowRoot!.querySelector('[data-action="remove-from-stack"]')).to.not.be.null;
+
+    mocks({ get_stacks: [] });
+    const el2 = await createList();
+    openMenuFor(el2, 'feat-a');
+    await el2.updateComplete;
+    expect(el2.shadowRoot!.querySelector('[data-action="stack-on"]')!.textContent).to.contain('Stack on');
+    expect(el2.shadowRoot!.querySelector('[data-action="remove-from-stack"]')).to.be.null;
+  });
+
+  it('Stack on… sets the parent, toasts, reloads and dispatches branches-changed', async () => {
+    const el = await createList();
+    let changed: string | undefined;
+    el.addEventListener('branches-changed', (e) => {
+      changed = (e as CustomEvent<{ repositoryPath: string }>).detail.repositoryPath;
+    });
+    openMenuFor(el, 'feat-a');
+    invokeCalls.length = 0;
+    const done = (el as unknown as Internals).handleStackOn();
+    await answerPrompt('main');
+    await done;
+
+    const call = invokeCalls.find((c) => c.command === 'set_branch_parent');
+    expect(call!.args).to.deep.include({ path: REPO_PATH, branch: 'feat-a', parent: 'main' });
+    expect(toastMessages()).to.include('success:feat-a is now stacked on main');
+    expect(invokeCalls.some((c) => c.command === 'get_stacks')).to.be.true;
+    expect(changed).to.equal(REPO_PATH);
+  });
+
+  it('Stack on… shows the backend refusal (e.g. a loop) as an error toast', async () => {
+    mocks({ set_branch_parent: new Error('feat-b is already stacked on feat-a; stacking feat-a on it would make a loop') });
+    const el = await createList();
+    openMenuFor(el, 'feat-a');
+    const done = (el as unknown as Internals).handleStackOn();
+    await answerPrompt('feat-b');
+    await done;
+    expect(toastMessages().some((m) => m.startsWith('error:') && m.includes('loop'))).to.be.true;
+  });
+
+  it('Stack on… does nothing when the prompt is cancelled', async () => {
+    const el = await createList();
+    openMenuFor(el, 'feat-a');
+    invokeCalls.length = 0;
+    const done = (el as unknown as Internals).handleStackOn();
+    await answerPrompt(null);
+    await done;
+    expect(invokeCalls.some((c) => c.command === 'set_branch_parent')).to.be.false;
+    expect(uiStore.getState().toasts).to.have.length(0);
+  });
+
+  it('Remove from Stack clears the parent and dispatches branches-changed', async () => {
+    const el = await createList();
+    let changed = false;
+    el.addEventListener('branches-changed', () => { changed = true; });
+    openMenuFor(el, 'feat-b');
+    invokeCalls.length = 0;
+    await (el as unknown as Internals).handleRemoveFromStack();
+    const call = invokeCalls.find((c) => c.command === 'clear_branch_parent');
+    expect(call!.args).to.deep.include({ path: REPO_PATH, branch: 'feat-b' });
+    expect(toastMessages()).to.include('success:feat-b removed from its stack');
+    expect(changed).to.be.true;
+  });
+
+  it('Remove from Stack reports failures', async () => {
+    mocks({ clear_branch_parent: new Error('config locked') });
+    const el = await createList();
+    openMenuFor(el, 'feat-b');
+    await (el as unknown as Internals).handleRemoveFromStack();
+    expect(toastMessages().some((m) => m.startsWith('error:') && m.includes('config locked'))).to.be.true;
+  });
+});

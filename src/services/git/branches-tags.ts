@@ -15,6 +15,7 @@ import type {
   UndoAction,
   UndoHistory,
   CleanupCandidate,
+  Stack,
 } from "../../types/git.types.ts";
 import type {
   CreateBranchCommand,
@@ -145,6 +146,36 @@ export async function unsetUpstreamBranch(
   branch: string,
 ): Promise<CommandResult<void>> {
   return invokeCommand<void>("unset_upstream_branch", { path, branch });
+}
+
+/**
+ * Declare `branch` as stacked on `parent` (stored in the repository config).
+ */
+export async function setBranchParent(
+  path: string,
+  branch: string,
+  parent: string,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("set_branch_parent", { path, branch, parent });
+}
+
+/**
+ * Take `branch` out of its stack. Branches stacked on it keep their parent.
+ */
+export async function clearBranchParent(
+  path: string,
+  branch: string,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("clear_branch_parent", { path, branch });
+}
+
+/**
+ * Every stack of dependent branches in the repository, bottom to top.
+ */
+export async function getStacks(
+  path: string,
+): Promise<CommandResult<Stack[]>> {
+  return invokeCommand<Stack[]>("get_stacks", { path });
 }
 
 /**

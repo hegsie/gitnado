@@ -834,6 +834,9 @@ pub fn run() {
             commands::hooks::clear_hook_execution_logs,
             // Terminal integration
             commands::terminal::open_terminal,
+            commands::stack::set_branch_parent,
+            commands::stack::clear_branch_parent,
+            commands::stack::get_stacks,
             commands::terminal::open_file_manager,
             commands::terminal::open_in_editor,
             // Repository statistics
