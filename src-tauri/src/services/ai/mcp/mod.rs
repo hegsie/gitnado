@@ -5,5 +5,6 @@
 
 pub mod server;
 pub mod tools;
+pub mod write;
 
 pub use server::{create_mcp_state, McpConfig, McpServer, McpState, McpStatus};

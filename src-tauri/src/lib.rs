@@ -203,6 +203,20 @@ pub fn run() {
             let mcp_state = create_mcp_state(config_dir);
             app.manage(mcp_state.clone());
 
+            // MCP write tools ask the user through the UI and announce what
+            // they changed; the gate reaches the window through this emitter.
+            {
+                let handle = app.handle().clone();
+                mcp_state
+                    .blocking_read()
+                    .write_gate()
+                    .set_emitter(std::sync::Arc::new(
+                        move |event: &str, payload: serde_json::Value| {
+                            let _ = handle.emit(event, payload);
+                        },
+                    ));
+            }
+
             // Restart the MCP server if it was running when the app last exited.
             // A bind failure is recorded in the status so Settings can explain it.
             tauri::async_runtime::spawn(async move {
@@ -772,6 +786,10 @@ pub fn run() {
             commands::mcp::get_mcp_config,
             commands::mcp::set_mcp_config,
             commands::mcp::regenerate_mcp_token,
+            commands::mcp::get_mcp_write_settings,
+            commands::mcp::set_mcp_write_settings,
+            commands::mcp::get_pending_mcp_consents,
+            commands::mcp::respond_mcp_consent,
             // OAuth authentication
             commands::oauth::oauth_get_authorize_url,
             commands::oauth::oauth_start_github_flow,

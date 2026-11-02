@@ -21,6 +21,7 @@ import { openCloneDestinationDialog, openDialog, showConfirm } from '../../servi
 import * as aiService from '../../services/ai.service.ts';
 import * as localAiService from '../../services/local-ai.service.ts';
 import * as mcpService from '../../services/mcp.service.ts';
+import '../mcp/gn-mcp-write-settings.ts';
 import * as gitService from '../../services/git.service.ts';
 import type { MergeToolInfo, AvailableDiffTool } from '../../services/git.service.ts';
 import { avatarBlockedExplanation, GRAVATAR_HOST } from '../../utils/avatar-policy.ts';
@@ -2548,6 +2549,8 @@ export class GnSettingsDialog extends LitElement {
           <pre class="mcp-client-config"><code>${this.mcpClientConfigSnippet(
             this.mcpTokenRevealed
           )}</code></pre>
+
+          <gn-mcp-write-settings></gn-mcp-write-settings>
         </div>
 
         <div class="settings-section">

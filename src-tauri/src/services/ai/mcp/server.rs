@@ -17,6 +17,7 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
 use super::tools;
+use super::write::{self, Decision, WriteGate};
 
 const MCP_CONFIG_FILE: &str = "mcp_config.json";
 
@@ -383,6 +384,8 @@ pub struct McpServer {
     last_error: Option<String>,
     /// Token and origin rules enforced by the running accept loop
     auth: Arc<StdRwLock<AuthSettings>>,
+    /// Write tools: on/off, saved policies and pending consent requests
+    write_gate: Arc<WriteGate>,
 }
 
 /// Shared MCP server state
@@ -408,6 +411,7 @@ impl McpServer {
 
         let server = Self {
             auth: Arc::new(StdRwLock::new(AuthSettings::from_config(&config))),
+            write_gate: Arc::new(WriteGate::load(&config_dir)),
             config,
             config_dir,
             running: Arc::new(AtomicBool::new(false)),
@@ -479,9 +483,19 @@ impl McpServer {
 
         let open_repos = self.open_repos.clone();
         let auth = self.auth.clone();
+        let gate = self.write_gate.clone();
 
         tokio::spawn(async move {
-            Self::run_server(listener, running, shutdown_rx, open_repos, auth, limits).await;
+            Self::run_server(
+                listener,
+                running,
+                shutdown_rx,
+                open_repos,
+                auth,
+                gate,
+                limits,
+            )
+            .await;
         });
 
         // Remember that the server should come back up on the next launch
@@ -529,6 +543,11 @@ impl McpServer {
         }
     }
 
+    /// Write-tool settings and the consent broker
+    pub fn write_gate(&self) -> Arc<WriteGate> {
+        self.write_gate.clone()
+    }
+
     /// Get the current configuration
     pub fn get_config(&self) -> &McpConfig {
         &self.config
@@ -568,6 +587,7 @@ impl McpServer {
         mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
+        gate: Arc<WriteGate>,
         limits: ConnectionLimits,
     ) {
         // One permit per in-flight connection; the permit is released when the
@@ -597,10 +617,11 @@ impl McpServer {
                             };
                             let repos = open_repos.clone();
                             let auth = auth.clone();
+                            let gate = gate.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
                                 if let Err(e) =
-                                    Self::handle_connection(stream, repos, auth, limits).await
+                                    Self::handle_connection(stream, repos, auth, gate, limits).await
                                 {
                                     tracing::warn!("MCP connection error: {}", e);
                                 }
@@ -620,6 +641,7 @@ impl McpServer {
         mut stream: tokio::net::TcpStream,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
+        gate: Arc<WriteGate>,
         limits: ConnectionLimits,
     ) -> Result<(), String> {
         // Snapshot the auth rules once per connection so the lock is never held
@@ -781,8 +803,10 @@ impl McpServer {
         };
 
         // Route to handler
-        let repos = open_repos.read().await;
-        let response = Self::handle_rpc_request(&rpc_request, &repos).await;
+        // Snapshot the list: a write tool may wait minutes for the user, and
+        // must not hold the lock that opening a repository needs meanwhile.
+        let repos = open_repos.read().await.clone();
+        let response = Self::handle_rpc_request(&rpc_request, &repos, &gate).await;
         let response_json = serde_json::to_string(&response).unwrap_or_default();
 
         Self::send_http_response(&mut stream, 200, &response_json, &allow_origin).await
@@ -792,11 +816,12 @@ impl McpServer {
     async fn handle_rpc_request(
         request: &JsonRpcRequest,
         open_repos: &[String],
+        gate: &WriteGate,
     ) -> JsonRpcResponse {
         match request.method.as_str() {
             "initialize" => Self::handle_initialize(request),
-            "tools/list" => Self::handle_tools_list(request),
-            "tools/call" => Self::handle_tools_call(request, open_repos).await,
+            "tools/list" => Self::handle_tools_list(request, gate.enabled()),
+            "tools/call" => Self::handle_tools_call(request, open_repos, gate).await,
             _ => JsonRpcResponse::error(
                 request.id.clone(),
                 -32601,
@@ -821,16 +846,82 @@ impl McpServer {
     }
 
     /// Handle the `tools/list` method
-    fn handle_tools_list(request: &JsonRpcRequest) -> JsonRpcResponse {
-        let tool_list = tools::get_tool_list();
+    fn handle_tools_list(request: &JsonRpcRequest, writes_enabled: bool) -> JsonRpcResponse {
+        let mut tool_list = tools::get_tool_list();
+        // Write tools are only advertised while the user has turned them on.
+        if writes_enabled {
+            tool_list.extend(write::write_tool_list());
+        }
         let result = serde_json::json!({
             "tools": tool_list
         });
         JsonRpcResponse::success(request.id.clone(), result)
     }
 
+    /// Run a write tool through the consent gate.
+    async fn call_write_tool(
+        tool: &str,
+        arguments: &Value,
+        open_repos: &[String],
+        gate: &WriteGate,
+    ) -> Result<Value, String> {
+        if !gate.enabled() {
+            return Err(
+                "Write tools are turned off. Enable them in Gitnado: Settings > MCP Server."
+                    .to_string(),
+            );
+        }
+        let repo_path = arguments
+            .get("repo_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Missing required argument: repo_path".to_string())?
+            .to_string();
+        // Writes are confined to repositories open in Gitnado — never "any
+        // repository on disk", even before the open list is known.
+        if open_repos.is_empty() {
+            return Err("No repositories are open in Gitnado".to_string());
+        }
+        tools::validate_repo_path(&repo_path, open_repos)?;
+
+        let prep_tool = tool.to_string();
+        let prep_args = arguments.clone();
+        let prep_repo = repo_path.clone();
+        let prepared =
+            tokio::task::spawn_blocking(move || write::prepare(&prep_tool, &prep_args, &prep_repo))
+                .await
+                .map_err(|e| e.to_string())??;
+
+        let decision = gate.authorize(tool, &prepared).await;
+        match decision {
+            Decision::Approved | Decision::AllowedByPolicy => {
+                let exec = prepared.clone();
+                let result = tokio::task::spawn_blocking(move || write::execute(&exec))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if result.is_ok() {
+                    gate.notify_applied(
+                        tool,
+                        &prepared.repo_path,
+                        &prepared.summary,
+                        decision == Decision::AllowedByPolicy,
+                    );
+                }
+                result
+            }
+            Decision::Denied => Err(format!("The user declined: {}", prepared.summary)),
+            Decision::TimedOut => Err(format!(
+                "No one approved this in Gitnado in time: {}",
+                prepared.summary
+            )),
+        }
+    }
+
     /// Handle the `tools/call` method
-    async fn handle_tools_call(request: &JsonRpcRequest, open_repos: &[String]) -> JsonRpcResponse {
+    async fn handle_tools_call(
+        request: &JsonRpcRequest,
+        open_repos: &[String],
+        gate: &WriteGate,
+    ) -> JsonRpcResponse {
         let params = match &request.params {
             Some(p) => p,
             None => {
@@ -858,7 +949,13 @@ impl McpServer {
             .cloned()
             .unwrap_or(Value::Object(serde_json::Map::new()));
 
-        match tools::call_tool(tool_name, &arguments, open_repos).await {
+        let outcome = if write::is_write_tool(tool_name) {
+            Self::call_write_tool(tool_name, &arguments, open_repos, gate).await
+        } else {
+            tools::call_tool(tool_name, &arguments, open_repos).await
+        };
+
+        match outcome {
             Ok(result) => {
                 let content = serde_json::json!({
                     "content": [{
@@ -1142,11 +1239,141 @@ mod tests {
             method: "tools/list".to_string(),
             params: None,
         };
-        let response = McpServer::handle_tools_list(&request);
+        let response = McpServer::handle_tools_list(&request, false);
         assert!(response.result.is_some());
         let result = response.result.unwrap();
         assert!(result["tools"].is_array());
         assert!(!result["tools"].as_array().unwrap().is_empty());
+    }
+
+    fn rpc(method: &str, params: Option<Value>) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            method: method.to_string(),
+            params,
+        }
+    }
+
+    fn tool_text(response: &JsonRpcResponse) -> (String, bool) {
+        let result = response.result.as_ref().expect("result");
+        (
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            result["isError"].as_bool().unwrap_or(false),
+        )
+    }
+
+    #[tokio::test]
+    async fn write_tools_are_listed_only_when_enabled() {
+        let names = |resp: JsonRpcResponse| -> Vec<String> {
+            resp.result.unwrap()["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let off = names(McpServer::handle_tools_list(
+            &rpc("tools/list", None),
+            false,
+        ));
+        assert!(!off.iter().any(|n| n == "commit"));
+        let on = names(McpServer::handle_tools_list(&rpc("tools/list", None), true));
+        for tool in write::WRITE_TOOLS {
+            assert!(on.iter().any(|n| n == tool), "{tool} missing");
+        }
+    }
+
+    #[tokio::test]
+    async fn write_tool_calls_are_refused_while_disabled_or_outside_open_repos() {
+        let t = crate::test_utils::TestRepo::with_initial_commit();
+        let call = rpc(
+            "tools/call",
+            Some(
+                serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "agent/x" } }),
+            ),
+        );
+
+        let off = WriteGate::in_memory(Default::default(), Duration::from_secs(1));
+        let (text, is_error) =
+            tool_text(&McpServer::handle_rpc_request(&call, &[t.path_str()], &off).await);
+        assert!(is_error);
+        assert!(text.contains("turned off"), "{text}");
+
+        let on = WriteGate::in_memory(
+            write::WriteSettings {
+                enabled: true,
+                policies: vec![],
+            },
+            Duration::from_secs(1),
+        );
+        let (text, is_error) = tool_text(&McpServer::handle_rpc_request(&call, &[], &on).await);
+        assert!(is_error);
+        assert!(text.contains("No repositories are open"), "{text}");
+        assert!(t
+            .repo()
+            .find_branch("agent/x", git2::BranchType::Local)
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn write_tool_runs_under_a_policy_and_is_announced() {
+        let t = crate::test_utils::TestRepo::with_initial_commit();
+        let gate = WriteGate::in_memory(
+            write::WriteSettings {
+                enabled: true,
+                policies: vec![write::WritePolicy {
+                    repo_path: t.path_str(),
+                    tool: "create_branch".into(),
+                    branch_pattern: "agent/*".into(),
+                }],
+            },
+            Duration::from_secs(1),
+        );
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+        let sink = events.clone();
+        gate.set_emitter(std::sync::Arc::new(move |e: &str, p: Value| {
+            sink.lock().unwrap().push((e.to_string(), p))
+        }));
+
+        let call = rpc(
+            "tools/call",
+            Some(
+                serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "agent/fix" } }),
+            ),
+        );
+        let (text, is_error) =
+            tool_text(&McpServer::handle_rpc_request(&call, &[t.path_str()], &gate).await);
+        assert!(!is_error, "{text}");
+        assert!(t
+            .repo()
+            .find_branch("agent/fix", git2::BranchType::Local)
+            .is_ok());
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1, "no prompt, one applied event: {events:?}");
+        assert_eq!(events[0].0, write::WRITE_APPLIED_EVENT);
+        assert_eq!(events[0].1["byPolicy"], true);
+        drop(events);
+
+        // A branch outside the pattern needs approval; with no UI it is denied.
+        let gate_no_ui = WriteGate::in_memory(gate.settings(), Duration::from_secs(1));
+        let call = rpc(
+            "tools/call",
+            Some(
+                serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "main-copy" } }),
+            ),
+        );
+        let (text, is_error) =
+            tool_text(&McpServer::handle_rpc_request(&call, &[t.path_str()], &gate_no_ui).await);
+        assert!(is_error);
+        assert!(text.contains("declined"), "{text}");
+        assert!(t
+            .repo()
+            .find_branch("main-copy", git2::BranchType::Local)
+            .is_err());
     }
 
     #[tokio::test]
@@ -1157,7 +1384,12 @@ mod tests {
             method: "unknown/method".to_string(),
             params: None,
         };
-        let response = McpServer::handle_rpc_request(&request, &[]).await;
+        let response = McpServer::handle_rpc_request(
+            &request,
+            &[],
+            &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+        )
+        .await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32601);
     }
@@ -1170,7 +1402,12 @@ mod tests {
             method: "tools/call".to_string(),
             params: None,
         };
-        let response = McpServer::handle_rpc_request(&request, &[]).await;
+        let response = McpServer::handle_rpc_request(
+            &request,
+            &[],
+            &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+        )
+        .await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602);
     }
@@ -1183,7 +1420,12 @@ mod tests {
             method: "tools/call".to_string(),
             params: Some(serde_json::json!({"arguments": {}})),
         };
-        let response = McpServer::handle_rpc_request(&request, &[]).await;
+        let response = McpServer::handle_rpc_request(
+            &request,
+            &[],
+            &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+        )
+        .await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602);
     }
