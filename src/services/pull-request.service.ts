@@ -370,3 +370,112 @@ export async function listOpenPullRequests(
     }
   }
 }
+
+/** What a new request needs, across providers. */
+export interface NewPullRequest {
+  head: string;
+  base: string;
+  title: string;
+  body: string;
+  draft?: boolean;
+}
+
+/** A created request's identity, normalised. */
+export interface CreatedPullRequest {
+  number: number;
+  url: string;
+}
+
+/** Open a request on the detected provider. */
+export async function createPullRequestFor(
+  target: PullRequestProviderTarget,
+  token: string | null,
+  input: NewPullRequest,
+): Promise<CommandResult<CreatedPullRequest>> {
+  switch (target.provider) {
+    case 'github': {
+      const r = await gitService.createPullRequest(
+        target.github!.owner,
+        target.github!.repo,
+        { title: input.title, body: input.body, head: input.head, base: input.base, draft: input.draft },
+        token,
+      );
+      return r.success ? { success: true, data: { number: r.data!.number, url: r.data!.htmlUrl } } : { success: false, error: r.error };
+    }
+    case 'gitlab': {
+      const r = await gitService.createGitLabMergeRequest(
+        target.gitlab!.instanceUrl,
+        target.gitlab!.projectPath,
+        { title: input.title, description: input.body, sourceBranch: input.head, targetBranch: input.base, draft: input.draft },
+        token,
+      );
+      return r.success ? { success: true, data: { number: r.data!.iid, url: r.data!.webUrl } } : { success: false, error: r.error };
+    }
+    case 'bitbucket': {
+      const r = await gitService.createBitbucketPullRequest(
+        target.bitbucket!.workspace,
+        target.bitbucket!.repoSlug,
+        { title: input.title, description: input.body, sourceBranch: input.head, destinationBranch: input.base },
+        token,
+      );
+      return r.success ? { success: true, data: { number: r.data!.id, url: r.data!.url } } : { success: false, error: r.error };
+    }
+    case 'azure-devops': {
+      const r = await gitService.createAdoPullRequest(
+        target.ado!.organization,
+        target.ado!.project,
+        target.ado!.repository,
+        { title: input.title, description: input.body, sourceRefName: input.head, targetRefName: input.base, isDraft: input.draft },
+        token,
+      );
+      return r.success ? { success: true, data: { number: r.data!.pullRequestId, url: r.data!.url } } : { success: false, error: r.error };
+    }
+  }
+}
+
+/** A request's current description ('' when it has none). */
+export async function getPullRequestBody(
+  target: PullRequestProviderTarget,
+  token: string | null,
+  number: number,
+): Promise<CommandResult<string>> {
+  const done = (r: CommandResult<unknown>, text: string | null | undefined): CommandResult<string> =>
+    r.success ? { success: true, data: text ?? '' } : { success: false, error: r.error };
+  switch (target.provider) {
+    case 'github': {
+      const r = await gitService.getPullRequest(target.github!.owner, target.github!.repo, number, token);
+      return done(r, r.data?.body);
+    }
+    case 'gitlab': {
+      const r = await gitService.getGitLabMergeRequest(target.gitlab!.instanceUrl, target.gitlab!.projectPath, number, token);
+      return done(r, r.data?.description);
+    }
+    case 'bitbucket': {
+      const r = await gitService.getBitbucketPullRequest(target.bitbucket!.workspace, target.bitbucket!.repoSlug, number, token);
+      return done(r, r.data?.description);
+    }
+    case 'azure-devops': {
+      const r = await gitService.getAdoPullRequest(target.ado!.organization, target.ado!.project, target.ado!.repository, number, token);
+      return done(r, r.data?.description);
+    }
+  }
+}
+
+/** Retarget a request and/or replace its description. */
+export async function updatePullRequestFor(
+  target: PullRequestProviderTarget,
+  token: string | null,
+  pr: { number: number; title: string },
+  change: { base?: string; body?: string },
+): Promise<CommandResult<void>> {
+  switch (target.provider) {
+    case 'github':
+      return gitService.updatePullRequest(target.github!.owner, target.github!.repo, pr.number, { body: change.body, base: change.base }, token);
+    case 'gitlab':
+      return gitService.updateGitLabMergeRequest(target.gitlab!.instanceUrl, target.gitlab!.projectPath, pr.number, { description: change.body, targetBranch: change.base }, token);
+    case 'bitbucket':
+      return gitService.updateBitbucketPullRequest(target.bitbucket!.workspace, target.bitbucket!.repoSlug, pr.number, { title: pr.title, description: change.body, destinationBranch: change.base }, token);
+    case 'azure-devops':
+      return gitService.updateAdoPullRequest(target.ado!.organization, target.ado!.project, target.ado!.repository, pr.number, { description: change.body, targetRefName: change.base }, token);
+  }
+}

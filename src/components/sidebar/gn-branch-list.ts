@@ -11,9 +11,16 @@ import { dragDropService, type DragItem } from '../../services/drag-drop.service
 import { settingsStore } from '../../stores/settings.store.ts';
 import {
   detectPullRequestProvider,
+  getProviderToken,
   invalidateProviderDetection,
   type PullRequestProviderTarget,
 } from '../../services/pull-request.service.ts';
+import {
+  planStackPullRequests,
+  summarizeStackSync,
+  syncStackPullRequests,
+  type StackPrStep,
+} from '../../services/stack-pr.service.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
 import { fuzzyScore } from '../../utils/fuzzy-search.ts';
 import '../dialogs/gn-branch-cleanup-dialog.ts';
@@ -319,6 +326,12 @@ export class GnBranchList extends LitElement {
         display: flex;
         align-items: center;
         justify-content: space-between;
+      }
+      .stack-base .restack-btn + .restack-btn {
+        margin-left: 4px;
+      }
+      .stack-base > span {
+        margin-right: auto;
       }
       .restack-btn {
         font-size: var(--font-size-xs, 11px);
@@ -632,6 +645,8 @@ export class GnBranchList extends LitElement {
   /** Declared stacks of dependent branches (roadmap 4.3). */
   @state() private stacks: Stack[] = [];
   @state() private stacksError: string | null = null;
+  /** A stack's pull requests are being synced (network round trips). */
+  @state() private stackPrSyncing = false;
   /** Local branches by name, for resolving stack rows to Branch objects. */
   private localBranchesByName = new Map<string, Branch>();
   @state() private loading = true;
@@ -1931,6 +1946,60 @@ export class GnBranchList extends LitElement {
     }
   }
 
+  /**
+   * "Sync PRs": one request per branch of the stack on the detected provider,
+   * each based on the branch below it, each with a stack table. Plans first
+   * (read-only), confirms what it will create or retarget, then syncs.
+   */
+  private async handleSyncStackPrs(stack: Stack): Promise<void> {
+    const target = this.prProvider;
+    if (!target || this.stackPrSyncing) return;
+    const repoPath = this.repositoryPath;
+    const noun = target.itemNoun;
+    this.stackPrSyncing = true;
+    try {
+      const token = await getProviderToken(target);
+      if (!token) {
+        showToast(`Connect a ${target.providerName} account to sync ${target.itemNounPlural}`, 'error');
+        return;
+      }
+      const plan = await planStackPullRequests(stack, this.localBranchesByName, target, token);
+      if (!plan.success || !plan.data) {
+        showToast(`Could not read ${target.itemNounPlural} from ${target.providerName}: ${plan.error?.message ?? 'Unknown error'}`, 'error');
+        return;
+      }
+      const steps = plan.data;
+      const describe = (st: StackPrStep): string => {
+        switch (st.action) {
+          case 'create': return `• ${st.branch}: open a ${noun} into ${st.base}`;
+          case 'retarget': return `• ${st.branch}: retarget ${noun} ${st.existing?.number ?? ''} from ${st.existing?.targetBranch} to ${st.base}`;
+          case 'refresh': return `• ${st.branch}: update the stack table on ${noun} ${st.existing?.number ?? ''}`;
+          case 'skip': return `• ${st.branch}: skipped — ${st.reason}`;
+        }
+      };
+      if (!steps.some((st) => st.action !== 'skip')) {
+        showToast(`Nothing to sync: ${steps.map((st) => `${st.branch} — ${st.reason}`).join('; ')}`, 'warning');
+        return;
+      }
+      const confirmed = await showConfirm(
+        `Sync stack ${target.itemNounPlural}`,
+        `On ${target.providerName} (${target.repoLabel}):\n\n${steps.map(describe).join('\n')}`,
+        'info',
+      );
+      if (!confirmed) return;
+
+      const outcomes = await syncStackPullRequests(repoPath, stack, this.localBranchesByName, steps, target, token);
+      const summary = summarizeStackSync(outcomes, noun);
+      showToast(summary.message, summary.ok ? 'success' : 'error');
+      // The request list refreshes on the app's repository refresh.
+      this.dispatchBranchesChanged(repoPath);
+    } catch (err) {
+      showToast(`Failed to sync ${target.itemNounPlural}: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+    } finally {
+      this.stackPrSyncing = false;
+    }
+  }
+
   /** Context menu "Remove from stack": forget the branch's declared parent. */
   private async handleRemoveFromStack(): Promise<void> {
     const branch = this.contextMenu.branch;
@@ -2856,6 +2925,15 @@ export class GnBranchList extends LitElement {
                   title="Replay every branch of this stack onto its parent's latest commit"
                   @click=${() => this.handleRestack(stack.base)}
                 >Restack</button>
+              ` : nothing}
+              ${this.prProvider ? html`
+                <button
+                  class="restack-btn sync-prs-btn"
+                  data-base=${stack.base}
+                  ?disabled=${this.stackPrSyncing}
+                  title="Open or update one ${this.prProvider.itemNoun} per branch of this stack on ${this.prProvider.providerName}, each based on the branch below it"
+                  @click=${() => this.handleSyncStackPrs(stack)}
+                >${this.prProvider.provider === 'gitlab' ? 'Sync MRs' : 'Sync PRs'}</button>
               ` : nothing}
             </li>
             ${stack.branches.map((entry) => {

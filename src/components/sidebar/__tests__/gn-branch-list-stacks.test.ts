@@ -23,6 +23,7 @@ import { uiStore } from '../../../stores/ui.store.ts';
 import type { GnBranchList } from '../gn-branch-list.ts';
 import '../gn-branch-list.ts';
 import { resetRefOpLocks } from '../../../utils/ref-lock.ts';
+import { invalidateProviderDetection } from '../../../services/pull-request.service.ts';
 import type { Branch, RestackPlan, Stack } from '../../../types/git.types.ts';
 
 const REPO_PATH = '/test/repo';
@@ -351,6 +352,109 @@ describe('gn-branch-list stacks', () => {
       restackBtn(el)!.click();
       await settle(el, () => toastMessages().length > 0);
       expect(toastMessages()).to.include('info:The stack on main is already up to date');
+    });
+  });
+
+  describe('sync stack pull requests', () => {
+    const PUSHED = BRANCHES.map((b) => ({ ...b, upstream: b.name === 'main' ? 'origin/main' : `origin/${b.name}`, targetOid: `${b.name}-oid` }));
+    const ghPr = (number: number, head: string, base: string) => ({
+      number, title: `PR ${number}`, state: 'open', user: { login: 'me' }, headRef: head, baseRef: base,
+      draft: false, mergeable: null, htmlUrl: `https://gh/pr/${number}`,
+    });
+    let confirmText = '';
+    const github = (overrides: Record<string, unknown> = {}) => {
+      confirmText = '';
+      mocks({
+        get_branches: PUSHED,
+        detect_github_repo: { owner: 'octo', repo: 'gitnado', remoteName: 'origin' },
+        get_keyring_token: 'tok',
+        list_pull_requests: [ghPr(11, 'feat-a', 'main')],
+        create_pull_request: ghPr(12, 'feat-b', 'feat-a'),
+        get_pull_request: { body: '' },
+        ...overrides,
+      });
+      const inner = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'plugin:dialog|message') confirmText = JSON.stringify(args);
+        return inner(command, args);
+      };
+    };
+    const syncBtn = (el: GnBranchList) => el.shadowRoot!.querySelector('.sync-prs-btn') as HTMLButtonElement | null;
+    const waitForToast = async () => {
+      for (let i = 0; i < 200 && toastMessages().length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+    const createReady = async () => {
+      const el = await createList();
+      for (let i = 0; i < 100 && !syncBtn(el); i++) {
+        await new Promise((r) => setTimeout(r, 10));
+        await el.updateComplete;
+      }
+      return el;
+    };
+
+    beforeEach(() => invalidateProviderDetection());
+
+    it('offers Sync PRs only when a hosting provider is detected', async () => {
+      github();
+      expect(syncBtn(await createReady())).to.not.be.null;
+      invalidateProviderDetection();
+      mocks();
+      const el = await createList();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(syncBtn(el)).to.be.null;
+    });
+
+    it('plans, confirms, creates and updates, then reports and refreshes', async () => {
+      github();
+      const el = await createReady();
+      let changed = false;
+      el.addEventListener('branches-changed', () => { changed = true; });
+      invokeCalls.length = 0;
+      syncBtn(el)!.click();
+      await waitForToast();
+
+      expect(confirmText).to.contain('feat-a: update the stack table on pull request 11');
+      expect(confirmText).to.contain('feat-b: open a pull request into feat-a');
+      expect(invokeCalls.find((c) => c.command === 'create_pull_request')!.args).to.deep.include({ owner: 'octo', repo: 'gitnado' });
+      expect(invokeCalls.filter((c) => c.command === 'update_pull_request')).to.have.length(2);
+      expect(toastMessages()[0]).to.equal('success:Stack pull requests: created 1 pull request, updated 1 pull request');
+      expect(changed).to.be.true;
+    });
+
+    it('asks for an account when there is no token', async () => {
+      github({ get_keyring_token: null });
+      const el = await createReady();
+      syncBtn(el)!.click();
+      await waitForToast();
+      expect(toastMessages()[0]).to.equal('error:Connect a GitHub account to sync pull requests');
+      expect(invokeCalls.some((c) => c.command === 'list_pull_requests')).to.be.false;
+    });
+
+    it('explains when nothing can be synced and changes nothing', async () => {
+      github({ get_branches: BRANCHES });
+      const el = await createReady();
+      syncBtn(el)!.click();
+      await waitForToast();
+      expect(toastMessages()[0]).to.match(/^warning:Nothing to sync: feat-a — it has not been pushed yet/);
+      expect(confirmText).to.equal('');
+    });
+
+    it('does nothing when the confirm is declined, and reports listing failures', async () => {
+      github({ 'plugin:dialog|message': 'Cancel' });
+      const el = await createReady();
+      invokeCalls.length = 0;
+      syncBtn(el)!.click();
+      for (let i = 0; i < 100 && !confirmText; i++) await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(invokeCalls.some((c) => c.command === 'create_pull_request')).to.be.false;
+      expect(toastMessages()).to.have.length(0);
+
+      invalidateProviderDetection();
+      github({ list_pull_requests: new Error('rate limited') });
+      const el2 = await createReady();
+      syncBtn(el2)!.click();
+      await waitForToast();
+      expect(toastMessages()[0]).to.equal('error:Could not read pull requests from GitHub: rate limited');
     });
   });
 });

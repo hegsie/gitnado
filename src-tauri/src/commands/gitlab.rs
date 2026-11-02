@@ -1251,11 +1251,95 @@ pub async fn list_gitlab_projects(
     parse_gitlab_project_page(&body, per_page, page)
 }
 
+/// Fields to change on a merge request; `None` leaves a field as it is.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMergeRequestInput {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// New target branch: retargets the merge request.
+    pub target_branch: Option<String>,
+}
+
+fn build_update_merge_request_body(input: &UpdateMergeRequestInput) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    if let Some(title) = &input.title {
+        body.insert("title".into(), title.clone().into());
+    }
+    if let Some(description) = &input.description {
+        body.insert("description".into(), description.clone().into());
+    }
+    if let Some(target) = &input.target_branch {
+        body.insert("target_branch".into(), target.clone().into());
+    }
+    serde_json::Value::Object(body)
+}
+
+/// Update a merge request's title, description or target branch.
+#[command]
+pub async fn update_gitlab_merge_request(
+    instance_url: String,
+    project_path: String,
+    iid: u64,
+    input: UpdateMergeRequestInput,
+    token: Option<String>,
+) -> Result<()> {
+    let token = resolve_token(token)?;
+    let url = build_api_url(
+        &instance_url,
+        &format!(
+            "projects/{}/merge_requests/{}",
+            url_encode(&project_path),
+            iid
+        ),
+    );
+    let body = build_update_merge_request_body(&input);
+    let client = api_client(&url)?;
+    let send = |auth: (&'static str, String)| {
+        client
+            .put(&url)
+            .header(auth.0, auth.1)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+    };
+    // Bearer first (OAuth), PRIVATE-TOKEN on 401 (PATs), as gitlab_post does.
+    let mut response = send(("Authorization", format!("Bearer {}", token)))
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Request failed: {}", e)))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        response = send(("PRIVATE-TOKEN", token.clone()))
+            .await
+            .map_err(|e| GitnadoError::OperationFailed(format!("Request failed: {}", e)))?;
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitLab API error {}: {}",
+            status, body
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
+    #[test]
+    fn update_merge_request_body_uses_gitlab_field_names() {
+        let body = build_update_merge_request_body(&UpdateMergeRequestInput {
+            title: None,
+            description: Some("stack".into()),
+            target_branch: Some("feat-a".into()),
+        });
+        assert_eq!(
+            body,
+            serde_json::json!({ "description": "stack", "target_branch": "feat-a" })
+        );
+    }
 
     #[test]
     fn test_build_api_url() {

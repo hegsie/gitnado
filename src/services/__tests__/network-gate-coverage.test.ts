@@ -157,6 +157,8 @@ const NETWORK_COMMANDS = new Set([
   'list_gitlab_merge_requests', 'list_gitlab_pipelines', 'list_issues',
   'list_pull_requests', 'list_releases', 'query_ado_work_items',
   'test_ssh_connection', 'update_issue_state', 'add_issue_comment',
+  'update_pull_request', 'update_gitlab_merge_request',
+  'update_bitbucket_pull_request', 'update_ado_pull_request',
   'get_repo_labels', 'check_bitbucket_connection',
   'check_bitbucket_connection_with_token',
   'get_github_pr_comments', 'add_github_pr_comment',
