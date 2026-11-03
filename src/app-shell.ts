@@ -90,6 +90,7 @@ import './components/dialogs/gn-conflict-resolution-dialog.ts';
 import type { GitflowFinishContext } from './components/dialogs/gn-conflict-resolution-dialog.ts';
 import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
+import './components/dialogs/gn-commit-composer-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -1170,6 +1171,40 @@ export class AppShell extends LitElement {
     window.dispatchEvent(new CustomEvent('open-branch-cleanup'));
   }
 
+  /**
+   * Palette "Undo last recompose": put the branch back to before the last
+   * Commit Composer run, if nothing has been committed on top since.
+   */
+  async undoLastRecompose(): Promise<void> {
+    const repoPath = this.activeRepository?.repository.path;
+    if (!repoPath) return;
+    const last = await gitService.getLastRecompose(repoPath);
+    if (!last.success) {
+      showToast(`Could not check the last recompose: ${last.error?.message ?? 'Unknown error'}`, 'error');
+      return;
+    }
+    if (!last.data) {
+      showToast('There is no recompose to undo (or the branch has moved on since)', 'info');
+      return;
+    }
+    const record = last.data;
+    const confirmed = await showConfirm(
+      'Undo recompose',
+      `Put ${record.branch} back to how it was before the last recompose (${record.before.slice(0, 7)})?`,
+      'warning',
+    );
+    if (!confirmed) return;
+    await this.runRefExclusive(repoPath, async () => {
+      const result = await gitService.undoRecompose(repoPath);
+      if (result.success) {
+        showToast(`Restored ${record.branch} to before the recompose`, 'success');
+        this.refreshConflictDialogRepo(repoPath);
+      } else {
+        showToast(`Undo failed: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      }
+    });
+  }
+
   private cycleRepositoryTab(offset: number): void {
     const state = repositoryStore.getState();
     const count = state.openRepositories.length;
@@ -1765,6 +1800,11 @@ export class AppShell extends LitElement {
           'gn-export-import-dialog': {
             dismissed: 'export/import cancelled',
             running: 'patch/bundle operation',
+          },
+          'gn-commit-composer-dialog': {
+            dismissed: 'commit composer closed',
+            running: 'recompose',
+            clearFlag: () => { dialogs.close('commitComposer'); },
           },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
@@ -6607,6 +6647,15 @@ export class AppShell extends LitElement {
       ></gn-command-palette>
 
       ${this.activeRepository ? html`
+        <gn-commit-composer-dialog
+          ?open=${dialogs.isOpen('commitComposer')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { dialogs.close('commitComposer'); }}
+          @recompose-applied=${(e: CustomEvent<{ repositoryPath?: string }>) => {
+            this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
+          }}
+        ></gn-commit-composer-dialog>
+
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}

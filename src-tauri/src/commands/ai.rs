@@ -9,7 +9,7 @@ use crate::services::ai::{
     GeneratedChangelog, GeneratedCommitMessage, GeneratedPrDescription, ReflogMatch, RiskLevel,
     Severity, StagedAnalysis, CHANGELOG_PROMPT, COMMIT_SPLIT_PROMPT, CONFLICT_EXPLAIN_PROMPT,
     CONFLICT_RESOLUTION_PROMPT, MAX_CHANGELOG_BYTES, MAX_CONFLICT_CONTEXT_BYTES, MAX_DIFF_BYTES,
-    PR_DESCRIPTION_PROMPT, REFLOG_MATCH_PROMPT, VIBE_CHECK_PROMPT,
+    PR_DESCRIPTION_PROMPT, RECOMPOSE_PROMPT, REFLOG_MATCH_PROMPT, VIBE_CHECK_PROMPT,
 };
 use tauri::{command, State};
 
@@ -588,6 +588,29 @@ pub async fn suggest_commit_splits(
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
+    parse_split_suggestion(&response)
+}
+
+/// Suggest how to regroup `base..HEAD` (or the working tree when `base` is
+/// None) into a series of commits, for the Commit Composer.
+#[command]
+pub async fn suggest_recompose(
+    state: State<'_, AiState>,
+    repo_path: String,
+    base: Option<String>,
+) -> Result<CommitSplitSuggestion> {
+    let text = crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(&repo_path)?;
+        crate::commands::recompose::changes_text(&repo, base.as_deref())
+    })
+    .await?;
+    let truncated = truncate_content(&text, MAX_DIFF_BYTES);
+    let service = state.read().await;
+    guard_ai_request(&service)?;
+    let response = service
+        .generate_text(RECOMPOSE_PROMPT, truncated, Some(2000))
+        .await
+        .map_err(GitnadoError::OperationFailed)?;
     parse_split_suggestion(&response)
 }
 

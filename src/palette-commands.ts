@@ -58,6 +58,8 @@ export interface PaletteCommandHost {
   handleRunFsck(): Promise<void>;
   handleRunPrune(): Promise<void>;
   openBranchCleanup(): Promise<void>;
+  /** Put the branch back to before the last Commit Composer run. */
+  undoLastRecompose(): Promise<void>;
   openSearchDialog(mode: SearchDialogMode): void;
   openIntegrationStandalone(type: IntegrationType): void;
   refreshConflictDialogRepo(pinnedPath: string | null): void;
@@ -230,6 +232,20 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
         const dialog = shell.shadowRoot?.querySelector('gn-changelog-dialog');
         if (dialog) (dialog as import('./components/dialogs/gn-changelog-dialog.ts').GnChangelogDialog).open();
       }),
+    },
+    {
+      id: 'commit-composer',
+      label: 'Recompose commits (Commit Composer)',
+      category: 'action',
+      icon: 'git-commit',
+      action: shell.requiresRepository(() => { dialogs.open('commitComposer'); }),
+    },
+    {
+      id: 'undo-recompose',
+      label: 'Undo last recompose',
+      category: 'action',
+      icon: 'git-commit',
+      action: shell.requiresRepository(() => { void shell.undoLastRecompose(); }),
     },
     {
       id: 'smart-undo',

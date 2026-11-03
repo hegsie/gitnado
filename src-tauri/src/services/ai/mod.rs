@@ -328,6 +328,17 @@ pub struct CommitSplitSuggestion {
     pub explanation: String,
 }
 
+/// System prompt for the Commit Composer: regroup a set of changes into a
+/// clean series of commits.
+pub const RECOMPOSE_PROMPT: &str = r#"You are reorganising a set of code changes into a clean series of git commits. The input lists every changed file and then the diff. Group the files into logically separate commits, ordered so that each commit builds on the previous ones (foundations first, then features that use them, then tests and docs). Return ONLY a JSON object (no markdown fences) with this structure:
+{"shouldSplit": true, "groups": [{"label": "short description", "files": ["path1", "path2"], "suggestedMessage": "conventional commit message"}], "explanation": "one sentence on how the changes were grouped"}
+
+Rules:
+- Every listed file must appear in exactly one group; use the paths exactly as listed
+- Use as few commits as make sense; a single cohesive change is one group
+- suggestedMessage: a conventional commit subject line (type(scope): summary), under 72 characters
+"#;
+
 /// System prompt for pre-commit "vibe check"
 pub const VIBE_CHECK_PROMPT: &str = r#"Analyze the following git diff for potential issues. Return ONLY a JSON object (no markdown fences) with this structure:
 {"findings": [{"category": "secret|complexity|quality", "severity": "info|warning|error", "message": "description", "filePath": "path/to/file or null"}], "summary": "one-line summary", "riskLevel": "low|medium|high"}
