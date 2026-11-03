@@ -1172,7 +1172,7 @@ export class AppShell extends LitElement {
   }
 
   /**
-   * Palette "Undo last recompose": put the branch back to before the last
+   * Palette "Revert last recompose": put the branch back to before the last
    * Commit Composer run, if nothing has been committed on top since.
    */
   async undoLastRecompose(): Promise<void> {

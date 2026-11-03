@@ -58,7 +58,7 @@ export interface PaletteCommandHost {
   handleRunFsck(): Promise<void>;
   handleRunPrune(): Promise<void>;
   openBranchCleanup(): Promise<void>;
-  /** Put the branch back to before the last Commit Composer run. */
+  /** Put the branch back to before the last Commit Composer run ("Revert last recompose"). */
   undoLastRecompose(): Promise<void>;
   openSearchDialog(mode: SearchDialogMode): void;
   openIntegrationStandalone(type: IntegrationType): void;
@@ -242,7 +242,7 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
     },
     {
       id: 'undo-recompose',
-      label: 'Undo last recompose',
+      label: 'Revert last recompose',
       category: 'action',
       icon: 'git-commit',
       action: shell.requiresRepository(() => { void shell.undoLastRecompose(); }),

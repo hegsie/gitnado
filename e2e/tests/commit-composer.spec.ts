@@ -84,11 +84,11 @@ test.describe('Commit Composer', () => {
     await expect(composer(page).locator('.error')).toHaveText('Recompose failed: main moved while recomposing');
   });
 
-  test('Undo last recompose from the palette restores the branch', async ({ page }) => {
+  test('Revert last recompose from the palette restores the branch', async ({ page }) => {
     await setupOpenRepository(page);
     await startCommandCaptureWithMocks(page, { get_last_recompose: RECORD, undo_recompose: RECORD });
     await autoConfirmDialogs(page);
-    await openViaCommandPalette(page, 'Undo last recompose');
+    await openViaCommandPalette(page, 'Revert last recompose');
     await waitForCommand(page, 'undo_recompose');
     await expect(page.locator('.toast', { hasText: 'Restored main to before the recompose' })).toBeVisible();
   });
@@ -96,7 +96,7 @@ test.describe('Commit Composer', () => {
   test('Undo with nothing to undo says so', async ({ page }) => {
     await setupOpenRepository(page);
     await startCommandCaptureWithMocks(page, { get_last_recompose: null });
-    await openViaCommandPalette(page, 'Undo last recompose');
+    await openViaCommandPalette(page, 'Revert last recompose');
     await expect(page.locator('.toast', { hasText: 'There is no recompose to undo' })).toBeVisible();
     expect(await findCommand(page, 'undo_recompose')).toHaveLength(0);
   });
