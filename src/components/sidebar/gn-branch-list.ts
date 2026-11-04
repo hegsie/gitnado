@@ -1520,6 +1520,50 @@ export class GnBranchList extends LitElement {
     }
   }
 
+  private async handleDeleteRemoteBranch(): Promise<void> {
+    const branch = this.contextMenu.branch;
+    if (!branch || !branch.isRemote) return;
+    const lockedRepo = this.repositoryPath;
+    if (!this.claimOperation(lockedRepo)) return;
+    const repoPath = this.repositoryPath;
+
+    this.contextMenu = { ...this.contextMenu, visible: false };
+
+    const slashIndex = branch.name.indexOf('/');
+    const remote = slashIndex > 0 ? branch.name.slice(0, slashIndex) : 'origin';
+    const branchName = branch.shorthand || (slashIndex > 0 ? branch.name.slice(slashIndex + 1) : branch.name);
+
+    const confirmed = await showConfirm(
+      'Delete Remote Branch',
+      `Are you sure you want to delete "${branchName}" from remote "${remote}"?\n\nThis will delete the branch on the remote server and cannot be undone.`,
+      'warning'
+    );
+
+    if (!confirmed) {
+      this.releaseOperation(lockedRepo);
+      return;
+    }
+
+    try {
+      const result = await gitService.deleteRemoteBranch({
+        path: repoPath,
+        remote,
+        name: branchName,
+      });
+
+      if (result.success) {
+        await this.loadBranches();
+        showToast(`Deleted remote branch ${branch.name}`, 'success');
+        this.dispatchBranchesChanged(repoPath);
+      } else if (!gitService.isNetworkGateRefusal(result.error)) {
+        console.error('Delete remote branch failed:', result.error);
+        showToast(`Failed to delete remote branch: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      }
+    } finally {
+      this.releaseOperation(lockedRepo);
+    }
+  }
+
   private async handleMergeBranch(): Promise<void> {
     const branch = this.contextMenu.branch;
     if (!branch) return;
@@ -2493,6 +2537,17 @@ export class GnBranchList extends LitElement {
               <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
             </svg>
             Delete branch
+          </button>
+        ` : ''}
+
+        ${!isLocal ? html`
+          <div class="context-menu-divider" role="separator"></div>
+          <button class="context-menu-item danger" role="menuitem" ?disabled=${this.operationInProgress} @click=${this.handleDeleteRemoteBranch}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+            </svg>
+            Delete remote branch
           </button>
         ` : ''}
       </div>

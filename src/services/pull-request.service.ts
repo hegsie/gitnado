@@ -21,6 +21,7 @@ import type {
   DetectedBitbucketRepo,
   DetectedGitHubRepo,
   DetectedGitLabRepo,
+  ProviderUserStatus,
 } from './git.service.ts';
 import type { CommandResult } from '../types/api.types.ts';
 import * as credentialService from './credential.service.ts';
@@ -262,6 +263,7 @@ export async function getProviderToken(
 export async function listOpenPullRequests(
   target: PullRequestProviderTarget,
   token: string | null,
+  pageSize: number = SIDEBAR_PAGE_SIZE,
 ): Promise<CommandResult<SidebarPullRequest[]>> {
   switch (target.provider) {
     case 'github': {
@@ -270,7 +272,7 @@ export async function listOpenPullRequests(
         repo.owner,
         repo.repo,
         'open',
-        SIDEBAR_PAGE_SIZE,
+        pageSize,
         1,
         token,
       );
@@ -299,7 +301,7 @@ export async function listOpenPullRequests(
         repo.project,
         repo.repository,
         'active',
-        SIDEBAR_PAGE_SIZE,
+        pageSize,
         token,
       );
       if (!result.success) return { success: false, error: result.error };
@@ -324,7 +326,7 @@ export async function listOpenPullRequests(
         repo.instanceUrl,
         repo.projectPath,
         'opened',
-        SIDEBAR_PAGE_SIZE,
+        pageSize,
         token,
       );
       if (!result.success) return { success: false, error: result.error };
@@ -349,7 +351,7 @@ export async function listOpenPullRequests(
         repo.workspace,
         repo.repoSlug,
         'OPEN',
-        SIDEBAR_PAGE_SIZE,
+        pageSize,
         token,
       );
       if (!result.success) return { success: false, error: result.error };
@@ -368,5 +370,41 @@ export async function listOpenPullRequests(
         })),
       };
     }
+  }
+}
+
+/**
+ * Check whether a commit author exists and is active in the connected hosting provider.
+ */
+export async function checkProviderUserStatus(
+  target: PullRequestProviderTarget,
+  authorName: string | null | undefined,
+  authorEmail: string | null | undefined,
+  token: string | null,
+): Promise<CommandResult<ProviderUserStatus>> {
+  switch (target.provider) {
+    case 'github':
+      return gitService.checkGitHubUserExists(authorName, authorEmail, token);
+    case 'azure-devops':
+      return gitService.checkAdoUserExists(
+        target.ado!.organization,
+        authorName,
+        authorEmail,
+        token,
+      );
+    case 'gitlab':
+      return gitService.checkGitLabUserExists(
+        target.gitlab!.instanceUrl,
+        authorName,
+        authorEmail,
+        token,
+      );
+    case 'bitbucket':
+      return gitService.checkBitbucketUserExists(
+        target.bitbucket!.workspace,
+        authorName,
+        authorEmail,
+        token,
+      );
   }
 }

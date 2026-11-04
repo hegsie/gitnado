@@ -3,7 +3,7 @@
 //! Provides integration with Azure DevOps for pull requests, work items, and pipelines.
 
 use crate::error::{GitnadoError, Result};
-use crate::models::{ProviderRepository, ProviderRepositoryPage};
+use crate::models::{ProviderRepository, ProviderRepositoryPage, ProviderUserStatus};
 use crate::services::provider_http;
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -1647,8 +1647,6 @@ pub async fn list_ado_organizations(token: Option<String>) -> Result<Vec<AdoOrga
 ///
 /// Kept in sync with REPO_PICKER_PAGE_SIZE in gn-account-repo-picker.ts, which
 /// discloses it to the user.
-const REPOSITORIES_DEFAULT_PER_PAGE: u32 = 30;
-
 /// The error a failed repository listing reports.
 ///
 /// A 401 means the account's PAT/OAuth token is dead — reported as
@@ -1689,19 +1687,20 @@ struct ApiRepoProject {
 /// Turn the org-wide repository list into one page of the shared listing shape.
 ///
 /// Azure DevOps' `git/repositories` endpoint takes no paging parameters and
-/// answers with every repository at once, so the page is cut here. Split out
-/// from the request so the mapping, the empty case and the paging are testable
-/// without a network.
+/// answers with every repository at once. When `per_page` is `Some(n)`, a slice
+/// is cut here; when `per_page` is `None`, all repositories are returned at
+/// once (sorted case-insensitively by `full_name`) so the client never has to
+/// re-download the entire organization payload to paginate or filter.
 fn parse_ado_repository_page(
     body: &str,
-    per_page: u32,
+    per_page: Option<u32>,
     page: u32,
 ) -> Result<ProviderRepositoryPage> {
     let data: ApiRepoListResponse = serde_json::from_str(body).map_err(|e| {
         GitnadoError::OperationFailed(format!("Failed to parse repositories: {}", e))
     })?;
 
-    let all: Vec<ProviderRepository> = data
+    let mut all: Vec<ProviderRepository> = data
         .value
         .into_iter()
         // A disabled repository cannot be cloned, so offering it would be a
@@ -1738,6 +1737,14 @@ fn parse_ado_repository_page(
         })
         .collect();
 
+    let Some(per_page) = per_page else {
+        all.sort_by_cached_key(|repo| repo.full_name.to_lowercase());
+        return Ok(ProviderRepositoryPage {
+            repositories: all,
+            next_page: None,
+        });
+    };
+
     let per_page = per_page.max(1) as usize;
     let start = (page.max(1) as usize - 1).saturating_mul(per_page);
     let end = start.saturating_add(per_page).min(all.len());
@@ -1761,7 +1768,9 @@ fn parse_ado_repository_page(
 /// List the Git repositories in an Azure DevOps organization.
 ///
 /// Scoped to the organization the account is configured with, across every
-/// project the token can see.
+/// project the token can see. Because the Azure DevOps endpoint always returns
+/// the entire organization's repository list in one HTTP response, omitting
+/// `per_page` returns the full sorted list in a single page (`next_page: None`).
 #[command]
 pub async fn list_ado_repositories(
     organization: String,
@@ -1770,7 +1779,6 @@ pub async fn list_ado_repositories(
     token: Option<String>,
 ) -> Result<ProviderRepositoryPage> {
     let token = resolve_ado_token(token)?;
-    let per_page = per_page.unwrap_or(REPOSITORIES_DEFAULT_PER_PAGE);
     let page = page.unwrap_or(1).max(1);
 
     // Organization-scoped: no project segment, so one call covers every project
@@ -1805,6 +1813,134 @@ pub async fn list_ado_repositories(
     })?;
 
     parse_ado_repository_page(&body, per_page, page)
+}
+
+// ============================================================================
+// User Existence Check Commands
+// ============================================================================
+
+#[derive(Deserialize)]
+struct ApiAdoIdentitiesResponse {
+    value: Vec<ApiAdoIdentityEntry>,
+}
+
+#[derive(Deserialize)]
+struct ApiAdoIdentityEntry {
+    #[serde(rename = "providerDisplayName")]
+    provider_display_name: Option<String>,
+    #[serde(rename = "customDisplayName")]
+    custom_display_name: Option<String>,
+    #[serde(rename = "isActive")]
+    is_active: Option<bool>,
+}
+
+fn parse_ado_identities_status(body: &str) -> Result<ProviderUserStatus> {
+    let data: ApiAdoIdentitiesResponse = serde_json::from_str(body).map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to parse identities: {}", e))
+    })?;
+
+    if data.value.is_empty() {
+        return Ok(ProviderUserStatus {
+            status: "not_found".to_string(),
+            matched_name: None,
+        });
+    }
+
+    if let Some(active) = data.value.iter().find(|i| i.is_active.unwrap_or(true)) {
+        return Ok(ProviderUserStatus {
+            status: "active".to_string(),
+            matched_name: active
+                .custom_display_name
+                .clone()
+                .or_else(|| active.provider_display_name.clone()),
+        });
+    }
+
+    let first = &data.value[0];
+    Ok(ProviderUserStatus {
+        status: "inactive".to_string(),
+        matched_name: first
+            .custom_display_name
+            .clone()
+            .or_else(|| first.provider_display_name.clone()),
+    })
+}
+
+/// Check whether a commit author exists and is active in an Azure DevOps organization.
+#[command]
+pub async fn check_ado_user_exists(
+    organization: String,
+    author_name: Option<String>,
+    author_email: Option<String>,
+    token: Option<String>,
+) -> Result<ProviderUserStatus> {
+    let token = resolve_ado_token(token)?;
+    let client = api_client()?;
+
+    let mut queries = Vec::new();
+    if let Some(email) = author_email.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        queries.push(email.to_string());
+    }
+    if let Some(name) = author_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !queries.iter().any(|q| q.eq_ignore_ascii_case(name)) {
+            queries.push(name.to_string());
+        }
+    }
+
+    if queries.is_empty() {
+        return Ok(ProviderUserStatus {
+            status: "unknown".to_string(),
+            matched_name: None,
+        });
+    }
+
+    let mut saw_inactive: Option<ProviderUserStatus> = None;
+
+    for filter_val in queries {
+        let url = format!(
+            "https://vssps.dev.azure.com/{}/_apis/identities?searchFilter=General&filterValue={}&queryMembership=None&api-version={}",
+            organization,
+            urlencoding::encode(&filter_val),
+            AZURE_DEVOPS_API_VERSION
+        );
+        let response = client
+            .get(&url)
+            .header("Authorization", get_auth_header(&token))
+            .header("Content-Type", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to check user identity: {}", e))
+            })?;
+
+        if !response.status().is_success() {
+            return Ok(ProviderUserStatus {
+                status: "unknown".to_string(),
+                matched_name: None,
+            });
+        }
+
+        let body = response.text().await.map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to read identity response: {}", e))
+        })?;
+
+        let status = parse_ado_identities_status(&body)?;
+        if status.status == "active" {
+            return Ok(status);
+        }
+        if status.status == "inactive" && saw_inactive.is_none() {
+            saw_inactive = Some(status);
+        }
+    }
+
+    if let Some(inactive) = saw_inactive {
+        return Ok(inactive);
+    }
+
+    Ok(ProviderUserStatus {
+        status: "not_found".to_string(),
+        matched_name: None,
+    })
 }
 
 #[cfg(test)]
@@ -1850,7 +1986,8 @@ mod tests {
 
     #[test]
     fn test_parse_ado_repository_page_maps_fields() {
-        let page = parse_ado_repository_page(ADO_REPO_LIST_JSON, 30, 1).expect("page should parse");
+        let page =
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, Some(30), 1).expect("page should parse");
 
         // The disabled repository cannot be cloned, so it is not offered.
         assert_eq!(page.repositories.len(), 2);
@@ -1873,15 +2010,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ado_repository_page_returns_all_sorted_when_unpaged() {
+        let page =
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, None, 1).expect("page should parse");
+        assert_eq!(page.repositories.len(), 2);
+        assert_eq!(page.repositories[0].full_name, "Tools/docs");
+        assert_eq!(page.repositories[1].full_name, "Tools/gitnado");
+        assert_eq!(page.next_page, None);
+    }
+
+    #[test]
     fn test_parse_ado_repository_page_paginates_in_memory() {
         // The endpoint takes no paging parameters, so the page is cut here.
-        let first = parse_ado_repository_page(ADO_REPO_LIST_JSON, 1, 1).expect("page should parse");
+        let first =
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, Some(1), 1).expect("page should parse");
         assert_eq!(first.repositories.len(), 1);
         assert_eq!(first.repositories[0].name, "gitnado");
         assert_eq!(first.next_page, Some(2));
 
         let second =
-            parse_ado_repository_page(ADO_REPO_LIST_JSON, 1, 2).expect("page should parse");
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, Some(1), 2).expect("page should parse");
         assert_eq!(second.repositories.len(), 1);
         assert_eq!(second.repositories[0].name, "docs");
         // Two clonable repositories, so page 2 is the last one.
@@ -1889,14 +2037,14 @@ mod tests {
 
         // A page past the end is empty rather than an error or a panic.
         let beyond =
-            parse_ado_repository_page(ADO_REPO_LIST_JSON, 1, 9).expect("page should parse");
+            parse_ado_repository_page(ADO_REPO_LIST_JSON, Some(1), 9).expect("page should parse");
         assert!(beyond.repositories.is_empty());
         assert_eq!(beyond.next_page, None);
     }
 
     #[test]
     fn test_parse_ado_repository_page_empty() {
-        let page = parse_ado_repository_page(r#"{ "count": 0, "value": [] }"#, 30, 1)
+        let page = parse_ado_repository_page(r#"{ "count": 0, "value": [] }"#, Some(30), 1)
             .expect("page should parse");
         assert!(page.repositories.is_empty());
         assert_eq!(page.next_page, None);

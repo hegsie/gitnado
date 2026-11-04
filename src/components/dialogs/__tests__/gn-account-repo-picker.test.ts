@@ -310,6 +310,28 @@ describe('gn-account-repo-picker', () => {
 
       expect(stateEl(el, 'no-matches')).to.exist;
     });
+
+    it('automatically loads further pages when a filter matches a later page', async () => {
+      unifiedProfileStore.getState().setAccounts([githubAccount]);
+      withStoredToken((command, args) => {
+        if (command !== 'list_github_repositories') return null;
+        const page = (args as { page?: number }).page ?? 1;
+        return page === 1
+          ? { repositories: [repo('alpha')], nextPage: 2 }
+          : { repositories: [repo('target-repo')], nextPage: null };
+      });
+
+      const el = await mount();
+      await waitForRepoItems(el, 1);
+
+      const filter = el.shadowRoot!.querySelector('#repo-filter') as HTMLInputElement;
+      filter.value = 'target';
+      filter.dispatchEvent(new Event('input'));
+
+      await waitForRepoItems(el, 1);
+      const rows = el.shadowRoot!.querySelectorAll('.repo-item');
+      expect(rows[0].textContent).to.contain('target-repo');
+    });
   });
 
   describe('pagination', () => {

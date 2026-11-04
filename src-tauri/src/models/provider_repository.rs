@@ -43,3 +43,13 @@ pub struct ProviderRepositoryPage {
     /// exhausted. Pages are 1-based for every provider here.
     pub next_page: Option<u32>,
 }
+
+/// Result of checking whether a commit author exists and is active in a hosting provider.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUserStatus {
+    /// Status of the user in the provider: `"active"`, `"inactive"`, `"not_found"`, or `"unknown"`.
+    pub status: String,
+    /// Matched display name or login in the provider, if found.
+    pub matched_name: Option<String>,
+}

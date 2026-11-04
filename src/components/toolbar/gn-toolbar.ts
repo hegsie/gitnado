@@ -61,7 +61,6 @@ export class GnToolbar extends LitElement {
         display: flex;
         align-items: center;
         height: 48px;
-        padding-left: 78px; /* Space for macOS traffic light buttons */
         background: var(--color-bg-secondary);
         border-bottom: 1px solid var(--color-border);
         -webkit-app-region: drag;
@@ -288,6 +287,7 @@ export class GnToolbar extends LitElement {
         position: fixed;
         inset: 0;
         z-index: 999;
+        -webkit-app-region: no-drag;
       }
 
       .tab-list-menu,
@@ -303,6 +303,12 @@ export class GnToolbar extends LitElement {
         border: 1px solid var(--color-border);
         border-radius: var(--radius-md);
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        -webkit-app-region: no-drag;
+      }
+
+      gn-clone-dialog,
+      gn-init-dialog {
+        -webkit-app-region: no-drag;
       }
 
       .tab-list-item {

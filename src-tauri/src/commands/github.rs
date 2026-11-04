@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::command;
 
 use crate::error::{GitnadoError, Result};
-use crate::models::{ProviderRepository, ProviderRepositoryPage};
+use crate::models::{ProviderRepository, ProviderRepositoryPage, ProviderUserStatus};
 use crate::services::provider_http;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
@@ -2860,6 +2860,174 @@ pub async fn delete_release(
     }
 
     Ok(())
+}
+
+// ============================================================================
+// User Existence Check Commands
+// ============================================================================
+
+fn extract_github_noreply_username(email: &str) -> Option<String> {
+    let lower = email.trim().to_ascii_lowercase();
+    let local = lower.strip_suffix("@users.noreply.github.com")?;
+    let username = match local.split_once('+') {
+        Some((_id, user)) => user,
+        None => local,
+    };
+    if !username.is_empty() && username.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        Some(username.to_string())
+    } else {
+        None
+    }
+}
+
+/// Check whether a commit author exists on GitHub.
+#[command]
+pub async fn check_github_user_exists(
+    author_name: Option<String>,
+    author_email: Option<String>,
+    token: Option<String>,
+) -> Result<ProviderUserStatus> {
+    let token = resolve_github_token(token).await?;
+    let client = api_client()?;
+
+    #[derive(Deserialize)]
+    struct ApiSimpleUser {
+        login: String,
+    }
+
+    #[derive(Deserialize)]
+    struct ApiUserSearchResponse {
+        total_count: u32,
+        items: Vec<ApiSimpleUser>,
+    }
+
+    let email = author_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let name = author_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    if email.is_none() && name.is_none() {
+        return Ok(ProviderUserStatus {
+            status: "unknown".to_string(),
+            matched_name: None,
+        });
+    }
+
+    // 1. If the email is a GitHub noreply address, look up the username directly.
+    if let Some(ref em) = email {
+        if let Some(username) = extract_github_noreply_username(em) {
+            let response = client
+                .get(format!("{}/users/{}", GITHUB_API_BASE, username))
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "Gitnado-Git-Client")
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await
+                .map_err(|e| {
+                    GitnadoError::OperationFailed(format!("Failed to check GitHub user: {}", e))
+                })?;
+
+            if response.status().as_u16() == 404 {
+                return Ok(ProviderUserStatus {
+                    status: "not_found".to_string(),
+                    matched_name: None,
+                });
+            }
+            if response.status().is_success() {
+                let user: ApiSimpleUser = response.json().await.map_err(|e| {
+                    GitnadoError::OperationFailed(format!("Failed to parse GitHub user: {}", e))
+                })?;
+                return Ok(ProviderUserStatus {
+                    status: "active".to_string(),
+                    matched_name: Some(user.login),
+                });
+            }
+            return Ok(ProviderUserStatus {
+                status: "unknown".to_string(),
+                matched_name: None,
+            });
+        }
+    }
+
+    // 2. If author_name looks like a GitHub username (no spaces), try direct lookup first.
+    if let Some(ref nm) = name {
+        if nm.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            let response = client
+                .get(format!("{}/users/{}", GITHUB_API_BASE, nm))
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "Gitnado-Git-Client")
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await
+                .map_err(|e| {
+                    GitnadoError::OperationFailed(format!("Failed to check GitHub user: {}", e))
+                })?;
+
+            if response.status().is_success() {
+                if let Ok(user) = response.json::<ApiSimpleUser>().await {
+                    return Ok(ProviderUserStatus {
+                        status: "active".to_string(),
+                        matched_name: Some(user.login),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. Search by email or name via /search/users
+    let mut queries = Vec::new();
+    if let Some(ref em) = email {
+        queries.push(format!("{} in:email", em));
+    }
+    if let Some(ref nm) = name {
+        queries.push(nm.clone());
+    }
+
+    for q in queries {
+        let response = client
+            .get(format!("{}/search/users", GITHUB_API_BASE))
+            .query(&[("q", q.as_str()), ("per_page", "5")])
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "Gitnado-Git-Client")
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to search GitHub users: {}", e))
+            })?;
+
+        if !response.status().is_success() {
+            return Ok(ProviderUserStatus {
+                status: "unknown".to_string(),
+                matched_name: None,
+            });
+        }
+
+        let search: ApiUserSearchResponse = response.json().await.map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to parse user search: {}", e))
+        })?;
+
+        if search.total_count > 0 {
+            return Ok(ProviderUserStatus {
+                status: "active".to_string(),
+                matched_name: search.items.first().map(|u| u.login.clone()),
+            });
+        }
+    }
+
+    Ok(ProviderUserStatus {
+        status: "not_found".to_string(),
+        matched_name: None,
+    })
 }
 
 #[cfg(test)]

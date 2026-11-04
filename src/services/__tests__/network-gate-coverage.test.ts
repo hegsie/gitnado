@@ -131,6 +131,7 @@ import { settingsStore } from '../../stores/settings.store.ts';
 const NETWORK_COMMANDS = new Set([
   // git operations
   'clone_repository', 'fetch', 'pull', 'push', 'push_tag', 'delete_remote_tag',
+  'delete_remote_branch',
   'push_to_multiple_remotes', 'fetch_all_remotes', 'add_submodule',
   'update_submodules', 'lfs_pull', 'lfs_fetch',
   'prune_remote_tracking_branches', 'start_auto_fetch',
@@ -168,6 +169,9 @@ const NETWORK_COMMANDS = new Set([
   // account repository listings (clone dialog's "From account" picker)
   'list_github_repositories', 'list_gitlab_projects',
   'list_bitbucket_repositories', 'list_ado_repositories',
+  // user existence checks (branch cleanup dialog)
+  'check_github_user_exists', 'check_ado_user_exists',
+  'check_gitlab_user_exists', 'check_bitbucket_user_exists',
   // GitHub App auth — `configure_github_app` mints an installation token from
   // api.github.com before it stores anything, and the installation listing is
   // a plain API read.

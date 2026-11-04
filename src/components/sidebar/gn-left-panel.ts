@@ -99,15 +99,6 @@ export class GnLeftPanel extends LitElement {
         color: var(--color-text-primary);
       }
 
-      .section.collapsed .section-content {
-        display: none;
-      }
-
-      .section.collapsed {
-        flex: 0 0 auto;
-        max-height: none;
-      }
-
       .section-content {
         flex: 1;
         overflow-y: auto;
@@ -123,6 +114,21 @@ export class GnLeftPanel extends LitElement {
         flex: 0 0 auto;
         max-height: 30%;
         border-top: 1px solid var(--color-border);
+      }
+
+      .branches-section.collapsed ~ .refs-section:not(.collapsed) {
+        flex: 1 1 auto;
+        max-height: none;
+      }
+
+      .section.collapsed .section-content {
+        display: none;
+      }
+
+      .section.collapsed {
+        flex: 0 0 auto;
+        min-height: 0;
+        max-height: none;
       }
 
       .placeholder {

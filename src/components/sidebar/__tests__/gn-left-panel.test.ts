@@ -492,4 +492,38 @@ describe('gn-left-panel', () => {
       'the section must not be hidden when the repo has no stashes'
     ).to.not.equal('none');
   });
+
+  it('shrinks collapsed branches section to header height and lets expanded refs section fill remaining space', async () => {
+    const el = await fixture<GnLeftPanel>(html`
+      <div style="height: 600px; display: flex; flex-direction: column;">
+        <gn-left-panel></gn-left-panel>
+      </div>
+    `);
+    const panel = (el.tagName.toLowerCase() === 'gn-left-panel'
+      ? el
+      : el.querySelector('gn-left-panel')) as GnLeftPanel;
+    await new Promise(r => setTimeout(r, 50));
+    await panel.updateComplete;
+
+    const toggleSection = (panel as unknown as {
+      toggleSection: (section: string) => void;
+    }).toggleSection.bind(panel);
+
+    // Collapse branches and expand pull-requests
+    toggleSection('branches');
+    toggleSection('pull-requests');
+    await panel.updateComplete;
+
+    const branchesSection = panel.shadowRoot!.querySelector('.branches-section') as HTMLElement;
+    const branchesHeader = branchesSection.querySelector('.section-header') as HTMLElement;
+    expect(branchesSection.classList.contains('collapsed')).to.be.true;
+    expect(branchesSection.offsetHeight).to.be.at.most(branchesHeader.offsetHeight + 2);
+
+    const prSection = Array.from(panel.shadowRoot!.querySelectorAll('.refs-section')).find(s =>
+      s.querySelector('.section-header')?.textContent?.includes('Pull Requests')
+    ) as HTMLElement;
+    const computedPr = getComputedStyle(prSection);
+    expect(computedPr.flexGrow).to.equal('1');
+    expect(computedPr.maxHeight).to.equal('none');
+  });
 });

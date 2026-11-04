@@ -433,6 +433,6 @@ describe("git service domain modules", () => {
     }
 
     expect(Object.keys(gitService).length).to.equal(totalDomainExports + publicSharedFunctions.length);
-    expect(Object.keys(gitService).length).to.equal(435);
+    expect(Object.keys(gitService).length).to.equal(440);
   });
 });

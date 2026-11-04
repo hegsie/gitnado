@@ -503,6 +503,13 @@ export interface DeleteRemoteTagCommand {
   token?: string;
 }
 
+export interface DeleteRemoteBranchCommand {
+  path: string;
+  name: string;
+  remote?: string;
+  token?: string;
+}
+
 export interface GetTagDetailsCommand {
   path: string;
   name: string;

@@ -191,6 +191,15 @@ const BUILDERS: Record<
     if (!name) return undefined;
     return ['branch', bool(a, 'force') ? '-D' : '-d', name];
   },
+  delete_remote_branch: (a) => {
+    const name = str(a, 'name');
+    if (!name) return undefined;
+    const argv = ['push'];
+    const remote = str(a, 'remote');
+    if (remote) argv.push(remote);
+    argv.push('--delete', name);
+    return argv;
+  },
   rename_branch: (a) => {
     const oldName = str(a, 'oldName');
     const newName = str(a, 'newName');

@@ -8,8 +8,15 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, state, property, query } from 'lit/decorators.js';
 import { sharedStyles, buttonStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
+import type { ProviderUserExistenceState } from '../../services/git.service.ts';
+import * as pullRequestService from '../../services/pull-request.service.ts';
+import type {
+  PullRequestProviderTarget,
+  SidebarPullRequest,
+} from '../../services/pull-request.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { showToast } from '../../services/notification.service.ts';
+import { openExternalUrl } from '../../utils/external-link.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 import type { Branch, CleanupCandidate } from '../../types/git.types.ts';
 import './gn-modal.ts';
@@ -25,6 +32,9 @@ type RiskLevel = 'safe' | 'warning' | 'danger';
 
 interface CleanupBranch {
   branch: Branch;
+  remoteName?: string;
+  lastCommitAuthor?: string | null;
+  lastCommitAuthorEmail?: string | null;
   risk: RiskLevel;
   riskReason: string;
   isProtected: boolean;
@@ -181,6 +191,64 @@ export class GnBranchCleanupDialog extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+      }
+
+      .remote-badge {
+        font-size: 10px;
+        font-weight: var(--font-weight-medium);
+        padding: 1px 6px;
+        border-radius: var(--radius-full);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        flex-shrink: 0;
+      }
+
+      .pr-badge {
+        font-size: 10px;
+        font-weight: var(--font-weight-medium);
+        padding: 1px 6px;
+        border-radius: var(--radius-full);
+        flex-shrink: 0;
+        border: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+      }
+
+      .pr-badge.no-pr {
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-muted);
+      }
+
+      .pr-badge.open-pr {
+        background: var(--color-primary-bg, rgba(59, 130, 246, 0.15));
+        color: var(--color-primary);
+        cursor: pointer;
+      }
+
+      .pr-badge.open-pr:hover {
+        text-decoration: underline;
+      }
+
+      .user-status-badge {
+        font-size: 10px;
+        font-weight: var(--font-weight-semibold);
+        padding: 1px 6px;
+        border-radius: var(--radius-full);
+        flex-shrink: 0;
+      }
+
+      .user-status-badge.missing {
+        background: var(--color-error-bg, var(--color-warning-bg));
+        color: var(--color-error);
+      }
+
+      .user-status-badge.inactive {
+        background: var(--color-warning-bg);
+        color: var(--color-warning);
       }
 
       .branch-detail {
@@ -332,6 +400,10 @@ export class GnBranchCleanupDialog extends LitElement {
   @state() private activeTab: CleanupTab = 'merged';
   @state() private deleting = false;
   @state() private pruneRemotes = true;
+  @state() private prProviderTarget: PullRequestProviderTarget | null = null;
+  @state() private prLookupDone = false;
+  @state() private openPrByBranch = new Map<string, SidebarPullRequest>();
+  @state() private authorStatusByKey = new Map<string, ProviderUserExistenceState>();
 
   private loadGeneration = 0;
 
@@ -369,6 +441,10 @@ export class GnBranchCleanupDialog extends LitElement {
     this.activeTab = 'merged';
     this.deleting = false;
     this.pruneRemotes = true;
+    this.prProviderTarget = null;
+    this.prLookupDone = false;
+    this.openPrByBranch = new Map();
+    this.authorStatusByKey = new Map();
   }
 
   private async loadCleanupData(preserveSelection = false): Promise<void> {
@@ -422,11 +498,12 @@ export class GnBranchCleanupDialog extends LitElement {
       }
 
       for (const candidate of result.data) {
+        const isRemote = Boolean(candidate.isRemote);
         const branch: Branch = {
           name: candidate.name,
           shorthand: candidate.shorthand,
           isHead: false,
-          isRemote: false,
+          isRemote,
           upstream: candidate.upstream,
           targetOid: '',
           aheadBehind: candidate.aheadBehind ?? undefined,
@@ -434,12 +511,22 @@ export class GnBranchCleanupDialog extends LitElement {
           isStale: candidate.category === 'stale',
         };
 
-        const isProtected = candidate.isProtected || this.isBuiltinProtected(candidate.name);
+        const isProtected =
+          candidate.isProtected ||
+          this.isBuiltinProtected(candidate.name) ||
+          this.isBuiltinProtected(candidate.shorthand);
         const protectedReason = isProtected ? this.getProtectedReason(candidate) : undefined;
         const risk = this.assessRisk(byName.get(candidate.name)!);
 
         const entry: CleanupBranch = {
           branch,
+          remoteName:
+            candidate.remoteName ??
+            (isRemote && candidate.name.includes('/')
+              ? candidate.name.slice(0, candidate.name.indexOf('/'))
+              : undefined),
+          lastCommitAuthor: candidate.lastCommitAuthor ?? null,
+          lastCommitAuthorEmail: candidate.lastCommitAuthorEmail ?? null,
           ...risk,
           isProtected,
           protectedReason,
@@ -507,6 +594,7 @@ export class GnBranchCleanupDialog extends LitElement {
       }
 
       this.requestUpdate();
+      void this.loadProviderInsights(repoPath, gen);
     } catch (err) {
       if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
         return;
@@ -518,6 +606,86 @@ export class GnBranchCleanupDialog extends LitElement {
       if (gen === this.loadGeneration) {
         this.loading = false;
       }
+    }
+  }
+
+  private authorKey(cb: CleanupBranch): string {
+    const email = (cb.lastCommitAuthorEmail ?? '').trim().toLowerCase();
+    const name = (cb.lastCommitAuthor ?? '').trim().toLowerCase();
+    return `${email}|${name}`;
+  }
+
+  /**
+   * Asynchronously enrich cleanup candidates with open PR status ("No open PR"
+   * vs "PR #N") and stale-branch author existence/activity in the connected
+   * hosting provider.
+   */
+  private async loadProviderInsights(repoPath: string, gen: number): Promise<void> {
+    try {
+      const target = await pullRequestService.detectPullRequestProvider(repoPath);
+      if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
+      if (!target) return;
+
+      const token = await pullRequestService.getProviderToken(target);
+      if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
+      if (!token) return;
+
+      this.prProviderTarget = target;
+
+      // 1. Fetch open PRs for the repository
+      const prRes = await pullRequestService.listOpenPullRequests(target, token, 100);
+      if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+        return;
+      }
+      if (prRes.success && prRes.data) {
+        const prMap = new Map<string, SidebarPullRequest>();
+        for (const pr of prRes.data) {
+          if (pr.sourceBranch && !prMap.has(pr.sourceBranch)) {
+            prMap.set(pr.sourceBranch, pr);
+          }
+        }
+        this.openPrByBranch = prMap;
+        this.prLookupDone = true;
+      }
+
+      // 2. Check whether authors of stale branches still exist / are active
+      const uniqueAuthors = new Map<string, { name: string | null; email: string | null }>();
+      for (const cb of this.staleBranches) {
+        const key = this.authorKey(cb);
+        if (key === '|') continue;
+        if (!uniqueAuthors.has(key) && uniqueAuthors.size < 25) {
+          uniqueAuthors.set(key, {
+            name: cb.lastCommitAuthor ?? null,
+            email: cb.lastCommitAuthorEmail ?? null,
+          });
+        }
+      }
+
+      for (const [key, author] of uniqueAuthors) {
+        if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+          return;
+        }
+        const statusRes = await pullRequestService.checkProviderUserStatus(
+          target,
+          author.name,
+          author.email,
+          token,
+        );
+        if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
+          return;
+        }
+        if (statusRes.success && statusRes.data) {
+          const next = new Map(this.authorStatusByKey);
+          next.set(key, statusRes.data.status);
+          this.authorStatusByKey = next;
+        }
+      }
+    } catch {
+      // Provider enrichment is non-fatal
     }
   }
 
@@ -558,18 +726,29 @@ export class GnBranchCleanupDialog extends LitElement {
 
     const ahead = candidate.aheadBehind.ahead;
     const isGone = group.some((c) => c.category === 'gone');
+    const isRemote = Boolean(candidate.isRemote);
 
     if (ahead === 0) {
       // A 'gone' branch with ahead === 0 is measured against HEAD, so it is
       // also emitted as 'merged' and the early return above already fired —
       // reaching here always means "nothing left to push to the upstream".
-      return { risk: 'safe', riskReason: 'No unpushed work' };
+      return {
+        risk: 'safe',
+        riskReason: isRemote ? 'Fully merged into current branch' : 'No unpushed work',
+      };
     }
 
     if (isGone) {
       return {
         risk: 'danger',
         riskReason: `Remote deleted with ${ahead} unpushed commit${ahead !== 1 ? 's' : ''}`,
+      };
+    }
+
+    if (isRemote) {
+      return {
+        risk: 'warning',
+        riskReason: `Has ${ahead} unmerged commit${ahead !== 1 ? 's' : ''} on remote`,
       };
     }
 
@@ -750,11 +929,26 @@ export class GnBranchCleanupDialog extends LitElement {
         ? '\n\nRemote-tracking branches will also be pruned.'
         : '';
 
+      const hasLocal = toDelete.some((cb) => !cb.branch.isRemote);
+      const hasRemote = toDelete.some((cb) => cb.branch.isRemote);
+      const scopeTitle =
+        hasLocal && hasRemote
+          ? ''
+          : hasRemote
+            ? 'Remote '
+            : 'Local ';
+      const scopeBody =
+        hasLocal && hasRemote
+          ? ''
+          : hasRemote
+            ? 'remote '
+            : 'local ';
+
       // Risk clause BEFORE the name list: the list is the part that can grow
       // without bound, so anything after it is what a clipped dialog hides.
       const confirmed = await showConfirm(
-        `Delete ${count} Local Branch${count === 1 ? '' : 'es'}?`,
-        `${count} selected local branch${count === 1 ? '' : 'es'} will be deleted.` +
+        `Delete ${count} ${scopeTitle}Branch${count === 1 ? '' : 'es'}?`,
+        `${count} selected ${scopeBody}branch${count === 1 ? '' : 'es'} will be deleted.` +
           riskSummary +
           `\n\n${names}.` +
           pruneSummary +
@@ -785,6 +979,27 @@ export class GnBranchCleanupDialog extends LitElement {
     const unmergedRefusals: CleanupBranch[] = [];
 
     for (const cb of toDelete) {
+      if (cb.branch.isRemote) {
+        const remote =
+          cb.remoteName ??
+          (cb.branch.name.includes('/')
+            ? cb.branch.name.slice(0, cb.branch.name.indexOf('/'))
+            : undefined);
+        const result = await gitService.deleteRemoteBranch({
+          path: repoPath,
+          remote,
+          name: cb.branch.shorthand,
+        });
+        if (result.success) {
+          deleted++;
+        } else {
+          failed++;
+          failures.push(`${cb.branch.name}: ${result.error?.message ?? 'unknown error'}`);
+          console.error(`Failed to delete remote branch ${cb.branch.name}:`, result.error);
+        }
+        continue;
+      }
+
       // NEVER force a branch the dialog labelled Safe. Two reasons: a merged
       // branch deletes fine without force, and withholding force keeps
       // delete_branch's merged-check, which is the only thing that catches the
@@ -1013,12 +1228,35 @@ export class GnBranchCleanupDialog extends LitElement {
   }
 
   private renderBranchItem(cb: CleanupBranch) {
-    const { branch, risk, riskReason, isProtected, protectedReason } = cb;
+    const {
+      branch,
+      remoteName,
+      lastCommitAuthor,
+      lastCommitAuthorEmail,
+      risk,
+      riskReason,
+      isProtected,
+      protectedReason,
+    } = cb;
     const isSelected = this.selectedBranches.has(branch.name);
 
-    const detail = branch.lastCommitTimestamp
+    const timePart = branch.lastCommitTimestamp
       ? `Last commit: ${this.formatTimeAgo(branch.lastCommitTimestamp)}`
       : '';
+    const authorPart = lastCommitAuthor
+      ? `by ${lastCommitAuthor}`
+      : lastCommitAuthorEmail
+        ? `by ${lastCommitAuthorEmail}`
+        : '';
+    const detail = [timePart, authorPart].filter(Boolean).join(' ');
+    const displayName = branch.isRemote ? branch.name : branch.shorthand;
+
+    const openPr = this.prLookupDone ? this.openPrByBranch.get(branch.shorthand) : undefined;
+    const prBadgePrefix = this.prProviderTarget?.provider === 'gitlab' ? 'MR !' : 'PR #';
+    const noPrLabel =
+      this.prProviderTarget?.provider === 'gitlab' ? 'No open MR' : 'No open PR';
+
+    const authorStatus = this.authorStatusByKey.get(this.authorKey(cb));
 
     return html`
       <li class="branch-item ${isProtected ? 'protected' : ''}">
@@ -1027,10 +1265,45 @@ export class GnBranchCleanupDialog extends LitElement {
           .checked=${isSelected}
           ?disabled=${isProtected || this.deleting}
           @change=${() => this.handleToggleBranch(branch.name)}
-          aria-label="Select ${branch.shorthand}"
+          aria-label="Select ${displayName}"
         />
         <div class="branch-info">
-          <span class="branch-name">${branch.shorthand}</span>
+          <span class="branch-name">
+            ${displayName}
+            ${branch.isRemote
+              ? html`<span class="remote-badge">${remoteName ?? 'remote'}</span>`
+              : nothing}
+            ${this.prLookupDone
+              ? openPr
+                ? html`<button
+                    type="button"
+                    class="pr-badge open-pr"
+                    title="${openPr.draft ? 'Draft: ' : ''}${openPr.title}"
+                    @click=${(e: Event) => {
+                      e.stopPropagation();
+                      if (openPr.url) void openExternalUrl(openPr.url);
+                    }}
+                  >
+                    ${openPr.draft ? 'Draft ' : ''}${prBadgePrefix}${openPr.number}
+                  </button>`
+                : html`<span class="pr-badge no-pr">${noPrLabel}</span>`
+              : nothing}
+            ${authorStatus === 'not_found'
+              ? html`<span
+                  class="user-status-badge missing"
+                  title="Author (${lastCommitAuthor || lastCommitAuthorEmail || 'unknown'}) was not found in ${this.prProviderTarget?.providerName ?? 'the system'}"
+                >
+                  User not found
+                </span>`
+              : authorStatus === 'inactive'
+                ? html`<span
+                    class="user-status-badge inactive"
+                    title="Author (${lastCommitAuthor || lastCommitAuthorEmail || 'unknown'}) is inactive in ${this.prProviderTarget?.providerName ?? 'the system'}"
+                  >
+                    User inactive
+                  </span>`
+                : nothing}
+          </span>
           ${detail ? html`<span class="branch-detail">${detail}</span>` : nothing}
           ${riskReason && !isProtected
             ? html`<span class="branch-detail">${riskReason}</span>`

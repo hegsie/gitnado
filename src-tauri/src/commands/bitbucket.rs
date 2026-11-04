@@ -5,7 +5,7 @@
 //! All API functions accept optional credentials from the frontend.
 
 use crate::error::{GitnadoError, Result};
-use crate::models::{ProviderRepository, ProviderRepositoryPage};
+use crate::models::{ProviderRepository, ProviderRepositoryPage, ProviderUserStatus};
 use crate::services::provider_http;
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -1613,6 +1613,145 @@ pub async fn list_bitbucket_repositories(
     })?;
 
     parse_bitbucket_repository_page(&body, page)
+}
+
+// ============================================================================
+// User Existence Check Commands
+// ============================================================================
+
+#[derive(Deserialize)]
+struct ApiBitbucketMembersResponse {
+    values: Vec<ApiBitbucketMemberEntry>,
+}
+
+#[derive(Deserialize)]
+struct ApiBitbucketMemberEntry {
+    user: Option<ApiBitbucketMemberUser>,
+}
+
+#[derive(Deserialize)]
+struct ApiBitbucketMemberUser {
+    display_name: Option<String>,
+    nickname: Option<String>,
+    username: Option<String>,
+    account_status: Option<String>,
+}
+
+fn parse_bitbucket_members_status(
+    body: &str,
+    author_name: Option<&str>,
+    author_email: Option<&str>,
+) -> Result<ProviderUserStatus> {
+    let data: ApiBitbucketMembersResponse = serde_json::from_str(body)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse members: {}", e)))?;
+
+    let target_name = author_name.map(str::trim).filter(|s| !s.is_empty());
+    let email_local = author_email
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|e| e.split_once('@').map(|(l, _)| l));
+
+    for entry in &data.values {
+        let Some(ref user) = entry.user else {
+            continue;
+        };
+        let candidates = [
+            user.display_name.as_deref(),
+            user.nickname.as_deref(),
+            user.username.as_deref(),
+        ];
+        let matched = candidates.into_iter().flatten().any(|cand| {
+            let cand_trimmed = cand.trim();
+            if cand_trimmed.is_empty() {
+                return false;
+            }
+            if let Some(tn) = target_name {
+                if cand_trimmed.eq_ignore_ascii_case(tn) {
+                    return true;
+                }
+            }
+            if let Some(el) = email_local {
+                if cand_trimmed.eq_ignore_ascii_case(el) {
+                    return true;
+                }
+            }
+            false
+        });
+
+        if matched {
+            let status_str = match user.account_status.as_deref() {
+                Some("inactive") | Some("closed") => "inactive",
+                _ => "active",
+            };
+            return Ok(ProviderUserStatus {
+                status: status_str.to_string(),
+                matched_name: user
+                    .display_name
+                    .clone()
+                    .or_else(|| user.nickname.clone())
+                    .or_else(|| user.username.clone()),
+            });
+        }
+    }
+
+    Ok(ProviderUserStatus {
+        status: "not_found".to_string(),
+        matched_name: None,
+    })
+}
+
+/// Check whether a commit author is a member of a Bitbucket workspace.
+#[command]
+pub async fn check_bitbucket_user_exists(
+    workspace: String,
+    author_name: Option<String>,
+    author_email: Option<String>,
+    token: Option<String>,
+    username: Option<String>,
+    app_password: Option<String>,
+) -> Result<ProviderUserStatus> {
+    let client = api_client()?;
+    let auth_header = get_auth_header_with_token(
+        token.as_deref(),
+        username.as_deref(),
+        app_password.as_deref(),
+    )?;
+
+    let name_clean = author_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let email_clean = author_email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if name_clean.is_none() && email_clean.is_none() {
+        return Ok(ProviderUserStatus {
+            status: "unknown".to_string(),
+            matched_name: None,
+        });
+    }
+
+    let url = format!(
+        "{}/workspaces/{}/members?pagelen=100",
+        BITBUCKET_API_BASE, workspace
+    );
+
+    let response = client
+        .get(&url)
+        .header("Authorization", auth_header)
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to check Bitbucket members: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        return Ok(ProviderUserStatus {
+            status: "unknown".to_string(),
+            matched_name: None,
+        });
+    }
+
+    let body = response.text().await.map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to read Bitbucket members: {}", e))
+    })?;
+
+    parse_bitbucket_members_status(&body, name_clean, email_clean)
 }
 
 #[cfg(test)]

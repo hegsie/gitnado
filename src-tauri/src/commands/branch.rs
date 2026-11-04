@@ -261,6 +261,69 @@ pub async fn delete_branch(path: String, name: String, force: Option<bool>) -> R
     .await
 }
 
+/// Delete a branch from a remote repository (and remove the local remote-tracking ref).
+#[command]
+pub async fn delete_remote_branch(
+    path: String,
+    name: String,
+    remote: Option<String>,
+    token: Option<String>,
+) -> Result<()> {
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let remote_name = crate::commands::remote::resolve_push_remote(&repo, remote);
+        crate::services::security::guard_push_remote(&path, Some(&remote_name))?;
+
+        // Normalize `name`: if caller passed "origin/feature/x" alongside remote "origin",
+        // strip the "<remote>/" prefix so the remote refspec is `:refs/heads/feature/x`.
+        let branch_short = name
+            .strip_prefix(&format!("{}/", remote_name))
+            .unwrap_or(&name)
+            .to_string();
+        let tracking_name = format!("{}/{}", remote_name, branch_short);
+
+        // Enforce branch protection rules on both the short name and the remote-qualified name.
+        let rules = super::branch_rules::load_rules(Path::new(&path))?;
+        if super::branch_rules::is_deletion_prevented(&rules, &branch_short)
+            || super::branch_rules::is_deletion_prevented(&rules, &tracking_name)
+        {
+            return Err(GitnadoError::OperationFailed(format!(
+                "Branch \"{}\" is protected by a branch rule and cannot be deleted. Remove the rule first.",
+                tracking_name
+            )));
+        }
+
+        let mut remote_obj = repo
+            .find_remote(&remote_name)
+            .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
+
+        let remote_oid = repo
+            .refname_to_id(&format!("refs/remotes/{}", tracking_name))
+            .map(|o| o.to_string())
+            .unwrap_or_else(|_| crate::commands::hooks::ZERO_OID.to_string());
+
+        crate::commands::hooks::run_pre_push_branch_delete(
+            &repo,
+            &remote_name,
+            &branch_short,
+            &remote_oid,
+        )?;
+
+        let mut push_opts = crate::services::credentials_service::get_push_options(token);
+        remote_obj.push(&[&format!(":refs/heads/{}", branch_short)], Some(&mut push_opts))?;
+
+        // Remove the local remote-tracking branch so the sidebar and cleanup dialog
+        // immediately reflect the deletion without needing a separate fetch --prune.
+        if let Ok(mut tracking_branch) = repo.find_branch(&tracking_name, git2::BranchType::Remote)
+        {
+            let _ = tracking_branch.delete();
+        }
+
+        Ok(())
+    })
+    .await
+}
+
 /// Rename a branch
 ///
 /// After renaming, if `update_tracking` is true (the default) and the branch

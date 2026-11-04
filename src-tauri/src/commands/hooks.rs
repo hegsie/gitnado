@@ -452,6 +452,22 @@ pub fn run_pre_push_tag_delete(
     run_hook_blocking(repo, "pre-push", &[remote_name, &url], Some(&stdin))
 }
 
+/// Run the pre-push hook for a branch DELETION (blocking, git parity).
+///
+/// git spells a deletion with the literal local ref `(delete)` and an all-zero
+/// local oid, per githooks(5).
+pub fn run_pre_push_branch_delete(
+    repo: &git2::Repository,
+    remote_name: &str,
+    branch_name: &str,
+    remote_oid: &str,
+) -> Result<()> {
+    let url = remote_url(repo, remote_name);
+    let remote_ref = format!("refs/heads/{}", branch_name);
+    let stdin = format!("(delete) {} {} {}\n", ZERO_OID, remote_ref, remote_oid);
+    run_hook_blocking(repo, "pre-push", &[remote_name, &url], Some(&stdin))
+}
+
 /// A git hook
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

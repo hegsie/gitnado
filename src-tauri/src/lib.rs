@@ -366,6 +366,7 @@ pub fn run() {
             commands::branch::get_branches,
             commands::branch::create_branch,
             commands::branch::delete_branch,
+            commands::branch::delete_remote_branch,
             commands::branch::rename_branch,
             commands::branch::checkout,
             commands::branch::checkout_with_autostash,
@@ -646,6 +647,7 @@ pub fn run() {
             commands::github::get_check_runs,
             commands::github::get_commit_status,
             commands::github::list_github_repositories,
+            commands::github::check_github_user_exists,
             // GitHub Issues
             commands::github::list_issues,
             commands::github::get_issue,
@@ -678,6 +680,7 @@ pub fn run() {
             commands::azure_devops::list_ado_pipeline_runs,
             commands::azure_devops::list_ado_organizations,
             commands::azure_devops::list_ado_repositories,
+            commands::azure_devops::check_ado_user_exists,
             // GitLab integration
             commands::gitlab::check_gitlab_connection,
             commands::gitlab::detect_gitlab_repo,
@@ -691,6 +694,7 @@ pub fn run() {
             commands::gitlab::list_gitlab_pipelines,
             commands::gitlab::get_gitlab_labels,
             commands::gitlab::list_gitlab_projects,
+            commands::gitlab::check_gitlab_user_exists,
             // Bitbucket integration
             commands::bitbucket::store_bitbucket_credentials,
             commands::bitbucket::get_bitbucket_credentials,
@@ -707,6 +711,7 @@ pub fn run() {
             commands::bitbucket::create_bitbucket_issue,
             commands::bitbucket::list_bitbucket_pipelines,
             commands::bitbucket::list_bitbucket_repositories,
+            commands::bitbucket::check_bitbucket_user_exists,
             // Commit templates
             commands::templates::get_commit_template,
             commands::templates::list_templates,

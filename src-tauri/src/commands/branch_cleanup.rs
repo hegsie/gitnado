@@ -30,12 +30,20 @@ pub struct CleanupCandidate {
     pub category: String,
     /// Unix timestamp of the last commit on this branch
     pub last_commit_timestamp: Option<i64>,
+    /// Display name of the last commit's author on this branch
+    pub last_commit_author: Option<String>,
+    /// Email address of the last commit's author on this branch
+    pub last_commit_author_email: Option<String>,
     /// Whether the branch is protected by a branch rule
     pub is_protected: bool,
     /// The upstream tracking reference, if any
     pub upstream: Option<String>,
-    /// Ahead/behind counts relative to upstream
+    /// Ahead/behind counts relative to upstream (or HEAD for gone/remote branches)
     pub ahead_behind: Option<AheadBehind>,
+    /// Whether this candidate is a remote-tracking branch (e.g. "origin/feature")
+    pub is_remote: bool,
+    /// Remote name when `is_remote` is true (e.g. "origin")
+    pub remote_name: Option<String>,
 }
 
 /// Get all branches that are candidates for cleanup.
@@ -100,10 +108,24 @@ pub async fn get_cleanup_candidates(
             None => continue,
         };
 
-        let last_commit_timestamp = repo
+        let (last_commit_timestamp, last_commit_author, last_commit_author_email) = repo
             .find_commit(branch_oid)
             .ok()
-            .map(|commit| commit.time().seconds());
+            .map(|commit| {
+                let sig = commit.author();
+                let name = sig
+                    .name()
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let email = sig
+                    .email()
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                (Some(commit.time().seconds()), name, email)
+            })
+            .unwrap_or((None, None, None));
 
         let upstream = branch
             .upstream()
@@ -167,9 +189,13 @@ pub async fn get_cleanup_candidates(
             shorthand: name.clone(),
             category: category.to_string(),
             last_commit_timestamp,
+            last_commit_author: last_commit_author.clone(),
+            last_commit_author_email: last_commit_author_email.clone(),
             is_protected: protected,
             upstream: upstream.clone(),
             ahead_behind: ahead_behind.clone(),
+            is_remote: false,
+            remote_name: None,
         };
 
         if is_merged {
@@ -180,6 +206,110 @@ pub async fn get_cleanup_candidates(
         }
         if is_gone {
             candidates.push(base("gone"));
+        }
+    }
+
+    // Determine the current HEAD branch's shorthand and upstream so we skip the
+    // remote branch corresponding to HEAD (e.g., "origin/main" when HEAD is "main").
+    let head_shorthand = head.shorthand().ok().map(|s| s.to_string());
+    let head_upstream_name = head_shorthand
+        .as_deref()
+        .and_then(|name| repo.find_branch(name, git2::BranchType::Local).ok())
+        .and_then(|b| b.upstream().ok())
+        .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+
+    for branch_result in repo.branches(Some(git2::BranchType::Remote))? {
+        let (branch, _) = branch_result?;
+        let reference = branch.get();
+
+        // Skip symbolic remote references such as "origin/HEAD -> origin/main"
+        if reference.kind() == Some(git2::ReferenceType::Symbolic) {
+            continue;
+        }
+
+        let name = branch.name()?.unwrap_or("").to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        let (remote_name, shorthand) = match name.split_once('/') {
+            Some((r, s)) if !r.is_empty() && !s.is_empty() => (r.to_string(), s.to_string()),
+            _ => continue,
+        };
+
+        if shorthand == "HEAD" {
+            continue;
+        }
+
+        // Skip the remote branch that HEAD is tracking or that shares HEAD's branch name
+        if head_upstream_name.as_deref() == Some(name.as_str())
+            || head_shorthand.as_deref() == Some(shorthand.as_str())
+        {
+            continue;
+        }
+
+        let branch_oid = match reference.target() {
+            Some(oid) => oid,
+            None => continue,
+        };
+
+        let (last_commit_timestamp, last_commit_author, last_commit_author_email) = repo
+            .find_commit(branch_oid)
+            .ok()
+            .map(|commit| {
+                let sig = commit.author();
+                let name = sig
+                    .name()
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let email = sig
+                    .email()
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                (Some(commit.time().seconds()), name, email)
+            })
+            .unwrap_or((None, None, None));
+
+        let protected = is_protected(&name) || is_protected(&shorthand);
+
+        // Compare remote branch against HEAD so the UI knows whether deleting the
+        // remote branch would discard commits not in the current branch.
+        let ahead_behind = repo
+            .graph_ahead_behind(branch_oid, head_oid)
+            .ok()
+            .map(|(ahead, behind)| AheadBehind { ahead, behind });
+
+        let is_merged = branch_oid == head_oid
+            || repo
+                .graph_descendant_of(head_oid, branch_oid)
+                .unwrap_or(false);
+
+        let is_stale = stale_days > 0
+            && last_commit_timestamp
+                .map(|ts| ts < stale_threshold)
+                .unwrap_or(false);
+
+        let base = |category: &str| CleanupCandidate {
+            name: name.clone(),
+            shorthand: shorthand.clone(),
+            category: category.to_string(),
+            last_commit_timestamp,
+            last_commit_author: last_commit_author.clone(),
+            last_commit_author_email: last_commit_author_email.clone(),
+            is_protected: protected,
+            upstream: None,
+            ahead_behind: ahead_behind.clone(),
+            is_remote: true,
+            remote_name: Some(remote_name.clone()),
+        };
+
+        if is_merged {
+            candidates.push(base("merged"));
+        }
+        if is_stale {
+            candidates.push(base("stale"));
         }
     }
 
@@ -198,12 +328,16 @@ mod tests {
             shorthand: "feature/old".to_string(),
             category: "merged".to_string(),
             last_commit_timestamp: Some(1700000000),
+            last_commit_author: Some("Alice".to_string()),
+            last_commit_author_email: Some("alice@example.com".to_string()),
             is_protected: false,
             upstream: Some("origin/feature/old".to_string()),
             ahead_behind: Some(AheadBehind {
                 ahead: 0,
                 behind: 2,
             }),
+            is_remote: false,
+            remote_name: None,
         };
 
         let json = serde_json::to_string(&candidate).expect("Failed to serialize");
@@ -366,5 +500,61 @@ mod tests {
                 .any(|c| c.name == "feature-wip" && c.category == "merged"),
             "Unmerged branch should not be a merged candidate"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_cleanup_candidates_includes_remote_merged_and_skips_head_upstream() {
+        let test_repo = TestRepo::with_initial_commit();
+        let default_branch = test_repo.current_branch();
+        let initial_oid = test_repo.head_oid();
+        test_repo.create_commit("advance main", &[("file.txt", "v2")]);
+        let latest_oid = test_repo.head_oid();
+
+        {
+            let repo = test_repo.repo();
+            // Remote branch matching HEAD's branch name (should be skipped)
+            repo.reference(
+                &format!("refs/remotes/origin/{}", default_branch),
+                latest_oid,
+                true,
+                "remote head branch",
+            )
+            .unwrap();
+            // Symbolic remote HEAD (should be skipped)
+            repo.reference_symbolic(
+                "refs/remotes/origin/HEAD",
+                &format!("refs/remotes/origin/{}", default_branch),
+                true,
+                "remote head symref",
+            )
+            .unwrap();
+            // Remote branch that is merged into HEAD
+            repo.reference(
+                "refs/remotes/origin/feature/old-merged",
+                initial_oid,
+                true,
+                "merged remote branch",
+            )
+            .unwrap();
+        }
+
+        let candidates = get_cleanup_candidates(test_repo.path_str(), Some(0))
+            .await
+            .expect("should return candidates");
+
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.name == format!("origin/{}", default_branch) || c.name == "origin/HEAD"),
+            "origin/HEAD and origin/<default_branch> must not be offered as cleanup candidates"
+        );
+
+        let remote_merged = candidates
+            .iter()
+            .find(|c| c.name == "origin/feature/old-merged" && c.category == "merged")
+            .expect("origin/feature/old-merged should be returned as a merged remote candidate");
+        assert!(remote_merged.is_remote);
+        assert_eq!(remote_merged.remote_name.as_deref(), Some("origin"));
+        assert_eq!(remote_merged.shorthand, "feature/old-merged");
     }
 }

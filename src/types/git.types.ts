@@ -624,9 +624,13 @@ export interface CleanupCandidate {
   shorthand: string;
   category: 'merged' | 'stale' | 'gone';
   lastCommitTimestamp: number | null;
+  lastCommitAuthor?: string | null;
+  lastCommitAuthorEmail?: string | null;
   isProtected: boolean;
   upstream: string | null;
   aheadBehind: AheadBehind | null;
+  isRemote?: boolean;
+  remoteName?: string | null;
 }
 
 /**

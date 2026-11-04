@@ -5,7 +5,7 @@
 //! All API functions accept an optional token parameter from the frontend.
 
 use crate::error::{GitnadoError, Result};
-use crate::models::{ProviderRepository, ProviderRepositoryPage};
+use crate::models::{ProviderRepository, ProviderRepositoryPage, ProviderUserStatus};
 use crate::services::provider_http;
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -1249,6 +1249,122 @@ pub async fn list_gitlab_projects(
         .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read projects: {}", e)))?;
 
     parse_gitlab_project_page(&body, per_page, page)
+}
+
+// ============================================================================
+// User Existence Check Commands
+// ============================================================================
+
+#[derive(Deserialize)]
+struct ApiGitLabUserEntry {
+    username: String,
+    name: String,
+    state: Option<String>,
+}
+
+fn parse_gitlab_users_status(body: &str) -> Result<ProviderUserStatus> {
+    let entries: Vec<ApiGitLabUserEntry> = serde_json::from_str(body)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse users: {}", e)))?;
+
+    if entries.is_empty() {
+        return Ok(ProviderUserStatus {
+            status: "not_found".to_string(),
+            matched_name: None,
+        });
+    }
+
+    if let Some(active) = entries
+        .iter()
+        .find(|u| u.state.as_deref().unwrap_or("active") == "active")
+    {
+        return Ok(ProviderUserStatus {
+            status: "active".to_string(),
+            matched_name: Some(if active.name.is_empty() {
+                active.username.clone()
+            } else {
+                active.name.clone()
+            }),
+        });
+    }
+
+    let first = &entries[0];
+    Ok(ProviderUserStatus {
+        status: "inactive".to_string(),
+        matched_name: Some(if first.name.is_empty() {
+            first.username.clone()
+        } else {
+            first.name.clone()
+        }),
+    })
+}
+
+/// Check whether a commit author exists and is active on a GitLab instance.
+#[command]
+pub async fn check_gitlab_user_exists(
+    instance_url: String,
+    author_name: Option<String>,
+    author_email: Option<String>,
+    token: Option<String>,
+) -> Result<ProviderUserStatus> {
+    api_client(&instance_url)?;
+    let token = resolve_token(token)?;
+
+    let mut queries = Vec::new();
+    if let Some(email) = author_email.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        queries.push(email.to_string());
+    }
+    if let Some(name) = author_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !queries.iter().any(|q| q.eq_ignore_ascii_case(name)) {
+            queries.push(name.to_string());
+        }
+    }
+
+    if queries.is_empty() {
+        return Ok(ProviderUserStatus {
+            status: "unknown".to_string(),
+            matched_name: None,
+        });
+    }
+
+    let mut saw_inactive: Option<ProviderUserStatus> = None;
+
+    for q in queries {
+        let url = format!(
+            "{}?search={}&per_page=10",
+            build_api_url(&instance_url, "users"),
+            url_encode(&q)
+        );
+        let response = gitlab_get(&url, &token).await?;
+
+        if !response.status().is_success() {
+            return Ok(ProviderUserStatus {
+                status: "unknown".to_string(),
+                matched_name: None,
+            });
+        }
+
+        let body = response
+            .text()
+            .await
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read users: {}", e)))?;
+
+        let status = parse_gitlab_users_status(&body)?;
+        if status.status == "active" {
+            return Ok(status);
+        }
+        if status.status == "inactive" && saw_inactive.is_none() {
+            saw_inactive = Some(status);
+        }
+    }
+
+    if let Some(inactive) = saw_inactive {
+        return Ok(inactive);
+    }
+
+    Ok(ProviderUserStatus {
+        status: "not_found".to_string(),
+        matched_name: None,
+    })
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ let mockInvoke: MockInvoke = () => Promise.resolve(null);
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
 import { expect, fixture, html, waitUntil } from '@open-wc/testing';
+import * as pullRequestService from '../../../services/pull-request.service.ts';
 import { settingsStore } from '../../../stores/settings.store.ts';
 import { uiStore } from '../../../stores/ui.store.ts';
 import type { CleanupCandidate } from '../../../types/git.types.ts';
@@ -1562,6 +1563,143 @@ describe('gn-branch-cleanup-dialog (fixture)', () => {
         n.textContent!.trim(),
       );
       expect(names).to.deep.equal(['feature/repo-b']);
+    });
+
+    it('renders and deletes remote branches via delete_remote_branch', async () => {
+      const remoteMerged: CleanupCandidate = {
+        ...createCandidate('origin/feature/old-remote', 'merged'),
+        shorthand: 'feature/old-remote',
+        isRemote: true,
+        remoteName: 'origin',
+      };
+
+      const el = await renderAndOpen([remoteMerged]);
+
+      const badge = el.shadowRoot!.querySelector('.remote-badge');
+      expect(badge).to.not.be.null;
+      expect(badge!.textContent!.trim()).to.equal('origin');
+
+      const deleteBtn = el.shadowRoot!.querySelector('.btn-danger') as HTMLButtonElement;
+      expect(deleteBtn.disabled).to.be.false;
+      deleteBtn.click();
+      await settle(el);
+
+      const remoteCalls = findCommands('delete_remote_branch');
+      expect(remoteCalls.length).to.equal(1);
+      expect(remoteCalls[0].args).to.deep.include({
+        path: REPO_PATH,
+        remote: 'origin',
+        name: 'feature/old-remote',
+      });
+    });
+
+    it('renders PR status and stale branch author existence badges when provider is connected', async () => {
+      pullRequestService.invalidateProviderDetection();
+      const staleFormerUser: CleanupCandidate = {
+        ...createCandidate('origin/feature/former-employee', 'stale', {
+          aheadBehind: { ahead: 2, behind: 10 },
+          lastCommitTimestamp: Math.floor(Date.now() / 1000) - 90 * 24 * 60 * 60,
+        }),
+        shorthand: 'feature/former-employee',
+        isRemote: true,
+        remoteName: 'origin',
+        lastCommitAuthor: 'Former Employee',
+        lastCommitAuthorEmail: 'former@example.com',
+      };
+      const staleWithOpenPr: CleanupCandidate = {
+        ...createCandidate('origin/feature/active-pr', 'stale', {
+          aheadBehind: { ahead: 1, behind: 5 },
+          lastCommitTimestamp: Math.floor(Date.now() / 1000) - 45 * 24 * 60 * 60,
+        }),
+        shorthand: 'feature/active-pr',
+        isRemote: true,
+        remoteName: 'origin',
+        lastCommitAuthor: 'Active Dev',
+        lastCommitAuthorEmail: 'active@example.com',
+      };
+
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'get_cleanup_candidates') {
+          return [staleFormerUser, staleWithOpenPr];
+        }
+        if (command === 'detect_ado_repo') {
+          return {
+            organization: 'sefe',
+            project: 'proj',
+            repository: 'repo',
+            remoteName: 'origin',
+          };
+        }
+        if (command === 'get_keyring_token') {
+          return 'ado-pat-token';
+        }
+        if (command === 'list_ado_pull_requests') {
+          return [
+            {
+              pullRequestId: 42,
+              title: 'Active feature PR',
+              description: null,
+              status: 'active',
+              createdBy: {
+                id: 'u1',
+                displayName: 'Active Dev',
+                uniqueName: 'active@example.com',
+                imageUrl: null,
+              },
+              creationDate: '2026-01-01T00:00:00Z',
+              sourceRefName: 'refs/heads/feature/active-pr',
+              targetRefName: 'refs/heads/main',
+              mergeStatus: null,
+              isDraft: false,
+              url: 'https://dev.azure.com/sefe/proj/_git/repo/pullrequest/42',
+              repositoryName: 'repo',
+            },
+          ];
+        }
+        if (command === 'check_ado_user_exists') {
+          const email = (args as { authorEmail?: string })?.authorEmail;
+          if (email === 'former@example.com') {
+            return { status: 'not_found', matchedName: null };
+          }
+          return { status: 'active', matchedName: 'Active Dev' };
+        }
+        return null;
+      };
+
+      const el = await fixture<GnBranchCleanupDialog>(
+        html`<gn-branch-cleanup-dialog .repositoryPath=${REPO_PATH}></gn-branch-cleanup-dialog>`,
+      );
+      await el.open();
+      await settle(el);
+
+      const staleTab = Array.from(el.shadowRoot!.querySelectorAll('.tab')).find((t) =>
+        t.textContent?.includes('Stale'),
+      ) as HTMLButtonElement;
+      staleTab.click();
+      await settle(el);
+
+      await waitUntil(
+        () => el.shadowRoot!.querySelectorAll('.pr-badge').length === 2,
+        'PR badges should render',
+      );
+      await waitUntil(
+        () => el.shadowRoot!.querySelector('.user-status-badge.missing') !== null,
+        'User not found badge should render',
+      );
+
+      const items = Array.from(el.shadowRoot!.querySelectorAll('.branch-item'));
+      expect(items.length).to.equal(2);
+
+      // First item: former employee with no open PR and User not found badge
+      expect(items[0].querySelector('.pr-badge.no-pr')?.textContent?.trim()).to.equal('No open PR');
+      expect(items[0].querySelector('.user-status-badge.missing')?.textContent?.trim()).to.equal(
+        'User not found',
+      );
+      expect(items[0].textContent).to.include('by Former Employee');
+
+      // Second item: active developer with PR #42 and no missing user badge
+      expect(items[1].querySelector('.pr-badge.open-pr')?.textContent?.trim()).to.equal('PR #42');
+      expect(items[1].querySelector('.user-status-badge')).to.be.null;
     });
   });
 });

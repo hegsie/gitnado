@@ -47,7 +47,9 @@ export class GnCloneDialog extends LitElement {
         display: flex;
         flex-direction: column;
         gap: var(--spacing-md);
-        min-width: 450px;
+        width: 520px;
+        max-width: 100%;
+        box-sizing: border-box;
       }
 
       .field {

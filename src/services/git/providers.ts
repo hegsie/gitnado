@@ -1767,6 +1767,71 @@ export async function listAdoRepositories(
   });
 }
 
+// ============================================================================
+// Provider User Existence Checks
+// ============================================================================
+
+export type ProviderUserExistenceState = 'active' | 'inactive' | 'not_found' | 'unknown';
+
+export interface ProviderUserStatus {
+  status: ProviderUserExistenceState;
+  matchedName: string | null;
+}
+
+export async function checkGitHubUserExists(
+  authorName?: string | null,
+  authorEmail?: string | null,
+  token?: string | null,
+): Promise<CommandResult<ProviderUserStatus>> {
+  return invokeProviderCommand<ProviderUserStatus>("check_github_user_exists", {
+    authorName,
+    authorEmail,
+    token,
+  });
+}
+
+export async function checkAdoUserExists(
+  organization: string,
+  authorName?: string | null,
+  authorEmail?: string | null,
+  token?: string | null,
+): Promise<CommandResult<ProviderUserStatus>> {
+  return invokeProviderCommand<ProviderUserStatus>("check_ado_user_exists", {
+    organization,
+    authorName,
+    authorEmail,
+    token,
+  });
+}
+
+export async function checkGitLabUserExists(
+  instanceUrl: string,
+  authorName?: string | null,
+  authorEmail?: string | null,
+  token?: string | null,
+): Promise<CommandResult<ProviderUserStatus>> {
+  return invokeProviderCommand<ProviderUserStatus>("check_gitlab_user_exists", {
+    instanceUrl,
+    authorName,
+    authorEmail,
+    token,
+  });
+}
+
+export async function checkBitbucketUserExists(
+  workspace: string,
+  authorName?: string | null,
+  authorEmail?: string | null,
+  token?: string | null,
+): Promise<CommandResult<ProviderUserStatus>> {
+  return invokeProviderCommand<ProviderUserStatus>("check_bitbucket_user_exists", {
+    workspace,
+    authorName,
+    authorEmail,
+    token,
+  });
+}
+
 
 // ============================================================================
 // PR/MR Templates

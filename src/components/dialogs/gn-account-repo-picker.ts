@@ -114,6 +114,7 @@ export class GnAccountRepoPicker extends LitElement {
         flex-direction: column;
         max-height: 220px;
         overflow-y: auto;
+        overflow-x: hidden;
         margin: 0;
         padding: 0;
         /* The rows carry their own separators; the explicit role="list" keeps
@@ -126,6 +127,7 @@ export class GnAccountRepoPicker extends LitElement {
 
       .repo-row {
         display: flex;
+        min-width: 0;
       }
 
       .repo-item {
@@ -161,17 +163,25 @@ export class GnAccountRepoPicker extends LitElement {
         display: flex;
         align-items: center;
         gap: var(--spacing-xs);
+        min-width: 0;
       }
 
       .repo-name {
         font-weight: var(--font-weight-medium);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .repo-owner {
         color: var(--color-text-tertiary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .badge {
+        flex-shrink: 0;
         padding: 0 4px;
         border-radius: var(--radius-sm);
         background: var(--color-bg-tertiary);
@@ -508,7 +518,11 @@ export class GnAccountRepoPicker extends LitElement {
           );
           return null;
         }
-        return listAdoRepositories(organization, REPO_PICKER_PAGE_SIZE, page, token);
+        // Azure DevOps returns every repository in the organization in a single
+        // HTTP response with no server-side paging or sorting, so omit perPage
+        // to receive the full sorted list at once rather than re-downloading
+        // the entire organization 30 items at a time.
+        return listAdoRepositories(organization, undefined, page, token);
       }
       default:
         this.failWith('misconfigured', 'This account type cannot list repositories.');
@@ -561,6 +575,37 @@ export class GnAccountRepoPicker extends LitElement {
 
   private handleFilterInput(e: Event): void {
     this.filter = (e.target as HTMLInputElement).value;
+    void this.ensureFilteredMatchLoaded();
+  }
+
+  /**
+   * When the user types a filter query and no loaded repository matches yet
+   * (or fewer than a handful match while more pages exist), automatically walk
+   * remaining pages so filtering searches across the account's repositories
+   * instead of only the first 30 loaded rows.
+   */
+  private async ensureFilteredMatchLoaded(): Promise<void> {
+    const needle = this.filter.trim();
+    if (!needle) return;
+
+    // Cap automatic background page walks so a huge account cannot spin forever
+    // on a typo, while still covering several hundred repositories seamlessly.
+    const maxAutoPages = 10;
+    let autoFetched = 0;
+
+    while (
+      this.filter.trim() === needle &&
+      this.filteredRepositories.length === 0 &&
+      this.nextPage !== null &&
+      !this.isLoading &&
+      !this.isLoadingMore &&
+      this.errorKind === null &&
+      !this.disabled &&
+      autoFetched < maxAutoPages
+    ) {
+      autoFetched += 1;
+      await this.loadPage(this.nextPage, true);
+    }
   }
 
   /**

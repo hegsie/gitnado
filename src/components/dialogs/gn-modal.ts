@@ -22,6 +22,7 @@ export class GnModal extends LitElement {
         right: 0;
         bottom: 0;
         z-index: var(--z-modal, 200);
+        -webkit-app-region: no-drag;
       }
 
       :host([open]) {

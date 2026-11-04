@@ -40,6 +40,7 @@ import type {
   DeleteTagCommand,
   PushTagCommand,
   DeleteRemoteTagCommand,
+  DeleteRemoteBranchCommand,
   GetTagDetailsCommand,
   EditTagMessageCommand,
   DescribeOptions,
@@ -92,6 +93,31 @@ export async function deleteBranch(
   force?: boolean,
 ): Promise<CommandResult<void>> {
   return invokeCommand<void>("delete_branch", { path, name, force });
+}
+
+export async function deleteRemoteBranch(
+  args: DeleteRemoteBranchCommand,
+): Promise<CommandResult<void>> {
+  const pushUrl = args.remote ? await resolveRemotePushUrl(args.path, args.remote) : null;
+  if (!await checkNetworkPermission('delete remote branch', args.path, args.remote, pushUrl)) {
+    return blockedResult();
+  }
+
+  if (!args.token) {
+    let token: string | undefined;
+    if (args.remote && pushUrl) {
+      token = await getPushUrlToken(args.path, args.remote, pushUrl);
+    } else {
+      token = await getRepoToken(args.path, args.remote);
+    }
+    if (token) {
+      args = { ...args, token };
+    }
+  }
+
+  return surfaceBackendRefusal(
+    await invokeCommand<void>("delete_remote_branch", args),
+  );
 }
 
 /**
