@@ -192,8 +192,6 @@ function setupMockInvoke(): void {
     if (command === 'list_bitbucket_issues') return mockIssues;
     if (command === 'list_bitbucket_pipelines') return mockPipelines;
     if (command === 'create_bitbucket_pull_request') return mockPullRequests[0];
-    if (command === 'store_bitbucket_credentials') return null;
-    if (command === 'delete_bitbucket_credentials') return null;
 
     // OAuth
     if (command === 'get_oauth_client_id') return null;

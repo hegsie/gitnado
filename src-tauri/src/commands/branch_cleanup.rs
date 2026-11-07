@@ -60,260 +60,265 @@ pub async fn get_cleanup_candidates(
     path: String,
     stale_days: Option<i64>,
 ) -> Result<Vec<CleanupCandidate>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mut candidates = Vec::new();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mut candidates = Vec::new();
 
-    let head = repo.head()?;
-    let head_oid = match head.target() {
-        Some(oid) => oid,
-        None => return Ok(candidates),
-    };
-
-    let stale_days = stale_days.unwrap_or(DEFAULT_STALE_DAYS);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let stale_threshold = if stale_days > 0 {
-        now - (stale_days * 24 * 60 * 60)
-    } else {
-        0 // disabled
-    };
-
-    // Load branch protection rules
-    let rules = load_rules(Path::new(&path)).unwrap_or_default();
-
-    // Shared with delete_branch's enforcement so the badge shown here and the
-    // rule actually applied at delete time can never diverge.
-    let is_protected = |branch_name: &str| -> bool {
-        super::branch_rules::is_deletion_prevented(&rules, branch_name)
-    };
-
-    for branch_result in repo.branches(Some(git2::BranchType::Local))? {
-        let (branch, _) = branch_result?;
-        let name = branch.name()?.unwrap_or("").to_string();
-
-        // Skip HEAD branch
-        let reference = branch.get();
-        let is_head = head
-            .name()
-            .and_then(|h| reference.name().map(|r| h == r))
-            .unwrap_or(false);
-        if is_head {
-            continue;
-        }
-
-        let branch_oid = match reference.target() {
+        let head = repo.head()?;
+        let head_oid = match head.target() {
             Some(oid) => oid,
-            None => continue,
+            None => return Ok(candidates),
         };
 
-        let (last_commit_timestamp, last_commit_author, last_commit_author_email) = repo
-            .find_commit(branch_oid)
-            .ok()
-            .map(|commit| {
-                let sig = commit.author();
-                let name = sig
-                    .name()
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                let email = sig
-                    .email()
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                (Some(commit.time().seconds()), name, email)
-            })
-            .unwrap_or((None, None, None));
-
-        let upstream = branch
-            .upstream()
-            .ok()
-            .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
-
-        let protected = is_protected(&name);
-
-        // Check if upstream is gone
-        let is_gone = {
-            let config = repo.config().ok();
-            let has_merge = config
-                .as_ref()
-                .and_then(|c| c.get_string(&format!("branch.{}.merge", name)).ok())
-                .is_some();
-            let has_remote = config
-                .as_ref()
-                .and_then(|c| c.get_string(&format!("branch.{}.remote", name)).ok())
-                .is_some();
-            // Gone if upstream is configured but branch.upstream() fails
-            has_merge && has_remote && branch.upstream().is_err()
+        let stale_days = stale_days.unwrap_or(DEFAULT_STALE_DAYS).clamp(0, 36_500);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let stale_threshold = if stale_days > 0 {
+            now.saturating_sub(stale_days.saturating_mul(24 * 60 * 60))
+        } else {
+            0 // disabled
         };
 
-        let ahead_behind = if let Ok(upstream_branch) = branch.upstream() {
-            if let Some(upstream_oid) = upstream_branch.get().target() {
-                repo.graph_ahead_behind(branch_oid, upstream_oid)
+        // Propagate load_rules error (returns Ok(vec![]) when branch_rules.json does
+        // not exist, and Err when the file is unreadable or corrupt) so a corrupt
+        // rules file never silently strips deletion protection in the cleanup list.
+        let rules = load_rules(Path::new(&path))?;
+
+        // Shared with delete_branch's enforcement so the badge shown here and the
+        // rule actually applied at delete time can never diverge.
+        let is_protected = |branch_name: &str| -> bool {
+            super::branch_rules::is_deletion_prevented(&rules, branch_name)
+        };
+
+        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            let name = branch.name()?.unwrap_or("").to_string();
+
+            // Skip HEAD branch
+            let reference = branch.get();
+            let is_head = head
+                .name()
+                .and_then(|h| reference.name().map(|r| h == r))
+                .unwrap_or(false);
+            if is_head {
+                continue;
+            }
+
+            let branch_oid = match reference.target() {
+                Some(oid) => oid,
+                None => continue,
+            };
+
+            let (last_commit_timestamp, last_commit_author, last_commit_author_email) = repo
+                .find_commit(branch_oid)
+                .ok()
+                .map(|commit| {
+                    let sig = commit.author();
+                    let name = sig
+                        .name()
+                        .ok()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    let email = sig
+                        .email()
+                        .ok()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    (Some(commit.time().seconds()), name, email)
+                })
+                .unwrap_or((None, None, None));
+
+            let upstream = branch
+                .upstream()
+                .ok()
+                .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+
+            let protected = is_protected(&name);
+
+            // Check if upstream is gone
+            let is_gone = {
+                let config = repo.config().ok();
+                let has_merge = config
+                    .as_ref()
+                    .and_then(|c| c.get_string(&format!("branch.{}.merge", name)).ok())
+                    .is_some();
+                let has_remote = config
+                    .as_ref()
+                    .and_then(|c| c.get_string(&format!("branch.{}.remote", name)).ok())
+                    .is_some();
+                // Gone if upstream is configured but branch.upstream() fails
+                has_merge && has_remote && branch.upstream().is_err()
+            };
+
+            let ahead_behind = if let Ok(upstream_branch) = branch.upstream() {
+                if let Some(upstream_oid) = upstream_branch.get().target() {
+                    repo.graph_ahead_behind(branch_oid, upstream_oid)
+                        .ok()
+                        .map(|(ahead, behind)| AheadBehind { ahead, behind })
+                } else {
+                    None
+                }
+            } else if is_gone {
+                // Upstream was deleted, so ahead/behind relative to it is
+                // impossible. Measure divergence from HEAD instead: a gone branch
+                // with commits not in HEAD is exactly what `git branch -d` refuses
+                // as "not fully merged", so the UI must be able to flag it as risky
+                // (unpushed commits) rather than silently "safe".
+                repo.graph_ahead_behind(branch_oid, head_oid)
                     .ok()
                     .map(|(ahead, behind)| AheadBehind { ahead, behind })
             } else {
                 None
+            };
+
+            // Check if merged: HEAD is a descendant of the branch commit, or the
+            // branch points at the exact same commit as HEAD (git treats a branch
+            // whose tip equals HEAD as merged — `git branch --merged` lists it).
+            let is_merged = branch_oid == head_oid
+                || repo
+                    .graph_descendant_of(head_oid, branch_oid)
+                    .unwrap_or(false);
+
+            // Check if stale
+            let is_stale = stale_days > 0
+                && last_commit_timestamp
+                    .map(|ts| ts < stale_threshold)
+                    .unwrap_or(false);
+
+            let base = |category: &str| CleanupCandidate {
+                name: name.clone(),
+                shorthand: name.clone(),
+                category: category.to_string(),
+                last_commit_timestamp,
+                last_commit_author: last_commit_author.clone(),
+                last_commit_author_email: last_commit_author_email.clone(),
+                is_protected: protected,
+                upstream: upstream.clone(),
+                ahead_behind: ahead_behind.clone(),
+                is_remote: false,
+                remote_name: None,
+            };
+
+            if is_merged {
+                candidates.push(base("merged"));
             }
-        } else if is_gone {
-            // Upstream was deleted, so ahead/behind relative to it is
-            // impossible. Measure divergence from HEAD instead: a gone branch
-            // with commits not in HEAD is exactly what `git branch -d` refuses
-            // as "not fully merged", so the UI must be able to flag it as risky
-            // (unpushed commits) rather than silently "safe".
-            repo.graph_ahead_behind(branch_oid, head_oid)
+            if is_stale {
+                candidates.push(base("stale"));
+            }
+            if is_gone {
+                candidates.push(base("gone"));
+            }
+        }
+
+        // Determine the current HEAD branch's shorthand and upstream so we skip the
+        // remote branch corresponding to HEAD (e.g., "origin/main" when HEAD is "main").
+        let head_shorthand = head.shorthand().ok().map(|s| s.to_string());
+        let head_upstream_name = head_shorthand
+            .as_deref()
+            .and_then(|name| repo.find_branch(name, git2::BranchType::Local).ok())
+            .and_then(|b| b.upstream().ok())
+            .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+
+        for branch_result in repo.branches(Some(git2::BranchType::Remote))? {
+            let (branch, _) = branch_result?;
+            let reference = branch.get();
+
+            // Skip symbolic remote references such as "origin/HEAD -> origin/main"
+            if reference.kind() == Some(git2::ReferenceType::Symbolic) {
+                continue;
+            }
+
+            let name = branch.name()?.unwrap_or("").to_string();
+            if name.is_empty() {
+                continue;
+            }
+
+            let (remote_name, shorthand) = match name.split_once('/') {
+                Some((r, s)) if !r.is_empty() && !s.is_empty() => (r.to_string(), s.to_string()),
+                _ => continue,
+            };
+
+            if shorthand == "HEAD" {
+                continue;
+            }
+
+            // Skip the remote branch that HEAD is tracking or that shares HEAD's branch name
+            if head_upstream_name.as_deref() == Some(name.as_str())
+                || head_shorthand.as_deref() == Some(shorthand.as_str())
+            {
+                continue;
+            }
+
+            let branch_oid = match reference.target() {
+                Some(oid) => oid,
+                None => continue,
+            };
+
+            let (last_commit_timestamp, last_commit_author, last_commit_author_email) = repo
+                .find_commit(branch_oid)
                 .ok()
-                .map(|(ahead, behind)| AheadBehind { ahead, behind })
-        } else {
-            None
-        };
+                .map(|commit| {
+                    let sig = commit.author();
+                    let name = sig
+                        .name()
+                        .ok()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    let email = sig
+                        .email()
+                        .ok()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    (Some(commit.time().seconds()), name, email)
+                })
+                .unwrap_or((None, None, None));
 
-        // Check if merged: HEAD is a descendant of the branch commit, or the
-        // branch points at the exact same commit as HEAD (git treats a branch
-        // whose tip equals HEAD as merged — `git branch --merged` lists it).
-        let is_merged = branch_oid == head_oid
-            || repo
-                .graph_descendant_of(head_oid, branch_oid)
-                .unwrap_or(false);
+            let protected = is_protected(&name) || is_protected(&shorthand);
 
-        // Check if stale
-        let is_stale = stale_days > 0
-            && last_commit_timestamp
-                .map(|ts| ts < stale_threshold)
-                .unwrap_or(false);
+            // Compare remote branch against HEAD so the UI knows whether deleting the
+            // remote branch would discard commits not in the current branch.
+            let ahead_behind = repo
+                .graph_ahead_behind(branch_oid, head_oid)
+                .ok()
+                .map(|(ahead, behind)| AheadBehind { ahead, behind });
 
-        let base = |category: &str| CleanupCandidate {
-            name: name.clone(),
-            shorthand: name.clone(),
-            category: category.to_string(),
-            last_commit_timestamp,
-            last_commit_author: last_commit_author.clone(),
-            last_commit_author_email: last_commit_author_email.clone(),
-            is_protected: protected,
-            upstream: upstream.clone(),
-            ahead_behind: ahead_behind.clone(),
-            is_remote: false,
-            remote_name: None,
-        };
+            let is_merged = branch_oid == head_oid
+                || repo
+                    .graph_descendant_of(head_oid, branch_oid)
+                    .unwrap_or(false);
 
-        if is_merged {
-            candidates.push(base("merged"));
-        }
-        if is_stale {
-            candidates.push(base("stale"));
-        }
-        if is_gone {
-            candidates.push(base("gone"));
-        }
-    }
+            let is_stale = stale_days > 0
+                && last_commit_timestamp
+                    .map(|ts| ts < stale_threshold)
+                    .unwrap_or(false);
 
-    // Determine the current HEAD branch's shorthand and upstream so we skip the
-    // remote branch corresponding to HEAD (e.g., "origin/main" when HEAD is "main").
-    let head_shorthand = head.shorthand().ok().map(|s| s.to_string());
-    let head_upstream_name = head_shorthand
-        .as_deref()
-        .and_then(|name| repo.find_branch(name, git2::BranchType::Local).ok())
-        .and_then(|b| b.upstream().ok())
-        .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+            let base = |category: &str| CleanupCandidate {
+                name: name.clone(),
+                shorthand: shorthand.clone(),
+                category: category.to_string(),
+                last_commit_timestamp,
+                last_commit_author: last_commit_author.clone(),
+                last_commit_author_email: last_commit_author_email.clone(),
+                is_protected: protected,
+                upstream: None,
+                ahead_behind: ahead_behind.clone(),
+                is_remote: true,
+                remote_name: Some(remote_name.clone()),
+            };
 
-    for branch_result in repo.branches(Some(git2::BranchType::Remote))? {
-        let (branch, _) = branch_result?;
-        let reference = branch.get();
-
-        // Skip symbolic remote references such as "origin/HEAD -> origin/main"
-        if reference.kind() == Some(git2::ReferenceType::Symbolic) {
-            continue;
+            if is_merged {
+                candidates.push(base("merged"));
+            }
+            if is_stale {
+                candidates.push(base("stale"));
+            }
         }
 
-        let name = branch.name()?.unwrap_or("").to_string();
-        if name.is_empty() {
-            continue;
-        }
-
-        let (remote_name, shorthand) = match name.split_once('/') {
-            Some((r, s)) if !r.is_empty() && !s.is_empty() => (r.to_string(), s.to_string()),
-            _ => continue,
-        };
-
-        if shorthand == "HEAD" {
-            continue;
-        }
-
-        // Skip the remote branch that HEAD is tracking or that shares HEAD's branch name
-        if head_upstream_name.as_deref() == Some(name.as_str())
-            || head_shorthand.as_deref() == Some(shorthand.as_str())
-        {
-            continue;
-        }
-
-        let branch_oid = match reference.target() {
-            Some(oid) => oid,
-            None => continue,
-        };
-
-        let (last_commit_timestamp, last_commit_author, last_commit_author_email) = repo
-            .find_commit(branch_oid)
-            .ok()
-            .map(|commit| {
-                let sig = commit.author();
-                let name = sig
-                    .name()
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                let email = sig
-                    .email()
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                (Some(commit.time().seconds()), name, email)
-            })
-            .unwrap_or((None, None, None));
-
-        let protected = is_protected(&name) || is_protected(&shorthand);
-
-        // Compare remote branch against HEAD so the UI knows whether deleting the
-        // remote branch would discard commits not in the current branch.
-        let ahead_behind = repo
-            .graph_ahead_behind(branch_oid, head_oid)
-            .ok()
-            .map(|(ahead, behind)| AheadBehind { ahead, behind });
-
-        let is_merged = branch_oid == head_oid
-            || repo
-                .graph_descendant_of(head_oid, branch_oid)
-                .unwrap_or(false);
-
-        let is_stale = stale_days > 0
-            && last_commit_timestamp
-                .map(|ts| ts < stale_threshold)
-                .unwrap_or(false);
-
-        let base = |category: &str| CleanupCandidate {
-            name: name.clone(),
-            shorthand: shorthand.clone(),
-            category: category.to_string(),
-            last_commit_timestamp,
-            last_commit_author: last_commit_author.clone(),
-            last_commit_author_email: last_commit_author_email.clone(),
-            is_protected: protected,
-            upstream: None,
-            ahead_behind: ahead_behind.clone(),
-            is_remote: true,
-            remote_name: Some(remote_name.clone()),
-        };
-
-        if is_merged {
-            candidates.push(base("merged"));
-        }
-        if is_stale {
-            candidates.push(base("stale"));
-        }
-    }
-
-    Ok(candidates)
+        Ok(candidates)
+    })
+    .await
 }
 
 #[cfg(test)]

@@ -57,172 +57,176 @@ pub async fn squash_commits(
     to_oid: String,
     message: String,
 ) -> Result<SquashResult> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Check for existing operations in progress
-    if repo.state() != git2::RepositoryState::Clean {
-        return Err(GitnadoError::OperationFailed(
-            "Another operation is in progress".to_string(),
-        ));
-    }
-
-    // Verify the repository has no uncommitted changes
-    let statuses = repo.statuses(None)?;
-    if !statuses.is_empty() {
-        let has_changes = statuses
-            .iter()
-            .any(|s| s.status() != git2::Status::IGNORED && s.status() != git2::Status::CURRENT);
-        if has_changes {
+        // Check for existing operations in progress
+        if repo.state() != git2::RepositoryState::Clean {
             return Err(GitnadoError::OperationFailed(
-                "Working directory has uncommitted changes. Commit or stash them first."
-                    .to_string(),
+                "Another operation is in progress".to_string(),
             ));
         }
-    }
 
-    // Parse the OIDs
-    let from = git2::Oid::from_str(&from_oid)
-        .map_err(|_| GitnadoError::CommitNotFound(from_oid.clone()))?;
-    let to =
-        git2::Oid::from_str(&to_oid).map_err(|_| GitnadoError::CommitNotFound(to_oid.clone()))?;
-
-    // Find the commits
-    let from_commit = repo
-        .find_commit(from)
-        .map_err(|_| GitnadoError::CommitNotFound(from_oid.clone()))?;
-    let to_commit = repo
-        .find_commit(to)
-        .map_err(|_| GitnadoError::CommitNotFound(to_oid.clone()))?;
-
-    // Collect commits to squash (from oldest to newest, exclusive of from_commit)
-    let mut commits_to_squash = Vec::new();
-    let mut revwalk = repo.revwalk()?;
-    revwalk.push(to)?;
-    revwalk.hide(from)?;
-    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
-
-    for oid in revwalk {
-        let oid = oid?;
-        let commit = repo.find_commit(oid)?;
-        commits_to_squash.push(commit);
-    }
-
-    if commits_to_squash.is_empty() {
-        return Err(GitnadoError::OperationFailed(
-            "No commits found in the specified range".to_string(),
-        ));
-    }
-
-    let squashed_count = commits_to_squash.len() as u32;
-
-    // The squashed range must be part of the current branch history: the
-    // branch ref is force-moved below, so an unrelated `to` would rewrite
-    // the branch to foreign history.
-    let head_commit = repo.head()?.peel_to_commit()?;
-    if head_commit.id() != to && !repo.graph_descendant_of(head_commit.id(), to)? {
-        return Err(GitnadoError::OperationFailed(
-            "The commits to squash must be part of the current branch history.".to_string(),
-        ));
-    }
-
-    // Get the tree from the newest commit (to_commit) - this contains the final state
-    let tree = to_commit.tree()?;
-
-    // Create a new commit with the same tree but with from_commit as the parent
-    let signature = repo.signature()?;
-
-    // Get the author from the first commit in the range (oldest commit being squashed)
-    let author = commits_to_squash
-        .first()
-        .map(|c| c.author())
-        .unwrap_or_else(|| signature.clone());
-
-    let new_oid = repo.commit(
-        None, // Don't update any reference yet
-        &author,
-        &signature,
-        &message,
-        &tree,
-        &[&from_commit],
-    )?;
-
-    // Replay every commit after to_commit (to..HEAD) onto the squashed
-    // commit, like `git rebase -i` does when a mid-history range is
-    // squashed. Without this, moving the branch ref to the squashed commit
-    // would silently discard all descendants of to_commit.
-    let mut commits_after = Vec::new();
-    let mut revwalk = repo.revwalk()?;
-    revwalk.push(head_commit.id())?;
-    revwalk.hide(to)?;
-    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
-    for oid in revwalk {
-        let commit = repo.find_commit(oid?)?;
-        ensure_replayable(&commit, "squash", "after the squashed range")?;
-        commits_after.push(commit);
-    }
-
-    let mut new_head_oid = new_oid;
-    for commit in &commits_after {
-        let current_base = repo.find_commit(new_head_oid)?;
-        let parent_tree = commit.parent(0)?.tree()?;
-        let commit_tree = commit.tree()?;
-        let base_tree = current_base.tree()?;
-
-        let mut merge_result = repo.merge_trees(&parent_tree, &base_tree, &commit_tree, None)?;
-        if merge_result.has_conflicts() {
-            // Nothing has been moved yet — the repository is untouched.
-            return Err(GitnadoError::OperationFailed(format!(
-                "Cannot squash: replaying the later commit {} onto the squashed \
-                 commit produced a conflict. Use an interactive rebase instead.",
-                commit.id()
-            )));
+        // Verify the repository has no uncommitted changes
+        let statuses = repo.statuses(None)?;
+        if !statuses.is_empty() {
+            let has_changes = statuses.iter().any(|s| {
+                s.status() != git2::Status::IGNORED && s.status() != git2::Status::CURRENT
+            });
+            if has_changes {
+                return Err(GitnadoError::OperationFailed(
+                    "Working directory has uncommitted changes. Commit or stash them first."
+                        .to_string(),
+                ));
+            }
         }
-        let new_tree = repo.find_tree(merge_result.write_tree_to(&repo)?)?;
-        new_head_oid = repo.commit(
-            None,
-            &commit.author(),
+
+        // Parse the OIDs
+        let from = git2::Oid::from_str(&from_oid)
+            .map_err(|_| GitnadoError::CommitNotFound(from_oid.clone()))?;
+        let to = git2::Oid::from_str(&to_oid)
+            .map_err(|_| GitnadoError::CommitNotFound(to_oid.clone()))?;
+
+        // Find the commits
+        let from_commit = repo
+            .find_commit(from)
+            .map_err(|_| GitnadoError::CommitNotFound(from_oid.clone()))?;
+        let to_commit = repo
+            .find_commit(to)
+            .map_err(|_| GitnadoError::CommitNotFound(to_oid.clone()))?;
+
+        // Collect commits to squash (from oldest to newest, exclusive of from_commit)
+        let mut commits_to_squash = Vec::new();
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(to)?;
+        revwalk.hide(from)?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+
+        for oid in revwalk {
+            let oid = oid?;
+            let commit = repo.find_commit(oid)?;
+            commits_to_squash.push(commit);
+        }
+
+        if commits_to_squash.is_empty() {
+            return Err(GitnadoError::OperationFailed(
+                "No commits found in the specified range".to_string(),
+            ));
+        }
+
+        let squashed_count = commits_to_squash.len() as u32;
+
+        // The squashed range must be part of the current branch history: the
+        // branch ref is force-moved below, so an unrelated `to` would rewrite
+        // the branch to foreign history.
+        let head_commit = repo.head()?.peel_to_commit()?;
+        if head_commit.id() != to && !repo.graph_descendant_of(head_commit.id(), to)? {
+            return Err(GitnadoError::OperationFailed(
+                "The commits to squash must be part of the current branch history.".to_string(),
+            ));
+        }
+
+        // Get the tree from the newest commit (to_commit) - this contains the final state
+        let tree = to_commit.tree()?;
+
+        // Create a new commit with the same tree but with from_commit as the parent
+        let signature = repo.signature()?;
+
+        // Get the author from the first commit in the range (oldest commit being squashed)
+        let author = commits_to_squash
+            .first()
+            .map(|c| c.author())
+            .unwrap_or_else(|| signature.clone());
+
+        let new_oid = repo.commit(
+            None, // Don't update any reference yet
+            &author,
             &signature,
-            commit.message().unwrap_or(""),
-            &new_tree,
-            &[&current_base],
+            &message,
+            &tree,
+            &[&from_commit],
         )?;
-    }
 
-    // Now we need to update HEAD to point to the new commit
-    // First check if we're on a branch or in detached HEAD state
-    let head = repo.head()?;
-    if head.is_branch() {
-        // Update the branch reference
-        let branch_name = head.shorthand().unwrap_or("HEAD");
-        let refname = format!("refs/heads/{}", branch_name);
-        repo.reference(
-            &refname,
-            new_head_oid,
-            true,
-            &format!("squash: {} commits into one", squashed_count),
-        )?;
-    } else {
-        // Detached HEAD - just update HEAD
-        repo.set_head_detached(new_head_oid)?;
-    }
+        // Replay every commit after to_commit (to..HEAD) onto the squashed
+        // commit, like `git rebase -i` does when a mid-history range is
+        // squashed. Without this, moving the branch ref to the squashed commit
+        // would silently discard all descendants of to_commit.
+        let mut commits_after = Vec::new();
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(head_commit.id())?;
+        revwalk.hide(to)?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+        for oid in revwalk {
+            let commit = repo.find_commit(oid?)?;
+            ensure_replayable(&commit, "squash", "after the squashed range")?;
+            commits_after.push(commit);
+        }
 
-    // Checkout the new commit to update working directory
-    repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+        let mut new_head_oid = new_oid;
+        for commit in &commits_after {
+            let current_base = repo.find_commit(new_head_oid)?;
+            let parent_tree = commit.parent(0)?.tree()?;
+            let commit_tree = commit.tree()?;
+            let base_tree = current_base.tree()?;
 
-    // git's rebase sequencer fires post-commit per replayed commit as HEAD
-    // advances. This app replays as an ATOMIC batch — nothing is moved until
-    // the whole sequence succeeds, so a mid-replay conflict leaves the repo
-    // untouched. Advancing HEAD per commit to fire the hook accurately would
-    // break that atomicity, and firing N times with HEAD already at the final
-    // commit would feed every invocation the same (wrong) SHA. So fire
-    // post-commit once, for the final rewritten HEAD.
-    crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
+            let mut merge_result =
+                repo.merge_trees(&parent_tree, &base_tree, &commit_tree, None)?;
+            if merge_result.has_conflicts() {
+                // Nothing has been moved yet — the repository is untouched.
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Cannot squash: replaying the later commit {} onto the squashed \
+                     commit produced a conflict. Use an interactive rebase instead.",
+                    commit.id()
+                )));
+            }
+            let new_tree = repo.find_tree(merge_result.write_tree_to(&repo)?)?;
+            new_head_oid = repo.commit(
+                None,
+                &commit.author(),
+                &signature,
+                commit.message().unwrap_or(""),
+                &new_tree,
+                &[&current_base],
+            )?;
+        }
 
-    Ok(SquashResult {
-        new_oid: new_head_oid.to_string(),
-        squashed_count,
-        success: true,
+        // Now we need to update HEAD to point to the new commit
+        // First check if we're on a branch or in detached HEAD state
+        let head = repo.head()?;
+        if head.is_branch() {
+            // Update the branch reference
+            let branch_name = head.shorthand().unwrap_or("HEAD");
+            let refname = format!("refs/heads/{}", branch_name);
+            repo.reference(
+                &refname,
+                new_head_oid,
+                true,
+                &format!("squash: {} commits into one", squashed_count),
+            )?;
+        } else {
+            // Detached HEAD - just update HEAD
+            repo.set_head_detached(new_head_oid)?;
+        }
+
+        // Checkout the new commit to update working directory
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+
+        // git's rebase sequencer fires post-commit per replayed commit as HEAD
+        // advances. This app replays as an ATOMIC batch — nothing is moved until
+        // the whole sequence succeeds, so a mid-replay conflict leaves the repo
+        // untouched. Advancing HEAD per commit to fire the hook accurately would
+        // break that atomicity, and firing N times with HEAD already at the final
+        // commit would feed every invocation the same (wrong) SHA. So fire
+        // post-commit once, for the final rewritten HEAD.
+        crate::commands::hooks::run_hook_noblock(&repo, "post-commit", &[]);
+
+        Ok(SquashResult {
+            new_oid: new_head_oid.to_string(),
+            squashed_count,
+            success: true,
+        })
     })
+    .await
 }
 
 /// Fixup the current staged changes into a specific commit
@@ -240,197 +244,200 @@ pub async fn fixup_commit(
     target_oid: String,
     amend_message: Option<String>,
 ) -> Result<SquashResult> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Check for existing operations in progress
-    if repo.state() != git2::RepositoryState::Clean {
-        return Err(GitnadoError::OperationFailed(
-            "Another operation is in progress".to_string(),
-        ));
-    }
+        // Check for existing operations in progress
+        if repo.state() != git2::RepositoryState::Clean {
+            return Err(GitnadoError::OperationFailed(
+                "Another operation is in progress".to_string(),
+            ));
+        }
 
-    // Refuse on unstaged working-tree changes, like the canonical flow
-    // (`git commit --fixup` + `git rebase --autosquash`), which errors with
-    // "cannot rebase: You have unstaged changes." The final checkout below
-    // would otherwise silently overwrite them. Untracked files are fine.
-    let statuses = repo.statuses(None)?;
-    let has_unstaged = statuses.iter().any(|s| {
-        s.status().intersects(
-            git2::Status::WT_MODIFIED
-                | git2::Status::WT_DELETED
-                | git2::Status::WT_TYPECHANGE
-                | git2::Status::WT_RENAMED,
-        )
-    });
-    if has_unstaged {
-        return Err(GitnadoError::OperationFailed(
-            "Cannot fixup: you have unstaged changes. Commit or stash them first.".to_string(),
-        ));
-    }
+        // Refuse on unstaged working-tree changes, like the canonical flow
+        // (`git commit --fixup` + `git rebase --autosquash`), which errors with
+        // "cannot rebase: You have unstaged changes." The final checkout below
+        // would otherwise silently overwrite them. Untracked files are fine.
+        let statuses = repo.statuses(None)?;
+        let has_unstaged = statuses.iter().any(|s| {
+            s.status().intersects(
+                git2::Status::WT_MODIFIED
+                    | git2::Status::WT_DELETED
+                    | git2::Status::WT_TYPECHANGE
+                    | git2::Status::WT_RENAMED,
+            )
+        });
+        if has_unstaged {
+            return Err(GitnadoError::OperationFailed(
+                "Cannot fixup: you have unstaged changes. Commit or stash them first.".to_string(),
+            ));
+        }
 
-    // Check if there are staged changes
-    let mut index = repo.index()?;
-    let head_tree = repo.head()?.peel_to_tree()?;
+        // Check if there are staged changes
+        let mut index = repo.index()?;
+        let head_tree = repo.head()?.peel_to_tree()?;
 
-    // Check for staged changes by comparing index to HEAD
-    let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
-    if diff.deltas().len() == 0 {
-        return Err(GitnadoError::OperationFailed(
-            "No staged changes to fixup".to_string(),
-        ));
-    }
+        // Check for staged changes by comparing index to HEAD
+        let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&index), None)?;
+        if diff.deltas().len() == 0 {
+            return Err(GitnadoError::OperationFailed(
+                "No staged changes to fixup".to_string(),
+            ));
+        }
 
-    // Parse the target OID
-    let target = git2::Oid::from_str(&target_oid)
-        .map_err(|_| GitnadoError::CommitNotFound(target_oid.clone()))?;
+        // Parse the target OID
+        let target = git2::Oid::from_str(&target_oid)
+            .map_err(|_| GitnadoError::CommitNotFound(target_oid.clone()))?;
 
-    let target_commit = repo
-        .find_commit(target)
-        .map_err(|_| GitnadoError::CommitNotFound(target_oid.clone()))?;
+        let target_commit = repo
+            .find_commit(target)
+            .map_err(|_| GitnadoError::CommitNotFound(target_oid.clone()))?;
 
-    // Get the current HEAD
-    let head_commit = repo.head()?.peel_to_commit()?;
+        // Get the current HEAD
+        let head_commit = repo.head()?.peel_to_commit()?;
 
-    // The target must be HEAD itself or an ancestor of it. libgit2 does not
-    // consider a commit a descendant of itself, so the graph check alone would
-    // reject the most common target of all — the tip commit, i.e. `git commit
-    // --amend`, for which the replay below is simply a no-op.
-    if head_commit.id() != target_commit.id()
-        && !repo.graph_descendant_of(head_commit.id(), target_commit.id())?
-    {
-        return Err(GitnadoError::OperationFailed(
-            "Target commit is not an ancestor of HEAD".to_string(),
-        ));
-    }
+        // The target must be HEAD itself or an ancestor of it. libgit2 does not
+        // consider a commit a descendant of itself, so the graph check alone would
+        // reject the most common target of all — the tip commit, i.e. `git commit
+        // --amend`, for which the replay below is simply a no-op.
+        if head_commit.id() != target_commit.id()
+            && !repo.graph_descendant_of(head_commit.id(), target_commit.id())?
+        {
+            return Err(GitnadoError::OperationFailed(
+                "Target commit is not an ancestor of HEAD".to_string(),
+            ));
+        }
 
-    // Collect all commits from target (exclusive) to HEAD (inclusive)
-    let mut commits_after_target = Vec::new();
-    let mut revwalk = repo.revwalk()?;
-    revwalk.push(head_commit.id())?;
-    revwalk.hide(target_commit.id())?;
-    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+        // Collect all commits from target (exclusive) to HEAD (inclusive)
+        let mut commits_after_target = Vec::new();
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(head_commit.id())?;
+        revwalk.hide(target_commit.id())?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
 
-    for oid in revwalk {
-        let oid = oid?;
-        let commit = repo.find_commit(oid)?;
-        ensure_replayable(&commit, "fixup", "after the target commit")?;
-        commits_after_target.push(commit);
-    }
+        for oid in revwalk {
+            let oid = oid?;
+            let commit = repo.find_commit(oid)?;
+            ensure_replayable(&commit, "fixup", "after the target commit")?;
+            commits_after_target.push(commit);
+        }
 
-    // Create the new tree by applying staged changes to target commit's tree
-    // First, we need to merge the current index changes with the target tree
-    let target_tree = target_commit.tree()?;
+        // Create the new tree by applying staged changes to target commit's tree
+        // First, we need to merge the current index changes with the target tree
+        let target_tree = target_commit.tree()?;
 
-    // Write the current index as a tree
-    let staged_tree_oid = index.write_tree()?;
-    let staged_tree = repo.find_tree(staged_tree_oid)?;
+        // Write the current index as a tree
+        let staged_tree_oid = index.write_tree()?;
+        let staged_tree = repo.find_tree(staged_tree_oid)?;
 
-    // Apply the staged changes to the target tree with a three-way merge:
-    // HEAD is the base, so exactly `staged_tree - head_tree` — what the user
-    // staged — is replayed onto the target tree. A treebuilder cannot be used
-    // here: it operates on a single tree level and rejects entry names
-    // containing '/', so any staged file inside a subdirectory would fail.
-    let mut merge_result = repo.merge_trees(&head_tree, &target_tree, &staged_tree, None)?;
-    if merge_result.has_conflicts() {
-        // Nothing has been moved yet — the repository is untouched.
-        return Err(GitnadoError::OperationFailed(format!(
-            "Cannot fixup: the staged changes conflict with commit {}. \
-             Use an interactive rebase instead.",
-            target_commit.id()
-        )));
-    }
-    let new_target_tree = repo.find_tree(merge_result.write_tree_to(&repo)?)?;
+        // Apply the staged changes to the target tree with a three-way merge:
+        // HEAD is the base, so exactly `staged_tree - head_tree` — what the user
+        // staged — is replayed onto the target tree. A treebuilder cannot be used
+        // here: it operates on a single tree level and rejects entry names
+        // containing '/', so any staged file inside a subdirectory would fail.
+        let mut merge_result = repo.merge_trees(&head_tree, &target_tree, &staged_tree, None)?;
+        if merge_result.has_conflicts() {
+            // Nothing has been moved yet — the repository is untouched.
+            return Err(GitnadoError::OperationFailed(format!(
+                "Cannot fixup: the staged changes conflict with commit {}. \
+                 Use an interactive rebase instead.",
+                target_commit.id()
+            )));
+        }
+        let new_target_tree = repo.find_tree(merge_result.write_tree_to(&repo)?)?;
 
-    // Create the new target commit with the merged tree
-    let signature = repo.signature()?;
-    let commit_message =
-        amend_message.unwrap_or_else(|| target_commit.message().unwrap_or("").to_string());
+        // Create the new target commit with the merged tree
+        let signature = repo.signature()?;
+        let commit_message =
+            amend_message.unwrap_or_else(|| target_commit.message().unwrap_or("").to_string());
 
-    // Keep every parent of the target commit. The target may now be HEAD, so it
-    // may be a merge commit, and rewriting it must not silently flatten the
-    // merge — `git commit --amend` keeps both parents. A root commit yields an
-    // empty parent list, exactly as before.
-    let target_parents: Vec<git2::Commit> = target_commit.parents().collect();
-    let parent_refs: Vec<&git2::Commit> = target_parents.iter().collect();
+        // Keep every parent of the target commit. The target may now be HEAD, so it
+        // may be a merge commit, and rewriting it must not silently flatten the
+        // merge — `git commit --amend` keeps both parents. A root commit yields an
+        // empty parent list, exactly as before.
+        let target_parents: Vec<git2::Commit> = target_commit.parents().collect();
+        let parent_refs: Vec<&git2::Commit> = target_parents.iter().collect();
 
-    let new_target_oid = repo.commit(
-        None,
-        &target_commit.author(),
-        &signature,
-        &commit_message,
-        &new_target_tree,
-        &parent_refs,
-    )?;
-
-    // Now replay all commits after target onto the new target
-    let mut current_base_oid = new_target_oid;
-
-    for commit in &commits_after_target {
-        let current_base = repo.find_commit(current_base_oid)?;
-
-        // Cherry-pick this commit onto the new base
-        let new_tree = {
-            // Get the changes this commit introduced
-            let commit_parent = commit.parent(0)?;
-            let parent_tree = commit_parent.tree()?;
-            let commit_tree = commit.tree()?;
-
-            // Merge the commit's changes onto the new base
-            let base_tree = current_base.tree()?;
-            let mut merge_result =
-                repo.merge_trees(&parent_tree, &base_tree, &commit_tree, None)?;
-
-            if merge_result.has_conflicts() {
-                // Write the conflicted index
-                merge_result.write_tree_to(&repo)?;
-                return Err(GitnadoError::OperationFailed(format!(
-                    "Conflict while replaying commit {}. Manual resolution required.",
-                    commit.id()
-                )));
-            }
-
-            let new_tree_oid = merge_result.write_tree_to(&repo)?;
-            repo.find_tree(new_tree_oid)?
-        };
-
-        // Create the replayed commit
-        current_base_oid = repo.commit(
+        let new_target_oid = repo.commit(
             None,
-            &commit.author(),
+            &target_commit.author(),
             &signature,
-            commit.message().unwrap_or(""),
-            &new_tree,
-            &[&current_base],
+            &commit_message,
+            &new_target_tree,
+            &parent_refs,
         )?;
-    }
 
-    // Update HEAD to point to the final commit
-    let head = repo.head()?;
-    if head.is_branch() {
-        let branch_name = head.shorthand().unwrap_or("HEAD");
-        let refname = format!("refs/heads/{}", branch_name);
-        repo.reference(
-            &refname,
-            current_base_oid,
-            true,
-            "fixup: amend changes into earlier commit",
-        )?;
-    } else {
-        repo.set_head_detached(current_base_oid)?;
-    }
+        // Now replay all commits after target onto the new target
+        let mut current_base_oid = new_target_oid;
 
-    // Reset the index to remove staged changes (they're now in the fixup)
-    index.read_tree(&repo.find_commit(current_base_oid)?.tree()?)?;
-    index.write()?;
+        for commit in &commits_after_target {
+            let current_base = repo.find_commit(current_base_oid)?;
 
-    // Checkout the new commit to update working directory
-    repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+            // Cherry-pick this commit onto the new base
+            let new_tree = {
+                // Get the changes this commit introduced
+                let commit_parent = commit.parent(0)?;
+                let parent_tree = commit_parent.tree()?;
+                let commit_tree = commit.tree()?;
 
-    Ok(SquashResult {
-        new_oid: current_base_oid.to_string(),
-        squashed_count: 1,
-        success: true,
+                // Merge the commit's changes onto the new base
+                let base_tree = current_base.tree()?;
+                let mut merge_result =
+                    repo.merge_trees(&parent_tree, &base_tree, &commit_tree, None)?;
+
+                if merge_result.has_conflicts() {
+                    // Write the conflicted index
+                    merge_result.write_tree_to(&repo)?;
+                    return Err(GitnadoError::OperationFailed(format!(
+                        "Conflict while replaying commit {}. Manual resolution required.",
+                        commit.id()
+                    )));
+                }
+
+                let new_tree_oid = merge_result.write_tree_to(&repo)?;
+                repo.find_tree(new_tree_oid)?
+            };
+
+            // Create the replayed commit
+            current_base_oid = repo.commit(
+                None,
+                &commit.author(),
+                &signature,
+                commit.message().unwrap_or(""),
+                &new_tree,
+                &[&current_base],
+            )?;
+        }
+
+        // Update HEAD to point to the final commit
+        let head = repo.head()?;
+        if head.is_branch() {
+            let branch_name = head.shorthand().unwrap_or("HEAD");
+            let refname = format!("refs/heads/{}", branch_name);
+            repo.reference(
+                &refname,
+                current_base_oid,
+                true,
+                "fixup: amend changes into earlier commit",
+            )?;
+        } else {
+            repo.set_head_detached(current_base_oid)?;
+        }
+
+        // Reset the index to remove staged changes (they're now in the fixup)
+        index.read_tree(&repo.find_commit(current_base_oid)?.tree()?)?;
+        index.write()?;
+
+        // Checkout the new commit to update working directory
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+
+        Ok(SquashResult {
+            new_oid: current_base_oid.to_string(),
+            squashed_count: 1,
+            success: true,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

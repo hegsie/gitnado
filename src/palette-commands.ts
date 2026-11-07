@@ -529,6 +529,108 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => { dialogs.open('reflog'); }),
     },
     {
+      id: 'undo-last-action',
+      label: 'Undo Last Git Action',
+      category: 'action',
+      icon: 'undo',
+      action: shell.requiresRepository(async () => {
+        const repoPath = shell.activeRepository!.repository.path;
+        if (!shell.claimRefOperation(repoPath)) {
+          shell.warnRepositoryBusy();
+          return;
+        }
+        try {
+          const git = await import('./services/git.service.ts');
+          const result = await git.undoLastAction(repoPath);
+          if (result.success && result.data) {
+            showToast(`Undid action: ${result.data.description}`, 'success');
+            await shell.handleRefresh();
+          } else {
+            showToast(result.error?.message ?? 'Nothing to undo', 'info');
+          }
+        } finally {
+          shell.releaseRefOperation(repoPath);
+        }
+      }),
+    },
+    {
+      id: 'redo-last-action',
+      label: 'Redo Last Git Action',
+      category: 'action',
+      icon: 'refresh',
+      action: shell.requiresRepository(async () => {
+        const repoPath = shell.activeRepository!.repository.path;
+        if (!shell.claimRefOperation(repoPath)) {
+          shell.warnRepositoryBusy();
+          return;
+        }
+        try {
+          const git = await import('./services/git.service.ts');
+          const result = await git.redoLastAction(repoPath);
+          if (result.success && result.data) {
+            showToast(`Redid action: ${result.data.description}`, 'success');
+            await shell.handleRefresh();
+          } else {
+            showToast(result.error?.message ?? 'Nothing to redo', 'info');
+          }
+        } finally {
+          shell.releaseRefOperation(repoPath);
+        }
+      }),
+    },
+    {
+      id: 'bookmark-repository',
+      label: 'Bookmark Current Repository',
+      category: 'action',
+      icon: 'tag',
+      action: shell.requiresRepository(async () => {
+        const repo = shell.activeRepository!.repository;
+        const git = await import('./services/git.service.ts');
+        const result = await git.addBookmark(repo.path, repo.name);
+        if (result.success) {
+          showToast(`Bookmarked ${repo.name}`, 'success');
+        } else {
+          showToast(result.error?.message ?? 'Failed to bookmark repository', 'error');
+        }
+      }),
+    },
+    {
+      id: 'run-custom-action',
+      label: 'Run Custom Action…',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(async () => {
+        const repoPath = shell.activeRepository!.repository.path;
+        const git = await import('./services/git.service.ts');
+        const actionsRes = await git.getCustomActions(repoPath);
+        if (!actionsRes.success || !actionsRes.data || actionsRes.data.length === 0) {
+          showToast('No custom actions configured for this repository', 'info');
+          return;
+        }
+        const names = actionsRes.data.map(a => a.name).join(', ');
+        const chosen = await showPrompt('Run Custom Action', `Available actions (${names}):`);
+        if (!chosen) return;
+        const match = actionsRes.data.find(
+          a => a.name.toLowerCase() === chosen.trim().toLowerCase() || a.id === chosen.trim()
+        );
+        if (!match) {
+          showToast(`Custom action "${chosen}" not found`, 'error');
+          return;
+        }
+        if (match.confirmBeforeRun) {
+          const ok = await showConfirm('Run Custom Action', `Run "${match.name}" (${match.command})?`, 'warning');
+          if (!ok) return;
+        }
+        const runRes = await git.runCustomAction(repoPath, match.id);
+        if (runRes.success && runRes.data?.success) {
+          showToast(`Completed "${match.name}"`, 'success');
+          await shell.handleRefresh();
+        } else {
+          showToast(runRes.error?.message ?? runRes.data?.stderr ?? `Custom action "${match.name}" failed`, 'error');
+        }
+      }),
+    },
+    {
       id: 'describe',
       label: 'Describe commit (git describe)',
       category: 'action',

@@ -13,169 +13,181 @@ pub async fn create_patch(
     commit_oids: Vec<String>,
     output_path: String,
 ) -> Result<Vec<String>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mut patch_files = Vec::new();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mut patch_files = Vec::new();
 
-    for (i, oid_str) in commit_oids.iter().enumerate() {
-        let oid = git2::Oid::from_str(oid_str)
-            .map_err(|_| GitnadoError::CommitNotFound(oid_str.clone()))?;
-        let commit = repo.find_commit(oid)?;
+        for (i, oid_str) in commit_oids.iter().enumerate() {
+            let oid = git2::Oid::from_str(oid_str)
+                .map_err(|_| GitnadoError::CommitNotFound(oid_str.clone()))?;
+            let commit = repo.find_commit(oid)?;
 
-        // Get the diff for this commit
-        let parent = if commit.parent_count() > 0 {
-            Some(commit.parent(0)?.tree()?)
-        } else {
-            None
-        };
+            // Get the diff for this commit
+            let parent = if commit.parent_count() > 0 {
+                Some(commit.parent(0)?.tree()?)
+            } else {
+                None
+            };
 
-        // Enable binary patch output and full (40-char) blob ids so that
-        // patches touching binary files contain a real "GIT binary patch"
-        // section that `git am`/`git apply` can apply, rather than an
-        // unapplyable "Binary files ... differ" placeholder.
-        let mut diff_opts = git2::DiffOptions::new();
-        diff_opts.show_binary(true);
-        diff_opts.id_abbrev(40);
-        let mut diff =
-            repo.diff_tree_to_tree(parent.as_ref(), Some(&commit.tree()?), Some(&mut diff_opts))?;
+            // Enable binary patch output and full (40-char) blob ids so that
+            // patches touching binary files contain a real "GIT binary patch"
+            // section that `git am`/`git apply` can apply, rather than an
+            // unapplyable "Binary files ... differ" placeholder.
+            let mut diff_opts = git2::DiffOptions::new();
+            diff_opts.show_binary(true);
+            diff_opts.id_abbrev(40);
+            let mut diff = repo.diff_tree_to_tree(
+                parent.as_ref(),
+                Some(&commit.tree()?),
+                Some(&mut diff_opts),
+            )?;
 
-        // Detect renames/copies so a moved file is emitted as a compact
-        // "rename from/to" instead of a full delete + add (git's default).
-        let mut find_opts = git2::DiffFindOptions::new();
-        find_opts.renames(true);
-        diff.find_similar(Some(&mut find_opts))?;
+            // Detect renames/copies so a moved file is emitted as a compact
+            // "rename from/to" instead of a full delete + add (git's default).
+            let mut find_opts = git2::DiffFindOptions::new();
+            find_opts.renames(true);
+            diff.find_similar(Some(&mut find_opts))?;
 
-        // Format patch
-        let mut patch_content = String::new();
+            // Format patch
+            let mut patch_content = String::new();
 
-        // Email header format
-        let sig = commit.author();
-        let time = commit.time();
-        let message = commit.message().unwrap_or("");
+            // Email header format
+            let sig = commit.author();
+            let time = commit.time();
+            let message = commit.message().unwrap_or("");
 
-        // RFC 2822 date format
-        let epoch = time.seconds();
-        let offset = time.offset_minutes();
-        let offset_hours = offset / 60;
-        let offset_mins = (offset % 60).abs();
-        let sign = if offset >= 0 { "+" } else { "-" };
+            // RFC 2822 date format
+            let epoch = time.seconds();
+            let offset = time.offset_minutes();
+            let offset_hours = offset / 60;
+            let offset_mins = (offset % 60).abs();
+            let sign = if offset >= 0 { "+" } else { "-" };
 
-        patch_content.push_str(&format!("From {} Mon Sep 17 00:00:00 2001\n", oid_str));
-        patch_content.push_str(&format!(
-            "From: {} <{}>\n",
-            sig.name().unwrap_or("Unknown"),
-            sig.email().unwrap_or("unknown@unknown.com")
-        ));
-        patch_content.push_str(&format!(
-            "Date: {}{}{:02}{:02}\n",
-            epoch,
-            sign,
-            offset_hours.abs(),
-            offset_mins
-        ));
+            patch_content.push_str(&format!("From {} Mon Sep 17 00:00:00 2001\n", oid_str));
+            patch_content.push_str(&format!(
+                "From: {} <{}>\n",
+                sig.name().unwrap_or("Unknown"),
+                sig.email().unwrap_or("unknown@unknown.com")
+            ));
+            patch_content.push_str(&format!(
+                "Date: {}{}{:02}{:02}\n",
+                epoch,
+                sign,
+                offset_hours.abs(),
+                offset_mins
+            ));
 
-        // Subject from first line of message
-        let first_line = message.lines().next().unwrap_or("");
-        patch_content.push_str(&format!(
-            "Subject: [PATCH {}/{}] {}\n\n",
-            i + 1,
-            commit_oids.len(),
-            first_line
-        ));
+            // Subject from first line of message
+            let first_line = message.lines().next().unwrap_or("");
+            patch_content.push_str(&format!(
+                "Subject: [PATCH {}/{}] {}\n\n",
+                i + 1,
+                commit_oids.len(),
+                first_line
+            ));
 
-        // Remaining message lines
-        let remaining: Vec<&str> = message.lines().skip(1).collect();
-        if !remaining.is_empty() {
-            for line in &remaining {
-                patch_content.push_str(line);
+            // Remaining message lines
+            let remaining: Vec<&str> = message.lines().skip(1).collect();
+            if !remaining.is_empty() {
+                for line in &remaining {
+                    patch_content.push_str(line);
+                    patch_content.push('\n');
+                }
                 patch_content.push('\n');
             }
+
+            patch_content.push_str("---\n");
+
+            // Diff stats
+            let stats = diff.stats()?;
+            let stats_buf = stats.to_buf(git2::DiffStatsFormat::FULL, 80)?;
+            patch_content.push_str(stats_buf.as_str().unwrap_or(""));
             patch_content.push('\n');
-        }
 
-        patch_content.push_str("---\n");
-
-        // Diff stats
-        let stats = diff.stats()?;
-        let stats_buf = stats.to_buf(git2::DiffStatsFormat::FULL, 80)?;
-        patch_content.push_str(stats_buf.as_str().unwrap_or(""));
-        patch_content.push('\n');
-
-        // Actual diff. Accumulate as raw bytes so that non-UTF8 content
-        // (Latin-1, Shift-JIS, binary literal data, ...) is written verbatim
-        // instead of being silently dropped, which would corrupt the patch.
-        let mut patch_bytes = patch_content.into_bytes();
-        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-            let origin = line.origin();
-            if origin == '+' || origin == '-' || origin == ' ' {
-                patch_bytes.push(origin as u8);
-            }
-            patch_bytes.extend_from_slice(line.content());
-            true
-        })?;
-
-        patch_bytes.extend_from_slice(b"\n-- \n");
-
-        // Write patch file
-        let short_id = &oid_str[..8.min(oid_str.len())];
-        let sanitized_subject = first_line
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '-'
+            // Actual diff. Accumulate as raw bytes so that non-UTF8 content
+            // (Latin-1, Shift-JIS, binary literal data, ...) is written verbatim
+            // instead of being silently dropped, which would corrupt the patch.
+            let mut patch_bytes = patch_content.into_bytes();
+            diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+                let origin = line.origin();
+                if origin == '+' || origin == '-' || origin == ' ' {
+                    patch_bytes.push(origin as u8);
                 }
-            })
-            .collect::<String>();
-        let filename = format!("{:04}-{}-{}.patch", i + 1, short_id, sanitized_subject);
-        let patch_path = Path::new(&output_path).join(&filename);
+                patch_bytes.extend_from_slice(line.content());
+                true
+            })?;
 
-        if let Some(parent_dir) = patch_path.parent() {
-            std::fs::create_dir_all(parent_dir)?;
+            patch_bytes.extend_from_slice(b"\n-- \n");
+
+            // Write patch file
+            let short_id = &oid_str[..8.min(oid_str.len())];
+            let sanitized_subject = first_line
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>();
+            let filename = format!("{:04}-{}-{}.patch", i + 1, short_id, sanitized_subject);
+            let patch_path = Path::new(&output_path).join(&filename);
+
+            if let Some(parent_dir) = patch_path.parent() {
+                std::fs::create_dir_all(parent_dir)?;
+            }
+            std::fs::write(&patch_path, &patch_bytes)?;
+            patch_files.push(patch_path.to_string_lossy().to_string());
         }
-        std::fs::write(&patch_path, &patch_bytes)?;
-        patch_files.push(patch_path.to_string_lossy().to_string());
-    }
 
-    Ok(patch_files)
+        Ok(patch_files)
+    })
+    .await
 }
 
 /// Apply a patch file to the working directory
 #[command]
 pub async fn apply_patch(path: String, patch_path: String, check_only: Option<bool>) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let patch_content = std::fs::read(&patch_path)?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let patch_content = std::fs::read(&patch_path)?;
 
-    let diff = git2::Diff::from_buffer(&patch_content)?;
+        let diff = git2::Diff::from_buffer(&patch_content)?;
 
-    if check_only.unwrap_or(false) {
-        // Dry run - just check if patch applies cleanly. Without
-        // ApplyOptions::check(true) libgit2 performs a REAL apply and writes
-        // the changes to the working tree (git apply --check must not modify
-        // anything).
-        let mut apply_opts = git2::ApplyOptions::new();
-        apply_opts.check(true);
-        repo.apply(&diff, git2::ApplyLocation::WorkDir, Some(&mut apply_opts))
-            .map_err(|e| {
-                GitnadoError::OperationFailed(format!("Patch would not apply cleanly: {}", e))
-            })?;
-    } else {
-        repo.apply(&diff, git2::ApplyLocation::WorkDir, None)?;
-    }
+        if check_only.unwrap_or(false) {
+            // Dry run - just check if patch applies cleanly. Without
+            // ApplyOptions::check(true) libgit2 performs a REAL apply and writes
+            // the changes to the working tree (git apply --check must not modify
+            // anything).
+            let mut apply_opts = git2::ApplyOptions::new();
+            apply_opts.check(true);
+            repo.apply(&diff, git2::ApplyLocation::WorkDir, Some(&mut apply_opts))
+                .map_err(|e| {
+                    GitnadoError::OperationFailed(format!("Patch would not apply cleanly: {}", e))
+                })?;
+        } else {
+            repo.apply(&diff, git2::ApplyLocation::WorkDir, None)?;
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Apply a patch to the index (staging area)
 #[command]
 pub async fn apply_patch_to_index(path: String, patch_path: String) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let patch_content = std::fs::read(&patch_path)?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let patch_content = std::fs::read(&patch_path)?;
 
-    let diff = git2::Diff::from_buffer(&patch_content)?;
-    repo.apply(&diff, git2::ApplyLocation::Index, None)?;
+        let diff = git2::Diff::from_buffer(&patch_content)?;
+        repo.apply(&diff, git2::ApplyLocation::Index, None)?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]

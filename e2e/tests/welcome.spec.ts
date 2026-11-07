@@ -90,8 +90,6 @@ test.describe('Welcome Screen with Recent Repositories', () => {
                 { path: '/path/to/repo1', name: 'repo1' },
                 { path: '/path/to/repo2', name: 'repo2' },
               ];
-            case 'get_repository_info':
-              return null; // No repo open
             default:
               return null;
           }
@@ -569,7 +567,7 @@ test.describe('Welcome - Extended Tests', () => {
         if (command === 'clone_repository') {
           return { path: '/home/user/projects/my-project', name: 'my-project' };
         }
-        if (command === 'open_repository' || command === 'get_repository_info') {
+        if (command === 'open_repository') {
           return {
             path: '/home/user/projects/my-project',
             name: 'my-project',
@@ -624,7 +622,7 @@ test.describe('Welcome - Extended Tests', () => {
         if (command === 'init_repository') {
           return { path: '/home/user/new-project', name: 'new-project' };
         }
-        if (command === 'open_repository' || command === 'get_repository_info') {
+        if (command === 'open_repository') {
           return {
             path: '/home/user/new-project',
             name: 'new-project',
@@ -889,7 +887,6 @@ test.describe('Welcome Screen - scan for repositories', () => {
       'plugin:dialog|open': '/code',
       scan_for_repositories: scanResultPayload(),
       open_repository: repositoryPayload('/code/alpha'),
-      get_repository_info: repositoryPayload('/code/alpha'),
     });
 
     await app.scanButton.click();
@@ -999,7 +996,6 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
         isBare: false,
       },
       open_repository: repositoryPayload('/code/alpha'),
-      get_repository_info: repositoryPayload('/code/alpha'),
     });
 
     await emitDragEvent(page, 'tauri://drag-enter', ['/code/alpha']);
@@ -1108,7 +1104,6 @@ test.describe('Welcome Screen - dropping a folder on the window', () => {
         isBare: false,
       },
       open_repository: repositoryPayload('/projects/new-thing'),
-      get_repository_info: repositoryPayload('/projects/new-thing'),
     });
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);
@@ -1292,7 +1287,6 @@ test.describe('Dropping a folder while a repository is open', () => {
         isBare: false,
       },
       open_repository: repositoryPayload('/code/alpha'),
-      get_repository_info: repositoryPayload('/code/alpha'),
     });
 
     await emitDragEvent(page, 'tauri://drag-enter', ['/code/alpha']);
@@ -1465,7 +1459,6 @@ test.describe('Initialize a repository here - with a repository already open', (
         isBare: false,
       },
       init_repository: repositoryPayload('/projects/new-thing'),
-      get_repository_info: repositoryPayload('/projects/new-thing'),
     });
 
     await emitDragEvent(page, 'tauri://drag-drop', ['/projects/new-thing']);

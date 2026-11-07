@@ -256,8 +256,6 @@ describe("git service domain modules", () => {
       "runGc",
       "runFsck",
       "runPrune",
-      "runGarbageCollection",
-      "verifyRepository",
     ] as const;
 
     for (const name of keyExports) {
@@ -273,7 +271,6 @@ describe("git service domain modules", () => {
       "setSigningKey",
       "setCommitSigning",
       "setTagSigning",
-      "getCommitSignature",
       "getCommitsSignatures",
       "getSigningStatus",
       "getSshConfig",
@@ -301,9 +298,8 @@ describe("git service domain modules", () => {
       "storeKeyringToken",
       "getKeyringToken",
       "deleteKeyringToken",
-      "getProfiles",
-      "saveProfile",
-      "applyProfile",
+      "loadProfiles",
+      "loadProfileForRepository",
       "verifyCommitSignature",
       "getCommitsSignatureInfo",
       "getSigningConfig",
@@ -401,7 +397,7 @@ describe("git service domain modules", () => {
     }
   });
 
-  it("git.service.ts barrel re-exports every runtime symbol from all domain modules (435 functions)", () => {
+  it("git.service.ts barrel re-exports every runtime symbol from all domain modules (427 functions)", () => {
     const domainModules = [
       repositoryModule,
       branchesTagsModule,
@@ -433,6 +429,6 @@ describe("git service domain modules", () => {
     }
 
     expect(Object.keys(gitService).length).to.equal(totalDomainExports + publicSharedFunctions.length);
-    expect(Object.keys(gitService).length).to.equal(440);
+    expect(Object.keys(gitService).length).to.equal(427);
   });
 });

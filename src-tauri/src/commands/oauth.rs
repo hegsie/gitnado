@@ -437,16 +437,6 @@ pub async fn oauth_get_authorize_url(
     })
 }
 
-/// Start GitHub OAuth flow with loopback server
-///
-/// This starts a loopback server and returns immediately.
-/// The server will wait for the callback and the frontend should poll
-/// using `oauth_poll_github_callback`.
-#[tauri::command]
-pub async fn oauth_start_github_flow(client_id: String) -> Result<StartOAuthResponse> {
-    oauth_get_authorize_url("github".to_string(), None, client_id).await
-}
-
 /// Exchange authorization code for tokens.
 ///
 /// The PKCE `verifier`, provider, redirect URI, and instance/issuer URL are
@@ -763,12 +753,6 @@ fn validate_callback_state(state: &str) -> Result<()> {
             "OAuth callback state did not match any pending flow".to_string(),
         ))
     }
-}
-
-/// Alias for backward compatibility
-#[tauri::command]
-pub async fn oauth_wait_for_github_callback(port: u16) -> Result<CallbackResponse> {
-    oauth_wait_for_callback(port).await
 }
 
 /// Cancel an in-flight OAuth flow and release its loopback server.
@@ -1126,22 +1110,6 @@ mod tests {
     }
 
     // ==========================================================================
-    // oauth_start_github_flow Tests
-    // ==========================================================================
-
-    #[tokio::test]
-    async fn test_oauth_start_github_flow() {
-        let _policy = no_policy();
-        let result = oauth_start_github_flow("test-client-id".to_string()).await;
-
-        assert!(result.is_ok());
-        let response = result.unwrap();
-
-        assert!(response.authorize_url.contains("github.com"));
-        assert!(response.loopback_port.is_some());
-    }
-
-    // ==========================================================================
     // oauth_wait_for_callback Tests
     // ==========================================================================
 
@@ -1149,13 +1117,6 @@ mod tests {
     async fn test_oauth_wait_for_callback_no_server() {
         // Attempting to wait on a port with no pending server should fail
         let result = oauth_wait_for_callback(59999).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_oauth_wait_for_github_callback_alias() {
-        // The alias should behave the same as oauth_wait_for_callback
-        let result = oauth_wait_for_github_callback(59999).await;
         assert!(result.is_err());
     }
 

@@ -25,6 +25,7 @@ type TestTab = 'connection' | 'pull-requests' | 'create-pr';
 @customElement('test-provider-dialog-base')
 class TestProviderDialog extends GnProviderDialogBase<TestRepo, TestConnection, TestTab> {
   protected readonly providerDisplayName = 'TestProvider';
+  protected readonly integrationType = 'github' as const;
 
   public loadInitialCalls = 0;
   public detectCalls: Array<{ loadData: boolean; selectAccount: boolean }> = [];

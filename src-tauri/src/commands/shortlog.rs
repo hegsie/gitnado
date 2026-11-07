@@ -46,185 +46,158 @@ pub async fn shortlog(
     email: Option<bool>,
     group: Option<String>,
 ) -> Result<ShortlogResult> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let use_all = all.unwrap_or(false);
-    let use_numbered = numbered.unwrap_or(false);
-    let use_summary = summary.unwrap_or(false);
-    let show_email = email.unwrap_or(false);
-    let group_by = group.as_deref().unwrap_or("author");
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let use_all = all.unwrap_or(false);
+        let use_numbered = numbered.unwrap_or(false);
+        let use_summary = summary.unwrap_or(false);
+        let show_email = email.unwrap_or(false);
+        let group_by = group.as_deref().unwrap_or("author");
 
-    let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(git2::Sort::TIME)?;
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
 
-    // Handle revision range
-    if let Some(ref range_spec) = range {
-        if range_spec.contains("...") {
-            // Symmetric-difference range like "v1...HEAD": commits reachable
-            // from either endpoint but not from both. Mirror git by walking
-            // both tips and hiding every merge base.
-            let parts: Vec<&str> = range_spec.splitn(2, "...").collect();
-            let from_spec = if parts[0].is_empty() {
-                "HEAD"
-            } else {
-                parts[0]
-            };
-            let to_spec = match parts.get(1) {
-                Some(s) if !s.is_empty() => *s,
-                _ => "HEAD",
-            };
-
-            let from_id = repo.revparse_single(from_spec)?.peel_to_commit()?.id();
-            let to_id = repo.revparse_single(to_spec)?.peel_to_commit()?.id();
-
-            revwalk.push(from_id)?;
-            revwalk.push(to_id)?;
-            for base in repo.merge_bases(from_id, to_id)?.iter() {
-                revwalk.hide(*base)?;
-            }
-        } else if range_spec.contains("..") {
-            // Range specification like "v1.0..HEAD"
-            let parts: Vec<&str> = range_spec.split("..").collect();
-            if parts.len() == 2 {
-                let from_spec = parts[0];
-                let to_spec = if parts[1].is_empty() {
+        // Handle revision range
+        if let Some(ref range_spec) = range {
+            if range_spec.contains("...") {
+                let parts: Vec<&str> = range_spec.splitn(2, "...").collect();
+                let from_spec = if parts[0].is_empty() {
                     "HEAD"
                 } else {
-                    parts[1]
+                    parts[0]
+                };
+                let to_spec = match parts.get(1) {
+                    Some(s) if !s.is_empty() => *s,
+                    _ => "HEAD",
                 };
 
-                // Resolve the 'to' revision and push it
-                let to_obj = repo.revparse_single(to_spec)?;
-                revwalk.push(to_obj.id())?;
+                let from_id = repo.revparse_single(from_spec)?.peel_to_commit()?.id();
+                let to_id = repo.revparse_single(to_spec)?.peel_to_commit()?.id();
 
-                // Resolve the 'from' revision and hide it
-                if !from_spec.is_empty() {
-                    let from_obj = repo.revparse_single(from_spec)?;
-                    revwalk.hide(from_obj.id())?;
+                revwalk.push(from_id)?;
+                revwalk.push(to_id)?;
+                for base in repo.merge_bases(from_id, to_id)?.iter() {
+                    revwalk.hide(*base)?;
+                }
+            } else if range_spec.contains("..") {
+                let parts: Vec<&str> = range_spec.split("..").collect();
+                if parts.len() == 2 {
+                    let from_spec = parts[0];
+                    let to_spec = if parts[1].is_empty() {
+                        "HEAD"
+                    } else {
+                        parts[1]
+                    };
+
+                    let to_obj = repo.revparse_single(to_spec)?;
+                    revwalk.push(to_obj.id())?;
+
+                    if !from_spec.is_empty() {
+                        let from_obj = repo.revparse_single(from_spec)?;
+                        revwalk.hide(from_obj.id())?;
+                    }
+                } else {
+                    let obj = repo.revparse_single(range_spec)?;
+                    revwalk.push(obj.id())?;
                 }
             } else {
-                // Fallback: just parse as single revision
                 let obj = repo.revparse_single(range_spec)?;
                 revwalk.push(obj.id())?;
             }
-        } else {
-            // Single revision - walk from that point
-            let obj = repo.revparse_single(range_spec)?;
-            revwalk.push(obj.id())?;
-        }
-    } else if use_all {
-        // Include all branches
-        for r in repo.references()?.flatten() {
-            if let Some(oid) = r.target() {
-                let _ = revwalk.push(oid);
+        } else if use_all {
+            for r in repo.references()?.flatten() {
+                if let Some(oid) = r.target() {
+                    let _ = revwalk.push(oid);
+                }
             }
-        }
-    } else {
-        // Default: just HEAD (may fail for empty repos)
-        if revwalk.push_head().is_err() {
-            // Empty repo or detached HEAD with no target - return empty result
+        } else if revwalk.push_head().is_err() {
             return Ok(ShortlogResult {
                 entries: Vec::new(),
                 total_commits: 0,
                 total_contributors: 0,
             });
         }
-    }
 
-    // Load the repository's .mailmap so coalesced identities match git's
-    // default behaviour. Absent or unreadable mailmaps are simply ignored.
-    let mailmap = repo.mailmap().ok();
+        let mailmap = repo.mailmap().ok();
 
-    // Group commits by author/committer
-    // Tuple: (name, email, commit_count, commit_messages)
-    let mut contributors_map: HashMap<String, (String, Option<String>, u32, Vec<String>)> =
-        HashMap::new();
-    let mut total_commits: u32 = 0;
+        let mut contributors_map: HashMap<String, (String, Option<String>, u32, Vec<String>)> =
+            HashMap::new();
+        let mut total_commits: u32 = 0;
 
-    for oid_result in revwalk {
-        let oid = oid_result?;
-        let commit = repo.find_commit(oid)?;
-        total_commits += 1;
+        for oid_result in revwalk {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+            total_commits += 1;
 
-        // Get the person based on group_by
-        let person = if group_by == "committer" {
-            commit.committer()
+            let person = if group_by == "committer" {
+                commit.committer()
+            } else {
+                commit.author()
+            };
+
+            let resolved = mailmap
+                .as_ref()
+                .and_then(|mm| mm.resolve_signature(&person).ok());
+            let effective = resolved.as_ref().unwrap_or(&person);
+
+            let person_name = effective.name().unwrap_or("Unknown").to_string();
+            let person_email = effective.email().ok().map(|s| s.to_string());
+
+            let key = if show_email {
+                format!(
+                    "{}\u{0}{}",
+                    person_name,
+                    person_email.clone().unwrap_or_default()
+                )
+            } else {
+                person_name.clone()
+            };
+
+            let commit_summary = commit.summary().ok().flatten().unwrap_or("").to_string();
+
+            let entry = contributors_map
+                .entry(key)
+                .or_insert_with(|| (person_name.clone(), person_email.clone(), 0, Vec::new()));
+
+            if entry.0 == "Unknown" && person_name != "Unknown" {
+                entry.0 = person_name;
+            }
+            if entry.1.is_none() && person_email.is_some() {
+                entry.1 = person_email;
+            }
+
+            entry.2 += 1;
+
+            if !use_summary {
+                entry.3.push(commit_summary);
+            }
+        }
+
+        let mut entries: Vec<ShortlogEntry> = contributors_map
+            .into_iter()
+            .map(|(_, (name, email, count, commits))| ShortlogEntry {
+                name: name.clone(),
+                email,
+                count,
+                commits,
+            })
+            .collect();
+
+        if use_numbered {
+            entries.sort_by_key(|b| std::cmp::Reverse(b.count));
         } else {
-            commit.author()
-        };
-
-        // Canonicalize the identity through the mailmap, falling back to the
-        // raw signature when no mapping applies.
-        let resolved = mailmap
-            .as_ref()
-            .and_then(|mm| mm.resolve_signature(&person).ok());
-        let effective = resolved.as_ref().unwrap_or(&person);
-
-        let person_name = effective.name().unwrap_or("Unknown").to_string();
-        let person_email = effective.email().ok().map(|s| s.to_string());
-
-        // git shortlog groups by author NAME by default; only with --email
-        // does the (name, email) pair become the grouping identity.
-        let key = if show_email {
-            format!(
-                "{}\u{0}{}",
-                person_name,
-                person_email.clone().unwrap_or_default()
-            )
-        } else {
-            person_name.clone()
-        };
-
-        let commit_summary = commit.summary().ok().flatten().unwrap_or("").to_string();
-
-        let entry = contributors_map
-            .entry(key)
-            .or_insert_with(|| (person_name.clone(), person_email.clone(), 0, Vec::new()));
-
-        // Update name if we have a better one (non-Unknown)
-        if entry.0 == "Unknown" && person_name != "Unknown" {
-            entry.0 = person_name;
-        }
-        // Update email if we don't have one
-        if entry.1.is_none() && person_email.is_some() {
-            entry.1 = person_email;
+            entries.sort_by_key(|a| a.name.to_lowercase());
         }
 
-        // Always increment the commit count
-        entry.2 += 1;
+        let total_contributors = entries.len() as u32;
 
-        // Add commit message if not in summary mode
-        if !use_summary {
-            entry.3.push(commit_summary);
-        }
-    }
-
-    // Build result entries
-    let mut entries: Vec<ShortlogEntry> = contributors_map
-        .into_iter()
-        .map(|(_, (name, email, count, commits))| ShortlogEntry {
-            name: name.clone(),
-            email,
-            count,
-            commits,
+        Ok(ShortlogResult {
+            entries,
+            total_commits,
+            total_contributors,
         })
-        .collect();
-
-    // Sort entries
-    if use_numbered {
-        // Sort by commit count (descending)
-        entries.sort_by_key(|b| std::cmp::Reverse(b.count));
-    } else {
-        // Sort alphabetically by name
-        entries.sort_by_key(|a| a.name.to_lowercase());
-    }
-
-    let total_contributors = entries.len() as u32;
-
-    Ok(ShortlogResult {
-        entries,
-        total_commits,
-        total_contributors,
     })
+    .await
 }
 
 #[cfg(test)]

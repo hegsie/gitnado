@@ -955,30 +955,6 @@ pub async fn lfs_prune(path: String, dry_run: Option<bool>) -> Result<String> {
     run_lfs_command(repo_path, &args)
 }
 
-/// Migrate existing files to LFS
-#[command]
-pub async fn lfs_migrate(
-    path: String,
-    pattern: String,
-    include_refs: Option<Vec<String>>,
-) -> Result<String> {
-    let repo_path = Path::new(&path);
-
-    let include_arg = format!("--include={}", pattern);
-    let mut args = vec!["migrate", "import", &include_arg];
-
-    // Add refs if specified
-    let refs_owned: Vec<String>;
-    if let Some(refs) = include_refs {
-        refs_owned = refs;
-        for r in &refs_owned {
-            args.push(r);
-        }
-    }
-
-    run_lfs_command(repo_path, &args)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

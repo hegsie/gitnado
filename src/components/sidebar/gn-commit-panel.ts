@@ -8,7 +8,7 @@ import { showPrompt } from '../../services/dialog.service.ts';
 import { repositoryStore, settingsStore } from '../../stores/index.ts';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { safeUnlisten } from '../../services/tauri-api.ts';
-import type { CommitTemplate, ConventionalType } from '../../services/git.service.ts';
+import type { CommitTemplate, ConventionalType, CommitMessageRules } from '../../services/git.service.ts';
 import type { Commit } from '../../types/git.types.ts';
 import { RefLockController, tryAcquireRefOpOrWarn, releaseRefOp } from '../../utils/ref-lock.ts';
 import {
@@ -890,6 +890,9 @@ export class GnCommitPanel extends LitElement {
   @state() private currentBranch: string = '';
   private cachedAuthor: string = '';
 
+  // Commit message rules state
+  @state() private commitRules: CommitMessageRules | null = null;
+
   // Trailer state (Signed-off-by / Co-authored-by)
   @state() private signOff: boolean = false;
   @state() private coAuthors: CoAuthor[] = [];
@@ -972,6 +975,7 @@ export class GnCommitPanel extends LitElement {
     await this.loadTemplates();
     await this.loadConventionalTypes();
     await this.loadGitTemplate();
+    await this.loadCommitRules();
     await this.checkAiAvailability();
     await this.loadAuthorName();
     // "Always sign off" seeds a fresh draft; it never overrides a choice the
@@ -1087,7 +1091,9 @@ export class GnCommitPanel extends LitElement {
       this.identityName = '';
       this.identityEmail = '';
       this.identityLoaded = false;
+      this.commitRules = null;
       void this.loadAuthorName();
+      void this.loadCommitRules();
     }
 
     // Once we KNOW there is no identity, sign-off cannot be armed: the
@@ -1255,6 +1261,14 @@ export class GnCommitPanel extends LitElement {
         }
       }
     }
+  }
+
+  private async loadCommitRules(): Promise<void> {
+    if (!this.repositoryPath) return;
+    const requestedFor = this.repositoryPath;
+    const result = await gitService.getCommitMessageRules(this.repositoryPath);
+    if (this.repositoryPath !== requestedFor) return;
+    this.commitRules = result.success ? (result.data ?? null) : null;
   }
 
   private async loadAuthorName(): Promise<void> {
@@ -1784,6 +1798,15 @@ export class GnCommitPanel extends LitElement {
 
     try {
       const message = this.buildCommitMessage();
+
+      if (this.commitRules) {
+        const validation = await gitService.validateCommitMessage(message, this.commitRules);
+        if (validation.success && validation.data && !validation.data.isValid) {
+          const errors = validation.data.errors.map(e => e.message).join('; ');
+          this.reportCommitFailure(repoPath, `Commit message validation failed: ${errors}`);
+          return;
+        }
+      }
 
       const result = await gitService.createCommit(repoPath, {
         message,

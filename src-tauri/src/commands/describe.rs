@@ -112,83 +112,86 @@ pub async fn describe(
     first_parent: Option<bool>,
     dirty: Option<bool>,
 ) -> Result<DescribeResult> {
-    // Verify the repository exists
-    let repo_path = Path::new(&path);
-    if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(GitnadoError::RepositoryNotFound(path));
-    }
-
-    // Build the git describe command
-    let mut cmd = Command::new("git");
-    cmd.current_dir(&path);
-    // Pinned to the C locale so the "nothing tags this commit" failure below
-    // is recognizable by its wording on a machine with git's translations
-    // installed — that case is an empty state in the UI, not an error.
-    cmd.env("LC_ALL", "C");
-    cmd.arg("describe");
-
-    // Add flags based on options
-    if tags.unwrap_or(false) {
-        cmd.arg("--tags");
-    }
-
-    if all.unwrap_or(false) {
-        cmd.arg("--all");
-    }
-
-    if long.unwrap_or(false) {
-        cmd.arg("--long");
-    }
-
-    if let Some(abbrev_len) = abbrev {
-        cmd.arg(format!("--abbrev={}", abbrev_len));
-    }
-
-    if let Some(ref pattern) = match_pattern {
-        cmd.arg(format!("--match={}", pattern));
-    }
-
-    if let Some(ref pattern) = exclude_pattern {
-        cmd.arg(format!("--exclude={}", pattern));
-    }
-
-    if first_parent.unwrap_or(false) {
-        cmd.arg("--first-parent");
-    }
-
-    if dirty.unwrap_or(false) {
-        cmd.arg("--dirty");
-    }
-
-    // Add the commitish if provided (must be last)
-    if let Some(ref commit) = commitish {
-        cmd.arg(commit);
-    }
-
-    // Execute the command
-    let output = cmd.output().map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to execute git describe: {}", e))
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr = stderr.trim();
-        // A commit with no tag above it is the normal state of every commit in
-        // a repository nobody has tagged yet, so it is reported separately
-        // from the failures that mean the request itself was wrong.
-        if is_no_names_found(stderr) {
-            return Err(GitnadoError::NoTagsReachable(
-                commitish.unwrap_or_else(|| "HEAD".to_string()),
-            ));
+    crate::utils::blocking_git(move || {
+        // Verify the repository exists
+        let repo_path = Path::new(&path);
+        if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
+            return Err(GitnadoError::RepositoryNotFound(path));
         }
-        return Err(GitnadoError::OperationFailed(format!(
-            "git describe failed: {}",
-            stderr
-        )));
-    }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_describe_output(&stdout))
+        // Build the git describe command
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&path);
+        // Pinned to the C locale so the "nothing tags this commit" failure below
+        // is recognizable by its wording on a machine with git's translations
+        // installed — that case is an empty state in the UI, not an error.
+        cmd.env("LC_ALL", "C");
+        cmd.arg("describe");
+
+        // Add flags based on options
+        if tags.unwrap_or(false) {
+            cmd.arg("--tags");
+        }
+
+        if all.unwrap_or(false) {
+            cmd.arg("--all");
+        }
+
+        if long.unwrap_or(false) {
+            cmd.arg("--long");
+        }
+
+        if let Some(abbrev_len) = abbrev {
+            cmd.arg(format!("--abbrev={}", abbrev_len));
+        }
+
+        if let Some(ref pattern) = match_pattern {
+            cmd.arg(format!("--match={}", pattern));
+        }
+
+        if let Some(ref pattern) = exclude_pattern {
+            cmd.arg(format!("--exclude={}", pattern));
+        }
+
+        if first_parent.unwrap_or(false) {
+            cmd.arg("--first-parent");
+        }
+
+        if dirty.unwrap_or(false) {
+            cmd.arg("--dirty");
+        }
+
+        // Add the commitish if provided (must be last)
+        if let Some(ref commit) = commitish {
+            cmd.arg(commit);
+        }
+
+        // Execute the command
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git describe: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            // A commit with no tag above it is the normal state of every commit in
+            // a repository nobody has tagged yet, so it is reported separately
+            // from the failures that mean the request itself was wrong.
+            if is_no_names_found(stderr) {
+                return Err(GitnadoError::NoTagsReachable(
+                    commitish.unwrap_or_else(|| "HEAD".to_string()),
+                ));
+            }
+            return Err(GitnadoError::OperationFailed(format!(
+                "git describe failed: {}",
+                stderr
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_describe_output(&stdout))
+    })
+    .await
 }
 
 #[cfg(test)]

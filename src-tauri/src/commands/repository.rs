@@ -1110,12 +1110,6 @@ pub async fn init_repository(
     .await
 }
 
-/// Get information about the current repository
-#[command]
-pub async fn get_repository_info(path: String) -> Result<Repository> {
-    open_repository(path).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2563,15 +2557,6 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(result.state, RepositoryState::Clean));
-    }
-
-    #[tokio::test]
-    async fn test_get_repository_info() {
-        let repo = TestRepo::with_initial_commit();
-        let result = get_repository_info(repo.path_str()).await;
-        assert!(result.is_ok());
-        let repo_info = result.unwrap();
-        assert!(repo_info.is_valid);
     }
 
     #[tokio::test]

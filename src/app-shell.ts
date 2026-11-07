@@ -2220,6 +2220,10 @@ export class AppShell extends LitElement {
       }
     } catch (error) {
       log.error('Failed to initialize unified profiles:', error);
+      showToast(
+        error instanceof Error ? error.message : 'Failed to initialize unified profiles',
+        'error'
+      );
     }
   }
 
@@ -6865,6 +6869,7 @@ export class AppShell extends LitElement {
           .repositoryPath=${this.activeRepository.repository.path}
           @close=${() => { dialogs.close('jira'); }}
           @branch-created=${() => this.handleRefresh()}
+          @jira-config-changed=${() => this.handleRefresh()}
         ></gn-jira-dialog>
       ` : ''}
 

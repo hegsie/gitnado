@@ -42,215 +42,219 @@ pub async fn bundle_create(
     refs: Vec<String>,
     all: bool,
 ) -> Result<BundleCreateResult> {
-    let repo_path = Path::new(&path);
-    if !repo_path.exists() {
-        return Err(GitnadoError::RepositoryNotFound(path));
-    }
-
-    reject_flag_like(&bundle_path, "Bundle path")?;
-    for ref_spec in &refs {
-        reject_flag_like(ref_spec, "Refspec")?;
-    }
-
-    // `git bundle create [<bundle-create options>] <file> <rev-list args>`.
-    // We place `--` directly before `<file>` to defend the file path from
-    // being parsed as a bundle-create option. `--all` and explicit refs are
-    // rev-list arguments and must come AFTER `<file>`.
-    let mut cmd = create_command("git");
-    cmd.current_dir(repo_path).arg("bundle").arg("create");
-
-    if !all && refs.is_empty() {
-        return Err(GitnadoError::OperationFailed(
-            "Either refs must be provided or 'all' must be true".to_string(),
-        ));
-    }
-
-    cmd.arg("--").arg(&bundle_path);
-
-    if all {
-        cmd.arg("--all");
-    } else {
-        for ref_spec in &refs {
-            cmd.arg(ref_spec);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        if !repo_path.exists() {
+            return Err(GitnadoError::RepositoryNotFound(path));
         }
-    }
 
-    let output = cmd.output().map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to execute git bundle create: {}", e))
-    })?;
+        reject_flag_like(&bundle_path, "Bundle path")?;
+        for ref_spec in &refs {
+            reject_flag_like(ref_spec, "Refspec")?;
+        }
 
-    if !output.status.success() {
+        // `git bundle create [<bundle-create options>] <file> <rev-list args>`.
+        // We place `--` directly before `<file>` to defend the file path from
+        // being parsed as a bundle-create option. `--all` and explicit refs are
+        // rev-list arguments and must come AFTER `<file>`.
+        let mut cmd = create_command("git");
+        cmd.current_dir(repo_path).arg("bundle").arg("create");
+
+        if !all && refs.is_empty() {
+            return Err(GitnadoError::OperationFailed(
+                "Either refs must be provided or 'all' must be true".to_string(),
+            ));
+        }
+
+        cmd.arg("--").arg(&bundle_path);
+
+        if all {
+            cmd.arg("--all");
+        } else {
+            for ref_spec in &refs {
+                cmd.arg(ref_spec);
+            }
+        }
+
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git bundle create: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git bundle create failed: {}",
+                stderr
+            )));
+        }
+
+        // Parse the output to get counts
+        // The output typically shows the number of objects written
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git bundle create failed: {}",
-            stderr
-        )));
-    }
+        let combined = format!("{}{}", stdout, stderr);
 
-    // Parse the output to get counts
-    // The output typically shows the number of objects written
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
-
-    let mut objects_count = 0u32;
-    // Parse lines like "Counting objects: 123, done."
-    for line in combined.lines() {
-        if line.contains("Counting objects:") || line.contains("Total") {
-            if let Some(num_str) = line.split(':').nth(1) {
-                if let Some(num) = num_str.trim().split(|c: char| !c.is_ascii_digit()).next() {
-                    if let Ok(n) = num.parse::<u32>() {
-                        objects_count = n;
+        let mut objects_count = 0u32;
+        // Parse lines like "Counting objects: 123, done."
+        for line in combined.lines() {
+            if line.contains("Counting objects:") || line.contains("Total") {
+                if let Some(num_str) = line.split(':').nth(1) {
+                    if let Some(num) = num_str.trim().split(|c: char| !c.is_ascii_digit()).next() {
+                        if let Ok(n) = num.parse::<u32>() {
+                            objects_count = n;
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Get refs count by listing the bundle
-    let refs_count = if all {
-        // Get all refs from the repo
-        let list_output = create_command("git")
-            .current_dir(repo_path)
-            .arg("show-ref")
-            .output()
-            .ok();
+        // Get refs count by listing the bundle
+        let refs_count = if all {
+            // Get all refs from the repo
+            let list_output = create_command("git")
+                .current_dir(repo_path)
+                .arg("show-ref")
+                .output()
+                .ok();
 
-        list_output
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .count()
-                    .try_into()
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0)
-    } else {
-        refs.len() as u32
-    };
+            list_output
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .count()
+                        .try_into()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0)
+        } else {
+            refs.len() as u32
+        };
 
-    Ok(BundleCreateResult {
-        bundle_path,
-        refs_count,
-        objects_count,
+        Ok(BundleCreateResult {
+            bundle_path,
+            refs_count,
+            objects_count,
+        })
     })
+    .await
 }
 
 /// Verify a bundle file against a repository
 #[command]
 pub async fn bundle_verify(path: String, bundle_path: String) -> Result<BundleVerifyResult> {
-    let repo_path = Path::new(&path);
-    if !repo_path.exists() {
-        return Err(GitnadoError::RepositoryNotFound(path));
-    }
-
-    reject_flag_like(&bundle_path, "Bundle path")?;
-    let bundle_file = Path::new(&bundle_path);
-    if !bundle_file.exists() {
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bundle file not found: {}",
-            bundle_path
-        )));
-    }
-
-    // Run git bundle verify. `--` keeps a malicious bundle_path from being
-    // parsed as a flag, mirroring bundle_list_heads / bundle_unbundle.
-    let output = create_command("git")
-        .current_dir(repo_path)
-        .arg("bundle")
-        .arg("verify")
-        .arg("--")
-        .arg(&bundle_path)
-        .output()
-        .map_err(|e| {
-            GitnadoError::OperationFailed(format!("Failed to execute git bundle verify: {}", e))
-        })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}\n{}", stdout, stderr);
-
-    let is_valid = output.status.success();
-
-    // Parse refs and prerequisites from output. `git bundle verify` groups
-    // its output into sections: "The bundle contains …" lists the refs the
-    // bundle provides (each line is "<oid> <refname>"), while "The bundle
-    // requires …" lists prerequisite commits the target must already have
-    // (each line is a bare "<oid>" with no refname). We must track the current
-    // section because a bare prerequisite oid is otherwise indistinguishable
-    // from a ref line, and older parsers that keyed off a "-" prefix never
-    // matched modern git output — leaving `requires` permanently empty.
-    let mut refs = Vec::new();
-    let mut requires = Vec::new();
-
-    #[derive(PartialEq)]
-    enum Section {
-        None,
-        Contains,
-        Requires,
-    }
-    let mut section = Section::None;
-
-    for line in combined.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let lower = line.to_lowercase();
-        if lower.contains("the bundle requires") {
-            section = Section::Requires;
-            continue;
-        }
-        if lower.contains("the bundle contains") {
-            section = Section::Contains;
-            continue;
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        if !repo_path.exists() {
+            return Err(GitnadoError::RepositoryNotFound(path));
         }
 
-        let first = line.split_whitespace().next().unwrap_or("");
-        let is_oid = (first.len() == 40 || first.len() == 64)
-            && first.chars().all(|c| c.is_ascii_hexdigit());
-        if !is_oid {
-            continue;
+        reject_flag_like(&bundle_path, "Bundle path")?;
+        let bundle_file = Path::new(&bundle_path);
+        if !bundle_file.exists() {
+            return Err(GitnadoError::OperationFailed(format!(
+                "Bundle file not found: {}",
+                bundle_path
+            )));
         }
 
-        if section == Section::Requires {
-            // Prerequisite lines carry only the bare oid.
-            requires.push(first.to_string());
-        } else {
-            // A ref line: "<oid> <refname>". Skip the bundle's HEAD pseudo-ref
-            // so it isn't reported as a real branch.
-            let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
-            if parts.len() == 2 {
-                let name = parts[1].trim().to_string();
-                if name != "HEAD" {
-                    refs.push(BundleRef {
-                        oid: parts[0].to_string(),
-                        name,
-                    });
+        // Run git bundle verify. `--` keeps a malicious bundle_path from being
+        // parsed as a flag, mirroring bundle_list_heads / bundle_unbundle.
+        let output = create_command("git")
+            .current_dir(repo_path)
+            .arg("bundle")
+            .arg("verify")
+            .arg("--")
+            .arg(&bundle_path)
+            .output()
+            .map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to execute git bundle verify: {}", e))
+            })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}\n{}", stdout, stderr);
+
+        let is_valid = output.status.success();
+
+        // Parse refs and prerequisites from output. `git bundle verify` groups
+        // its output into sections: "The bundle contains …" lists the refs the
+        // bundle provides (each line is "<oid> <refname>"), while "The bundle
+        // requires …" lists prerequisite commits the target must already have
+        // (each line is a bare "<oid>" with no refname). We must track the current
+        // section because a bare prerequisite oid is otherwise indistinguishable
+        // from a ref line, and older parsers that keyed off a "-" prefix never
+        // matched modern git output — leaving `requires` permanently empty.
+        let mut refs = Vec::new();
+        let mut requires = Vec::new();
+
+        #[derive(PartialEq)]
+        enum Section {
+            None,
+            Contains,
+            Requires,
+        }
+        let mut section = Section::None;
+
+        for line in combined.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let lower = line.to_lowercase();
+            if lower.contains("the bundle requires") {
+                section = Section::Requires;
+                continue;
+            }
+            if lower.contains("the bundle contains") {
+                section = Section::Contains;
+                continue;
+            }
+
+            let first = line.split_whitespace().next().unwrap_or("");
+            let is_oid = (first.len() == 40 || first.len() == 64)
+                && first.chars().all(|c| c.is_ascii_hexdigit());
+            if !is_oid {
+                continue;
+            }
+
+            if section == Section::Requires {
+                // Prerequisite lines carry only the bare oid.
+                requires.push(first.to_string());
+            } else {
+                // A ref line: "<oid> <refname>". Skip the bundle's HEAD pseudo-ref
+                // so it isn't reported as a real branch.
+                let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
+                if parts.len() == 2 {
+                    let name = parts[1].trim().to_string();
+                    if name != "HEAD" {
+                        refs.push(BundleRef {
+                            oid: parts[0].to_string(),
+                            name,
+                        });
+                    }
                 }
             }
         }
-    }
 
-    let message = if !is_valid {
-        Some(stderr.to_string())
-    } else {
-        None
-    };
+        let message = if !is_valid {
+            Some(stderr.to_string())
+        } else {
+            None
+        };
 
-    Ok(BundleVerifyResult {
-        is_valid,
-        refs,
-        requires,
-        message,
+        Ok(BundleVerifyResult {
+            is_valid,
+            refs,
+            requires,
+            message,
+        })
     })
+    .await
 }
 
-/// List the heads (refs) contained in a bundle file
-#[command]
-pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
-    reject_flag_like(&bundle_path, "Bundle path")?;
-    let bundle_file = Path::new(&bundle_path);
+fn bundle_list_heads_sync(bundle_path: &str) -> Result<Vec<BundleRef>> {
+    reject_flag_like(bundle_path, "Bundle path")?;
+    let bundle_file = Path::new(bundle_path);
     if !bundle_file.exists() {
         return Err(GitnadoError::OperationFailed(format!(
             "Bundle file not found: {}",
@@ -263,7 +267,7 @@ pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
         .arg("bundle")
         .arg("list-heads")
         .arg("--")
-        .arg(&bundle_path)
+        .arg(bundle_path)
         .output()
         .map_err(|e| {
             GitnadoError::OperationFailed(format!("Failed to execute git bundle list-heads: {}", e))
@@ -294,169 +298,183 @@ pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
     Ok(refs)
 }
 
+/// List the heads (refs) contained in a bundle file
+#[command]
+pub async fn bundle_list_heads(bundle_path: String) -> Result<Vec<BundleRef>> {
+    crate::utils::blocking_git(move || bundle_list_heads_sync(&bundle_path)).await
+}
+
 /// Extract (unbundle) a bundle file into a repository
 #[command]
 pub async fn bundle_unbundle(path: String, bundle_path: String) -> Result<Vec<BundleRef>> {
-    let repo_path = Path::new(&path);
-    if !repo_path.exists() {
-        return Err(GitnadoError::RepositoryNotFound(path));
-    }
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        if !repo_path.exists() {
+            return Err(GitnadoError::RepositoryNotFound(path));
+        }
 
-    reject_flag_like(&bundle_path, "Bundle path")?;
-    let bundle_file = Path::new(&bundle_path);
-    if !bundle_file.exists() {
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bundle file not found: {}",
-            bundle_path
-        )));
-    }
+        reject_flag_like(&bundle_path, "Bundle path")?;
+        let bundle_file = Path::new(&bundle_path);
+        if !bundle_file.exists() {
+            return Err(GitnadoError::OperationFailed(format!(
+                "Bundle file not found: {}",
+                bundle_path
+            )));
+        }
 
-    // First verify the bundle is valid for this repository
-    let verify_output = create_command("git")
-        .current_dir(repo_path)
-        .arg("bundle")
-        .arg("verify")
-        .arg("--")
-        .arg(&bundle_path)
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to verify bundle: {}", e)))?;
-
-    if !verify_output.status.success() {
-        let stderr = String::from_utf8_lossy(&verify_output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "Bundle verification failed: {}. The repository may be missing prerequisite commits.",
-            stderr
-        )));
-    }
-
-    // Use git fetch to unbundle - this fetches all refs from the bundle.
-    // `--` terminates options so a malicious bundle_path cannot be parsed
-    // as a flag like `--upload-pack=`.
-    let output = create_command("git")
-        .current_dir(repo_path)
-        .arg("fetch")
-        .arg("--")
-        .arg(&bundle_path)
-        .arg("*:*") // Fetch all refs
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to unbundle: {}", e)))?;
-
-    // git fetch from bundle may fail with "*:*" on some versions, try alternative approach
-    if !output.status.success() {
-        // Get list of refs in the bundle first
-        let list_output = create_command("git")
+        // First verify the bundle is valid for this repository
+        let verify_output = create_command("git")
+            .current_dir(repo_path)
             .arg("bundle")
-            .arg("list-heads")
+            .arg("verify")
             .arg("--")
             .arg(&bundle_path)
             .output()
             .map_err(|e| {
-                GitnadoError::OperationFailed(format!("Failed to list bundle heads: {}", e))
+                GitnadoError::OperationFailed(format!("Failed to verify bundle: {}", e))
             })?;
 
-        if !list_output.status.success() {
-            let stderr = String::from_utf8_lossy(&list_output.stderr);
+        if !verify_output.status.success() {
+            let stderr = String::from_utf8_lossy(&verify_output.stderr);
             return Err(GitnadoError::OperationFailed(format!(
-                "Failed to list bundle heads: {}",
+                "Bundle verification failed: {}. The repository may be missing prerequisite commits.",
                 stderr
             )));
         }
 
-        let stdout = String::from_utf8_lossy(&list_output.stdout);
-        let mut fetched_refs = Vec::new();
-        let mut refused_refs: Vec<(String, String)> = Vec::new();
+        // Use git fetch to unbundle - this fetches all refs from the bundle.
+        // `--` terminates options so a malicious bundle_path cannot be parsed
+        // as a flag like `--upload-pack=`.
+        let output = create_command("git")
+            .current_dir(repo_path)
+            .arg("fetch")
+            .arg("--")
+            .arg(&bundle_path)
+            .arg("*:*") // Fetch all refs
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .output()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to unbundle: {}", e)))?;
 
-        // Fetch each ref individually
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
-            if parts.len() == 2 {
-                let oid = parts[0];
-                let refname = parts[1].trim();
+        // git fetch from bundle may fail with "*:*" on some versions, try alternative approach
+        if !output.status.success() {
+            // Get list of refs in the bundle first
+            let list_output = create_command("git")
+                .arg("bundle")
+                .arg("list-heads")
+                .arg("--")
+                .arg(&bundle_path)
+                .output()
+                .map_err(|e| {
+                    GitnadoError::OperationFailed(format!("Failed to list bundle heads: {}", e))
+                })?;
 
-                // Skip the bundle's HEAD pseudo-ref and anything that is not a
-                // real ref. Fetching "HEAD:HEAD" would create a bogus local
-                // branch refs/heads/HEAD and make every later "HEAD" lookup
-                // ambiguous. Flag-like names originate from the untrusted
-                // bundle and are rejected for the same reason.
-                if refname == "HEAD" || !refname.starts_with("refs/") || refname.starts_with('-') {
-                    continue;
-                }
-                let fetch_result = create_command("git")
-                    .current_dir(repo_path)
-                    .arg("fetch")
-                    .arg("--")
-                    .arg(&bundle_path)
-                    .arg(format!("{}:{}", refname, refname))
-                    .output();
+            if !list_output.status.success() {
+                let stderr = String::from_utf8_lossy(&list_output.stderr);
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Failed to list bundle heads: {}",
+                    stderr
+                )));
+            }
 
-                match fetch_result {
-                    Ok(result) if result.status.success() => {
-                        fetched_refs.push(BundleRef {
-                            oid: oid.to_string(),
-                            name: refname.to_string(),
-                        });
+            let stdout = String::from_utf8_lossy(&list_output.stdout);
+            let mut fetched_refs = Vec::new();
+            let mut refused_refs: Vec<(String, String)> = Vec::new();
+
+            // Fetch each ref individually
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
+                if parts.len() == 2 {
+                    let oid = parts[0];
+                    let refname = parts[1].trim();
+
+                    // Skip the bundle's HEAD pseudo-ref and anything that is not a
+                    // real ref. Fetching "HEAD:HEAD" would create a bogus local
+                    // branch refs/heads/HEAD and make every later "HEAD" lookup
+                    // ambiguous. Flag-like names originate from the untrusted
+                    // bundle and are rejected for the same reason.
+                    if refname == "HEAD"
+                        || !refname.starts_with("refs/")
+                        || refname.starts_with('-')
+                    {
+                        continue;
                     }
-                    Ok(result) => {
-                        // git refuses to update a checked-out branch and rejects
-                        // non-fast-forward updates. Record why so the user is
-                        // told the ref was not updated instead of it silently
-                        // vanishing from the result.
-                        let stderr = String::from_utf8_lossy(&result.stderr);
-                        let reason = stderr
-                            .lines()
-                            .rev()
-                            .find(|l| !l.trim().is_empty())
-                            .unwrap_or("")
-                            .trim()
-                            .to_string();
-                        refused_refs.push((refname.to_string(), reason));
-                    }
-                    Err(e) => {
-                        refused_refs.push((refname.to_string(), e.to_string()));
+                    let fetch_result = create_command("git")
+                        .current_dir(repo_path)
+                        .arg("fetch")
+                        .arg("--")
+                        .arg(&bundle_path)
+                        .arg(format!("{}:{}", refname, refname))
+                        .output();
+
+                    match fetch_result {
+                        Ok(result) if result.status.success() => {
+                            fetched_refs.push(BundleRef {
+                                oid: oid.to_string(),
+                                name: refname.to_string(),
+                            });
+                        }
+                        Ok(result) => {
+                            // git refuses to update a checked-out branch and rejects
+                            // non-fast-forward updates. Record why so the user is
+                            // told the ref was not updated instead of it silently
+                            // vanishing from the result.
+                            let stderr = String::from_utf8_lossy(&result.stderr);
+                            let reason = stderr
+                                .lines()
+                                .rev()
+                                .find(|l| !l.trim().is_empty())
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            refused_refs.push((refname.to_string(), reason));
+                        }
+                        Err(e) => {
+                            refused_refs.push((refname.to_string(), e.to_string()));
+                        }
                     }
                 }
             }
+
+            // Surface refused refs rather than reporting success while the ref the
+            // user most likely wanted (e.g. the checked-out branch) was never
+            // updated.
+            if !refused_refs.is_empty() {
+                let detail = refused_refs
+                    .iter()
+                    .map(|(name, reason)| {
+                        if reason.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{} ({})", name, reason)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Some refs from the bundle could not be updated: {}. This usually means the branch is currently checked out or the update was not a fast-forward.",
+                    detail
+                )));
+            }
+
+            if fetched_refs.is_empty() {
+                return Err(GitnadoError::OperationFailed(
+                    "Failed to fetch any refs from bundle".to_string(),
+                ));
+            }
+
+            return Ok(fetched_refs);
         }
 
-        // Surface refused refs rather than reporting success while the ref the
-        // user most likely wanted (e.g. the checked-out branch) was never
-        // updated.
-        if !refused_refs.is_empty() {
-            let detail = refused_refs
-                .iter()
-                .map(|(name, reason)| {
-                    if reason.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{} ({})", name, reason)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(GitnadoError::OperationFailed(format!(
-                "Some refs from the bundle could not be updated: {}. This usually means the branch is currently checked out or the update was not a fast-forward.",
-                detail
-            )));
-        }
-
-        if fetched_refs.is_empty() {
-            return Err(GitnadoError::OperationFailed(
-                "Failed to fetch any refs from bundle".to_string(),
-            ));
-        }
-
-        return Ok(fetched_refs);
-    }
-
-    // Parse the fetched refs from the bundle. The "*:*" refspec only updates
-    // refs/*, so exclude the bundle's HEAD pseudo-ref from the reported result.
-    let heads = bundle_list_heads(bundle_path).await?;
-    Ok(heads
-        .into_iter()
-        .filter(|r| r.name.starts_with("refs/"))
-        .collect())
+        // Parse the fetched refs from the bundle. The "*:*" refspec only updates
+        // refs/*, so exclude the bundle's HEAD pseudo-ref from the reported result.
+        let heads = bundle_list_heads_sync(&bundle_path)?;
+        Ok(heads
+            .into_iter()
+            .filter(|r| r.name.starts_with("refs/"))
+            .collect())
+    })
+    .await
 }
 
 #[cfg(test)]

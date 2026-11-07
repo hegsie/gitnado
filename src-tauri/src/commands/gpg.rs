@@ -488,9 +488,8 @@ fn commit_has_signature(repo_path: &Path, oid: &str) -> bool {
     repo.extract_signature(&oid, None).is_ok()
 }
 
-/// Get signature information for a commit
-#[command]
-pub async fn get_commit_signature(path: String, commit_oid: String) -> Result<CommitSignature> {
+/// Get signature information for a commit (internal helper for batch verification)
+async fn get_commit_signature(path: String, commit_oid: String) -> Result<CommitSignature> {
     let repo_path = Path::new(&path);
 
     // Use git log with signature format

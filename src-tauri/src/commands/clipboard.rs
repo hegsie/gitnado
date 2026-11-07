@@ -59,19 +59,6 @@ impl From<String> for FilePathFormat {
     }
 }
 
-/// Copy text to system clipboard
-/// Note: This is provided for completeness, but frontend typically uses navigator.clipboard directly
-#[command]
-pub async fn copy_to_clipboard(text: String) -> Result<CopyResult> {
-    // In a desktop context, the frontend uses navigator.clipboard.writeText()
-    // This command is provided for cases where backend-initiated clipboard operations are needed
-    // For Tauri, clipboard operations are typically done on the frontend
-    Ok(CopyResult {
-        success: true,
-        text,
-    })
-}
-
 /// Get formatted commit info for copying
 #[command]
 pub async fn get_commit_info_for_copy(
@@ -230,15 +217,6 @@ pub async fn get_file_path_for_copy(
 mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
-
-    #[tokio::test]
-    async fn test_copy_to_clipboard() {
-        let result = copy_to_clipboard("test text".to_string()).await;
-        assert!(result.is_ok());
-        let copy_result = result.unwrap();
-        assert!(copy_result.success);
-        assert_eq!(copy_result.text, "test text");
-    }
 
     #[tokio::test]
     async fn test_get_commit_info_sha() {

@@ -1215,56 +1215,6 @@ mod tests {
         assert_eq!(amended.committer().name().unwrap(), local.name().unwrap());
     }
 
-    /// A reword changes the message and nothing else. Passing the fresh
-    /// signature as author re-attributed a colleague's commit to whoever
-    /// reworded it, and the new author date reordered it in date-sorted views.
-    #[tokio::test]
-    async fn test_reword_head_preserves_the_original_author() {
-        let test_repo = TestRepo::with_initial_commit();
-
-        const ORIGINAL_TIME: i64 = 1_000_000_000;
-        {
-            let repo = test_repo.repo();
-            test_repo.create_file("b.txt", "content");
-            test_repo.stage_file("b.txt");
-
-            let mut index = repo.index().unwrap();
-            let tree_oid = index.write_tree().unwrap();
-            let tree = repo.find_tree(tree_oid).unwrap();
-
-            let author = git2::Signature::new(
-                "Colleague",
-                "colleague@example.com",
-                &git2::Time::new(ORIGINAL_TIME, 0),
-            )
-            .unwrap();
-            let committer = repo.signature().unwrap();
-            let parent = repo.head().unwrap().peel_to_commit().unwrap();
-
-            repo.commit(
-                Some("HEAD"),
-                &author,
-                &committer,
-                "Typo in mesage",
-                &tree,
-                &[&parent],
-            )
-            .unwrap();
-        }
-
-        amend_commit_message(test_repo.path_str(), "Fix typo in message".to_string())
-            .await
-            .unwrap();
-
-        let repo = test_repo.repo();
-        let reworded = repo.head().unwrap().peel_to_commit().unwrap();
-
-        assert_eq!(reworded.message().unwrap().trim(), "Fix typo in message");
-        assert_eq!(reworded.author().name().unwrap(), "Colleague");
-        assert_eq!(reworded.author().email().unwrap(), "colleague@example.com");
-        assert_eq!(reworded.author().when().seconds(), ORIGINAL_TIME);
-    }
-
     /// Messages of every commit reachable from HEAD, newest first.
     fn history(repo: &TestRepo) -> Vec<String> {
         let repo = repo.repo();
@@ -2464,48 +2414,6 @@ mod tests {
             head.parent_count(),
             1,
             "a revert commit keeps a single parent"
-        );
-    }
-
-    // Finding 100: amend_commit_message must honor commit.gpgsign and re-sign the
-    // reworded commit rather than emit it unsigned (libgit2 cannot sign).
-    #[tokio::test]
-    async fn test_amend_commit_message_signs_when_gpgsign_enabled() {
-        let repo = TestRepo::with_initial_commit();
-
-        // Configure SSH signing; skip if ssh-keygen is unavailable.
-        let keydir = tempfile::TempDir::new().unwrap();
-        let key = keydir.path().join("id");
-        let gen = std::process::Command::new("ssh-keygen")
-            .args(["-t", "ed25519", "-N", "", "-f", key.to_str().unwrap(), "-q"])
-            .output();
-        if gen.map(|o| !o.status.success()).unwrap_or(true) {
-            return;
-        }
-        let pubkey = format!("{}.pub", key.to_str().unwrap());
-        for (k, v) in [
-            ("gpg.format", "ssh"),
-            ("user.signingkey", pubkey.as_str()),
-            ("commit.gpgsign", "true"),
-        ] {
-            std::process::Command::new("git")
-                .current_dir(&repo.path)
-                .args(["config", k, v])
-                .output()
-                .unwrap();
-        }
-
-        let commit = amend_commit_message(repo.path_str(), "Reworded and signed".to_string())
-            .await
-            .unwrap();
-        assert_eq!(commit.summary, "Reworded and signed");
-
-        // The reworded commit must carry a signature.
-        let git_repo = repo.repo();
-        let oid = git2::Oid::from_str(&commit.oid).unwrap();
-        assert!(
-            git_repo.extract_signature(&oid, None).is_ok(),
-            "amended commit must be signed when commit.gpgsign=true"
         );
     }
 

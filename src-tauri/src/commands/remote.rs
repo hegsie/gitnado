@@ -12,7 +12,7 @@ pub use fetch_pull::*;
 #[cfg(test)]
 use fetch_pull::{
     fast_forward_to, fetch_internal, fetch_single_remote, merge_fetched_commit, pull_branch,
-    pull_should_rebase, resolve_pull_target,
+    pull_should_rebase,
 };
 
 #[cfg(test)]

@@ -63,7 +63,6 @@ test.describe('Multi-Account - Adding Second Account', () => {
         repositoryAssignments: {},
       },
       get_integration_accounts: [existingGitHubAccount],
-      get_profiles: [defaultProfile],
       get_active_profile: defaultProfile,
     });
 

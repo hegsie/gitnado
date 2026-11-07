@@ -551,7 +551,7 @@ export class GnToolbar extends LitElement {
           embeddingIndexService.buildIndex(path).then(() => {
             this.checkSemanticAvailability(path);
           }).catch((err) => {
-            console.error('Failed to build embedding index:', err);
+            log.warn('Failed to build embedding index:', err);
           });
         } else {
           const message = result.error?.message ?? 'Failed to open repository';

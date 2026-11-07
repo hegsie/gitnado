@@ -30,89 +30,74 @@ pub async fn get_cleanable_files(
     include_ignored: Option<bool>,
     include_directories: Option<bool>,
 ) -> Result<Vec<CleanEntry>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let workdir = repo.workdir().ok_or_else(|| {
-        crate::error::GitnadoError::OperationFailed("Repository has no working directory".into())
-    })?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let workdir = repo.workdir().ok_or_else(|| {
+            crate::error::GitnadoError::OperationFailed(
+                "Repository has no working directory".into(),
+            )
+        })?;
 
-    let include_ignored = include_ignored.unwrap_or(false);
-    let include_directories = include_directories.unwrap_or(true);
+        let include_ignored = include_ignored.unwrap_or(false);
+        let include_directories = include_directories.unwrap_or(true);
 
-    let mut entries = Vec::new();
+        let mut entries = Vec::new();
 
-    // Get status to find untracked files.
-    //
-    // Do NOT recurse into fully-untracked directories: canonical `git clean`
-    // without `-d` never touches files inside untracked directories, and with
-    // `-d` it removes the whole directory as a single unit (printing
-    // "Removing dir/"), not file-by-file. Reporting untracked directories as a
-    // single entry lets `include_directories` behave exactly like `-d`
-    // (dropping them when off) and lets a full clean remove the directory
-    // itself instead of leaving an empty husk behind.
-    let statuses = repo.statuses(Some(
-        git2::StatusOptions::new()
-            .include_untracked(true)
-            .include_ignored(include_ignored)
-            .recurse_untracked_dirs(false),
-    ))?;
+        let statuses = repo.statuses(Some(
+            git2::StatusOptions::new()
+                .include_untracked(true)
+                .include_ignored(include_ignored)
+                .recurse_untracked_dirs(false),
+        ))?;
 
-    for entry in statuses.iter() {
-        let status = entry.status();
-        let file_path = entry.path().unwrap_or("");
+        for entry in statuses.iter() {
+            let status = entry.status();
+            let file_path = entry.path().unwrap_or("");
 
-        // Check if file is untracked or ignored
-        let is_untracked = status.contains(git2::Status::WT_NEW);
-        let is_ignored = status.contains(git2::Status::IGNORED);
+            let is_untracked = status.contains(git2::Status::WT_NEW);
+            let is_ignored = status.contains(git2::Status::IGNORED);
 
-        if !is_untracked && !is_ignored {
-            continue;
+            if !is_untracked && !is_ignored {
+                continue;
+            }
+
+            if is_ignored && !include_ignored {
+                continue;
+            }
+
+            let full_path = workdir.join(file_path);
+            let is_directory = full_path.is_dir();
+
+            if is_directory && !include_directories {
+                continue;
+            }
+
+            let is_nested_repo = is_directory && crate::utils::contains_nested_repo(&full_path);
+
+            let size = if is_directory {
+                None
+            } else {
+                fs::metadata(&full_path).ok().map(|m| m.len())
+            };
+
+            entries.push(CleanEntry {
+                path: file_path.to_string(),
+                is_directory,
+                is_ignored,
+                is_nested_repo,
+                size,
+            });
         }
 
-        // Skip ignored files if not requested
-        if is_ignored && !include_ignored {
-            continue;
-        }
-
-        let full_path = workdir.join(file_path);
-        let is_directory = full_path.is_dir();
-
-        // Skip directories if not requested
-        if is_directory && !include_directories {
-            continue;
-        }
-
-        // A directory that itself contains a `.git` entry is an untracked
-        // nested repository; deleting it destroys its history. Flag it so the
-        // UI can require an explicit confirmation (mirroring `git clean`'s
-        // second `-f`).
-        // At ANY depth, not just the selected directory — see
-        // utils::contains_nested_repo.
-        let is_nested_repo = is_directory && crate::utils::contains_nested_repo(&full_path);
-
-        // Get file size
-        let size = if is_directory {
-            None
-        } else {
-            fs::metadata(&full_path).ok().map(|m| m.len())
-        };
-
-        entries.push(CleanEntry {
-            path: file_path.to_string(),
-            is_directory,
-            is_ignored,
-            is_nested_repo,
-            size,
+        entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.path.cmp(&b.path),
         });
-    }
 
-    // Sort: directories first, then by path
-    entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.path.cmp(&b.path),
-    });
-
-    Ok(entries)
+        Ok(entries)
+    })
+    .await
 }
 
 /// Return true if the repository index tracks any path at or under `dir_rel`.
@@ -134,88 +119,74 @@ fn dir_contains_tracked(index: &git2::Index, dir_rel: &str) -> bool {
 }
 
 /// Clean (remove) specified files.
-///
-/// Mirrors `git clean`'s safety guarantees:
-/// - Paths that escape the work tree (`..`, absolute) are rejected outright,
-///   matching git's fatal "is outside repository"; the whole operation refuses
-///   before deleting anything.
-/// - Tracked/version-controlled paths are silently skipped (git clean never
-///   deletes tracked content, even when named explicitly).
-/// - Untracked nested git repositories are refused unless `force_nested` is set,
-///   mirroring git's requirement of a second `-f` before destroying an embedded
-///   repo's history.
 #[command]
 pub async fn clean_files(
     path: String,
     paths: Vec<String>,
     force_nested: Option<bool>,
 ) -> Result<u32> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let workdir = repo.workdir().ok_or_else(|| {
-        crate::error::GitnadoError::OperationFailed("Repository has no working directory".into())
-    })?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let workdir = repo.workdir().ok_or_else(|| {
+            crate::error::GitnadoError::OperationFailed(
+                "Repository has no working directory".into(),
+            )
+        })?;
 
-    let force_nested = force_nested.unwrap_or(false);
+        let force_nested = force_nested.unwrap_or(false);
 
-    // Validate containment for EVERY path up front. git rejects pathspecs that
-    // escape the work tree with a fatal error and deletes nothing; do the same
-    // so a single bad ("../x") path can never destroy data outside the repo.
-    let mut validated: Vec<(String, std::path::PathBuf)> = Vec::with_capacity(paths.len());
-    for file_path in &paths {
-        let full_path = validate_path_within_repo(workdir, file_path)?;
-        validated.push((file_path.clone(), full_path));
-    }
+        let mut validated: Vec<(String, std::path::PathBuf)> = Vec::with_capacity(paths.len());
+        for file_path in &paths {
+            let full_path = validate_path_within_repo(workdir, file_path)?;
+            validated.push((file_path.clone(), full_path));
+        }
 
-    let index = repo.index()?;
-    let mut removed_count = 0;
+        let index = repo.index()?;
+        let mut removed_count = 0;
 
-    for (file_path, full_path) in &validated {
-        if full_path.is_dir() {
-            // Refuse to destroy an untracked nested repository unless the caller
-            // explicitly opted in (git clean needs a second `-f`).
-            if crate::utils::contains_nested_repo(full_path) && !force_nested {
-                tracing::warn!(
-                    "Refusing to remove nested git repository without force: {}",
-                    file_path
+        for (file_path, full_path) in &validated {
+            if full_path.is_dir() {
+                if crate::utils::contains_nested_repo(full_path) && !force_nested {
+                    tracing::warn!(
+                        "Refusing to remove nested git repository without force: {}",
+                        file_path
+                    );
+                    continue;
+                }
+                if dir_contains_tracked(&index, file_path) {
+                    tracing::warn!(
+                        "Refusing to remove directory with tracked files: {}",
+                        file_path
+                    );
+                    continue;
+                }
+                if fs::remove_dir_all(full_path).is_ok() {
+                    removed_count += 1;
+                    tracing::info!("Removed directory: {}", file_path);
+                } else {
+                    tracing::warn!("Failed to remove directory: {}", file_path);
+                }
+            } else if full_path.is_file() {
+                let removable = matches!(
+                    repo.status_file(Path::new(file_path)),
+                    Ok(s) if s.contains(git2::Status::WT_NEW) || s.contains(git2::Status::IGNORED)
                 );
-                continue;
-            }
-            // Never recursively delete a directory that holds tracked content.
-            if dir_contains_tracked(&index, file_path) {
-                tracing::warn!(
-                    "Refusing to remove directory with tracked files: {}",
-                    file_path
-                );
-                continue;
-            }
-            if fs::remove_dir_all(full_path).is_ok() {
-                removed_count += 1;
-                tracing::info!("Removed directory: {}", file_path);
-            } else {
-                tracing::warn!("Failed to remove directory: {}", file_path);
-            }
-        } else if full_path.is_file() {
-            // Only remove untracked or ignored files. git clean silently skips
-            // tracked paths (including staged ones) and never deletes
-            // version-controlled content.
-            let removable = matches!(
-                repo.status_file(Path::new(file_path)),
-                Ok(s) if s.contains(git2::Status::WT_NEW) || s.contains(git2::Status::IGNORED)
-            );
-            if !removable {
-                tracing::warn!("Refusing to remove tracked path: {}", file_path);
-                continue;
-            }
-            if fs::remove_file(full_path).is_ok() {
-                removed_count += 1;
-                tracing::info!("Removed file: {}", file_path);
-            } else {
-                tracing::warn!("Failed to remove file: {}", file_path);
+                if !removable {
+                    tracing::warn!("Refusing to remove tracked path: {}", file_path);
+                    continue;
+                }
+                if fs::remove_file(full_path).is_ok() {
+                    removed_count += 1;
+                    tracing::info!("Removed file: {}", file_path);
+                } else {
+                    tracing::warn!("Failed to remove file: {}", file_path);
+                }
             }
         }
-    }
 
-    Ok(removed_count)
+        Ok(removed_count)
+    })
+    .await
 }
 
 /// Clean all untracked files

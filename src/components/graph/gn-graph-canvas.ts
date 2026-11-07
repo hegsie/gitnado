@@ -42,6 +42,7 @@ import type { GraphPullRequest } from '../../graph/virtual-scroll.ts';
 import { searchIndexService } from '../../services/search-index.service.ts';
 import { embeddingIndexService } from '../../services/embedding-index.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
+import { commitsStore } from '../../stores/commits.store.ts';
 import { shouldFetchAvatars } from '../../utils/avatar-policy.ts';
 
 /**
@@ -1117,6 +1118,7 @@ export class GnGraphCanvas extends LitElement {
       // Render instantly from the per-repo cache when switching back to a
       // visited tab, then revalidate in the background (no spinner). A repo
       // seen for the first time takes the normal loading path.
+      commitsStore.getState().setActiveRepo(this.repositoryPath || null);
       const cached = graphCache.get(this.repositoryPath);
       if (cached) {
         this.applyCachedGraph(cached);
@@ -1331,6 +1333,8 @@ export class GnGraphCanvas extends LitElement {
     this.commits = cached.commits.map(commitToGraphCommit);
     this.totalLoadedCommits = cached.commits.length;
     this.hasMoreCommits = cached.hasMore;
+    commitsStore.getState().setCommits(cached.commits, this.repositoryPath);
+    commitsStore.getState().setHasMore(cached.hasMore, this.repositoryPath);
     this.isLoading = false;
     this.loadError = null;
     // A cached page is a completed load for this repo: an empty cached page
@@ -1549,6 +1553,8 @@ export class GnGraphCanvas extends LitElement {
       this.commits = commitsResult.data.map(commitToGraphCommit);
       this.totalLoadedCommits = commitsResult.data.length;
       this.hasMoreCommits = commitsResult.data.length >= this.commitCount;
+      commitsStore.getState().setCommits(commitsResult.data, repoPath);
+      commitsStore.getState().setHasMore(this.hasMoreCommits, repoPath);
 
       // Fetch the true total in the background (cheap: served from the
       // backend walk cache) so pagination and the a11y label are exact
@@ -1716,6 +1722,8 @@ export class GnGraphCanvas extends LitElement {
       this.hasMoreCommits = this.commitTotal !== null
         ? this.totalLoadedCommits < this.commitTotal
         : result.data.length >= batchSize;
+      commitsStore.getState().appendCommits(result.data, this.repositoryPath);
+      commitsStore.getState().setHasMore(this.hasMoreCommits, this.repositoryPath);
 
       // Incremental append keeps rows/lanes/colors of already-visible
       // commits stable. A branch filter or active search changes which
@@ -3353,6 +3361,8 @@ export class GnGraphCanvas extends LitElement {
       // Get refs for this commit
       refs = this.refsByCommit[this.selectedNode.oid] ?? [];
     }
+
+    commitsStore.getState().selectCommit(commit?.oid ?? null);
 
     this.dispatchEvent(
       new CustomEvent<CommitSelectedEvent>('commit-selected', {

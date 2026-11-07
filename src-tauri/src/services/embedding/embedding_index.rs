@@ -81,7 +81,9 @@ impl EmbeddingIndexState {
             self.engine = Some(engine);
         }
 
-        Ok(self.engine.as_mut().unwrap())
+        self.engine
+            .as_mut()
+            .ok_or_else(|| "Embedding engine failed to initialize".to_string())
     }
 
     /// Register a build as active

@@ -504,13 +504,18 @@ export async function exchangeCode(
   const result = cmdResult.data;
 
   // Handle both camelCase and snake_case field names (Rust serde serialization edge case)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawResult = result as any;
+  const rawResult = result as OAuthTokenResponse & {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    token_type?: string;
+    id_token?: string;
+  };
   const normalizedResult: OAuthTokenResponse = {
-    accessToken: rawResult.accessToken || rawResult.access_token,
+    accessToken: rawResult.accessToken || rawResult.access_token || '',
     refreshToken: rawResult.refreshToken || rawResult.refresh_token,
     expiresIn: rawResult.expiresIn || rawResult.expires_in,
-    tokenType: rawResult.tokenType || rawResult.token_type,
+    tokenType: rawResult.tokenType || rawResult.token_type || 'bearer',
     scope: rawResult.scope,
     // Preserve the OIDC ID token — it's the only source of user identity for
     // Enterprise SSO accounts (decoded in the OIDC dialog for the cached user).
@@ -550,13 +555,18 @@ export async function refreshToken(
 
   // Normalize snake_case/camelCase like exchangeCode (serde edge case),
   // so callers reliably read accessToken/refreshToken/expiresIn.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = result.data as any;
+  const raw = result.data as OAuthTokenResponse & {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    token_type?: string;
+    id_token?: string;
+  };
   return {
-    accessToken: raw.accessToken || raw.access_token,
+    accessToken: raw.accessToken || raw.access_token || '',
     refreshToken: raw.refreshToken || raw.refresh_token,
     expiresIn: raw.expiresIn || raw.expires_in,
-    tokenType: raw.tokenType || raw.token_type,
+    tokenType: raw.tokenType || raw.token_type || 'bearer',
     scope: raw.scope,
     idToken: raw.idToken || raw.id_token,
   };

@@ -1,38 +1,6 @@
 /**
- * Workflow types for Git identity profiles and workflow support
+ * Workflow types for Git Flow and branch-age workflow support
  */
-
-/**
- * Git identity profile for switching between different identities
- */
-export interface GitProfile {
-  /** Unique identifier for the profile */
-  id: string;
-  /** Display name (e.g., "Work", "Personal") */
-  name: string;
-  /** Git user.name value */
-  gitName: string;
-  /** Git user.email value */
-  gitEmail: string;
-  /** Optional GPG signing key ID */
-  signingKey: string | null;
-  /** URL patterns for auto-detection (e.g., "github.com/mycompany/*") */
-  urlPatterns: string[];
-  /** Whether this is the default profile */
-  isDefault: boolean;
-  /** Optional color for UI display */
-  color: string | null;
-}
-
-/**
- * Configuration for storing profiles
- */
-export interface ProfilesConfig {
-  /** All saved profiles */
-  profiles: GitProfile[];
-  /** Repository to profile assignments (repo path -> profile id) */
-  repositoryAssignments: Record<string, string>;
-}
 
 /**
  * Git Flow configuration for a repository
@@ -120,32 +88,3 @@ export const DEFAULT_GITFLOW_CONFIG: GitFlowConfig = {
   hotfixPrefix: 'hotfix/',
   versionTagPrefix: 'v',
 };
-
-/**
- * Create a new empty profile
- */
-export function createEmptyProfile(): Omit<GitProfile, 'id'> {
-  return {
-    name: '',
-    gitName: '',
-    gitEmail: '',
-    signingKey: null,
-    urlPatterns: [],
-    isDefault: false,
-    color: null,
-  };
-}
-
-/**
- * Profile colors for UI display
- */
-export const PROFILE_COLORS = [
-  '#3b82f6', // blue
-  '#10b981', // green
-  '#f59e0b', // amber
-  '#ef4444', // red
-  '#8b5cf6', // purple
-  '#ec4899', // pink
-  '#06b6d4', // cyan
-  '#f97316', // orange
-] as const;

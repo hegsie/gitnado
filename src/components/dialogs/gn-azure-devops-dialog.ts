@@ -4,7 +4,7 @@
  */
 
 import { html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
@@ -29,7 +29,7 @@ import { unifiedProfileStore, getAccountsByType, selectDefaultGlobalAccount, get
 import * as unifiedProfileService from '../../services/unified-profile.service.ts';
 import type { IntegrationAccount } from '../../types/unified-profile.types.ts';
 import * as credentialService from '../../services/credential.service.ts';
-import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
+import { GnProviderDialogBase, providerDialogBaseStyles, type PrReviewComment } from './gn-provider-dialog-base.ts';
 import './gn-modal.ts';
 import './gn-account-selector.ts';
 
@@ -72,61 +72,12 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
   TabType
 > {
   protected readonly providerDisplayName = 'Azure DevOps';
+  protected readonly integrationType = 'azure-devops' as const;
+  protected override readonly deferStoreSelectionDuringInit = true;
   static styles = [
     sharedStyles,
+    providerDialogBaseStyles,
     css`
-      .content {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-md);
-        min-height: 400px;
-        max-height: 70vh;
-      }
-
-      .tabs {
-        display: flex;
-        gap: var(--spacing-xs);
-        border-bottom: 1px solid var(--color-border);
-        padding-bottom: var(--spacing-sm);
-      }
-
-      .tab {
-        padding: var(--spacing-xs) var(--spacing-md);
-        border: none;
-        background: none;
-        color: var(--color-text-secondary);
-        font-size: var(--font-size-sm);
-        cursor: pointer;
-        border-radius: var(--radius-sm);
-        transition: all var(--transition-fast);
-      }
-
-      .tab:hover {
-        background: var(--color-bg-hover);
-        color: var(--color-text-primary);
-      }
-
-      .tab.active {
-        background: var(--color-primary-bg);
-        color: var(--color-primary);
-        font-weight: var(--font-weight-medium);
-      }
-
-      .tab-content {
-        flex: 1;
-        overflow: auto;
-      }
-
-      /* Connection Tab */
-      .connection-status {
-        display: flex;
-        align-items: center;
-        gap: var(--spacing-md);
-        padding: var(--spacing-md);
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-md);
-      }
-
       .user-avatar {
         width: 48px;
         height: 48px;
@@ -140,65 +91,9 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
         font-size: var(--font-size-lg);
       }
 
-      .user-info {
-        flex: 1;
-      }
-
-      .user-name {
-        font-weight: var(--font-weight-semibold);
-        color: var(--color-text-primary);
-      }
-
       .user-org {
         font-size: var(--font-size-sm);
         color: var(--color-text-secondary);
-      }
-
-      .token-form {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-md);
-      }
-
-      .form-group {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-xs);
-      }
-
-      .form-group label {
-        font-size: var(--font-size-sm);
-        font-weight: var(--font-weight-medium);
-        color: var(--color-text-secondary);
-      }
-
-      .form-group input,
-      .form-group textarea,
-      .form-group select {
-        padding: var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-md);
-        background: var(--color-bg-secondary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-sm);
-      }
-
-      .form-group textarea {
-        min-height: 100px;
-        resize: vertical;
-        font-family: inherit;
-      }
-
-      .form-group input:focus,
-      .form-group textarea:focus,
-      .form-group select:focus {
-        outline: none;
-        border-color: var(--color-primary);
-      }
-
-      .help-text {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
       }
 
       /* Official Microsoft-branded sign-in button (light variant). Kept close to
@@ -238,15 +133,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
         cursor: not-allowed;
       }
 
-      .help-link {
-        color: var(--color-primary);
-        text-decoration: none;
-      }
-
-      .help-link:hover {
-        text-decoration: underline;
-      }
-
       /* PR List */
       .pr-list {
         display: flex;
@@ -269,14 +155,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
         background: var(--color-bg-hover);
       }
 
-      .pr-card-wrapper {
-        display: flex;
-        flex-direction: column;
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-md);
-        overflow: hidden;
-      }
-
       .pr-card-wrapper .pr-item {
         border-radius: 0;
       }
@@ -285,118 +163,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
         display: flex;
         gap: var(--spacing-xs);
         align-items: center;
-      }
-
-      .pr-comments-drawer {
-        border-top: 1px solid var(--color-border);
-        padding: var(--spacing-md);
-        background: var(--color-bg-secondary);
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-sm);
-      }
-
-      .pr-comments-list {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-sm);
-        max-height: 240px;
-        overflow-y: auto;
-      }
-
-      .pr-comment-item {
-        padding: var(--spacing-sm);
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-sm);
-        border: 1px solid var(--color-border);
-      }
-
-      .pr-comment-header {
-        display: flex;
-        align-items: center;
-        gap: var(--spacing-sm);
-        margin-bottom: var(--spacing-xs);
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-      }
-
-      .pr-comment-author {
-        font-weight: var(--font-weight-semibold);
-        color: var(--color-text-primary);
-      }
-
-      .pr-comment-location {
-        font-family: var(--font-family-mono);
-        background: var(--color-bg-hover);
-        color: var(--color-primary);
-        padding: 1px 6px;
-        border-radius: var(--radius-sm);
-      }
-
-      .pr-comment-body {
-        font-size: var(--font-size-sm);
-        color: var(--color-text-primary);
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .pr-comments-empty {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-        padding: var(--spacing-xs) 0;
-      }
-
-      .pr-comment-form {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-xs);
-        margin-top: var(--spacing-xs);
-      }
-
-      .pr-comment-inline-fields {
-        display: flex;
-        gap: var(--spacing-xs);
-      }
-
-      .pr-comment-file-input {
-        flex: 1;
-        padding: 6px var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono);
-      }
-
-      .pr-comment-line-input {
-        width: 90px;
-        padding: 6px var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono);
-      }
-
-      .pr-comment-input-row {
-        display: flex;
-        gap: var(--spacing-xs);
-        align-items: flex-end;
-      }
-
-      .pr-comment-body-input {
-        flex: 1;
-        padding: var(--spacing-xs) var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-sm);
-        font-family: inherit;
-        resize: vertical;
-        min-height: 48px;
       }
 
       .pr-number {
@@ -716,37 +482,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
         color: white;
       }
 
-      .connection-actions {
-        display: flex;
-        gap: var(--spacing-sm);
-        margin-left: auto;
-      }
-
-      .empty-state {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: var(--spacing-xl);
-        color: var(--color-text-muted);
-        text-align: center;
-      }
-
-      .empty-state svg {
-        width: 48px;
-        height: 48px;
-        margin-bottom: var(--spacing-md);
-        opacity: 0.5;
-      }
-
-      .loading {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: var(--spacing-xl);
-        color: var(--color-text-muted);
-      }
-
       .error {
         padding: var(--spacing-md);
         background: var(--color-error-bg);
@@ -768,14 +503,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
 
     `,
   ];
-
-  /**
-   * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
-   * this dialog was opened with a return target (the profile manager).
-   */
-  @property({ type: Boolean }) backButton = false;
-  /** Profile name for the "Adding to <name>" breadcrumb; empty when standalone. */
-  @property({ type: String }) attachToProfileName = '';
 
   @state() private pullRequests: AdoPullRequest[] = [];
   @state() private workItems: AdoWorkItem[] = [];
@@ -850,85 +577,46 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
       }
     });
 
-    // Subscribe to unified profile store. When the active profile changes,
-    // re-derive the preferred account so a profile switch is reflected here.
-    let lastActiveProfileId = unifiedProfileStore.getState().activeProfile?.id ?? null;
-    const applyAccount = (account: IntegrationAccount | undefined) => {
-      if (!account) return;
-      this.selectedAccountId = account.id;
-      if (account.config.type === 'azure-devops' && account.config.organization) {
-        this.organizationInput = account.config.organization;
-      }
-    };
-    this.unsubscribeStore = unifiedProfileStore.subscribe((state) => {
-      this.accounts = getAccountsByType('azure-devops');
-      if (this.selectedAccountId && !this.accounts.some(a => a.id === this.selectedAccountId)) {
-        this.selectedAccountId = null;
-      }
-      const selectMatchingCandidate = () => {
-        const candidate =
-          getActiveProfilePreferredAccount('azure-devops') ??
-          selectDefaultGlobalAccount('azure-devops') ??
-          this.accounts[0];
-        if (this.detectedRepo) {
-          const detectedNorm = this.normalizeOrg(this.detectedRepo.organization);
-          const candidateNorm =
-            candidate?.config.type === 'azure-devops'
-              ? this.normalizeOrg(candidate.config.organization)
-              : '';
-          const matching =
-            candidate && (!candidateNorm || candidateNorm === detectedNorm)
-              ? candidate
-              : this.accounts.find(
-                  (a) =>
-                    a.config.type === 'azure-devops' &&
-                    (!a.config.organization ||
-                      this.normalizeOrg(a.config.organization) === detectedNorm)
-                );
-          if (matching) {
-            applyAccount(matching);
-          }
-        } else {
-          applyAccount(candidate);
-        }
-      };
-      const activeProfileId = state.activeProfile?.id ?? null;
-      if (activeProfileId !== lastActiveProfileId) {
-        // Track the id either way so this doesn't re-fire, but DON'T clobber a
-        // half-completed "Add account" flow or an in-flight loadInitialData()
-        // that is about to detect the repo and match the organization.
-        lastActiveProfileId = activeProfileId;
-        if (!this.isAddingAccount && !this.initInFlight && this.accounts.length > 0) {
-          selectMatchingCandidate();
-        }
-      } else if (
-        !this.isAddingAccount &&
-        !this.initInFlight &&
-        !this.selectedAccountId &&
-        this.accounts.length > 0
-      ) {
-        selectMatchingCandidate();
-      }
-    });
-
-    // Initialize from current state
-    this.accounts = getAccountsByType('azure-devops');
-    if (this.accounts.length > 0 && !this.selectedAccountId && !this.open) {
-      applyAccount(
-        getActiveProfilePreferredAccount('azure-devops')
-        ?? selectDefaultGlobalAccount('azure-devops')
-        ?? this.accounts[0],
-      );
-    }
+    this.setupUnifiedProfileSubscription({ skipInitialSelectionWhenOpen: true });
 
     if (this.open) {
       await this.loadInitialData();
     }
   }
 
-  disconnectedCallback(): void {
+  protected override applyStoreSelectedAccount(account: IntegrationAccount | undefined): void {
+    if (!account) return;
+    this.selectedAccountId = account.id;
+    if (account.config.type === 'azure-devops' && account.config.organization) {
+      this.organizationInput = account.config.organization;
+    }
+  }
+
+  protected override resolveStorePreferredAccount(): IntegrationAccount | undefined {
+    const candidate =
+      getActiveProfilePreferredAccount('azure-devops') ??
+      selectDefaultGlobalAccount('azure-devops') ??
+      this.accounts[0];
+    if (this.detectedRepo) {
+      const detectedNorm = this.normalizeOrg(this.detectedRepo.organization);
+      const candidateNorm =
+        candidate?.config.type === 'azure-devops'
+          ? this.normalizeOrg(candidate.config.organization)
+          : '';
+      return candidate && (!candidateNorm || candidateNorm === detectedNorm)
+        ? candidate
+        : this.accounts.find(
+            (a) =>
+              a.config.type === 'azure-devops' &&
+              (!a.config.organization ||
+                this.normalizeOrg(a.config.organization) === detectedNorm),
+          );
+    }
+    return candidate;
+  }
+
+  override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.unsubscribeStore?.();
     // Cancel any in-flight sign-in so its callback can't fire after unmount, and
     // invalidate continuations so a late finalize can't mutate a dead element.
     this.abandonPendingEntraFlow();
@@ -943,6 +631,10 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
     // (the host may hide the dialog without routing through handleClose, e.g.
     // by setting its `open` prop false), so a reopen can't surface a stuck
     // "Connecting..." spinner.
+    this.abandonPendingEntraFlow();
+  }
+
+  protected override onBeforeCloseOrNavigate(): void {
     this.abandonPendingEntraFlow();
   }
 
@@ -1068,18 +760,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
       this.hasStoredToken = !!token;
     } else {
       this.hasStoredToken = false;
-    }
-  }
-
-  /**
-   * Mirror a verified connection result into the shared unified-profile store so
-   * other views (e.g. the profile manager's status dots) reflect it immediately.
-   */
-  private syncSharedConnectionStatus(connected: boolean): void {
-    if (this.selectedAccountId) {
-      unifiedProfileStore
-        .getState()
-        .setAccountConnectionStatus(this.selectedAccountId, connected ? 'connected' : 'disconnected');
     }
   }
 
@@ -1312,27 +992,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
     this.beginAddAccount();
     this.tokenInput = '';
     this.organizationInput = '';
-  }
-
-  /**
-   * Handle manage accounts request
-   */
-  private handleManageAccounts(e: Event): void {
-    // Navigating to the Accounts view hides (but doesn't unmount) this dialog and
-    // can re-derive selectedAccountId on the way back, so abandon any in-flight
-    // Entra sign-in first — otherwise a late poll could write to the wrong account.
-    this.abandonPendingEntraFlow();
-    // Consume the account-selector's bubbling/composed event so it can't ALSO
-    // reach the host — otherwise the host would receive both it and our re-dispatch
-    // below, firing its handler twice (the second pass corrupts reversible-Back state).
-    e.stopPropagation();
-    this.dispatchEvent(
-      new CustomEvent('manage-accounts', {
-        detail: { integrationType: 'azure-devops' },
-        bubbles: true,
-        composed: true,
-      })
-    );
   }
 
   protected async detectRepo(loadData = true, updateOrgInput = true): Promise<void> {
@@ -2481,16 +2140,6 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
     });
   }
 
-  private handleClose(): void {
-    // The element stays mounted (only `open` toggles), so disconnectedCallback
-    // does NOT fire on close. Abandon any in-flight sign-in here so a background
-    // poll OR a still-running finalize can't silently connect an account after
-    // the user dismissed the dialog, and discard org-picker state so nothing
-    // reappears stale on reopen.
-    this.abandonPendingEntraFlow();
-    this.dispatchEvent(new CustomEvent('close'));
-  }
-
   private getWorkItemTypeClass(type: string): string {
     const lowerType = type.toLowerCase().replace(/\s+/g, '-');
     if (lowerType === 'bug') return 'bug';
@@ -3027,9 +2676,7 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
         @close=${this.handleClose}
       >
         <div class="content">
-          ${this.attachToProfileName
-            ? html`<div class="attach-breadcrumb" data-testid="attach-breadcrumb">Adding to <strong>${this.attachToProfileName}</strong></div>`
-            : nothing}
+          ${this.renderAttachBreadcrumb()}
           ${this.renderDetectedRepo()}
 
           ${this.accounts.length > 0 || this.connectionStatus?.connected ? html`

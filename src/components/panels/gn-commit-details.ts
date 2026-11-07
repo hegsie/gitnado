@@ -10,10 +10,12 @@ import * as gitService from '../../services/git.service.ts';
 import { parseIssueReferences, isClosingKeyword } from '../../services/git.service.ts';
 import type { IssueReference } from '../../services/git.service.ts';
 import type { Commit, RefInfo, CommitFileEntry, FileStatus } from '../../types/git.types.ts';
-import type { GitNote } from '../../services/git.service.ts';
+import type { GitNote, CommitSignatureInfo } from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { loggers, openExternalUrl } from '../../utils/index.ts';
+import { shouldFetchAvatars, shouldFetchAvatarsNow } from '../../utils/avatar-policy.ts';
+import { settingsStore } from '../../stores/settings.store.ts';
 import { restoreFileFromCommit } from '../../utils/restore-file.ts';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { join } from '@tauri-apps/api/path';
@@ -151,6 +153,40 @@ export class GnCommitDetails extends LitElement {
       .copy-sha-btn svg {
         width: 14px;
         height: 14px;
+      }
+
+      .signature-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 6px;
+        border-radius: var(--radius-sm);
+        font-size: 11px;
+        font-weight: var(--font-weight-medium);
+      }
+
+      .signature-badge.good {
+        background: var(--color-success-bg);
+        color: var(--color-success);
+      }
+
+      .signature-badge.bad,
+      .signature-badge.error {
+        background: var(--color-error-bg);
+        color: var(--color-error);
+      }
+
+      .signature-badge.unknown {
+        background: var(--color-warning-bg);
+        color: var(--color-warning);
+      }
+
+      .author-avatar {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        object-fit: cover;
+        flex-shrink: 0;
       }
 
       .meta-row {
@@ -638,6 +674,8 @@ export class GnCommitDetails extends LitElement {
   @state() private selectedFilePath: string | null = null;
   @state() private issueReferences: IssueReference[] = [];
   @state() private contextMenu: FileContextMenuState = { visible: false, x: 0, y: 0, file: null };
+  @state() private signatureInfo: CommitSignatureInfo | null = null;
+  @state() private authorAvatarUrl: string | null = null;
 
   // --- Git notes ---
   @state() private notesRefs: string[] = [DEFAULT_NOTES_REF];
@@ -663,6 +701,7 @@ export class GnCommitDetails extends LitElement {
   @state() private showNotesOverview = false;
 
   private currentCommitOid: string | null = null;
+  private settingsUnsubscribe: (() => void) | null = null;
 
   /**
    * Unsaved note text, keyed by ref + commit. Clicking another commit in the
@@ -681,6 +720,13 @@ export class GnCommitDetails extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener('click', this.handleDocumentClick);
+    this.settingsUnsubscribe = settingsStore.subscribe((state) => {
+      if (!shouldFetchAvatars(state)) {
+        this.authorAvatarUrl = null;
+      } else if (!this.authorAvatarUrl && this.commit && this.repositoryPath) {
+        void this.loadAuthorAvatar();
+      }
+    });
     log.debug('connectedCallback - initial state:', {
       repositoryPath: this.repositoryPath,
       commitOid: this.commit?.oid,
@@ -690,6 +736,8 @@ export class GnCommitDetails extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     document.removeEventListener('click', this.handleDocumentClick);
+    this.settingsUnsubscribe?.();
+    this.settingsUnsubscribe = null;
   }
 
   updated(changedProperties: Map<string, unknown>): void {
@@ -727,7 +775,10 @@ export class GnCommitDetails extends LitElement {
         this.stashNoteDraft();
         this.currentCommitOid = this.commit.oid;
         this.selectedFilePath = null;
+        this.signatureInfo = null;
+        this.authorAvatarUrl = null;
         this.loadFiles();
+        this.loadCommitMetadata();
         this.parseIssueRefs();
         // The refresh above already reloads the note for the new commit, so
         // only load it here when the repository stayed the same.
@@ -751,6 +802,49 @@ export class GnCommitDetails extends LitElement {
       : this.commit.summary;
 
     this.issueReferences = parseIssueReferences(fullMessage);
+  }
+
+  private async loadAuthorAvatar(): Promise<void> {
+    if (!this.repositoryPath || !this.commit) return;
+    const repoPath = this.repositoryPath;
+    const commitOid = this.commit.oid;
+    const authorEmail = this.commit.author.email;
+    if (!authorEmail || !shouldFetchAvatarsNow()) {
+      this.authorAvatarUrl = null;
+      return;
+    }
+    const avatarResult = await gitService.getAvatarUrl({ email: authorEmail, size: 40 });
+    if (this.repositoryPath !== repoPath || this.commit?.oid !== commitOid) return;
+    this.authorAvatarUrl =
+      shouldFetchAvatarsNow() && avatarResult.success && avatarResult.data?.gravatarUrl
+        ? avatarResult.data.gravatarUrl
+        : null;
+  }
+
+  private async loadCommitMetadata(): Promise<void> {
+    if (!this.repositoryPath || !this.commit) return;
+    const repoPath = this.repositoryPath;
+    const commitOid = this.commit.oid;
+    const authorEmail = this.commit.author.email;
+    const allowAvatar = Boolean(authorEmail) && shouldFetchAvatarsNow();
+
+    const [sigResult, avatarResult] = await Promise.all([
+      gitService.verifyCommitSignature(repoPath, commitOid),
+      allowAvatar
+        ? gitService.getAvatarUrl({ email: authorEmail, size: 40 })
+        : Promise.resolve({ success: false as const }),
+    ]);
+
+    if (this.repositoryPath !== repoPath || this.commit?.oid !== commitOid) return;
+
+    if (sigResult.success && sigResult.data?.isSigned) {
+      this.signatureInfo = sigResult.data;
+    }
+    if (shouldFetchAvatarsNow() && avatarResult.success && avatarResult.data?.gravatarUrl) {
+      this.authorAvatarUrl = avatarResult.data.gravatarUrl;
+    } else {
+      this.authorAvatarUrl = null;
+    }
   }
 
   private async loadFiles(): Promise<void> {
@@ -1750,12 +1844,27 @@ export class GnCommitDetails extends LitElement {
                 <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
               </svg>
             </button>
+            ${this.signatureInfo?.isSigned
+              ? html`
+                  <span
+                    class="signature-badge ${this.signatureInfo.signatureStatus}"
+                    title=${this.signatureInfo.signerName
+                      ? `${this.signatureInfo.signatureType?.toUpperCase() ?? 'Signed'} (${this.signatureInfo.signatureStatus}): ${this.signatureInfo.signerName}${this.signatureInfo.keyId ? ` [${this.signatureInfo.keyId}]` : ''}`
+                      : `Signature status: ${this.signatureInfo.signatureStatus}`}
+                  >
+                    ${this.signatureInfo.signatureStatus === 'good' ? 'Verified' : this.signatureInfo.signatureStatus}
+                  </span>
+                `
+              : nothing}
           </div>
         </div>
 
         <div class="section">
           <div class="section-title">Author</div>
           <div class="meta-row">
+            ${this.authorAvatarUrl && shouldFetchAvatarsNow()
+              ? html`<img class="author-avatar" src=${this.authorAvatarUrl} alt="" @error=${() => { this.authorAvatarUrl = null; }} />`
+              : nothing}
             <span class="meta-value">${this.commit.author.name}</span>
           </div>
           <div class="meta-row">

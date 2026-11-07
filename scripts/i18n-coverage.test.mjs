@@ -92,12 +92,12 @@ test('scans exactly the files lit-localize is configured to extract from', () =>
   const files = listSourceFiles();
   assert.ok(files.length > 0, 'found source files');
   assert.ok(
-    files.some((f) => f.endsWith('components/dialogs/gn-settings-dialog.ts')),
+    files.some((f) => f.replaceAll('\\', '/').endsWith('components/dialogs/gn-settings-dialog.ts')),
     'includes the settings dialog'
   );
   for (const file of files) {
     assert.ok(!file.endsWith('.test.ts'), `${file} is a test`);
-    assert.ok(!file.includes('/i18n/generated/'), `${file} is generated`);
+    assert.ok(!file.replaceAll('\\', '/').includes('/i18n/generated/'), `${file} is generated`);
   }
 });
 

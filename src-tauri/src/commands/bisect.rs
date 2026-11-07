@@ -306,11 +306,7 @@ fn inactive_status() -> BisectStatus {
     }
 }
 
-/// Get the current bisect status
-#[command]
-pub async fn get_bisect_status(path: String) -> Result<BisectStatus> {
-    let repo_path = Path::new(&path);
-
+fn get_bisect_status_sync(repo_path: &Path) -> Result<BisectStatus> {
     if !is_bisect_active(repo_path) {
         return Ok(inactive_status());
     }
@@ -406,6 +402,12 @@ pub async fn get_bisect_status(path: String) -> Result<BisectStatus> {
     })
 }
 
+/// Get the current bisect status
+#[command]
+pub async fn get_bisect_status(path: String) -> Result<BisectStatus> {
+    crate::utils::blocking_git(move || get_bisect_status_sync(Path::new(&path))).await
+}
+
 /// Start a new bisect session
 #[command]
 pub async fn bisect_start(
@@ -413,39 +415,42 @@ pub async fn bisect_start(
     bad_commit: Option<String>,
     good_commit: Option<String>,
 ) -> Result<BisectStepResult> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    // Start bisect
-    run_git_command(repo_path, &["bisect", "start"])?;
+        // Start bisect
+        run_git_command(repo_path, &["bisect", "start"])?;
 
-    // The two marking steps take free-text refs straight from the dialog, so a
-    // typo fails them — but `git bisect start` has already written BISECT_LOG,
-    // and libgit2 keys RepositoryState::Bisect off that file. Reporting the
-    // failure and leaving the state behind meant ensure_checkoutable and
-    // ensure_resettable then refused EVERY checkout, reset and git-flow
-    // operation in the app, while the dialog said the bisect had not started.
-    // Rolled back the way create_branch and the git-flow starts are.
-    let marked = (|| -> Result<()> {
-        if let Some(bad) = &bad_commit {
-            run_git_command(repo_path, &["bisect", "bad", bad])?;
+        // The two marking steps take free-text refs straight from the dialog, so a
+        // typo fails them — but `git bisect start` has already written BISECT_LOG,
+        // and libgit2 keys RepositoryState::Bisect off that file. Reporting the
+        // failure and leaving the state behind meant ensure_checkoutable and
+        // ensure_resettable then refused EVERY checkout, reset and git-flow
+        // operation in the app, while the dialog said the bisect had not started.
+        // Rolled back the way create_branch and the git-flow starts are.
+        let marked = (|| -> Result<()> {
+            if let Some(bad) = &bad_commit {
+                run_git_command(repo_path, &["bisect", "bad", bad])?;
+            }
+            if let Some(good) = &good_commit {
+                run_git_command(repo_path, &["bisect", "good", good])?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = marked {
+            let _ = run_git_command(repo_path, &["bisect", "reset"]);
+            return Err(e);
         }
-        if let Some(good) = &good_commit {
-            run_git_command(repo_path, &["bisect", "good", good])?;
-        }
-        Ok(())
-    })();
-    if let Err(e) = marked {
-        let _ = run_git_command(repo_path, &["bisect", "reset"]);
-        return Err(e);
-    }
 
-    let status = get_bisect_status(path.clone()).await?;
+        let status = get_bisect_status_sync(repo_path)?;
 
-    Ok(BisectStepResult {
-        status,
-        culprit: None,
-        message: "Bisect session started".to_string(),
+        Ok(BisectStepResult {
+            status,
+            culprit: None,
+            message: "Bisect session started".to_string(),
+        })
     })
+    .await
 }
 
 /// The terms this bisect session was started with.
@@ -519,104 +524,116 @@ fn run_bisect_step(repo_path: &Path, args: &[&str]) -> Result<String> {
 /// Mark the current commit (or specified commit) as bad
 #[command]
 pub async fn bisect_bad(path: String, commit: Option<String>) -> Result<BisectStepResult> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    let (term_bad, _) = session_terms(repo_path);
+        let (term_bad, _) = session_terms(repo_path);
 
-    let args: Vec<&str> = match &commit {
-        Some(c) => vec!["bisect", term_bad.as_str(), c.as_str()],
-        None => vec!["bisect", term_bad.as_str()],
-    };
+        let args: Vec<&str> = match &commit {
+            Some(c) => vec!["bisect", term_bad.as_str(), c.as_str()],
+            None => vec!["bisect", term_bad.as_str()],
+        };
 
-    let output = run_bisect_step(repo_path, &args)?;
+        let output = run_bisect_step(repo_path, &args)?;
 
-    // Check if we found the culprit
-    let culprit = if announces_culprit(&output) {
-        // Parse the culprit commit info
-        parse_culprit_from_output(&output)
-    } else {
-        None
-    };
+        // Check if we found the culprit
+        let culprit = if announces_culprit(&output) {
+            // Parse the culprit commit info
+            parse_culprit_from_output(&output)
+        } else {
+            None
+        };
 
-    let status = get_bisect_status(path.clone()).await?;
+        let status = get_bisect_status_sync(repo_path)?;
 
-    Ok(BisectStepResult {
-        status,
-        culprit,
-        message: output,
+        Ok(BisectStepResult {
+            status,
+            culprit,
+            message: output,
+        })
     })
+    .await
 }
 
 /// Mark the current commit (or specified commit) as good
 #[command]
 pub async fn bisect_good(path: String, commit: Option<String>) -> Result<BisectStepResult> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    let (_, term_good) = session_terms(repo_path);
+        let (_, term_good) = session_terms(repo_path);
 
-    let args: Vec<&str> = match &commit {
-        Some(c) => vec!["bisect", term_good.as_str(), c.as_str()],
-        None => vec!["bisect", term_good.as_str()],
-    };
+        let args: Vec<&str> = match &commit {
+            Some(c) => vec!["bisect", term_good.as_str(), c.as_str()],
+            None => vec!["bisect", term_good.as_str()],
+        };
 
-    let output = run_bisect_step(repo_path, &args)?;
+        let output = run_bisect_step(repo_path, &args)?;
 
-    // Marking good is what usually NARROWS the range to the culprit, so this
-    // handler must recognise the announcement just as much as marking bad.
-    let culprit = if announces_culprit(&output) {
-        parse_culprit_from_output(&output)
-    } else {
-        None
-    };
+        // Marking good is what usually NARROWS the range to the culprit, so this
+        // handler must recognise the announcement just as much as marking bad.
+        let culprit = if announces_culprit(&output) {
+            parse_culprit_from_output(&output)
+        } else {
+            None
+        };
 
-    let status = get_bisect_status(path.clone()).await?;
+        let status = get_bisect_status_sync(repo_path)?;
 
-    Ok(BisectStepResult {
-        status,
-        culprit,
-        message: output,
+        Ok(BisectStepResult {
+            status,
+            culprit,
+            message: output,
+        })
     })
+    .await
 }
 
 /// Skip the current commit (can't be tested)
 #[command]
 pub async fn bisect_skip(path: String, commit: Option<String>) -> Result<BisectStepResult> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    let args: Vec<&str> = match &commit {
-        Some(c) => vec!["bisect", "skip", c.as_str()],
-        None => vec!["bisect", "skip"],
-    };
+        let args: Vec<&str> = match &commit {
+            Some(c) => vec!["bisect", "skip", c.as_str()],
+            None => vec!["bisect", "skip"],
+        };
 
-    let output = run_git_command(repo_path, &args)?;
+        let output = run_git_command(repo_path, &args)?;
 
-    let status = get_bisect_status(path.clone()).await?;
+        let status = get_bisect_status_sync(repo_path)?;
 
-    Ok(BisectStepResult {
-        status,
-        culprit: None,
-        message: output,
+        Ok(BisectStepResult {
+            status,
+            culprit: None,
+            message: output,
+        })
     })
+    .await
 }
 
 /// Reset/end the bisect session
 #[command]
 pub async fn bisect_reset(path: String) -> Result<BisectStepResult> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    let output = run_git_command(repo_path, &["bisect", "reset"])?;
+        let output = run_git_command(repo_path, &["bisect", "reset"])?;
 
-    let status = get_bisect_status(path.clone()).await?;
+        let status = get_bisect_status_sync(repo_path)?;
 
-    Ok(BisectStepResult {
-        status,
-        culprit: None,
-        message: if output.is_empty() {
-            "Bisect session ended".to_string()
-        } else {
-            output
-        },
+        Ok(BisectStepResult {
+            status,
+            culprit: None,
+            message: if output.is_empty() {
+                "Bisect session ended".to_string()
+            } else {
+                output
+            },
+        })
     })
+    .await
 }
 
 /// Parse culprit commit info from git bisect output

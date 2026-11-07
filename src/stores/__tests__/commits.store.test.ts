@@ -231,4 +231,51 @@ describe('commits.store', () => {
       expect(state.selection.selectedOid).to.be.null;
     });
   });
+
+  describe('multi-tab repository caching and generation tracking', () => {
+    it('caches and restores commits and selection per repository tab', () => {
+      const store = commitsStore.getState();
+      store.setActiveRepo('/repo/alpha');
+      store.setCommits([createMockCommit('a111111', 'Alpha commit')]);
+      store.selectCommit('a111111');
+
+      store.setActiveRepo('/repo/beta');
+      expect(commitsStore.getState().commits.length).to.equal(0);
+      expect(commitsStore.getState().selection.selectedOid).to.be.null;
+
+      store.setCommits([createMockCommit('b222222', 'Beta commit')]);
+      store.selectCommit('b222222');
+
+      // Switch back to alpha and verify immediate restoration from per-repo cache
+      store.setActiveRepo('/repo/alpha');
+      const alphaState = commitsStore.getState();
+      expect(alphaState.commits.length).to.equal(1);
+      expect(alphaState.commits[0].oid).to.equal('a111111');
+      expect(alphaState.selection.selectedOid).to.equal('a111111');
+      expect(alphaState.getCommit('b222222', '/repo/beta')?.oid).to.equal('b222222');
+    });
+
+    it('tracks request generations and invalidates stale generations', () => {
+      const store = commitsStore.getState();
+      store.setActiveRepo('/repo/alpha');
+      const gen1 = store.nextGeneration('/repo/alpha');
+      expect(store.isGenerationValid(gen1, '/repo/alpha')).to.be.true;
+
+      const gen2 = store.nextGeneration('/repo/alpha');
+      expect(store.isGenerationValid(gen1, '/repo/alpha')).to.be.false;
+      expect(store.isGenerationValid(gen2, '/repo/alpha')).to.be.true;
+    });
+
+    it('evicts closed repository state cleanly', () => {
+      const store = commitsStore.getState();
+      store.setActiveRepo('/repo/alpha');
+      store.setCommits([createMockCommit('a111111')]);
+      store.evictRepo('/repo/alpha');
+
+      const state = commitsStore.getState();
+      expect(state.activeRepoPath).to.be.null;
+      expect(state.commits.length).to.equal(0);
+      expect(state.commitsByRepo['/repo/alpha']).to.be.undefined;
+    });
+  });
 });

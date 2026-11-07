@@ -349,7 +349,6 @@ test.describe('GitHub Dialog - GitHub App', () => {
         repositoryAssignments: {},
       },
       get_integration_accounts: [existingGitHubAccount],
-      get_profiles: [defaultProfile],
       get_active_profile: defaultProfile,
     });
   });
@@ -482,7 +481,6 @@ test.describe('GitHub Dialog - GitHub App replacement', () => {
         repositoryAssignments: {},
       },
       get_integration_accounts: [existingGitHubAccount, oldAppAccount],
-      get_profiles: [defaultProfile],
       get_active_profile: defaultProfile,
     });
 
@@ -546,7 +544,6 @@ test.describe('GitHub Dialog - GitHub App replacement', () => {
         repositoryAssignments: {},
       },
       get_integration_accounts: [existingGitHubAccount, oldAppAccount],
-      get_profiles: [defaultProfile],
       get_active_profile: defaultProfile,
     });
 

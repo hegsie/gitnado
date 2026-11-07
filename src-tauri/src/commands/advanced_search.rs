@@ -111,73 +111,76 @@ pub async fn filter_commits(
     filter: CommitFilter,
     max_results: Option<u32>,
 ) -> Result<Vec<FilteredCommit>> {
-    let max_results = max_results.unwrap_or(500);
+    crate::utils::blocking_git(move || {
+        let max_results = max_results.unwrap_or(500).clamp(1, 10_000);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        .arg(format!("--format={}", LOG_FORMAT))
-        .arg(format!("-{}", max_results));
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            .arg(format!("--format={}", LOG_FORMAT))
+            .arg(format!("-{}", max_results));
 
-    if let Some(ref author) = filter.author {
-        cmd.arg(format!("--author={}", author));
-    }
+        if let Some(ref author) = filter.author {
+            cmd.arg(format!("--author={}", author));
+        }
 
-    if let Some(ref committer) = filter.committer {
-        cmd.arg(format!("--committer={}", committer));
-    }
+        if let Some(ref committer) = filter.committer {
+            cmd.arg(format!("--committer={}", committer));
+        }
 
-    if let Some(ref message) = filter.message {
-        cmd.arg(format!("--grep={}", message));
-        // Match the message literally (like `git log --grep=… -F`); without -F
-        // the query is a regex, so "v1.2" would spuriously match "v1x2".
-        cmd.arg("--fixed-strings");
-        // NOTE: -i is deliberately NOT added here. Canonical git applies -i
-        // globally to ALL header-matching patterns (--grep, --author, --committer)
-        // and defaults to case-sensitive. Adding -i only when a message filter is
-        // present silently made --author/--committer case-insensitive whenever a
-        // message was also supplied, so an unrelated field changed the author
-        // result set. Matching canonical git's default keeps every field
-        // case-sensitive regardless of which other filters are set.
-    }
+        if let Some(ref message) = filter.message {
+            cmd.arg(format!("--grep={}", message));
+            // Match the message literally (like `git log --grep=… -F`); without -F
+            // the query is a regex, so "v1.2" would spuriously match "v1x2".
+            cmd.arg("--fixed-strings");
+            // NOTE: -i is deliberately NOT added here. Canonical git applies -i
+            // globally to ALL header-matching patterns (--grep, --author, --committer)
+            // and defaults to case-sensitive. Adding -i only when a message filter is
+            // present silently made --author/--committer case-insensitive whenever a
+            // message was also supplied, so an unrelated field changed the author
+            // result set. Matching canonical git's default keeps every field
+            // case-sensitive regardless of which other filters are set.
+        }
 
-    if let Some(ref after_date) = filter.after_date {
-        cmd.arg(format!("--after={}", after_date));
-    }
+        if let Some(ref after_date) = filter.after_date {
+            cmd.arg(format!("--after={}", after_date));
+        }
 
-    if let Some(ref before_date) = filter.before_date {
-        cmd.arg(format!("--before={}", before_date));
-    }
+        if let Some(ref before_date) = filter.before_date {
+            cmd.arg(format!("--before={}", before_date));
+        }
 
-    if filter.no_merges.unwrap_or(false) {
-        cmd.arg("--no-merges");
-    }
+        if filter.no_merges.unwrap_or(false) {
+            cmd.arg("--no-merges");
+        }
 
-    if let Some(min_parents) = filter.min_parents {
-        cmd.arg(format!("--min-parents={}", min_parents));
-    }
+        if let Some(min_parents) = filter.min_parents {
+            cmd.arg(format!("--min-parents={}", min_parents));
+        }
 
-    if let Some(max_parents) = filter.max_parents {
-        cmd.arg(format!("--max-parents={}", max_parents));
-    }
+        if let Some(max_parents) = filter.max_parents {
+            cmd.arg(format!("--max-parents={}", max_parents));
+        }
 
-    if filter.first_parent.unwrap_or(false) {
-        cmd.arg("--first-parent");
-    }
+        if filter.first_parent.unwrap_or(false) {
+            cmd.arg("--first-parent");
+        }
 
-    if let Some(ref branch) = filter.branch {
-        // Reject ref values that could be parsed as a `git log` flag like
-        // `--output=/tmp/x` (arbitrary file write).
-        crate::utils::reject_flag_like(branch, "Branch")?;
-        cmd.arg(branch.as_str());
-    }
+        if let Some(ref branch) = filter.branch {
+            // Reject ref values that could be parsed as a `git log` flag like
+            // `--output=/tmp/x` (arbitrary file write).
+            crate::utils::reject_flag_like(branch, "Branch")?;
+            cmd.arg(branch.as_str());
+        }
 
-    if let Some(ref file_path) = filter.path {
-        cmd.arg("--").arg(file_path.as_str());
-    }
+        if let Some(ref file_path) = filter.path {
+            cmd.arg("--").arg(file_path.as_str());
+        }
 
-    execute_git_log(&mut cmd)
+        execute_git_log(&mut cmd)
+    })
+    .await
 }
 
 /// Get commits that exist in `compare_branch` but not in `base_branch`
@@ -190,20 +193,24 @@ pub async fn get_branch_diff_commits(
     compare_branch: String,
     max_results: Option<u32>,
 ) -> Result<Vec<FilteredCommit>> {
-    let max_results = max_results.unwrap_or(500);
+    crate::utils::blocking_git(move || {
+        let max_results = max_results.unwrap_or(500).clamp(1, 10_000);
 
-    crate::utils::reject_flag_like(&base_branch, "Base branch")?;
-    crate::utils::reject_flag_like(&compare_branch, "Compare branch")?;
+        crate::utils::reject_flag_like(&base_branch, "Base branch")?;
+        crate::utils::reject_flag_like(&compare_branch, "Compare branch")?;
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        .arg(format!("--format={}", LOG_FORMAT))
-        .arg(format!("-{}", max_results))
-        .arg(format!("{}..{}", base_branch, compare_branch));
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            .arg(format!("--format={}", LOG_FORMAT))
+            .arg(format!("-{}", max_results))
+            .arg(format!("{}..{}", base_branch, compare_branch))
+            .arg("--");
 
-    execute_git_log(&mut cmd)
+        execute_git_log(&mut cmd)
+    })
+    .await
 }
 
 /// Get the commit history for a specific file, optionally following renames
@@ -216,23 +223,26 @@ pub async fn get_file_log(
     follow: Option<bool>,
     max_results: Option<u32>,
 ) -> Result<Vec<FilteredCommit>> {
-    let max_results = max_results.unwrap_or(500);
-    let should_follow = follow.unwrap_or(true);
+    crate::utils::blocking_git(move || {
+        let max_results = max_results.unwrap_or(500).clamp(1, 10_000);
+        let should_follow = follow.unwrap_or(true);
 
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(&path)
-        .arg("log")
-        .arg(format!("--format={}", LOG_FORMAT))
-        .arg(format!("-{}", max_results));
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&path)
+            .arg("log")
+            .arg(format!("--format={}", LOG_FORMAT))
+            .arg(format!("-{}", max_results));
 
-    if should_follow {
-        cmd.arg("--follow");
-    }
+        if should_follow {
+            cmd.arg("--follow");
+        }
 
-    cmd.arg("--").arg(&file_path);
+        cmd.arg("--").arg(&file_path);
 
-    execute_git_log(&mut cmd)
+        execute_git_log(&mut cmd)
+    })
+    .await
 }
 
 #[cfg(test)]

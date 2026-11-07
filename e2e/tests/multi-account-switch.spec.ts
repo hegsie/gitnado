@@ -74,7 +74,6 @@ test.describe('Multi-Account - Switching Between Accounts', () => {
         repositoryAssignments: {},
       },
       get_integration_accounts: [account1, account2],
-      get_profiles: [defaultProfile],
       get_active_profile: defaultProfile,
     });
 

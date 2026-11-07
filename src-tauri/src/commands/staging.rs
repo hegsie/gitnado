@@ -645,44 +645,6 @@ pub async fn read_file_content(
     .await
 }
 
-/// Strip trailing whitespace from files
-///
-/// Reads each file, removes trailing whitespace from every line, and writes it back.
-#[command]
-pub async fn strip_trailing_whitespace(path: String, file_paths: Vec<String>) -> Result<()> {
-    crate::utils::blocking_git(move || {
-        let repo_path = Path::new(&path);
-
-        for file_path in &file_paths {
-            let full_path = validate_path_within_repo(repo_path, file_path)?;
-
-            if !full_path.exists() || !full_path.is_file() {
-                continue;
-            }
-
-            let content = std::fs::read_to_string(&full_path)?;
-
-            let stripped: String = content
-                .lines()
-                .map(|line| line.trim_end())
-                .collect::<Vec<&str>>()
-                .join("\n");
-
-            // Preserve final newline if original file had one
-            let result = if content.ends_with('\n') {
-                format!("{}\n", stripped)
-            } else {
-                stripped
-            };
-
-            std::fs::write(&full_path, result)?;
-        }
-
-        Ok(())
-    })
-    .await
-}
-
 /// Get hunks for a file diff (staged or unstaged)
 ///
 /// Returns structured hunk information for partial staging UI.
@@ -1429,66 +1391,6 @@ mod tests {
         let status = get_status(repo.path_str()).await.unwrap();
         let staged = status.iter().find(|e| e.path == "new.txt" && e.is_staged);
         assert!(staged.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_strip_trailing_whitespace() {
-        let repo = TestRepo::with_initial_commit();
-
-        repo.create_file("whitespace.txt", "hello   \nworld  \nfoo\n");
-
-        let result =
-            strip_trailing_whitespace(repo.path_str(), vec!["whitespace.txt".to_string()]).await;
-        assert!(result.is_ok());
-
-        let content = std::fs::read_to_string(repo.path.join("whitespace.txt")).unwrap();
-        assert_eq!(content, "hello\nworld\nfoo\n");
-    }
-
-    #[tokio::test]
-    async fn test_strip_trailing_whitespace_no_trailing_newline() {
-        let repo = TestRepo::with_initial_commit();
-
-        repo.create_file("no_newline.txt", "hello   \nworld  ");
-
-        let result =
-            strip_trailing_whitespace(repo.path_str(), vec!["no_newline.txt".to_string()]).await;
-        assert!(result.is_ok());
-
-        let content = std::fs::read_to_string(repo.path.join("no_newline.txt")).unwrap();
-        assert_eq!(content, "hello\nworld");
-    }
-
-    #[tokio::test]
-    async fn test_strip_trailing_whitespace_multiple_files() {
-        let repo = TestRepo::with_initial_commit();
-
-        repo.create_file("file1.txt", "a   \nb  \n");
-        repo.create_file("file2.txt", "c  \nd   \n");
-
-        let result = strip_trailing_whitespace(
-            repo.path_str(),
-            vec!["file1.txt".to_string(), "file2.txt".to_string()],
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let content1 = std::fs::read_to_string(repo.path.join("file1.txt")).unwrap();
-        assert_eq!(content1, "a\nb\n");
-
-        let content2 = std::fs::read_to_string(repo.path.join("file2.txt")).unwrap();
-        assert_eq!(content2, "c\nd\n");
-    }
-
-    #[tokio::test]
-    async fn test_strip_trailing_whitespace_skips_missing_files() {
-        let repo = TestRepo::with_initial_commit();
-
-        let result =
-            strip_trailing_whitespace(repo.path_str(), vec!["nonexistent.txt".to_string()]).await;
-
-        // Should succeed even if file doesn't exist (just skip it)
-        assert!(result.is_ok());
     }
 
     #[tokio::test]

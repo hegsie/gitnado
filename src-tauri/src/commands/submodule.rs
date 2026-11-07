@@ -157,90 +157,93 @@ fn run_git_command_in(
 /// naming a host the operation never contacts.
 #[command]
 pub async fn get_submodules(path: String) -> Result<Vec<Submodule>> {
-    let repo_path = Path::new(&path);
-    let repo = git2::Repository::open(repo_path)?;
-    let config = repo.config().ok();
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        let repo = git2::Repository::open(repo_path)?;
+        let config = repo.config().ok();
 
-    let mut submodules = Vec::new();
+        let mut submodules = Vec::new();
 
-    // Iterate through submodules
-    for submodule in repo.submodules()? {
-        let name = submodule.name().ok().unwrap_or("").to_string();
-        let sm_path = submodule.path().to_string_lossy().to_string();
-        let url = config
-            .as_ref()
-            .and_then(|cfg| cfg.get_string(&format!("submodule.{}.url", name)).ok())
-            .filter(|url| !url.trim().is_empty())
-            .or_else(|| submodule.url().ok().flatten().map(|s| s.to_string()));
-        let branch = submodule.branch().ok().flatten().map(|s| s.to_string());
+        // Iterate through submodules
+        for submodule in repo.submodules()? {
+            let name = submodule.name().ok().unwrap_or("").to_string();
+            let sm_path = submodule.path().to_string_lossy().to_string();
+            let url = config
+                .as_ref()
+                .and_then(|cfg| cfg.get_string(&format!("submodule.{}.url", name)).ok())
+                .filter(|url| !url.trim().is_empty())
+                .or_else(|| submodule.url().ok().flatten().map(|s| s.to_string()));
+            let branch = submodule.branch().ok().flatten().map(|s| s.to_string());
 
-        // Determine status
-        let status = match submodule.open() {
-            Ok(sub_repo) => {
-                // Submodule is initialized
-                let head_id = sub_repo.head().ok().and_then(|h| h.target());
-                let index_id = submodule.index_id();
+            // Determine status
+            let status = match submodule.open() {
+                Ok(sub_repo) => {
+                    // Submodule is initialized
+                    let head_id = sub_repo.head().ok().and_then(|h| h.target());
+                    let index_id = submodule.index_id();
 
-                if head_id != index_id {
-                    SubmoduleStatus::Modified
-                } else {
-                    // Check for local changes
-                    let statuses = sub_repo.statuses(Some(
-                        git2::StatusOptions::new()
-                            .include_untracked(true)
-                            .recurse_untracked_dirs(false),
-                    ));
+                    if head_id != index_id {
+                        SubmoduleStatus::Modified
+                    } else {
+                        // Check for local changes
+                        let statuses = sub_repo.statuses(Some(
+                            git2::StatusOptions::new()
+                                .include_untracked(true)
+                                .recurse_untracked_dirs(false),
+                        ));
 
-                    if let Ok(statuses) = statuses {
-                        if statuses.iter().any(|s| !s.status().is_empty()) {
-                            SubmoduleStatus::Dirty
+                        if let Ok(statuses) = statuses {
+                            if statuses.iter().any(|s| !s.status().is_empty()) {
+                                SubmoduleStatus::Dirty
+                            } else {
+                                SubmoduleStatus::Current
+                            }
                         } else {
                             SubmoduleStatus::Current
                         }
-                    } else {
-                        SubmoduleStatus::Current
                     }
                 }
-            }
-            Err(_) => {
-                // Check if path exists
-                let full_path = repo_path.join(submodule.path());
-                if full_path.exists() {
-                    SubmoduleStatus::Uninitialized
-                } else {
-                    SubmoduleStatus::Missing
+                Err(_) => {
+                    // Check if path exists
+                    let full_path = repo_path.join(submodule.path());
+                    if full_path.exists() {
+                        SubmoduleStatus::Uninitialized
+                    } else {
+                        SubmoduleStatus::Missing
+                    }
                 }
-            }
-        };
+            };
 
-        let initialized = matches!(
-            status,
-            SubmoduleStatus::Current | SubmoduleStatus::Modified | SubmoduleStatus::Dirty
-        );
+            let initialized = matches!(
+                status,
+                SubmoduleStatus::Current | SubmoduleStatus::Modified | SubmoduleStatus::Dirty
+            );
 
-        let head_oid = if initialized {
-            submodule.open().ok().and_then(|r| {
-                r.head()
-                    .ok()
-                    .and_then(|h| h.target())
-                    .map(|id| id.to_string())
-            })
-        } else {
-            None
-        };
+            let head_oid = if initialized {
+                submodule.open().ok().and_then(|r| {
+                    r.head()
+                        .ok()
+                        .and_then(|h| h.target())
+                        .map(|id| id.to_string())
+                })
+            } else {
+                None
+            };
 
-        submodules.push(Submodule {
-            name,
-            path: sm_path,
-            url,
-            head_oid,
-            branch,
-            initialized,
-            status,
-        });
-    }
+            submodules.push(Submodule {
+                name,
+                path: sm_path,
+                url,
+                head_oid,
+                branch,
+                initialized,
+                status,
+            });
+        }
 
-    Ok(submodules)
+        Ok(submodules)
+    })
+    .await
 }
 
 /// Whether a `.gitmodules` URL is relative to the superproject.
@@ -543,67 +546,73 @@ pub async fn add_submodule(
     submodule_path: String,
     branch: Option<String>,
 ) -> Result<Submodule> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    reject_flag_like(&url, "Submodule URL")?;
-    reject_flag_like(&submodule_path, "Submodule path")?;
-    // `git submodule add` clones the submodule. A relative url resolves
-    // against the superproject's remote, so it is guarded as that remote
-    // rather than refused for having no parseable host.
-    guard_submodule_url(&path, &url)?;
-    if let Some(ref b) = branch {
-        reject_flag_like(b, "Submodule branch")?;
-    }
+        reject_flag_like(&url, "Submodule URL")?;
+        reject_flag_like(&submodule_path, "Submodule path")?;
+        // `git submodule add` clones the submodule. A relative url resolves
+        // against the superproject's remote, so it is guarded as that remote
+        // rather than refused for having no parseable host.
+        guard_submodule_url(&path, &url)?;
+        if let Some(ref b) = branch {
+            reject_flag_like(b, "Submodule branch")?;
+        }
 
-    let mut args = vec!["submodule", "add"];
+        let mut args = vec!["submodule", "add"];
 
-    if let Some(ref b) = branch {
-        args.push("-b");
-        args.push(b);
-    }
+        if let Some(ref b) = branch {
+            args.push("-b");
+            args.push(b);
+        }
 
-    args.push("--");
-    args.push(&url);
-    args.push(&submodule_path);
+        args.push("--");
+        args.push(&url);
+        args.push(&submodule_path);
 
-    run_git_command(repo_path, &args)?;
+        run_git_command(repo_path, &args)?;
 
-    // Get the newly added submodule
-    let repo = git2::Repository::open(repo_path)?;
-    let submodule = repo.find_submodule(&submodule_path)?;
+        // Get the newly added submodule
+        let repo = git2::Repository::open(repo_path)?;
+        let submodule = repo.find_submodule(&submodule_path)?;
 
-    Ok(Submodule {
-        name: submodule.name().ok().unwrap_or("").to_string(),
-        path: submodule.path().to_string_lossy().to_string(),
-        url: submodule.url().ok().flatten().map(|s| s.to_string()),
-        head_oid: None,
-        branch,
-        initialized: false,
-        status: SubmoduleStatus::Uninitialized,
+        Ok(Submodule {
+            name: submodule.name().ok().unwrap_or("").to_string(),
+            path: submodule.path().to_string_lossy().to_string(),
+            url: submodule.url().ok().flatten().map(|s| s.to_string()),
+            head_oid: None,
+            branch,
+            initialized: false,
+            status: SubmoduleStatus::Uninitialized,
+        })
     })
+    .await
 }
 
 /// Initialize submodules
 #[command]
 pub async fn init_submodules(path: String, submodule_paths: Option<Vec<String>>) -> Result<()> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    let mut args = vec!["submodule", "init"];
+        let mut args = vec!["submodule", "init"];
 
-    let paths_owned: Vec<String>;
-    if let Some(ref paths) = submodule_paths {
-        paths_owned = paths.clone();
-        for p in &paths_owned {
-            reject_flag_like(p, "Submodule path")?;
+        let paths_owned: Vec<String>;
+        if let Some(ref paths) = submodule_paths {
+            paths_owned = paths.clone();
+            for p in &paths_owned {
+                reject_flag_like(p, "Submodule path")?;
+            }
+            args.push("--");
+            for p in &paths_owned {
+                args.push(p);
+            }
         }
-        args.push("--");
-        for p in &paths_owned {
-            args.push(p);
-        }
-    }
 
-    run_git_command(repo_path, &args)?;
-    Ok(())
+        run_git_command(repo_path, &args)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Update submodules
@@ -617,122 +626,87 @@ pub async fn update_submodules(
     token: Option<String>,
     token_remote: Option<String>,
 ) -> Result<()> {
-    // The token the frontend looked up (git.service.ts updateSubmodules) used
-    // to be logged and dropped here, so `git submodule update` ran with
-    // GIT_TERMINAL_PROMPT=0 and no credential at all: Init, Update and Update
-    // All failed on a private submodule for exactly the users whose fetch and
-    // push succeed. It now goes to git as a credential helper in the
-    // environment, which the per-submodule clone/fetch children inherit.
-    //
-    // `token_remote` names the remote the frontend resolved that token
-    // against, so the helper is scoped to the host it belongs to rather than
-    // to whichever remote happens to be called `origin`.
-
-    // `git submodule update` fetches (and clones with --init), so it is gated
-    // like fetch/pull — on the destinations it actually has. Offline mode used
-    // to refuse HERE, before a single submodule url had been read, so the
-    // local-target carve-out `check` makes could never be reached: a submodule
-    // on `/srv/git/dep.git` opens no socket, an allowlist permits updating it,
-    // and offline mode refused it anyway — stricter than an allowlist for an
-    // identical purely-local operation, and refusing to UPDATE a submodule the
-    // same dialog had just let the user ADD (`add_submodule` guards the url).
-    // The per-submodule guard below applies both policies, and fails closed on
-    // a submodule whose url cannot be read, so nothing is waved through by
-    // deleting the fast path.
-    //
-    // Under an allowlist the superproject's own remote is deliberately NOT
-    // checked: it is only where a RELATIVE submodule url resolves to, and
-    // `guard_submodule_url` checks it for exactly those. Checking it for every
-    // update refused a local-only superproject — no remotes at all — whose
-    // `.gitmodules` named nothing but allowlisted hosts.
-    //
-    // So the guard runs on every host the update is actually going to
-    // contact. The clones and fetches it spawns go to the urls in
-    // `.gitmodules`, which are repository content and can name any host: an
-    // allowlist of `github.com` on a github.com superproject used to sit
-    // there while this reached gitlab.com. An EMPTY list is not "no submodules": the args builder
-    // emits a bare `--`, and git then updates every submodule. Treated as
-    // `None` here so that case is guarded as the "all of them" it really is.
-    let repo_path = Path::new(&path);
-    let selected = guard_submodule_urls(
-        repo_path,
-        submodule_paths.as_deref().filter(|paths| !paths.is_empty()),
-        init.unwrap_or(false),
-    )?;
-
-    let mut args = vec!["submodule", "update"];
-
-    if init.unwrap_or(false) {
-        args.push("--init");
-    }
-
-    // Nested submodules cannot be guarded until their parent is cloned, so
-    // under a policy `--recursive` is not git's to do: the tree is walked in
-    // Rust below (`update_nested_submodules`), one guarded level at a time.
-    // With no policy in force there is nothing to guard, and git's own
-    // recursion is kept so the common case pays nothing for this.
-    let recursive = recursive.unwrap_or(false);
-    let guarded_recursion = recursive && selected.is_some();
-    if recursive && !guarded_recursion {
-        args.push("--recursive");
-    }
-
-    if remote.unwrap_or(false) {
-        args.push("--remote");
-    }
-
-    // The command every nested level runs: the same flags, no pathspecs.
-    let nested_args = args.clone();
-
-    let paths_owned: Vec<String>;
-    if let Some(ref paths) = submodule_paths {
-        paths_owned = paths.clone();
-        for p in &paths_owned {
-            reject_flag_like(p, "Submodule path")?;
-        }
-        args.push("--");
-        for p in &paths_owned {
-            args.push(p);
-        }
-    }
-
-    run_git_command_with_token(repo_path, &args, token.as_deref(), token_remote.as_deref())?;
-
-    if let (true, Some(top_level)) = (guarded_recursion, selected) {
-        update_nested_submodules(
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        let selected = guard_submodule_urls(
             repo_path,
-            repo_path,
-            &top_level,
-            &nested_args,
-            token.as_deref(),
-            token_remote.as_deref(),
-            1,
+            submodule_paths.as_deref().filter(|paths| !paths.is_empty()),
+            init.unwrap_or(false),
         )?;
-    }
-    Ok(())
+
+        let mut args = vec!["submodule", "update"];
+
+        if init.unwrap_or(false) {
+            args.push("--init");
+        }
+
+        let recursive = recursive.unwrap_or(false);
+        let guarded_recursion = recursive && selected.is_some();
+        if recursive && !guarded_recursion {
+            args.push("--recursive");
+        }
+
+        if remote.unwrap_or(false) {
+            args.push("--remote");
+        }
+
+        // The command every nested level runs: the same flags, no pathspecs.
+        let nested_args = args.clone();
+
+        let paths_owned: Vec<String>;
+        if let Some(ref paths) = submodule_paths {
+            paths_owned = paths.clone();
+            for p in &paths_owned {
+                reject_flag_like(p, "Submodule path")?;
+            }
+            args.push("--");
+            for p in &paths_owned {
+                args.push(p);
+            }
+        }
+
+        run_git_command_with_token(repo_path, &args, token.as_deref(), token_remote.as_deref())?;
+
+        if let (true, Some(top_level)) = (guarded_recursion, selected) {
+            update_nested_submodules(
+                repo_path,
+                repo_path,
+                &top_level,
+                &nested_args,
+                token.as_deref(),
+                token_remote.as_deref(),
+                1,
+            )?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Sync submodule URLs from .gitmodules to .git/config
 #[command]
 pub async fn sync_submodules(path: String, submodule_paths: Option<Vec<String>>) -> Result<()> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    let mut args = vec!["submodule", "sync"];
+        let mut args = vec!["submodule", "sync"];
 
-    let paths_owned: Vec<String>;
-    if let Some(ref paths) = submodule_paths {
-        paths_owned = paths.clone();
-        for p in &paths_owned {
-            reject_flag_like(p, "Submodule path")?;
+        let paths_owned: Vec<String>;
+        if let Some(ref paths) = submodule_paths {
+            paths_owned = paths.clone();
+            for p in &paths_owned {
+                reject_flag_like(p, "Submodule path")?;
+            }
+            args.push("--");
+            for p in &paths_owned {
+                args.push(p);
+            }
         }
-        args.push("--");
-        for p in &paths_owned {
-            args.push(p);
-        }
-    }
 
-    run_git_command(repo_path, &args)?;
-    Ok(())
+        run_git_command(repo_path, &args)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Deinitialize a submodule (remove from working tree but keep in .gitmodules)
@@ -742,95 +716,55 @@ pub async fn deinit_submodule(
     submodule_path: String,
     force: Option<bool>,
 ) -> Result<()> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    reject_flag_like(&submodule_path, "Submodule path")?;
+        reject_flag_like(&submodule_path, "Submodule path")?;
 
-    let mut args = vec!["submodule", "deinit"];
+        let mut args = vec!["submodule", "deinit"];
 
-    if force.unwrap_or(false) {
-        args.push("-f");
-    }
+        if force.unwrap_or(false) {
+            args.push("-f");
+        }
 
-    args.push("--");
-    args.push(&submodule_path);
+        args.push("--");
+        args.push(&submodule_path);
 
-    run_git_command(repo_path, &args)?;
-    Ok(())
+        run_git_command(repo_path, &args)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Remove a submodule completely
 #[command]
 pub async fn remove_submodule(path: String, submodule_path: String) -> Result<()> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    // Mirror canonical git submodule removal: `git submodule deinit -f <path>`
-    // followed by `git rm -f <path>`. This removes the working tree, the
-    // .gitmodules entry, and the index entry, but intentionally LEAVES the
-    // submodule's object store under `.git/modules/<name>` intact so that any
-    // local commits made inside the submodule that were never pushed remain
-    // recoverable. Deleting `.git/modules/<name>` here (as a previous version
-    // did) permanently destroyed those commits with no reflog and no recovery
-    // path — a data-loss bug that canonical git never inflicts.
+        reject_flag_like(&submodule_path, "Submodule path")?;
 
-    // The path comes from .gitmodules, which is repository content — a clone
-    // from an untrusted source can declare `path = --all`, and
-    // `git submodule deinit -f --all` clears and unregisters EVERY submodule,
-    // discarding uncommitted work in each, while the confirm named only one.
-    // `--` (plus the rejection) is what every other CLI-shelling command in
-    // this codebase does; update_submodules one function away already did.
-    reject_flag_like(&submodule_path, "Submodule path")?;
+        // Step 1: Deinit the submodule
+        run_git_command(
+            repo_path,
+            &["submodule", "deinit", "-f", "--", &submodule_path],
+        )?;
 
-    // Step 1: Deinit the submodule
-    run_git_command(
-        repo_path,
-        &["submodule", "deinit", "-f", "--", &submodule_path],
-    )?;
+        // Step 2: Remove from working tree and index (keeps .git/modules for recovery)
+        run_git_command(repo_path, &["rm", "-f", "--", &submodule_path])?;
 
-    // Step 2: Remove from working tree and index (keeps .git/modules for recovery)
-    run_git_command(repo_path, &["rm", "-f", "--", &submodule_path])?;
-
-    Ok(())
-}
-
-/// Get the status summary of a specific submodule
-#[command]
-pub async fn get_submodule_status(path: String, submodule_path: String) -> Result<String> {
-    let repo_path = Path::new(&path);
-
-    reject_flag_like(&submodule_path, "Submodule path")?;
-
-    let output = run_git_command(repo_path, &["submodule", "status", "--", &submodule_path])?;
-
-    Ok(output)
-}
-
-/// Foreach - run a command in each submodule
-#[command]
-pub async fn submodule_foreach(
-    path: String,
-    command: String,
-    recursive: Option<bool>,
-) -> Result<String> {
-    let repo_path = Path::new(&path);
-
-    let mut args = vec!["submodule", "foreach"];
-
-    if recursive.unwrap_or(false) {
-        args.push("--recursive");
-    }
-
-    args.push(&command);
-
-    run_git_command(repo_path, &args)
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
-    use std::io::Write;
     // Only the `#[cfg(unix)]` credential-helper tests pipe a child's stdio.
+    #[cfg(unix)]
+    use std::io::Write;
     #[cfg(unix)]
     use std::process::Stdio;
 
@@ -1643,26 +1577,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_submodule_status_not_found() {
-        let repo = TestRepo::with_initial_commit();
-        // Status on nonexistent submodule should fail
-        let result = get_submodule_status(repo.path_str(), "nonexistent".to_string()).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_sync_submodules_no_submodules() {
         let repo = TestRepo::with_initial_commit();
         // Sync on repo with no submodules should succeed
         let result = sync_submodules(repo.path_str(), None).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_submodule_foreach_no_submodules() {
-        let repo = TestRepo::with_initial_commit();
-        // Foreach with no submodules should succeed (just do nothing)
-        let result = submodule_foreach(repo.path_str(), "pwd".to_string(), None).await;
         assert!(result.is_ok());
     }
 
@@ -1760,14 +1678,6 @@ mod tests {
             None,
         )
         .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_submodule_foreach_recursive() {
-        let repo = TestRepo::with_initial_commit();
-        // Foreach with recursive flag and no submodules should succeed
-        let result = submodule_foreach(repo.path_str(), "echo test".to_string(), Some(true)).await;
         assert!(result.is_ok());
     }
 
@@ -2143,23 +2053,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deinit_and_status_reject_a_flag_like_path() {
+    async fn test_deinit_rejects_a_flag_like_path() {
         let repo = TestRepo::with_initial_commit();
 
-        for err in [
-            deinit_submodule(repo.path_str(), "--all".to_string(), Some(true))
-                .await
-                .expect_err("deinit must reject a flag-like path"),
-            get_submodule_status(repo.path_str(), "--all".to_string())
-                .await
-                .expect_err("status must reject a flag-like path"),
-        ] {
-            assert!(
-                err.to_string().contains("must not start with '-'"),
-                "unexpected error: {}",
-                err
-            );
-        }
+        let err = deinit_submodule(repo.path_str(), "--all".to_string(), Some(true))
+            .await
+            .expect_err("deinit must reject a flag-like path");
+        assert!(
+            err.to_string().contains("must not start with '-'"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[tokio::test]

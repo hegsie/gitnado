@@ -23,9 +23,9 @@ const mockSignature = {
   },
 };
 
-import { getCommitSignature, type CommitSignature } from '../git.service.ts';
+import { getCommitsSignatures, type CommitSignature } from '../git.service.ts';
 
-describe('getCommitSignature - cache consistency', () => {
+describe('getCommitsSignatures - cache consistency', () => {
   beforeEach(() => {
     invokeCallCount = 0;
     lastInvokedCommand = null;
@@ -33,45 +33,63 @@ describe('getCommitSignature - cache consistency', () => {
   });
 
   it('should call Tauri when signature is not cached', async () => {
-    const result = await getCommitSignature('/test/repo', 'abc123');
+    (globalThis as unknown as { __TAURI_INTERNALS__: { invoke: MockInvoke } }).__TAURI_INTERNALS__.invoke = (command: string) => {
+      invokeCallCount++;
+      lastInvokedCommand = command;
+      return Promise.resolve([['abc123', mockSignature]]);
+    };
+
+    const result = await getCommitsSignatures('/test/repo', ['abc123']);
 
     expect(result.success).to.be.true;
-    expect(result.data?.signed).to.be.true;
-    expect(lastInvokedCommand).to.equal('get_commit_signature');
+    expect(result.data?.[0]?.[1].signed).to.be.true;
+    expect(lastInvokedCommand).to.equal('get_commits_signatures');
     expect(invokeCallCount).to.equal(1);
   });
 
   it('should return cached result without Tauri call', async () => {
-    // Pre-populate the cache (as getCommitsSignatures would)
+    // Pre-populate the cache
     const cacheKey = createCacheKey('/test/repo', 'abc123');
     commitSignatureCache.set(cacheKey, mockSignature);
 
-    const result = await getCommitSignature('/test/repo', 'abc123');
+    const result = await getCommitsSignatures('/test/repo', ['abc123']);
 
     expect(result.success).to.be.true;
-    expect(result.data).to.deep.equal(mockSignature as CommitSignature);
+    expect(result.data).to.deep.equal([['abc123', mockSignature as CommitSignature]]);
     // Should not have called Tauri
     expect(invokeCallCount).to.equal(0);
   });
 
   it('should cache the result after a Tauri call', async () => {
+    (globalThis as unknown as { __TAURI_INTERNALS__: { invoke: MockInvoke } }).__TAURI_INTERNALS__.invoke = (command: string) => {
+      invokeCallCount++;
+      lastInvokedCommand = command;
+      return Promise.resolve([['def456', mockSignature]]);
+    };
+
     // First call: not cached, calls Tauri
-    await getCommitSignature('/test/repo', 'def456');
+    await getCommitsSignatures('/test/repo', ['def456']);
     expect(invokeCallCount).to.equal(1);
 
     // Second call: should be cached
     invokeCallCount = 0;
-    const result = await getCommitSignature('/test/repo', 'def456');
+    const result = await getCommitsSignatures('/test/repo', ['def456']);
     expect(result.success).to.be.true;
     expect(invokeCallCount).to.equal(0);
   });
 
   it('should use different cache keys for different repos', async () => {
+    (globalThis as unknown as { __TAURI_INTERNALS__: { invoke: MockInvoke } }).__TAURI_INTERNALS__.invoke = (command: string) => {
+      invokeCallCount++;
+      lastInvokedCommand = command;
+      return Promise.resolve([['abc123', mockSignature]]);
+    };
+
     const cacheKey = createCacheKey('/repo-a', 'abc123');
     commitSignatureCache.set(cacheKey, mockSignature);
 
     // Different repo path should not hit cache
-    const result = await getCommitSignature('/repo-b', 'abc123');
+    const result = await getCommitsSignatures('/repo-b', ['abc123']);
     expect(invokeCallCount).to.equal(1);
     expect(result.success).to.be.true;
   });

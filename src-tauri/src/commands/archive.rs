@@ -35,55 +35,58 @@ pub async fn create_archive(
     format: Option<String>,
     prefix: Option<String>,
 ) -> Result<String> {
-    let repo_path = Path::new(&path);
-    let repo = git2::Repository::open(repo_path)?;
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        let repo = git2::Repository::open(repo_path)?;
 
-    // Resolve the reference to a tree so we can surface a clear error for an
-    // invalid ref before shelling out to git.
-    let ref_str = tree_ref.as_deref().unwrap_or("HEAD");
-    let obj = repo.revparse_single(ref_str)?;
-    obj.peel_to_tree().map_err(|_| {
-        GitnadoError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
-    })?;
+        // Resolve the reference to a tree so we can surface a clear error for an
+        // invalid ref before shelling out to git.
+        let ref_str = tree_ref.as_deref().unwrap_or("HEAD");
+        let obj = repo.revparse_single(ref_str)?;
+        obj.peel_to_tree().map_err(|_| {
+            GitnadoError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
+        })?;
 
-    let format_arg = resolve_format(format.as_deref())?;
+        let format_arg = resolve_format(format.as_deref())?;
 
-    // Defend every user-controlled value that reaches the CLI.
-    reject_flag_like(&output_path, "Output path")?;
-    reject_flag_like(ref_str, "Reference")?;
-    let prefix_str = prefix.unwrap_or_default();
-    if !prefix_str.is_empty() {
-        reject_flag_like(&prefix_str, "Prefix")?;
-    }
+        // Defend every user-controlled value that reaches the CLI.
+        reject_flag_like(&output_path, "Output path")?;
+        reject_flag_like(ref_str, "Reference")?;
+        let prefix_str = prefix.unwrap_or_default();
+        if !prefix_str.is_empty() {
+            reject_flag_like(&prefix_str, "Prefix")?;
+        }
 
-    // A user operation, so it goes through `create_command` and the export the
-    // user ran shows in the Output panel.
-    let mut cmd = create_command("git");
-    cmd.current_dir(repo_path)
-        .arg("archive")
-        .arg(format!("--format={}", format_arg))
-        .arg(format!("--output={}", output_path));
-    if !prefix_str.is_empty() {
-        // git archive requires a trailing slash to nest entries under a
-        // directory, matching the previous "<prefix>/<file>" layout.
-        cmd.arg(format!("--prefix={}/", prefix_str));
-    }
-    // `--` terminates options so a ref cannot be reinterpreted as a flag.
-    cmd.arg("--").arg(ref_str);
+        // A user operation, so it goes through `create_command` and the export the
+        // user ran shows in the Output panel.
+        let mut cmd = create_command("git");
+        cmd.current_dir(repo_path)
+            .arg("archive")
+            .arg(format!("--format={}", format_arg))
+            .arg(format!("--output={}", output_path));
+        if !prefix_str.is_empty() {
+            // git archive requires a trailing slash to nest entries under a
+            // directory, matching the previous "<prefix>/<file>" layout.
+            cmd.arg(format!("--prefix={}/", prefix_str));
+        }
+        // `--` terminates options so a ref cannot be reinterpreted as a flag.
+        cmd.arg("--").arg(ref_str);
 
-    let output = cmd.output().map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to execute git archive: {}", e))
-    })?;
+        let output = cmd.output().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to execute git archive: {}", e))
+        })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git archive failed: {}",
-            stderr.trim()
-        )));
-    }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git archive failed: {}",
+                stderr.trim()
+            )));
+        }
 
-    Ok(output_path)
+        Ok(output_path)
+    })
+    .await
 }
 
 /// Get the list of files that would be included in the archive.
@@ -93,58 +96,61 @@ pub async fn create_archive(
 /// contain — including the effect of `export-ignore` gitattributes.
 #[command]
 pub async fn get_archive_files(path: String, tree_ref: Option<String>) -> Result<Vec<String>> {
-    let repo_path = Path::new(&path);
-    let repo = git2::Repository::open(repo_path)?;
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
+        let repo = git2::Repository::open(repo_path)?;
 
-    let ref_str = tree_ref.as_deref().unwrap_or("HEAD");
-    let obj = repo.revparse_single(ref_str)?;
-    obj.peel_to_tree().map_err(|_| {
-        GitnadoError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
-    })?;
-
-    reject_flag_like(ref_str, "Reference")?;
-
-    // A read: no `--output`, so `create_command` files it as the listing it
-    // is and keeps it out of the Output panel.
-    let output = create_command("git")
-        .current_dir(repo_path)
-        .arg("archive")
-        .arg("--format=tar")
-        .arg("--")
-        .arg(ref_str)
-        .output()
-        .map_err(|e| {
-            GitnadoError::OperationFailed(format!("Failed to execute git archive: {}", e))
+        let ref_str = tree_ref.as_deref().unwrap_or("HEAD");
+        let obj = repo.revparse_single(ref_str)?;
+        obj.peel_to_tree().map_err(|_| {
+            GitnadoError::OperationFailed(format!("Cannot resolve '{}' to a tree", ref_str))
         })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(GitnadoError::OperationFailed(format!(
-            "git archive failed: {}",
-            stderr.trim()
-        )));
-    }
+        reject_flag_like(ref_str, "Reference")?;
 
-    let mut files = Vec::new();
-    let mut archive = tar::Archive::new(output.stdout.as_slice());
-    for entry in archive
-        .entries()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read archive: {}", e)))?
-    {
-        let entry = entry.map_err(|e| {
-            GitnadoError::OperationFailed(format!("Failed to read archive entry: {}", e))
-        })?;
-        // Skip directory entries; report only files and symlinks.
-        if entry.header().entry_type().is_dir() {
-            continue;
+        // A read: no `--output`, so `create_command` files it as the listing it
+        // is and keeps it out of the Output panel.
+        let output = create_command("git")
+            .current_dir(repo_path)
+            .arg("archive")
+            .arg("--format=tar")
+            .arg("--")
+            .arg(ref_str)
+            .output()
+            .map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to execute git archive: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitnadoError::OperationFailed(format!(
+                "git archive failed: {}",
+                stderr.trim()
+            )));
         }
-        let entry_path = entry
-            .path()
-            .map_err(|e| GitnadoError::OperationFailed(format!("Invalid archive path: {}", e)))?;
-        files.push(entry_path.to_string_lossy().to_string());
-    }
 
-    Ok(files)
+        let mut files = Vec::new();
+        let mut archive = tar::Archive::new(output.stdout.as_slice());
+        for entry in archive
+            .entries()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to read archive: {}", e)))?
+        {
+            let entry = entry.map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to read archive entry: {}", e))
+            })?;
+            // Skip directory entries; report only files and symlinks.
+            if entry.header().entry_type().is_dir() {
+                continue;
+            }
+            let entry_path = entry.path().map_err(|e| {
+                GitnadoError::OperationFailed(format!("Invalid archive path: {}", e))
+            })?;
+            files.push(entry_path.to_string_lossy().to_string());
+        }
+
+        Ok(files)
+    })
+    .await
 }
 
 #[cfg(test)]

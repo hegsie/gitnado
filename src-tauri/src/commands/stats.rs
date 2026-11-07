@@ -149,174 +149,177 @@ pub struct HourActivity {
 /// Get comprehensive repository statistics
 #[command]
 pub async fn get_repo_stats(path: String, max_commits: Option<usize>) -> Result<RepoStats> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let max = max_commits.unwrap_or(10000);
-    let mailmap = repo.mailmap().ok();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let max = max_commits.unwrap_or(10000);
+        let mailmap = repo.mailmap().ok();
 
-    let mut revwalk = repo.revwalk()?;
-    // push_head may fail for empty repos - that's OK
-    let _ = revwalk.push_head();
-    revwalk.set_sorting(git2::Sort::TIME)?;
+        let mut revwalk = repo.revwalk()?;
+        // push_head may fail for empty repos - that's OK
+        let _ = revwalk.push_head();
+        revwalk.set_sorting(git2::Sort::TIME)?;
 
-    // Try to include all branches
-    for (branch, _) in (repo.branches(Some(git2::BranchType::Local))?).flatten() {
-        if let Some(oid) = branch.get().target() {
-            let _ = revwalk.push(oid);
-        }
-    }
-
-    let mut total_commits = 0;
-    let mut first_commit_date: Option<i64> = None;
-    let mut latest_commit_date: Option<i64> = None;
-    let mut contributors_map: HashMap<String, ContributorStats> = HashMap::new();
-    let mut month_activity: HashMap<(i32, u32), usize> = HashMap::new();
-    let mut dow_activity: [usize; 7] = [0; 7];
-    let mut hour_activity: [usize; 24] = [0; 24];
-
-    for oid_result in revwalk {
-        if total_commits >= max {
-            break;
+        // Try to include all branches
+        for (branch, _) in (repo.branches(Some(git2::BranchType::Local))?).flatten() {
+            if let Some(oid) = branch.get().target() {
+                let _ = revwalk.push(oid);
+            }
         }
 
-        let oid = oid_result?;
-        let commit = repo.find_commit(oid)?;
-        total_commits += 1;
+        let mut total_commits = 0;
+        let mut first_commit_date: Option<i64> = None;
+        let mut latest_commit_date: Option<i64> = None;
+        let mut contributors_map: HashMap<String, ContributorStats> = HashMap::new();
+        let mut month_activity: HashMap<(i32, u32), usize> = HashMap::new();
+        let mut dow_activity: [usize; 7] = [0; 7];
+        let mut hour_activity: [usize; 24] = [0; 24];
 
-        let time_secs = commit.time().seconds();
-        let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
+        for oid_result in revwalk {
+            if total_commits >= max {
+                break;
+            }
 
-        // Track first and latest commit
-        match first_commit_date {
-            None => first_commit_date = Some(time_secs),
-            Some(first) if time_secs < first => first_commit_date = Some(time_secs),
-            _ => {}
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+            total_commits += 1;
+
+            let time_secs = commit.time().seconds();
+            let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
+
+            // Track first and latest commit
+            match first_commit_date {
+                None => first_commit_date = Some(time_secs),
+                Some(first) if time_secs < first => first_commit_date = Some(time_secs),
+                _ => {}
+            }
+            match latest_commit_date {
+                None => latest_commit_date = Some(time_secs),
+                Some(latest) if time_secs > latest => latest_commit_date = Some(time_secs),
+                _ => {}
+            }
+
+            // Contributor stats
+            let key = author_email.clone();
+            let entry = contributors_map.entry(key).or_insert(ContributorStats {
+                name: author_name.clone(),
+                email: author_email.clone(),
+                commit_count: 0,
+                first_commit: time_secs,
+                latest_commit: time_secs,
+                lines_added: 0,
+                lines_deleted: 0,
+            });
+            entry.commit_count += 1;
+            if time_secs < entry.first_commit {
+                entry.first_commit = time_secs;
+            }
+            if time_secs > entry.latest_commit {
+                entry.latest_commit = time_secs;
+            }
+
+            // Time-based activity in the author's recorded local timezone, matching
+            // what `git log` displays (author-local time, not UTC).
+            let local_secs = author_local_secs(&commit);
+            let days_since_epoch = local_secs.div_euclid(86400);
+            // Day of week: Jan 1 1970 was Thursday (4)
+            let dow = ((days_since_epoch % 7) + 4).rem_euclid(7);
+            dow_activity[dow as usize] += 1;
+
+            // Hour of day (author-local)
+            let hour = (local_secs.rem_euclid(86400) / 3600) as usize;
+            if hour < 24 {
+                hour_activity[hour] += 1;
+            }
+
+            // Year and month (author-local)
+            let (year, month) = epoch_to_year_month(local_secs);
+            *month_activity.entry((year, month)).or_insert(0) += 1;
         }
-        match latest_commit_date {
-            None => latest_commit_date = Some(time_secs),
-            Some(latest) if time_secs > latest => latest_commit_date = Some(time_secs),
-            _ => {}
-        }
 
-        // Contributor stats
-        let key = author_email.clone();
-        let entry = contributors_map.entry(key).or_insert(ContributorStats {
-            name: author_name.clone(),
-            email: author_email.clone(),
-            commit_count: 0,
-            first_commit: time_secs,
-            latest_commit: time_secs,
-            lines_added: 0,
-            lines_deleted: 0,
-        });
-        entry.commit_count += 1;
-        if time_secs < entry.first_commit {
-            entry.first_commit = time_secs;
-        }
-        if time_secs > entry.latest_commit {
-            entry.latest_commit = time_secs;
-        }
+        // Count branches and tags
+        let total_branches = repo.branches(None)?.filter_map(|b| b.ok()).count();
 
-        // Time-based activity in the author's recorded local timezone, matching
-        // what `git log` displays (author-local time, not UTC).
-        let local_secs = author_local_secs(&commit);
-        let days_since_epoch = local_secs.div_euclid(86400);
-        // Day of week: Jan 1 1970 was Thursday (4)
-        let dow = ((days_since_epoch % 7) + 4).rem_euclid(7);
-        dow_activity[dow as usize] += 1;
+        let total_tags = repo.tag_names(None)?.iter().flatten().count();
 
-        // Hour of day (author-local)
-        let hour = (local_secs.rem_euclid(86400) / 3600) as usize;
-        if hour < 24 {
-            hour_activity[hour] += 1;
-        }
-
-        // Year and month (author-local)
-        let (year, month) = epoch_to_year_month(local_secs);
-        *month_activity.entry((year, month)).or_insert(0) += 1;
-    }
-
-    // Count branches and tags
-    let total_branches = repo.branches(None)?.filter_map(|b| b.ok()).count();
-
-    let total_tags = repo.tag_names(None)?.iter().flatten().count();
-
-    // Count files in HEAD
-    let files_count = if let Ok(head) = repo.head() {
-        if let Ok(tree) = head.peel_to_tree() {
-            let mut count = 0;
-            tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-                if entry.kind() == Some(git2::ObjectType::Blob) {
-                    count += 1;
-                }
-                git2::TreeWalkResult::Ok
-            })
-            .unwrap_or(());
-            count
+        // Count files in HEAD
+        let files_count = if let Ok(head) = repo.head() {
+            if let Ok(tree) = head.peel_to_tree() {
+                let mut count = 0;
+                tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+                    if entry.kind() == Some(git2::ObjectType::Blob) {
+                        count += 1;
+                    }
+                    git2::TreeWalkResult::Ok
+                })
+                .unwrap_or(());
+                count
+            } else {
+                0
+            }
         } else {
             0
-        }
-    } else {
-        0
-    };
+        };
 
-    // Sort contributors by commit count
-    let mut contributors: Vec<ContributorStats> = contributors_map.into_values().collect();
-    contributors.sort_by_key(|b| std::cmp::Reverse(b.commit_count));
+        // Sort contributors by commit count
+        let mut contributors: Vec<ContributorStats> = contributors_map.into_values().collect();
+        contributors.sort_by_key(|b| std::cmp::Reverse(b.commit_count));
 
-    // Sort month activity
-    let mut activity_by_month: Vec<MonthActivity> = month_activity
-        .into_iter()
-        .map(|((year, month), count)| MonthActivity {
-            year,
-            month,
-            commit_count: count,
+        // Sort month activity
+        let mut activity_by_month: Vec<MonthActivity> = month_activity
+            .into_iter()
+            .map(|((year, month), count)| MonthActivity {
+                year,
+                month,
+                commit_count: count,
+            })
+            .collect();
+        activity_by_month.sort_by(|a, b| a.year.cmp(&b.year).then(a.month.cmp(&b.month)));
+
+        let day_names = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+        let activity_by_day_of_week: Vec<DayOfWeekActivity> = dow_activity
+            .iter()
+            .enumerate()
+            .map(|(i, &count)| DayOfWeekActivity {
+                day: day_names[i].to_string(),
+                day_index: i as u32,
+                commit_count: count,
+            })
+            .collect();
+
+        let activity_by_hour: Vec<HourActivity> = hour_activity
+            .iter()
+            .enumerate()
+            .map(|(i, &count)| HourActivity {
+                hour: i as u32,
+                commit_count: count,
+            })
+            .collect();
+
+        Ok(RepoStats {
+            total_commits,
+            total_branches,
+            total_tags,
+            total_contributors: contributors.len(),
+            first_commit_date,
+            latest_commit_date,
+            contributors,
+            activity_by_month,
+            activity_by_day_of_week,
+            activity_by_hour,
+            files_count,
+            total_lines_added: 0, // Skip for performance
+            total_lines_deleted: 0,
         })
-        .collect();
-    activity_by_month.sort_by(|a, b| a.year.cmp(&b.year).then(a.month.cmp(&b.month)));
-
-    let day_names = [
-        "Sunday",
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-    ];
-    let activity_by_day_of_week: Vec<DayOfWeekActivity> = dow_activity
-        .iter()
-        .enumerate()
-        .map(|(i, &count)| DayOfWeekActivity {
-            day: day_names[i].to_string(),
-            day_index: i as u32,
-            commit_count: count,
-        })
-        .collect();
-
-    let activity_by_hour: Vec<HourActivity> = hour_activity
-        .iter()
-        .enumerate()
-        .map(|(i, &count)| HourActivity {
-            hour: i as u32,
-            commit_count: count,
-        })
-        .collect();
-
-    Ok(RepoStats {
-        total_commits,
-        total_branches,
-        total_tags,
-        total_contributors: contributors.len(),
-        first_commit_date,
-        latest_commit_date,
-        contributors,
-        activity_by_month,
-        activity_by_day_of_week,
-        activity_by_hour,
-        files_count,
-        total_lines_added: 0, // Skip for performance
-        total_lines_deleted: 0,
     })
+    .await
 }
 
 /// Get contributor statistics with diff stats (slower, separate command)
@@ -325,54 +328,57 @@ pub async fn get_contributor_stats(
     path: String,
     max_commits: Option<usize>,
 ) -> Result<Vec<ContributorStats>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let max = max_commits.unwrap_or(5000);
-    let mailmap = repo.mailmap().ok();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let max = max_commits.unwrap_or(5000);
+        let mailmap = repo.mailmap().ok();
 
-    let mut revwalk = repo.revwalk()?;
-    revwalk.push_head()?;
-    revwalk.set_sorting(git2::Sort::TIME)?;
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push_head()?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
 
-    let mut contributors_map: HashMap<String, ContributorStats> = HashMap::new();
+        let mut contributors_map: HashMap<String, ContributorStats> = HashMap::new();
 
-    for (count, oid_result) in revwalk.enumerate() {
-        if count >= max {
-            break;
+        for (count, oid_result) in revwalk.enumerate() {
+            if count >= max {
+                break;
+            }
+
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+            let time_secs = commit.time().seconds();
+            let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
+
+            // Get diff stats for this commit (mirrors `git log --numstat`).
+            let (added, deleted) = commit_line_churn(&repo, &commit);
+
+            let key = author_email.clone();
+            let entry = contributors_map.entry(key).or_insert(ContributorStats {
+                name: author_name,
+                email: author_email,
+                commit_count: 0,
+                first_commit: time_secs,
+                latest_commit: time_secs,
+                lines_added: 0,
+                lines_deleted: 0,
+            });
+            entry.commit_count += 1;
+            entry.lines_added += added;
+            entry.lines_deleted += deleted;
+            if time_secs < entry.first_commit {
+                entry.first_commit = time_secs;
+            }
+            if time_secs > entry.latest_commit {
+                entry.latest_commit = time_secs;
+            }
         }
 
-        let oid = oid_result?;
-        let commit = repo.find_commit(oid)?;
-        let time_secs = commit.time().seconds();
-        let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
+        let mut contributors: Vec<ContributorStats> = contributors_map.into_values().collect();
+        contributors.sort_by_key(|b| std::cmp::Reverse(b.commit_count));
 
-        // Get diff stats for this commit (mirrors `git log --numstat`).
-        let (added, deleted) = commit_line_churn(&repo, &commit);
-
-        let key = author_email.clone();
-        let entry = contributors_map.entry(key).or_insert(ContributorStats {
-            name: author_name,
-            email: author_email,
-            commit_count: 0,
-            first_commit: time_secs,
-            latest_commit: time_secs,
-            lines_added: 0,
-            lines_deleted: 0,
-        });
-        entry.commit_count += 1;
-        entry.lines_added += added;
-        entry.lines_deleted += deleted;
-        if time_secs < entry.first_commit {
-            entry.first_commit = time_secs;
-        }
-        if time_secs > entry.latest_commit {
-            entry.latest_commit = time_secs;
-        }
-    }
-
-    let mut contributors: Vec<ContributorStats> = contributors_map.into_values().collect();
-    contributors.sort_by_key(|b| std::cmp::Reverse(b.commit_count));
-
-    Ok(contributors)
+        Ok(contributors)
+    })
+    .await
 }
 
 /// Simple epoch to year/month conversion
@@ -533,331 +539,335 @@ pub async fn get_repo_statistics(
     since: Option<String>,
     until: Option<String>,
 ) -> Result<RepoStatistics> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mailmap = repo.mailmap().ok();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mailmap = repo.mailmap().ok();
 
-    // Parse date filters
-    let since_epoch = since.as_ref().and_then(|s| parse_iso8601_to_epoch(s));
-    let until_epoch = until.as_ref().and_then(|s| parse_iso8601_to_epoch(s));
+        // Parse date filters
+        let since_epoch = since.as_ref().and_then(|s| parse_iso8601_to_epoch(s));
+        let until_epoch = until.as_ref().and_then(|s| parse_iso8601_to_epoch(s));
 
-    // Walk commits
-    let mut revwalk = repo.revwalk()?;
-    if repo.head().is_ok() {
-        revwalk.push_head()?;
-    }
-    revwalk.set_sorting(git2::Sort::TIME)?;
-
-    // Try to include all branches
-    for (branch, _) in (repo.branches(Some(git2::BranchType::Local))?).flatten() {
-        if let Some(oid) = branch.get().target() {
-            let _ = revwalk.push(oid);
-        }
-    }
-
-    let mut total_commits: u32 = 0;
-    let mut first_commit_date: Option<i64> = None;
-    let mut last_commit_date: Option<i64> = None;
-    let mut total_lines_added: u64 = 0;
-    let mut total_lines_deleted: u64 = 0;
-
-    // For contributors
-    let mut contributors_map: HashMap<String, EnhancedContributorStats> = HashMap::new();
-
-    // For activity breakdown
-    let mut month_activity: HashMap<(u32, u32), (u32, HashSet<String>)> = HashMap::new();
-    let mut weekday_activity: [u32; 7] = [0; 7];
-    let mut hour_activity: [u32; 24] = [0; 24];
-
-    for oid_result in revwalk {
-        let oid = oid_result?;
-        let commit = repo.find_commit(oid)?;
-        let time_secs = commit.time().seconds();
-
-        // Apply date filters
-        if let Some(since) = since_epoch {
-            if time_secs < since {
-                continue;
-            }
-        }
-        if let Some(until) = until_epoch {
-            if time_secs > until {
-                continue;
-            }
-        }
-
-        total_commits += 1;
-
-        let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
-
-        // Track first and last commit
-        match first_commit_date {
-            None => first_commit_date = Some(time_secs),
-            Some(first) if time_secs < first => first_commit_date = Some(time_secs),
-            _ => {}
-        }
-        match last_commit_date {
-            None => last_commit_date = Some(time_secs),
-            Some(last) if time_secs > last => last_commit_date = Some(time_secs),
-            _ => {}
-        }
-
-        // Get diff stats (lines added/deleted), mirroring `git log --numstat`:
-        // merges contribute nothing and renames count as 0/0.
-        let (added, deleted) = if include_contributors {
-            let (a, d) = commit_line_churn(&repo, &commit);
-            (a as u64, d as u64)
-        } else {
-            (0, 0)
-        };
-
-        total_lines_added += added;
-        total_lines_deleted += deleted;
-
-        // Contributor stats
-        if include_contributors {
-            let key = author_email.clone();
-            let entry = contributors_map
-                .entry(key)
-                .or_insert(EnhancedContributorStats {
-                    name: author_name.clone(),
-                    email: author_email.clone(),
-                    commits: 0,
-                    lines_added: 0,
-                    lines_deleted: 0,
-                    first_commit: time_secs,
-                    last_commit: time_secs,
-                });
-            entry.commits += 1;
-            entry.lines_added += added;
-            entry.lines_deleted += deleted;
-            if time_secs < entry.first_commit {
-                entry.first_commit = time_secs;
-            }
-            if time_secs > entry.last_commit {
-                entry.last_commit = time_secs;
-            }
-        }
-
-        // Activity breakdown in the author's recorded local timezone, matching
-        // what `git log` displays (author-local time, not UTC).
-        if include_activity {
-            let local_secs = author_local_secs(&commit);
-
-            // Year/month activity
-            let (year, month) = epoch_to_year_month(local_secs);
-            let entry = month_activity
-                .entry((year as u32, month))
-                .or_insert((0, HashSet::new()));
-            entry.0 += 1;
-            entry.1.insert(author_email.clone());
-
-            // Day of week (0=Sunday); Jan 1, 1970 was Thursday (4)
-            let days_since_epoch = local_secs.div_euclid(86400);
-            let dow = ((days_since_epoch % 7) + 4).rem_euclid(7);
-            weekday_activity[dow as usize] += 1;
-
-            // Hour of day (author-local)
-            let hour = (local_secs.rem_euclid(86400) / 3600) as usize;
-            if hour < 24 {
-                hour_activity[hour] += 1;
-            }
-        }
-    }
-
-    // Count branches and tags
-    let total_branches = repo.branches(None)?.filter_map(|b| b.ok()).count() as u32;
-    let total_tags = repo.tag_names(None)?.iter().flatten().count() as u32;
-
-    // Count files and get file type breakdown
-    let mut total_files: u32 = 0;
-    let mut file_types_map: HashMap<String, (u32, u64)> = HashMap::new();
-
-    if let Ok(head) = repo.head() {
-        if let Ok(tree) = head.peel_to_tree() {
-            tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-                if entry.kind() == Some(git2::ObjectType::Blob) {
-                    total_files += 1;
-
-                    if include_file_types {
-                        let name = entry.name().ok().unwrap_or("");
-                        let ext = if let Some(pos) = name.rfind('.') {
-                            name[pos..].to_lowercase()
-                        } else {
-                            "(no extension)".to_string()
-                        };
-
-                        let lines = if let Some(oid) = entry.id().into() {
-                            count_blob_lines(&repo, oid)
-                        } else {
-                            0
-                        };
-
-                        let stat = file_types_map.entry(ext).or_insert((0, 0));
-                        stat.0 += 1;
-                        stat.1 += lines;
-                    }
-                }
-                git2::TreeWalkResult::Ok
-            })
-            .unwrap_or(());
-        }
-    }
-
-    // Calculate repo size (sum of file sizes in HEAD)
-    let mut repo_size_bytes: u64 = 0;
-    if let Ok(head) = repo.head() {
-        if let Ok(tree) = head.peel_to_tree() {
-            tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-                if entry.kind() == Some(git2::ObjectType::Blob) {
-                    if let Ok(blob) = repo.find_blob(entry.id()) {
-                        repo_size_bytes += blob.size() as u64;
-                    }
-                }
-                git2::TreeWalkResult::Ok
-            })
-            .unwrap_or(());
-        }
-    }
-
-    // Calculate repo age in days
-    let repo_age_days = if let (Some(first), Some(last)) = (first_commit_date, last_commit_date) {
-        ((last - first) / 86400) as u32
-    } else {
-        0
-    };
-
-    // Build activity breakdown
-    let activity_by_month = if include_activity {
-        let mut activity: Vec<EnhancedMonthActivity> = month_activity
-            .into_iter()
-            .map(
-                |((year, month), (commits, authors))| EnhancedMonthActivity {
-                    year,
-                    month,
-                    commits,
-                    authors: authors.len() as u32,
-                },
-            )
-            .collect();
-        activity.sort_by(|a, b| a.year.cmp(&b.year).then(a.month.cmp(&b.month)));
-        Some(activity)
-    } else {
-        None
-    };
-
-    let activity_by_weekday = if include_activity {
-        let day_names = [
-            "Sunday",
-            "Monday",
-            "Tuesday",
-            "Wednesday",
-            "Thursday",
-            "Friday",
-            "Saturday",
-        ];
-        Some(
-            weekday_activity
-                .iter()
-                .enumerate()
-                .map(|(i, &commits)| WeekdayActivity {
-                    day: day_names[i].to_string(),
-                    commits,
-                })
-                .collect(),
-        )
-    } else {
-        None
-    };
-
-    let activity_by_hour = if include_activity {
-        Some(
-            hour_activity
-                .iter()
-                .enumerate()
-                .map(|(i, &commits)| EnhancedHourActivity {
-                    hour: i as u32,
-                    commits,
-                })
-                .collect(),
-        )
-    } else {
-        None
-    };
-
-    // Build contributors list
-    let top_contributors = if include_contributors {
-        let mut contributors: Vec<EnhancedContributorStats> =
-            contributors_map.into_values().collect();
-        contributors.sort_by_key(|b| std::cmp::Reverse(b.commits));
-        Some(contributors)
-    } else {
-        None
-    };
-
-    // Build file types list
-    let file_types = if include_file_types {
-        let mut types: Vec<FileTypeStats> = file_types_map
-            .into_iter()
-            .map(|(ext, (count, lines))| FileTypeStats {
-                extension: ext,
-                file_count: count,
-                total_lines: lines,
-            })
-            .collect();
-        types.sort_by_key(|b| std::cmp::Reverse(b.file_count));
-        Some(types)
-    } else {
-        None
-    };
-
-    let total_contributors = if let Some(ref contribs) = top_contributors {
-        contribs.len() as u32
-    } else {
-        // Count unique contributors
-        let mut unique_authors: HashSet<String> = HashSet::new();
+        // Walk commits
         let mut revwalk = repo.revwalk()?;
         if repo.head().is_ok() {
             revwalk.push_head()?;
         }
-        for oid_result in revwalk.flatten() {
-            if let Ok(commit) = repo.find_commit(oid_result) {
-                let time_secs = commit.time().seconds();
-                // Apply date filters
-                if let Some(since) = since_epoch {
-                    if time_secs < since {
-                        continue;
-                    }
-                }
-                if let Some(until) = until_epoch {
-                    if time_secs > until {
-                        continue;
-                    }
-                }
-                let (_, email) = resolve_author(&commit, mailmap.as_ref());
-                unique_authors.insert(email);
+        revwalk.set_sorting(git2::Sort::TIME)?;
+
+        // Try to include all branches
+        for (branch, _) in (repo.branches(Some(git2::BranchType::Local))?).flatten() {
+            if let Some(oid) = branch.get().target() {
+                let _ = revwalk.push(oid);
             }
         }
-        unique_authors.len() as u32
-    };
 
-    Ok(RepoStatistics {
-        total_commits,
-        total_branches,
-        total_tags,
-        total_contributors,
-        total_files,
-        repo_size_bytes,
-        first_commit_date,
-        last_commit_date,
-        repo_age_days,
-        activity_by_month,
-        activity_by_weekday,
-        activity_by_hour,
-        top_contributors,
-        file_types,
-        total_lines_added,
-        total_lines_deleted,
+        let mut total_commits: u32 = 0;
+        let mut first_commit_date: Option<i64> = None;
+        let mut last_commit_date: Option<i64> = None;
+        let mut total_lines_added: u64 = 0;
+        let mut total_lines_deleted: u64 = 0;
+
+        // For contributors
+        let mut contributors_map: HashMap<String, EnhancedContributorStats> = HashMap::new();
+
+        // For activity breakdown
+        let mut month_activity: HashMap<(u32, u32), (u32, HashSet<String>)> = HashMap::new();
+        let mut weekday_activity: [u32; 7] = [0; 7];
+        let mut hour_activity: [u32; 24] = [0; 24];
+
+        for oid_result in revwalk {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+            let time_secs = commit.time().seconds();
+
+            // Apply date filters
+            if let Some(since) = since_epoch {
+                if time_secs < since {
+                    continue;
+                }
+            }
+            if let Some(until) = until_epoch {
+                if time_secs > until {
+                    continue;
+                }
+            }
+
+            total_commits += 1;
+
+            let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
+
+            // Track first and last commit
+            match first_commit_date {
+                None => first_commit_date = Some(time_secs),
+                Some(first) if time_secs < first => first_commit_date = Some(time_secs),
+                _ => {}
+            }
+            match last_commit_date {
+                None => last_commit_date = Some(time_secs),
+                Some(last) if time_secs > last => last_commit_date = Some(time_secs),
+                _ => {}
+            }
+
+            // Get diff stats (lines added/deleted), mirroring `git log --numstat`:
+            // merges contribute nothing and renames count as 0/0.
+            let (added, deleted) = if include_contributors {
+                let (a, d) = commit_line_churn(&repo, &commit);
+                (a as u64, d as u64)
+            } else {
+                (0, 0)
+            };
+
+            total_lines_added += added;
+            total_lines_deleted += deleted;
+
+            // Contributor stats
+            if include_contributors {
+                let key = author_email.clone();
+                let entry = contributors_map
+                    .entry(key)
+                    .or_insert(EnhancedContributorStats {
+                        name: author_name.clone(),
+                        email: author_email.clone(),
+                        commits: 0,
+                        lines_added: 0,
+                        lines_deleted: 0,
+                        first_commit: time_secs,
+                        last_commit: time_secs,
+                    });
+                entry.commits += 1;
+                entry.lines_added += added;
+                entry.lines_deleted += deleted;
+                if time_secs < entry.first_commit {
+                    entry.first_commit = time_secs;
+                }
+                if time_secs > entry.last_commit {
+                    entry.last_commit = time_secs;
+                }
+            }
+
+            // Activity breakdown in the author's recorded local timezone, matching
+            // what `git log` displays (author-local time, not UTC).
+            if include_activity {
+                let local_secs = author_local_secs(&commit);
+
+                // Year/month activity
+                let (year, month) = epoch_to_year_month(local_secs);
+                let entry = month_activity
+                    .entry((year as u32, month))
+                    .or_insert((0, HashSet::new()));
+                entry.0 += 1;
+                entry.1.insert(author_email.clone());
+
+                // Day of week (0=Sunday); Jan 1, 1970 was Thursday (4)
+                let days_since_epoch = local_secs.div_euclid(86400);
+                let dow = ((days_since_epoch % 7) + 4).rem_euclid(7);
+                weekday_activity[dow as usize] += 1;
+
+                // Hour of day (author-local)
+                let hour = (local_secs.rem_euclid(86400) / 3600) as usize;
+                if hour < 24 {
+                    hour_activity[hour] += 1;
+                }
+            }
+        }
+
+        // Count branches and tags
+        let total_branches = repo.branches(None)?.filter_map(|b| b.ok()).count() as u32;
+        let total_tags = repo.tag_names(None)?.iter().flatten().count() as u32;
+
+        // Count files and get file type breakdown
+        let mut total_files: u32 = 0;
+        let mut file_types_map: HashMap<String, (u32, u64)> = HashMap::new();
+
+        if let Ok(head) = repo.head() {
+            if let Ok(tree) = head.peel_to_tree() {
+                tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+                    if entry.kind() == Some(git2::ObjectType::Blob) {
+                        total_files += 1;
+
+                        if include_file_types {
+                            let name = entry.name().ok().unwrap_or("");
+                            let ext = if let Some(pos) = name.rfind('.') {
+                                name[pos..].to_lowercase()
+                            } else {
+                                "(no extension)".to_string()
+                            };
+
+                            let lines = if let Some(oid) = entry.id().into() {
+                                count_blob_lines(&repo, oid)
+                            } else {
+                                0
+                            };
+
+                            let stat = file_types_map.entry(ext).or_insert((0, 0));
+                            stat.0 += 1;
+                            stat.1 += lines;
+                        }
+                    }
+                    git2::TreeWalkResult::Ok
+                })
+                .unwrap_or(());
+            }
+        }
+
+        // Calculate repo size (sum of file sizes in HEAD)
+        let mut repo_size_bytes: u64 = 0;
+        if let Ok(head) = repo.head() {
+            if let Ok(tree) = head.peel_to_tree() {
+                tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+                    if entry.kind() == Some(git2::ObjectType::Blob) {
+                        if let Ok(blob) = repo.find_blob(entry.id()) {
+                            repo_size_bytes += blob.size() as u64;
+                        }
+                    }
+                    git2::TreeWalkResult::Ok
+                })
+                .unwrap_or(());
+            }
+        }
+
+        // Calculate repo age in days
+        let repo_age_days = if let (Some(first), Some(last)) = (first_commit_date, last_commit_date)
+        {
+            ((last - first) / 86400) as u32
+        } else {
+            0
+        };
+
+        // Build activity breakdown
+        let activity_by_month = if include_activity {
+            let mut activity: Vec<EnhancedMonthActivity> = month_activity
+                .into_iter()
+                .map(
+                    |((year, month), (commits, authors))| EnhancedMonthActivity {
+                        year,
+                        month,
+                        commits,
+                        authors: authors.len() as u32,
+                    },
+                )
+                .collect();
+            activity.sort_by(|a, b| a.year.cmp(&b.year).then(a.month.cmp(&b.month)));
+            Some(activity)
+        } else {
+            None
+        };
+
+        let activity_by_weekday = if include_activity {
+            let day_names = [
+                "Sunday",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+            ];
+            Some(
+                weekday_activity
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &commits)| WeekdayActivity {
+                        day: day_names[i].to_string(),
+                        commits,
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        let activity_by_hour = if include_activity {
+            Some(
+                hour_activity
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &commits)| EnhancedHourActivity {
+                        hour: i as u32,
+                        commits,
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        // Build contributors list
+        let top_contributors = if include_contributors {
+            let mut contributors: Vec<EnhancedContributorStats> =
+                contributors_map.into_values().collect();
+            contributors.sort_by_key(|b| std::cmp::Reverse(b.commits));
+            Some(contributors)
+        } else {
+            None
+        };
+
+        // Build file types list
+        let file_types = if include_file_types {
+            let mut types: Vec<FileTypeStats> = file_types_map
+                .into_iter()
+                .map(|(ext, (count, lines))| FileTypeStats {
+                    extension: ext,
+                    file_count: count,
+                    total_lines: lines,
+                })
+                .collect();
+            types.sort_by_key(|b| std::cmp::Reverse(b.file_count));
+            Some(types)
+        } else {
+            None
+        };
+
+        let total_contributors = if let Some(ref contribs) = top_contributors {
+            contribs.len() as u32
+        } else {
+            // Count unique contributors
+            let mut unique_authors: HashSet<String> = HashSet::new();
+            let mut revwalk = repo.revwalk()?;
+            if repo.head().is_ok() {
+                revwalk.push_head()?;
+            }
+            for oid_result in revwalk.flatten() {
+                if let Ok(commit) = repo.find_commit(oid_result) {
+                    let time_secs = commit.time().seconds();
+                    // Apply date filters
+                    if let Some(since) = since_epoch {
+                        if time_secs < since {
+                            continue;
+                        }
+                    }
+                    if let Some(until) = until_epoch {
+                        if time_secs > until {
+                            continue;
+                        }
+                    }
+                    let (_, email) = resolve_author(&commit, mailmap.as_ref());
+                    unique_authors.insert(email);
+                }
+            }
+            unique_authors.len() as u32
+        };
+
+        Ok(RepoStatistics {
+            total_commits,
+            total_branches,
+            total_tags,
+            total_contributors,
+            total_files,
+            repo_size_bytes,
+            first_commit_date,
+            last_commit_date,
+            repo_age_days,
+            activity_by_month,
+            activity_by_weekday,
+            activity_by_hour,
+            top_contributors,
+            file_types,
+            total_lines_added,
+            total_lines_deleted,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

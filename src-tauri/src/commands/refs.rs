@@ -38,117 +38,109 @@ pub enum RefType {
 /// Returns a map of commit OID -> list of refs pointing to it
 #[command]
 pub async fn get_refs_by_commit(path: String) -> Result<HashMap<String, Vec<RefInfo>>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mut refs_map: HashMap<String, Vec<RefInfo>> = HashMap::new();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mut refs_map: HashMap<String, Vec<RefInfo>> = HashMap::new();
 
-    let head = repo.head().ok();
-    let head_name = head
-        .as_ref()
-        .and_then(|h| h.name().ok().map(|s| s.to_string()));
+        let head = repo.head().ok();
+        let head_name = head
+            .as_ref()
+            .and_then(|h| h.name().ok().map(|s| s.to_string()));
 
-    // Get all references
-    for reference in repo.references()? {
-        let reference = match reference {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        // Get all references
+        for reference in repo.references()? {
+            let reference = match reference {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
 
-        let name = match reference.name() {
-            Ok(n) => n.to_string(),
-            Err(_) => continue,
-        };
+            let name = match reference.name() {
+                Ok(n) => n.to_string(),
+                Err(_) => continue,
+            };
 
-        // Skip HEAD and other special refs
-        if name == "HEAD" || name.starts_with("refs/stash") {
-            continue;
+            // Skip HEAD and other special refs
+            if name == "HEAD" || name.starts_with("refs/stash") {
+                continue;
+            }
+
+            // Get the target commit OID and tag metadata
+            let (target_oid, is_annotated, tag_message) = if reference.is_tag() {
+                // Try to peel to tag object first (for annotated tags)
+                let tag_obj = reference.peel_to_tag().ok();
+                let is_annotated = tag_obj.is_some();
+                let tag_message = tag_obj
+                    .as_ref()
+                    .and_then(|t| t.message().ok().flatten().map(|m| m.to_string()));
+
+                // For annotated tags, peel to the commit
+                let oid = reference.peel_to_commit().ok().map(|c| c.id().to_string());
+                (oid, Some(is_annotated), tag_message)
+            } else {
+                (reference.target().map(|oid| oid.to_string()), None, None)
+            };
+
+            let target_oid = match target_oid {
+                Some(oid) => oid,
+                None => continue,
+            };
+
+            // Determine ref type and create shorthand
+            let (ref_type, shorthand) = if name.starts_with("refs/heads/") {
+                (
+                    RefType::LocalBranch,
+                    name.strip_prefix("refs/heads/")
+                        .unwrap_or(&name)
+                        .to_string(),
+                )
+            } else if name.starts_with("refs/remotes/") {
+                (
+                    RefType::RemoteBranch,
+                    name.strip_prefix("refs/remotes/")
+                        .unwrap_or(&name)
+                        .to_string(),
+                )
+            } else if name.starts_with("refs/tags/") {
+                (
+                    RefType::Tag,
+                    name.strip_prefix("refs/tags/").unwrap_or(&name).to_string(),
+                )
+            } else {
+                continue; // Skip other ref types
+            };
+
+            let is_head = head_name.as_ref().map(|h| h == &name).unwrap_or(false);
+
+            let ref_info = RefInfo {
+                name,
+                shorthand,
+                ref_type,
+                is_head,
+                is_annotated,
+                tag_message,
+            };
+
+            refs_map.entry(target_oid).or_default().push(ref_info);
         }
 
-        // Get the target commit OID and tag metadata
-        let (target_oid, is_annotated, tag_message) = if reference.is_tag() {
-            // Try to peel to tag object first (for annotated tags)
-            let tag_obj = reference.peel_to_tag().ok();
-            let is_annotated = tag_obj.is_some();
-            let tag_message = tag_obj
-                .as_ref()
-                .and_then(|t| t.message().ok().flatten().map(|m| m.to_string()));
-
-            // For annotated tags, peel to the commit
-            let oid = reference.peel_to_commit().ok().map(|c| c.id().to_string());
-            (oid, Some(is_annotated), tag_message)
-        } else {
-            (reference.target().map(|oid| oid.to_string()), None, None)
-        };
-
-        let target_oid = match target_oid {
-            Some(oid) => oid,
-            None => continue,
-        };
-
-        // Determine ref type and create shorthand
-        let (ref_type, shorthand) = if name.starts_with("refs/heads/") {
-            (
-                RefType::LocalBranch,
-                name.strip_prefix("refs/heads/")
-                    .unwrap_or(&name)
-                    .to_string(),
-            )
-        } else if name.starts_with("refs/remotes/") {
-            (
-                RefType::RemoteBranch,
-                name.strip_prefix("refs/remotes/")
-                    .unwrap_or(&name)
-                    .to_string(),
-            )
-        } else if name.starts_with("refs/tags/") {
-            (
-                RefType::Tag,
-                name.strip_prefix("refs/tags/").unwrap_or(&name).to_string(),
-            )
-        } else {
-            continue; // Skip other ref types
-        };
-
-        let is_head = head_name.as_ref().map(|h| h == &name).unwrap_or(false);
-
-        let ref_info = RefInfo {
-            name,
-            shorthand,
-            ref_type,
-            is_head,
-            is_annotated,
-            tag_message,
-        };
-
-        refs_map.entry(target_oid).or_default().push(ref_info);
-    }
-
-    // A detached HEAD has no branch ref pointing at it, and the literal "HEAD"
-    // ref is skipped above — so nothing in the map carried is_head, and the
-    // graph's getHeadOid() returned undefined. That silently dropped the
-    // lane-0 mainline pinning, left no HEAD marker anywhere on a checkout the
-    // app itself offers, and made "Jump to HEAD" a no-op. Emit HEAD itself.
-    //
-    // Guarded on a resolved HEAD rather than swallowing the error: the ordinary
-    // reason head_detached() has nothing to say is an unborn HEAD, and the
-    // local `head` binding above is already None in that case. Anything else is
-    // a real repository problem, and silently returning no HEAD marker would
-    // present it as an attached checkout.
-    if let Some(head_ref) = head.as_ref() {
-        if repo.head_detached()? {
-            if let Some(oid) = head_ref.target() {
-                refs_map.entry(oid.to_string()).or_default().push(RefInfo {
-                    name: "HEAD".to_string(),
-                    shorthand: "HEAD (detached)".to_string(),
-                    ref_type: RefType::DetachedHead,
-                    is_head: true,
-                    is_annotated: None,
-                    tag_message: None,
-                });
+        if let Some(head_ref) = head.as_ref() {
+            if repo.head_detached()? {
+                if let Some(oid) = head_ref.target() {
+                    refs_map.entry(oid.to_string()).or_default().push(RefInfo {
+                        name: "HEAD".to_string(),
+                        shorthand: "HEAD (detached)".to_string(),
+                        ref_type: RefType::DetachedHead,
+                        is_head: true,
+                        is_annotated: None,
+                        tag_message: None,
+                    });
+                }
             }
         }
-    }
 
-    Ok(refs_map)
+        Ok(refs_map)
+    })
+    .await
 }
 
 #[cfg(test)]

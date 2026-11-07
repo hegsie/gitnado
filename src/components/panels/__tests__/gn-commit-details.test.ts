@@ -6,6 +6,7 @@
 
 import { expect, fixture, html } from '@open-wc/testing';
 import { uiStore } from '../../../stores/ui.store.ts';
+import { settingsStore } from '../../../stores/settings.store.ts';
 import type { Commit } from '../../../types/git.types.ts';
 import { resetRefOpLocks } from '../../../utils/ref-lock.ts';
 
@@ -32,6 +33,14 @@ const mockInvoke: MockInvoke = async (command: string) => {
 
   if (command === 'get_commit_files') {
     return mockFiles;
+  }
+
+  if (command === 'get_avatar_url') {
+    return {
+      email: 'test@example.com',
+      hash: 'abc123',
+      gravatarUrl: 'https://www.gravatar.com/avatar/abc123?s=40&d=identicon',
+    };
   }
 
   return null;
@@ -68,10 +77,12 @@ describe('gn-commit-details', () => {
     invokeHistory.length = 0;
     confirmAnswer = 'Ok';
     uiStore.setState({ toasts: [] });
+    settingsStore.getState().resetToDefaults();
     resetRefOpLocks();
   });
 
   afterEach(() => {
+    settingsStore.getState().resetToDefaults();
     resetRefOpLocks();
   });
 
@@ -408,6 +419,42 @@ describe('gn-commit-details', () => {
 
       expect(menuState(el).visible, 'a failed load still disarms the menu').to.be.false;
       expect(menuCount(el), 'no menu is rendered over the error state').to.equal(0);
+    });
+  });
+
+  describe('avatar privacy policy enforcement', () => {
+    it('does not fetch or render author avatars when Offline Mode is enabled', async () => {
+      settingsStore.getState().setOfflineMode(true);
+      invokeHistory.length = 0;
+
+      const el = await fixture<GnCommitDetails>(
+        html`<gn-commit-details .repositoryPath=${'/test/repo'} .commit=${mockCommit}></gn-commit-details>`,
+      );
+      await el.updateComplete;
+
+      expect(invokeHistory.some((c) => c.command === 'get_avatar_url')).to.be.false;
+      expect(el.shadowRoot!.querySelector('.author-avatar')).to.be.null;
+    });
+
+    it('clears rendered author avatar immediately when Offline Mode is turned on', async () => {
+      settingsStore.getState().setShowAvatars(true);
+      settingsStore.getState().setOfflineMode(false);
+      settingsStore.getState().setRemoteAllowlist([]);
+
+      const el = await fixture<GnCommitDetails>(
+        html`<gn-commit-details .repositoryPath=${'/test/repo'} .commit=${mockCommit}></gn-commit-details>`,
+      );
+      await el.updateComplete;
+      // Wait for async loadCommitMetadata
+      await new Promise((r) => setTimeout(r, 0));
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.author-avatar')).to.not.be.null;
+
+      settingsStore.getState().setOfflineMode(true);
+      await el.updateComplete;
+
+      expect(el.shadowRoot!.querySelector('.author-avatar')).to.be.null;
     });
   });
 });

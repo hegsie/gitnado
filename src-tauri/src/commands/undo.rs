@@ -259,158 +259,164 @@ fn find_current_index(actions: &[UndoAction]) -> i32 {
 /// Get the undo/redo history for a repository by parsing the reflog
 #[command]
 pub async fn get_undo_history(path: String, max_count: Option<u32>) -> Result<UndoHistory> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let reflog = repo.reflog("HEAD")?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let reflog = repo.reflog("HEAD")?;
 
-    let limit = max_count.unwrap_or(50) as usize;
-    let mut actions = Vec::new();
+        let limit = max_count.unwrap_or(50) as usize;
+        let mut actions = Vec::new();
 
-    for (index, entry) in reflog.iter().enumerate() {
-        if actions.len() >= limit {
-            break;
+        for (index, entry) in reflog.iter().enumerate() {
+            if actions.len() >= limit {
+                break;
+            }
+
+            let message = entry.message().ok().flatten().unwrap_or("").to_string();
+            let (action_type, description) = parse_reflog_action(&message);
+
+            let after_ref = entry.id_new().to_string();
+            let before_ref = entry.id_old().to_string();
+            let timestamp = entry.committer().when().seconds();
+
+            // Build details JSON with extra context
+            let details = serde_json::json!({
+                "reflogIndex": index,
+                "rawMessage": message,
+                "author": entry.committer().name().ok().unwrap_or("Unknown"),
+            });
+
+            actions.push(UndoAction {
+                action_type,
+                description,
+                timestamp,
+                before_ref,
+                after_ref,
+                details: Some(details.to_string()),
+            });
         }
 
-        let message = entry.message().ok().flatten().unwrap_or("").to_string();
-        let (action_type, description) = parse_reflog_action(&message);
+        let current_index = find_current_index(&actions);
 
-        let after_ref = entry.id_new().to_string();
-        let before_ref = entry.id_old().to_string();
-        let timestamp = entry.committer().when().seconds();
+        // can_undo: there is at least one action to undo (go back in history)
+        let can_undo = !actions.is_empty();
+        // can_redo: only meaningful when tracking undo position client-side
+        let can_redo = false;
 
-        // Build details JSON with extra context
-        let details = serde_json::json!({
-            "reflogIndex": index,
-            "rawMessage": message,
-            "author": entry.committer().name().ok().unwrap_or("Unknown"),
-        });
-
-        actions.push(UndoAction {
-            action_type,
-            description,
-            timestamp,
-            before_ref,
-            after_ref,
-            details: Some(details.to_string()),
-        });
-    }
-
-    let current_index = find_current_index(&actions);
-
-    // can_undo: there is at least one action to undo (go back in history)
-    let can_undo = !actions.is_empty();
-    // can_redo: only meaningful when tracking undo position client-side
-    let can_redo = false;
-
-    Ok(UndoHistory {
-        actions,
-        current_index,
-        can_undo,
-        can_redo,
+        Ok(UndoHistory {
+            actions,
+            current_index,
+            can_undo,
+            can_redo,
+        })
     })
+    .await
 }
 
 /// Undo the last action by resetting HEAD to the previous reflog state
 #[command]
 pub async fn undo_last_action(path: String) -> Result<UndoAction> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Get the reflog to find the previous state
-    let (before_oid_str, target_oid_str, message, timestamp, author) = {
-        let reflog = repo.reflog("HEAD")?;
+        // Get the reflog to find the previous state
+        let (before_oid_str, target_oid_str, message, timestamp, author) = {
+            let reflog = repo.reflog("HEAD")?;
 
-        // We need at least 2 entries to undo (current + previous)
-        if reflog.len() < 2 {
-            return Err(crate::error::GitnadoError::OperationFailed(
-                "Nothing to undo: not enough reflog history".to_string(),
+            // We need at least 2 entries to undo (current + previous)
+            if reflog.len() < 2 {
+                return Err(crate::error::GitnadoError::OperationFailed(
+                    "Nothing to undo: not enough reflog history".to_string(),
+                ));
+            }
+
+            // Entry 0 is the current state, entry 1 is the state before
+            let current_entry = reflog.get(0).ok_or_else(|| {
+                crate::error::GitnadoError::OperationFailed(
+                    "Failed to read current reflog entry".to_string(),
+                )
+            })?;
+
+            let previous_entry = reflog.get(1).ok_or_else(|| {
+                crate::error::GitnadoError::OperationFailed(
+                    "Failed to read previous reflog entry".to_string(),
+                )
+            })?;
+
+            let current_oid = current_entry.id_new().to_string();
+            let target_oid = previous_entry.id_new().to_string();
+            let msg = current_entry
+                .message()
+                .ok()
+                .flatten()
+                .unwrap_or("")
+                .to_string();
+            let ts = current_entry.committer().when().seconds();
+            let auth = current_entry
+                .committer()
+                .name()
+                .ok()
+                .unwrap_or("Unknown")
+                .to_string();
+
+            (current_oid, target_oid, msg, ts, auth)
+        };
+
+        // Parse the action we're undoing
+        let (action_type, description) = parse_reflog_action(&message);
+
+        // Undoing a checkout must restore the previous HEAD *symbolically* — like
+        // `git switch -` — which returns to the previous branch and never moves any
+        // branch ref. A mixed reset here would rewrite the current branch to the
+        // pre-checkout commit and orphan its commits (data loss).
+        if action_type == "checkout" {
+            return undo_checkout(
+                &repo,
+                &message,
+                &before_oid_str,
+                &target_oid_str,
+                timestamp,
+                author,
+                description,
+            );
+        }
+
+        // Refuse if a rebase/bisect/sequence is in progress: a reset would destroy it.
+        ensure_resettable(&repo)?;
+
+        // If the recorded action did not move HEAD (e.g. a synthetic record_action
+        // entry such as a branch delete, or a checkout between two refs at the same
+        // commit), a reset to that OID is a silent no-op that restores nothing.
+        // Refuse rather than claim a successful undo.
+        if target_oid_str == before_oid_str {
+            return Err(GitnadoError::OperationFailed(
+                "This action did not move HEAD, so it cannot be undone by resetting. Nothing was changed.".to_string(),
             ));
         }
 
-        // Entry 0 is the current state, entry 1 is the state before
-        let current_entry = reflog.get(0).ok_or_else(|| {
-            crate::error::GitnadoError::OperationFailed(
-                "Failed to read current reflog entry".to_string(),
-            )
-        })?;
+        // Perform a mixed reset to the previous state
+        let target_oid = git2::Oid::from_str(&target_oid_str)?;
+        let target_commit = repo.find_commit(target_oid)?;
+        repo.reset(target_commit.as_object(), git2::ResetType::Mixed, None)?;
 
-        let previous_entry = reflog.get(1).ok_or_else(|| {
-            crate::error::GitnadoError::OperationFailed(
-                "Failed to read previous reflog entry".to_string(),
-            )
-        })?;
+        // Record a marker so a subsequent redo can tell this was an app undo.
+        set_redo_marker(&repo, &before_oid_str, &target_oid_str);
 
-        let current_oid = current_entry.id_new().to_string();
-        let target_oid = previous_entry.id_new().to_string();
-        let msg = current_entry
-            .message()
-            .ok()
-            .flatten()
-            .unwrap_or("")
-            .to_string();
-        let ts = current_entry.committer().when().seconds();
-        let auth = current_entry
-            .committer()
-            .name()
-            .ok()
-            .unwrap_or("Unknown")
-            .to_string();
+        let details = serde_json::json!({
+            "undoneAction": action_type,
+            "undoneDescription": description,
+            "author": author,
+        });
 
-        (current_oid, target_oid, msg, ts, auth)
-    };
-
-    // Parse the action we're undoing
-    let (action_type, description) = parse_reflog_action(&message);
-
-    // Undoing a checkout must restore the previous HEAD *symbolically* — like
-    // `git switch -` — which returns to the previous branch and never moves any
-    // branch ref. A mixed reset here would rewrite the current branch to the
-    // pre-checkout commit and orphan its commits (data loss).
-    if action_type == "checkout" {
-        return undo_checkout(
-            &repo,
-            &message,
-            &before_oid_str,
-            &target_oid_str,
+        Ok(UndoAction {
+            action_type: "undo".to_string(),
+            description: format!("Undo: {}", description),
             timestamp,
-            author,
-            description,
-        );
-    }
-
-    // Refuse if a rebase/bisect/sequence is in progress: a reset would destroy it.
-    ensure_resettable(&repo)?;
-
-    // If the recorded action did not move HEAD (e.g. a synthetic record_action
-    // entry such as a branch delete, or a checkout between two refs at the same
-    // commit), a reset to that OID is a silent no-op that restores nothing.
-    // Refuse rather than claim a successful undo.
-    if target_oid_str == before_oid_str {
-        return Err(GitnadoError::OperationFailed(
-            "This action did not move HEAD, so it cannot be undone by resetting. Nothing was changed.".to_string(),
-        ));
-    }
-
-    // Perform a mixed reset to the previous state
-    let target_oid = git2::Oid::from_str(&target_oid_str)?;
-    let target_commit = repo.find_commit(target_oid)?;
-    repo.reset(target_commit.as_object(), git2::ResetType::Mixed, None)?;
-
-    // Record a marker so a subsequent redo can tell this was an app undo.
-    set_redo_marker(&repo, &before_oid_str, &target_oid_str);
-
-    let details = serde_json::json!({
-        "undoneAction": action_type,
-        "undoneDescription": description,
-        "author": author,
-    });
-
-    Ok(UndoAction {
-        action_type: "undo".to_string(),
-        description: format!("Undo: {}", description),
-        timestamp,
-        before_ref: before_oid_str,
-        after_ref: target_oid_str,
-        details: Some(details.to_string()),
+            before_ref: before_oid_str,
+            after_ref: target_oid_str,
+            details: Some(details.to_string()),
+        })
     })
+    .await
 }
 
 /// Undo a checkout by switching back to the previous branch (or detached
@@ -480,109 +486,115 @@ fn undo_checkout(
 /// deliberate reset is never silently reverted.
 #[command]
 pub async fn redo_last_action(path: String) -> Result<UndoAction> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Read the app-undo marker. Absent marker => the last action was not an
-    // app undo, so there is nothing to redo.
-    let (redo_target, undo_head, undo_ref) = {
-        let cfg = repo.config()?;
-        let target = cfg.get_string("gitnado.redotarget").ok();
-        let head = cfg.get_string("gitnado.redohead").ok();
-        let reference = cfg.get_string("gitnado.redoref").ok();
-        match (target, head) {
-            (Some(t), Some(h)) if !t.is_empty() && !h.is_empty() => (t, h, reference),
-            _ => {
-                return Err(GitnadoError::OperationFailed(
-                    "Nothing to redo: the last action was not an undo.".to_string(),
-                ));
+        // Read the app-undo marker. Absent marker => the last action was not an
+        // app undo, so there is nothing to redo.
+        let (redo_target, undo_head, undo_ref) = {
+            let cfg = repo.config()?;
+            let target = cfg.get_string("gitnado.redotarget").ok();
+            let head = cfg.get_string("gitnado.redohead").ok();
+            let reference = cfg.get_string("gitnado.redoref").ok();
+            match (target, head) {
+                (Some(t), Some(h)) if !t.is_empty() && !h.is_empty() => (t, h, reference),
+                _ => {
+                    return Err(GitnadoError::OperationFailed(
+                        "Nothing to redo: the last action was not an undo.".to_string(),
+                    ));
+                }
             }
+        };
+
+        // If HEAD has moved since the undo (a new commit, a manual reset, etc.),
+        // the marker is stale and redoing would clobber whatever the user did next.
+        let current_head = repo
+            .head()
+            .ok()
+            .and_then(|h| h.target())
+            .map(|o| o.to_string());
+        if current_head.as_deref() != Some(undo_head.as_str()) {
+            return Err(GitnadoError::OperationFailed(
+                "Nothing to redo: the repository has changed since the last undo.".to_string(),
+            ));
         }
-    };
 
-    // If HEAD has moved since the undo (a new commit, a manual reset, etc.),
-    // the marker is stale and redoing would clobber whatever the user did next.
-    let current_head = repo
-        .head()
-        .ok()
-        .and_then(|h| h.target())
-        .map(|o| o.to_string());
-    if current_head.as_deref() != Some(undo_head.as_str()) {
-        return Err(GitnadoError::OperationFailed(
-            "Nothing to redo: the repository has changed since the last undo.".to_string(),
-        ));
-    }
+        // The OID matching is not enough on its own: branches share commits, so the
+        // check above passes just as happily on a DIFFERENT branch that happens to
+        // point at the undo position. The reset below moves whatever ref HEAD is on,
+        // so redo must be on the same ref the undo moved. A marker with no recorded
+        // ref (written before this was tracked) is treated as stale for the same
+        // reason — the marker only ever spans a single undo/redo pair, so refusing
+        // costs at most one redo and never resets a branch the undo never touched.
+        let current_ref = head_ref_name(&repo);
+        if undo_ref.is_none() || current_ref != undo_ref {
+            return Err(GitnadoError::OperationFailed(
+                "Nothing to redo: the repository has changed since the last undo.".to_string(),
+            ));
+        }
 
-    // The OID matching is not enough on its own: branches share commits, so the
-    // check above passes just as happily on a DIFFERENT branch that happens to
-    // point at the undo position. The reset below moves whatever ref HEAD is on,
-    // so redo must be on the same ref the undo moved. A marker with no recorded
-    // ref (written before this was tracked) is treated as stale for the same
-    // reason — the marker only ever spans a single undo/redo pair, so refusing
-    // costs at most one redo and never resets a branch the undo never touched.
-    let current_ref = head_ref_name(&repo);
-    if undo_ref.is_none() || current_ref != undo_ref {
-        return Err(GitnadoError::OperationFailed(
-            "Nothing to redo: the repository has changed since the last undo.".to_string(),
-        ));
-    }
+        // Refuse if a rebase/bisect/sequence is in progress: a reset would destroy it.
+        ensure_resettable(&repo)?;
 
-    // Refuse if a rebase/bisect/sequence is in progress: a reset would destroy it.
-    ensure_resettable(&repo)?;
+        // Perform a mixed reset to the redo target (undo always used a mixed reset).
+        let target_oid = git2::Oid::from_str(&redo_target)?;
+        let target_commit = repo.find_commit(target_oid)?;
+        repo.reset(target_commit.as_object(), git2::ResetType::Mixed, None)?;
 
-    // Perform a mixed reset to the redo target (undo always used a mixed reset).
-    let target_oid = git2::Oid::from_str(&redo_target)?;
-    let target_commit = repo.find_commit(target_oid)?;
-    repo.reset(target_commit.as_object(), git2::ResetType::Mixed, None)?;
+        // The marker has been consumed.
+        clear_redo_marker(&repo);
 
-    // The marker has been consumed.
-    clear_redo_marker(&repo);
+        let author = match repo.signature() {
+            Ok(sig) => sig.name().unwrap_or("Unknown").to_string(),
+            Err(_) => "Unknown".to_string(),
+        };
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
-    let author = match repo.signature() {
-        Ok(sig) => sig.name().unwrap_or("Unknown").to_string(),
-        Err(_) => "Unknown".to_string(),
-    };
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        let details = serde_json::json!({
+            "author": author,
+        });
 
-    let details = serde_json::json!({
-        "author": author,
-    });
-
-    Ok(UndoAction {
-        action_type: "redo".to_string(),
-        description: "Redo: restored previous state".to_string(),
-        timestamp,
-        before_ref: undo_head,
-        after_ref: redo_target,
-        details: Some(details.to_string()),
+        Ok(UndoAction {
+            action_type: "redo".to_string(),
+            description: "Redo: restored previous state".to_string(),
+            timestamp,
+            before_ref: undo_head,
+            after_ref: redo_target,
+            details: Some(details.to_string()),
+        })
     })
+    .await
 }
 
 /// Record a custom action to the undo history.
 /// This writes a synthetic reflog entry that can be used for undo/redo tracking.
 #[command]
 pub async fn record_action(path: String, action: UndoAction) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Write a reflog entry for the current HEAD with the action description
-    let head_ref = repo.head()?;
-    let head_oid = head_ref.target().ok_or_else(|| {
-        crate::error::GitnadoError::OperationFailed(
-            "HEAD does not point to a valid commit".to_string(),
-        )
-    })?;
+        // Write a reflog entry for the current HEAD with the action description
+        let head_ref = repo.head()?;
+        let head_oid = head_ref.target().ok_or_else(|| {
+            crate::error::GitnadoError::OperationFailed(
+                "HEAD does not point to a valid commit".to_string(),
+            )
+        })?;
 
-    let sig = repo.signature()?;
-    let reflog_message = format!("{}: {}", action.action_type, action.description);
+        let sig = repo.signature()?;
+        let reflog_message = format!("{}: {}", action.action_type, action.description);
 
-    // Append to the HEAD reflog
-    let mut reflog = repo.reflog("HEAD")?;
-    reflog.append(head_oid, &sig, Some(&reflog_message))?;
-    reflog.write()?;
+        // Append to the HEAD reflog
+        let mut reflog = repo.reflog("HEAD")?;
+        reflog.append(head_oid, &sig, Some(&reflog_message))?;
+        reflog.write()?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]

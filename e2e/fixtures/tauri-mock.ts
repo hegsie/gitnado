@@ -209,7 +209,6 @@ function createMockHandler(mocks: typeof defaultMockData) {
     switch (command) {
       // Repository commands
       case 'open_repository':
-      case 'get_repository_info':
         return mocks.repository;
 
       case 'get_recent_repositories':
@@ -604,9 +603,6 @@ function createMockHandler(mocks: typeof defaultMockData) {
       }
 
       // Profile commands
-      case 'get_profiles':
-        return [{ id: 'default', name: 'Default', gitName: 'Test User', gitEmail: 'test@example.com' }];
-
       case 'get_active_profile':
         return { id: 'default', name: 'Default', gitName: 'Test User', gitEmail: 'test@example.com' };
 
@@ -782,7 +778,6 @@ export async function setupTauriMocks(
       const commandHandler = (command: string, args?: Record<string, unknown>): unknown => {
         switch (command) {
           case 'open_repository':
-          case 'get_repository_info':
             return state.repository;
           case 'get_recent_repositories':
             return [state.repository];
@@ -868,10 +863,6 @@ export async function setupTauriMocks(
               state.remotes[0]?.name ??
               'origin'
             );
-          case 'get_profiles':
-            return [
-              { id: 'default', name: 'Default', gitName: 'Test User', gitEmail: 'test@example.com' },
-            ];
           case 'get_active_profile':
             return {
               id: 'default',

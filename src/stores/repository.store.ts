@@ -1,6 +1,7 @@
 import { createStore } from 'zustand/vanilla';
 import { persist } from 'zustand/middleware';
 import type { Repository, Branch, Remote, Tag, Stash, StatusEntry } from '../types/git.types.ts';
+import { commitsStore } from './commits.store.ts';
 
 export interface RecentRepository {
   path: string;
@@ -160,6 +161,10 @@ export const repositoryStore = createStore<RepositoryState>()(
           };
         });
 
+        if (activate) {
+          commitsStore.getState().setActiveRepo(repo.path);
+        }
+
         // Add to recent
         get().addRecentRepository(repo.path, name);
       },
@@ -197,6 +202,10 @@ export const repositoryStore = createStore<RepositoryState>()(
             activeIndex: newActiveIndex,
           };
         });
+
+        commitsStore.getState().evictRepo(path);
+        const nextActive = get().getActiveRepository();
+        commitsStore.getState().setActiveRepo(nextActive?.repository.path ?? null);
       },
 
       prunePersistedRepo: (path) => {
@@ -212,6 +221,8 @@ export const repositoryStore = createStore<RepositoryState>()(
           }
           return { activeIndex: index };
         });
+        const active = get().getActiveRepository();
+        commitsStore.getState().setActiveRepo(active?.repository.path ?? null);
       },
 
       setActiveByPath: (path) => {
@@ -222,6 +233,8 @@ export const repositoryStore = createStore<RepositoryState>()(
           if (index < 0) return state;
           return { activeIndex: index };
         });
+        const active = get().getActiveRepository();
+        commitsStore.getState().setActiveRepo(active?.repository.path ?? null);
       },
 
       // Loading/error state
@@ -340,7 +353,10 @@ export const repositoryStore = createStore<RepositoryState>()(
         return get().persistedOpenRepos;
       },
 
-      reset: () => set(initialState),
+      reset: () => {
+        set(initialState);
+        commitsStore.getState().reset();
+      },
     }),
     {
       name: 'gitnado-repositories',

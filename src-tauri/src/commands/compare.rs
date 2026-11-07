@@ -57,72 +57,75 @@ pub async fn compare_branches(
     include_commits: bool,
     include_files: bool,
 ) -> Result<BranchComparison> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Resolve refs to commits
-    let base_obj = repo.revparse_single(&base)?;
-    let compare_obj = repo.revparse_single(&compare)?;
+        // Resolve refs to commits
+        let base_obj = repo.revparse_single(&base)?;
+        let compare_obj = repo.revparse_single(&compare)?;
 
-    let base_commit = base_obj.peel_to_commit()?;
-    let compare_commit = compare_obj.peel_to_commit()?;
+        let base_commit = base_obj.peel_to_commit()?;
+        let compare_commit = compare_obj.peel_to_commit()?;
 
-    let base_oid = base_commit.id();
-    let compare_oid = compare_commit.id();
+        let base_oid = base_commit.id();
+        let compare_oid = compare_commit.id();
 
-    // Find merge base
-    let merge_base_oid = repo
-        .merge_base(base_oid, compare_oid)
-        .map_err(|_| GitnadoError::OperationFailed("No common ancestor found".to_string()))?;
+        // Find merge base
+        let merge_base_oid = repo
+            .merge_base(base_oid, compare_oid)
+            .map_err(|_| GitnadoError::OperationFailed("No common ancestor found".to_string()))?;
 
-    // Calculate ahead/behind counts
-    let (ahead, behind) = repo.graph_ahead_behind(compare_oid, base_oid)?;
+        // Calculate ahead/behind counts
+        let (ahead, behind) = repo.graph_ahead_behind(compare_oid, base_oid)?;
 
-    // Get commits ahead (commits in compare but not in base)
-    let commits_ahead = if include_commits {
-        Some(get_commits_between(&repo, merge_base_oid, compare_oid)?)
-    } else {
-        None
-    };
+        // Get commits ahead (commits in compare but not in base)
+        let commits_ahead = if include_commits {
+            Some(get_commits_between(&repo, merge_base_oid, compare_oid)?)
+        } else {
+            None
+        };
 
-    // Get commits behind (commits in base but not in compare)
-    let commits_behind = if include_commits {
-        Some(get_commits_between(&repo, merge_base_oid, base_oid)?)
-    } else {
-        None
-    };
+        // Get commits behind (commits in base but not in compare)
+        let commits_behind = if include_commits {
+            Some(get_commits_between(&repo, merge_base_oid, base_oid)?)
+        } else {
+            None
+        };
 
-    // Get changed files between merge base and compare ref
-    let (files_changed, total_additions, total_deletions) = if include_files {
-        let merge_base_commit = repo.find_commit(merge_base_oid)?;
-        let merge_base_tree = merge_base_commit.tree()?;
-        let compare_tree = compare_commit.tree()?;
+        // Get changed files between merge base and compare ref
+        let (files_changed, total_additions, total_deletions) = if include_files {
+            let merge_base_commit = repo.find_commit(merge_base_oid)?;
+            let merge_base_tree = merge_base_commit.tree()?;
+            let compare_tree = compare_commit.tree()?;
 
-        let diff = repo.diff_tree_to_tree(Some(&merge_base_tree), Some(&compare_tree), None)?;
+            let diff = repo.diff_tree_to_tree(Some(&merge_base_tree), Some(&compare_tree), None)?;
 
-        let files = get_changed_files(&repo, &diff)?;
-        let stats = diff.stats()?;
+            let files = get_changed_files(&repo, &diff)?;
+            let stats = diff.stats()?;
 
-        (
-            Some(files),
-            stats.insertions() as u32,
-            stats.deletions() as u32,
-        )
-    } else {
-        (None, 0, 0)
-    };
+            (
+                Some(files),
+                stats.insertions() as u32,
+                stats.deletions() as u32,
+            )
+        } else {
+            (None, 0, 0)
+        };
 
-    Ok(BranchComparison {
-        base_ref: base,
-        compare_ref: compare,
-        ahead: ahead as u32,
-        behind: behind as u32,
-        merge_base: merge_base_oid.to_string(),
-        commits_ahead,
-        commits_behind,
-        files_changed,
-        total_additions,
-        total_deletions,
+        Ok(BranchComparison {
+            base_ref: base,
+            compare_ref: compare,
+            ahead: ahead as u32,
+            behind: behind as u32,
+            merge_base: merge_base_oid.to_string(),
+            commits_ahead,
+            commits_behind,
+            files_changed,
+            total_additions,
+            total_deletions,
+        })
     })
+    .await
 }
 
 /// Get commits between a base commit (exclusive) and a target commit (inclusive)

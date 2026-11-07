@@ -1550,21 +1550,3 @@ export async function runPrune(
   }
   return result;
 }
-
-/**
- * @deprecated Use runGc instead. Kept for backward compatibility.
- */
-export async function runGarbageCollection(
-  args: RunGcCommand & { silent?: boolean },
-): Promise<CommandResult<MaintenanceResult>> {
-  return runGc(args);
-}
-
-/**
- * @deprecated Use runFsck instead. Kept for backward compatibility.
- */
-export async function verifyRepository(
-  args: RunFsckCommand & { silent?: boolean },
-): Promise<CommandResult<MaintenanceResult>> {
-  return runFsck(args);
-}

@@ -77,99 +77,105 @@ fn create_signed_tag_cli(
 /// Get all tags
 #[command]
 pub async fn get_tags(path: String) -> Result<Vec<Tag>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let mut tags = Vec::new();
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let mut tags = Vec::new();
 
-    repo.tag_foreach(|oid, name| {
-        let name_str = String::from_utf8_lossy(name).to_string();
-        // Remove refs/tags/ prefix
-        let short_name = name_str
-            .strip_prefix("refs/tags/")
-            .unwrap_or(&name_str)
-            .to_string();
+        repo.tag_foreach(|oid, name| {
+            let name_str = String::from_utf8_lossy(name).to_string();
+            // Remove refs/tags/ prefix
+            let short_name = name_str
+                .strip_prefix("refs/tags/")
+                .unwrap_or(&name_str)
+                .to_string();
 
-        // Try to get tag details if it's an annotated tag
-        let (message, tagger, is_annotated, target_oid) = if let Ok(tag) = repo.find_tag(oid) {
-            let tagger = tag.tagger().map(|sig| Signature {
-                name: sig.name().ok().unwrap_or("").to_string(),
-                email: sig.email().ok().unwrap_or("").to_string(),
-                timestamp: sig.when().seconds(),
-            });
-            (
-                tag.message().ok().flatten().map(|s| s.to_string()),
+            // Try to get tag details if it's an annotated tag
+            let (message, tagger, is_annotated, target_oid) = if let Ok(tag) = repo.find_tag(oid) {
+                let tagger = tag.tagger().map(|sig| Signature {
+                    name: sig.name().ok().unwrap_or("").to_string(),
+                    email: sig.email().ok().unwrap_or("").to_string(),
+                    timestamp: sig.when().seconds(),
+                });
+                (
+                    tag.message().ok().flatten().map(|s| s.to_string()),
+                    tagger,
+                    true,
+                    tag.target_id().to_string(),
+                )
+            } else {
+                (None, None, false, oid.to_string())
+            };
+
+            tags.push(Tag {
+                name: short_name,
+                target_oid,
+                message,
                 tagger,
-                true,
-                tag.target_id().to_string(),
-            )
-        } else {
-            (None, None, false, oid.to_string())
-        };
+                is_annotated,
+            });
+            true
+        })?;
 
-        tags.push(Tag {
-            name: short_name,
-            target_oid,
-            message,
-            tagger,
-            is_annotated,
-        });
-        true
-    })?;
+        // Sort tags by name
+        tags.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Sort tags by name
-    tags.sort_by(|a, b| a.name.cmp(&b.name));
-
-    Ok(tags)
+        Ok(tags)
+    })
+    .await
 }
 
 /// Get detailed information about a specific tag
 #[command]
 pub async fn get_tag_details(path: String, name: String) -> Result<TagDetails> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Find the reference for the tag
-    let refname = format!("refs/tags/{}", name);
-    let reference = repo
-        .find_reference(&refname)
-        .map_err(|_| GitnadoError::TagNotFound(name.clone()))?;
+        // Find the reference for the tag
+        let refname = format!("refs/tags/{}", name);
+        let reference = repo
+            .find_reference(&refname)
+            .map_err(|_| GitnadoError::TagNotFound(name.clone()))?;
 
-    let ref_oid = reference.target().ok_or(GitnadoError::InvalidReference)?;
+        let ref_oid = reference.target().ok_or(GitnadoError::InvalidReference)?;
 
-    // Try to get tag details if it's an annotated tag
-    let details = if let Ok(tag) = repo.find_tag(ref_oid) {
-        // Check if tag is signed by looking for a signature block in the raw message
-        let is_signed = tag.message_bytes().map(message_is_signed).unwrap_or(false);
+        // Try to get tag details if it's an annotated tag
+        let details = if let Ok(tag) = repo.find_tag(ref_oid) {
+            // Check if tag is signed by looking for a signature block in the raw message
+            let is_signed = tag.message_bytes().map(message_is_signed).unwrap_or(false);
 
-        TagDetails {
-            name,
-            oid: ref_oid.to_string(),
-            target_oid: tag.target_id().to_string(),
-            is_annotated: true,
-            message: tag.message().ok().flatten().map(|s| s.to_string()),
-            tagger_name: tag
-                .tagger()
-                .and_then(|s| s.name().ok().map(|n| n.to_string())),
-            tagger_email: tag
-                .tagger()
-                .and_then(|s| s.email().ok().map(|e| e.to_string())),
-            tagger_date: tag.tagger().map(|s| s.when().seconds()),
-            is_signed,
-        }
-    } else {
-        // Lightweight tag
-        TagDetails {
-            name,
-            oid: ref_oid.to_string(),
-            target_oid: ref_oid.to_string(),
-            is_annotated: false,
-            message: None,
-            tagger_name: None,
-            tagger_email: None,
-            tagger_date: None,
-            is_signed: false,
-        }
-    };
+            TagDetails {
+                name,
+                oid: ref_oid.to_string(),
+                target_oid: tag.target_id().to_string(),
+                is_annotated: true,
+                message: tag.message().ok().flatten().map(|s| s.to_string()),
+                tagger_name: tag
+                    .tagger()
+                    .and_then(|s| s.name().ok().map(|n| n.to_string())),
+                tagger_email: tag
+                    .tagger()
+                    .and_then(|s| s.email().ok().map(|e| e.to_string())),
+                tagger_date: tag.tagger().map(|s| s.when().seconds()),
+                is_signed,
+            }
+        } else {
+            // Lightweight tag
+            TagDetails {
+                name,
+                oid: ref_oid.to_string(),
+                target_oid: ref_oid.to_string(),
+                is_annotated: false,
+                message: None,
+                tagger_name: None,
+                tagger_email: None,
+                tagger_date: None,
+                is_signed: false,
+            }
+        };
 
-    Ok(details)
+        Ok(details)
+    })
+    .await
 }
 
 /// Create a new tag
@@ -180,55 +186,58 @@ pub async fn create_tag(
     target: Option<String>,
     message: Option<String>,
 ) -> Result<Tag> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Get target commit
-    let target_oid = if let Some(ref target_ref) = target {
-        repo.revparse_single(target_ref)?.id()
-    } else {
-        repo.head()?.peel_to_commit()?.id()
-    };
-
-    let target_obj = repo.find_object(target_oid, None)?;
-
-    let (is_annotated, tagger) = if let Some(ref msg) = message {
-        // Create annotated tag. libgit2 cannot sign, so when tag.gpgsign is on we
-        // must shell out to `git tag -s` to honor the configured signing.
-        let signature = repo.signature()?;
-        if tag_signing_enabled(&repo) {
-            create_signed_tag_cli(&path, &name, &target_oid.to_string(), msg, false)?;
+        // Get target commit
+        let target_oid = if let Some(ref target_ref) = target {
+            repo.revparse_single(target_ref)?.id()
         } else {
-            repo.tag(&name, &target_obj, &signature, msg, false)?;
-        }
-        (
-            true,
-            Some(Signature {
-                name: signature.name().ok().unwrap_or("").to_string(),
-                email: signature.email().ok().unwrap_or("").to_string(),
-                timestamp: signature.when().seconds(),
-            }),
-        )
-    } else {
-        // Create lightweight tag
-        repo.tag_lightweight(&name, &target_obj, false)?;
-        (false, None)
-    };
+            repo.head()?.peel_to_commit()?.id()
+        };
 
-    Ok(Tag {
-        name: name.clone(),
-        target_oid: target_oid.to_string(),
-        message,
-        tagger,
-        is_annotated,
+        let target_obj = repo.find_object(target_oid, None)?;
+
+        let (is_annotated, tagger) = if let Some(ref msg) = message {
+            let signature = repo.signature()?;
+            if tag_signing_enabled(&repo) {
+                create_signed_tag_cli(&path, &name, &target_oid.to_string(), msg, false)?;
+            } else {
+                repo.tag(&name, &target_obj, &signature, msg, false)?;
+            }
+            (
+                true,
+                Some(Signature {
+                    name: signature.name().ok().unwrap_or("").to_string(),
+                    email: signature.email().ok().unwrap_or("").to_string(),
+                    timestamp: signature.when().seconds(),
+                }),
+            )
+        } else {
+            repo.tag_lightweight(&name, &target_obj, false)?;
+            (false, None)
+        };
+
+        Ok(Tag {
+            name: name.clone(),
+            target_oid: target_oid.to_string(),
+            message,
+            tagger,
+            is_annotated,
+        })
     })
+    .await
 }
 
 /// Delete a tag
 #[command]
 pub async fn delete_tag(path: String, name: String) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    repo.tag_delete(&name)?;
-    Ok(())
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        repo.tag_delete(&name)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Push a tag to a remote
@@ -240,48 +249,34 @@ pub async fn push_tag(
     force: Option<bool>,
     token: Option<String>,
 ) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Resolved the way `push` resolves it (remote.rs, resolve_push_remote):
-    // the branch's push config, then its upstream, then the sole remote,
-    // and only then "origin". Hard-coding origin failed outright on
-    // `git clone -o upstream` and on any remote the app's own Remote dialog
-    // renamed — the tag push errored "Remote not found: origin", naming a
-    // remote the user never configured, with no way to make it succeed.
-    let remote_name = crate::commands::remote::resolve_push_remote(&repo, remote);
-    // Offline mode / remote allowlist, enforced backend-side too — on the
-    // remote's PUSH url, which is where this push goes.
-    crate::services::security::guard_push_remote(&path, Some(&remote_name))?;
-    // The pre-push hook below uploads LFS objects reachable from the tag.
-    crate::commands::lfs::guard_lfs_upload(&path, Some(&remote_name))?;
-    let mut remote_obj = repo
-        .find_remote(&remote_name)
-        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
+        let remote_name = crate::commands::remote::resolve_push_remote(&repo, remote);
+        crate::services::security::guard_push_remote(&path, Some(&remote_name))?;
+        crate::commands::lfs::guard_lfs_upload(&path, Some(&remote_name))?;
+        let mut remote_obj = repo
+            .find_remote(&remote_name)
+            .map_err(|_| GitnadoError::RemoteNotFound(remote_name.clone()))?;
 
-    let mut push_opts = credentials_service::get_push_options(token);
+        let mut push_opts = credentials_service::get_push_options(token);
 
-    let refspec = if force.unwrap_or(false) {
-        format!("+refs/tags/{}:refs/tags/{}", name, name)
-    } else {
-        format!("refs/tags/{}:refs/tags/{}", name, name)
-    };
+        let refspec = if force.unwrap_or(false) {
+            format!("+refs/tags/{}:refs/tags/{}", name, name)
+        } else {
+            format!("refs/tags/{}:refs/tags/{}", name, name)
+        };
 
-    // Run pre-push like canonical git — the git2 push path otherwise bypasses
-    // it. A non-zero exit aborts the tag push.
-    crate::commands::hooks::run_pre_push_tag(&repo, &remote_name, &name)?;
+        crate::commands::hooks::run_pre_push_tag(&repo, &remote_name, &name)?;
 
-    remote_obj.push(&[&refspec], Some(&mut push_opts))?;
+        remote_obj.push(&[&refspec], Some(&mut push_opts))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Delete a tag on a remote.
-///
-/// Pushes the empty refspec `:refs/tags/<name>`, exactly what
-/// `git push <remote> :refs/tags/<name>` does. Without it a pushed tag could
-/// never be retracted: the fetch refspec `refs/tags/*:refs/tags/*`
-/// (remote.rs, fetch_single_remote) copies the remote's tags back, so a
-/// local-only delete undid itself on the next fetch.
 #[command]
 pub async fn delete_remote_tag(
     path: String,
@@ -289,30 +284,26 @@ pub async fn delete_remote_tag(
     remote: Option<String>,
     token: Option<String>,
 ) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    let remote_name = remote.as_deref().unwrap_or("origin");
-    crate::services::security::guard_push_remote(&path, Some(remote_name))?;
-    let mut remote_obj = repo
-        .find_remote(remote_name)
-        .map_err(|_| GitnadoError::RemoteNotFound(remote_name.to_string()))?;
+        let remote_name = remote.as_deref().unwrap_or("origin");
+        crate::services::security::guard_push_remote(&path, Some(remote_name))?;
+        let mut remote_obj = repo
+            .find_remote(remote_name)
+            .map_err(|_| GitnadoError::RemoteNotFound(remote_name.to_string()))?;
 
-    let mut push_opts = credentials_service::get_push_options(token.clone());
+        let mut push_opts = credentials_service::get_push_options(token.clone());
 
-    // githooks(5) zeroes only the LOCAL side of a deletion line; the remote
-    // object name stays the value the remote advertised. Sending zeros there
-    // told a tag-protection hook the tag did not exist on the remote, so a
-    // hook guarding published tags failed open on the one operation it exists
-    // to stop. Read the advertisement first, the way git does.
-    let remote_oid = advertised_tag_oid(&mut remote_obj, &name, token)?;
+        let remote_oid = advertised_tag_oid(&mut remote_obj, &name, token)?;
 
-    // Run pre-push like canonical git — the git2 push path otherwise bypasses
-    // it. A non-zero exit aborts the deletion.
-    crate::commands::hooks::run_pre_push_tag_delete(&repo, remote_name, &name, &remote_oid)?;
+        crate::commands::hooks::run_pre_push_tag_delete(&repo, remote_name, &name, &remote_oid)?;
 
-    remote_obj.push(&[&format!(":refs/tags/{}", name)], Some(&mut push_opts))?;
+        remote_obj.push(&[&format!(":refs/tags/{}", name)], Some(&mut push_opts))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// The oid the remote advertises for `refs/tags/<name>`, or [`ZERO_OID`] when
@@ -343,56 +334,53 @@ fn advertised_tag_oid(
 /// failure can't leave the old tag deleted and unrecoverable (tags have no reflog).
 #[command]
 pub async fn edit_tag_message(path: String, name: String, message: String) -> Result<TagDetails> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Find the existing tag
-    let refname = format!("refs/tags/{}", name);
-    let reference = repo
-        .find_reference(&refname)
-        .map_err(|_| GitnadoError::TagNotFound(name.clone()))?;
+        // Find the existing tag
+        let refname = format!("refs/tags/{}", name);
+        let reference = repo
+            .find_reference(&refname)
+            .map_err(|_| GitnadoError::TagNotFound(name.clone()))?;
 
-    let ref_oid = reference.target().ok_or(GitnadoError::InvalidReference)?;
+        let ref_oid = reference.target().ok_or(GitnadoError::InvalidReference)?;
 
-    // Get tag details - we need the target commit
-    let tag = repo
-        .find_tag(ref_oid)
-        .map_err(|_| GitnadoError::OperationFailed("Cannot edit a lightweight tag".to_string()))?;
+        // Get tag details - we need the target commit
+        let tag = repo.find_tag(ref_oid).map_err(|_| {
+            GitnadoError::OperationFailed("Cannot edit a lightweight tag".to_string())
+        })?;
 
-    let target_oid = tag.target_id();
-    let target_obj = repo.find_object(target_oid, None)?;
+        let target_oid = tag.target_id();
+        let target_obj = repo.find_object(target_oid, None)?;
 
-    // Replace the tag in place atomically. We do NOT delete the old tag first:
-    // annotated tags have no reflog, so a failure (e.g. signing refused) after
-    // deletion would be unrecoverable data loss. The force flag / `git tag -f`
-    // overwrites the existing tag only once the replacement is successfully
-    // created, honoring tag.gpgsign (libgit2 cannot sign, so fall back to
-    // `git tag -s` when signing is enabled).
-    let signature = repo.signature()?;
-    let new_tag_oid = if tag_signing_enabled(&repo) {
-        create_signed_tag_cli(&path, &name, &target_oid.to_string(), &message, true)?;
-        repo.refname_to_id(&format!("refs/tags/{}", name))?
-    } else {
-        repo.tag(&name, &target_obj, &signature, &message, true)?
-    };
+        let signature = repo.signature()?;
+        let new_tag_oid = if tag_signing_enabled(&repo) {
+            create_signed_tag_cli(&path, &name, &target_oid.to_string(), &message, true)?;
+            repo.refname_to_id(&format!("refs/tags/{}", name))?
+        } else {
+            repo.tag(&name, &target_obj, &signature, &message, true)?
+        };
 
-    // Return the updated tag details
-    let new_tag = repo.find_tag(new_tag_oid)?;
-    let is_signed = new_tag
-        .message_bytes()
-        .map(message_is_signed)
-        .unwrap_or(false);
+        // Return the updated tag details
+        let new_tag = repo.find_tag(new_tag_oid)?;
+        let is_signed = new_tag
+            .message_bytes()
+            .map(message_is_signed)
+            .unwrap_or(false);
 
-    Ok(TagDetails {
-        name,
-        oid: new_tag_oid.to_string(),
-        target_oid: target_oid.to_string(),
-        is_annotated: true,
-        message: Some(message),
-        tagger_name: signature.name().ok().map(|s| s.to_string()),
-        tagger_email: signature.email().ok().map(|e| e.to_string()),
-        tagger_date: Some(signature.when().seconds()),
-        is_signed,
+        Ok(TagDetails {
+            name,
+            oid: new_tag_oid.to_string(),
+            target_oid: target_oid.to_string(),
+            is_annotated: true,
+            message: Some(message),
+            tagger_name: signature.name().ok().map(|s| s.to_string()),
+            tagger_email: signature.email().ok().map(|e| e.to_string()),
+            tagger_date: Some(signature.when().seconds()),
+            is_signed,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

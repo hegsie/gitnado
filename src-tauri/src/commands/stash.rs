@@ -40,102 +40,104 @@ pub struct StashFile {
 /// Get all stashes
 #[command]
 pub async fn get_stashes(path: String) -> Result<Vec<Stash>> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
-    let mut stashes = Vec::new();
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
+        let mut stashes = Vec::new();
 
-    repo.stash_foreach(|index, message, oid| {
-        stashes.push(Stash {
-            index,
-            message: message.to_string(),
-            oid: oid.to_string(),
-        });
-        true
-    })?;
+        repo.stash_foreach(|index, message, oid| {
+            stashes.push(Stash {
+                index,
+                message: message.to_string(),
+                oid: oid.to_string(),
+            });
+            true
+        })?;
 
-    Ok(stashes)
+        Ok(stashes)
+    })
+    .await
 }
 
 /// Create a new stash
-///
-/// Returns `Ok(None)` when the working tree is clean and there is nothing to
-/// stash. This mirrors `git stash push`, which prints "No local changes to
-/// save" and exits 0 — a benign informational no-op, not a failure. libgit2
-/// reports nothing-to-stash as `ErrorCode::NotFound`; we translate that into a
-/// `None` result so the UI can show an informational toast instead of an error.
 #[command]
 pub async fn create_stash(
     path: String,
     message: Option<String>,
     include_untracked: Option<bool>,
 ) -> Result<Option<Stash>> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
-    let signature = repo.signature()?;
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
+        let signature = repo.signature()?;
 
-    let mut flags = git2::StashFlags::DEFAULT;
-    if include_untracked.unwrap_or(false) {
-        flags |= git2::StashFlags::INCLUDE_UNTRACKED;
-    }
+        let mut flags = git2::StashFlags::DEFAULT;
+        if include_untracked.unwrap_or(false) {
+            flags |= git2::StashFlags::INCLUDE_UNTRACKED;
+        }
 
-    let oid = match repo.stash_save(&signature, message.as_deref().unwrap_or("WIP"), Some(flags)) {
-        Ok(oid) => oid,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
+        let oid =
+            match repo.stash_save(&signature, message.as_deref().unwrap_or("WIP"), Some(flags)) {
+                Ok(oid) => oid,
+                Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
 
-    Ok(Some(Stash {
-        index: 0,
-        message: message.unwrap_or_else(|| "WIP".to_string()),
-        oid: oid.to_string(),
-    }))
+        Ok(Some(Stash {
+            index: 0,
+            message: message.unwrap_or_else(|| "WIP".to_string()),
+            oid: oid.to_string(),
+        }))
+    })
+    .await
 }
 
 /// Apply a stash
 #[command]
 pub async fn apply_stash(path: String, index: usize, drop_after: Option<bool>) -> Result<()> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
 
-    repo.stash_apply(index, None)?;
+        repo.stash_apply(index, None)?;
 
-    // git_stash_apply returns success (0) even when the apply lands merge
-    // conflicts. Surface the conflict so the UI opens the resolution flow, and
-    // keep the stash regardless — `drop_after` is only honoured on a CLEAN apply.
-    if repo.index()?.has_conflicts() {
-        return Err(GitnadoError::MergeConflict);
-    }
+        if repo.index()?.has_conflicts() {
+            return Err(GitnadoError::MergeConflict);
+        }
 
-    if drop_after.unwrap_or(false) {
-        repo.stash_drop(index)?;
-    }
+        if drop_after.unwrap_or(false) {
+            repo.stash_drop(index)?;
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Drop a stash
 #[command]
 pub async fn drop_stash(path: String, index: usize) -> Result<()> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
-    repo.stash_drop(index)?;
-    Ok(())
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
+        repo.stash_drop(index)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Pop a stash (apply and drop)
 #[command]
 pub async fn pop_stash(path: String, index: usize) -> Result<()> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
 
-    // Do NOT use stash_pop: git_stash_pop drops the stash even when the apply
-    // lands conflicts (git_stash_apply returns 0 on a conflicted apply), which
-    // silently loses the stashed changes. Apply first, and only drop when the
-    // apply was clean — on a conflict, surface it and keep the stash so the user
-    // can resolve (and the entry remains recoverable).
-    repo.stash_apply(index, None)?;
+        repo.stash_apply(index, None)?;
 
-    if repo.index()?.has_conflicts() {
-        return Err(GitnadoError::MergeConflict);
-    }
+        if repo.index()?.has_conflicts() {
+            return Err(GitnadoError::MergeConflict);
+        }
 
-    repo.stash_drop(index)?;
-    Ok(())
+        repo.stash_drop(index)?;
+        Ok(())
+    })
+    .await
 }
 
 /// The path a delta refers to, preferring the new side — a deletion only has an
@@ -247,118 +249,98 @@ pub async fn stash_show(
     stat: Option<bool>,
     patch: Option<bool>,
 ) -> Result<StashShowResult> {
-    let mut repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let mut repo = git2::Repository::open(Path::new(&path))?;
 
-    // Get stash info (message and oid) by iterating through stashes
-    let mut stash_info: Option<(String, git2::Oid)> = None;
-    repo.stash_foreach(|i, message, oid| {
-        if i as u32 == index {
-            stash_info = Some((message.to_string(), *oid));
-            false // Stop iterating
+        // Get stash info (message and oid) by iterating through stashes
+        let mut stash_info: Option<(String, git2::Oid)> = None;
+        repo.stash_foreach(|i, message, oid| {
+            if i as u32 == index {
+                stash_info = Some((message.to_string(), *oid));
+                false // Stop iterating
+            } else {
+                true // Continue
+            }
+        })?;
+
+        let (message, stash_oid) = stash_info.ok_or_else(|| {
+            crate::error::GitnadoError::Git(git2::Error::from_str(&format!(
+                "Stash entry {} not found",
+                index
+            )))
+        })?;
+
+        // Get the stash commit
+        let stash_commit = repo.find_commit(stash_oid)?;
+
+        // Get parent commit (the commit the stash was based on)
+        let parent_commit = stash_commit.parent(0)?;
+
+        // Get the diff between parent and stash commit
+        let parent_tree = parent_commit.tree()?;
+        let stash_tree = stash_commit.tree()?;
+
+        let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&stash_tree), None)?;
+
+        let mut diffs: Vec<(git2::Diff<'_>, std::collections::HashSet<String>)> =
+            vec![(diff, std::collections::HashSet::new())];
+        if stash_commit.parent_count() >= 3 {
+            let untracked_tree = stash_commit.parent(2)?.tree()?;
+            let duplicates: std::collections::HashSet<String> =
+                diffs[0].0.deltas().map(|d| delta_path(&d)).collect();
+            diffs.push((
+                repo.diff_tree_to_tree(None, Some(&untracked_tree), None)?,
+                duplicates,
+            ));
+        }
+
+        // Collect file stats
+        let mut files: Vec<StashFile> = Vec::new();
+        let mut total_additions: u32 = 0;
+        let mut total_deletions: u32 = 0;
+
+        // Get stats if requested (default true)
+        if stat.unwrap_or(true) {
+            for (diff, skip) in &diffs {
+                let (additions, deletions) = collect_diff_files(diff, skip, &mut files)?;
+                total_additions += additions;
+                total_deletions += deletions;
+            }
+        }
+
+        // Generate patch if requested
+        let patch_output = if patch.unwrap_or(false) {
+            let mut patch_buf = Vec::new();
+            for (diff, skip) in &diffs {
+                diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
+                    if !skip.is_empty() && skip.contains(&delta_path(&delta)) {
+                        return true;
+                    }
+
+                    let origin = line.origin();
+                    if origin == '+' || origin == '-' || origin == ' ' {
+                        patch_buf.push(origin as u8);
+                    }
+                    patch_buf.extend_from_slice(line.content());
+                    true
+                })?;
+            }
+            Some(String::from_utf8_lossy(&patch_buf).to_string())
         } else {
-            true // Continue
-        }
-    })?;
+            None
+        };
 
-    let (message, stash_oid) = stash_info.ok_or_else(|| {
-        crate::error::GitnadoError::Git(git2::Error::from_str(&format!(
-            "Stash entry {} not found",
-            index
-        )))
-    })?;
-
-    // Get the stash commit
-    let stash_commit = repo.find_commit(stash_oid)?;
-
-    // Get parent commit (the commit the stash was based on)
-    let parent_commit = stash_commit.parent(0)?;
-
-    // Get the diff between parent and stash commit
-    let parent_tree = parent_commit.tree()?;
-    let stash_tree = stash_commit.tree()?;
-
-    let diff = repo.diff_tree_to_tree(Some(&parent_tree), Some(&stash_tree), None)?;
-
-    // Untracked files stashed with INCLUDE_UNTRACKED are not in the stash
-    // commit's tree — git records them in a third parent commit whose tree holds
-    // only those files. Diff an empty tree against it so the preview shows what
-    // `git stash show -u` would; the app's stash-creation surfaces request
-    // untracked capture, so without this a stash of nothing but new files
-    // reports no files at all. `create_stash` leaves `include_untracked`
-    // optional (defaulting to false), so a stash created without untracked
-    // capture has only two parents — hence the guard below. libgit2 also
-    // writes an EMPTY third parent when untracked capture was
-    // requested but nothing was untracked — which simply yields no deltas.
-    //
-    // One path can land in BOTH trees: stage a deletion of a tracked file and
-    // then recreate it on disk, and libgit2 records it in the worktree tree (as
-    // a modification of the committed version) AND in the untracked parent.
-    // Git itself refuses to preview such a stash at all ("worktree and
-    // untracked commit have duplicate entries"), but `git stash apply` restores
-    // the worktree copy and leaves the untracked one unused — so the worktree
-    // delta is the one that describes what applying actually produces. Report
-    // that row alone rather than emitting the same path twice and
-    // double-counting its lines in the totals.
-    let mut diffs: Vec<(git2::Diff<'_>, std::collections::HashSet<String>)> =
-        vec![(diff, std::collections::HashSet::new())];
-    if stash_commit.parent_count() >= 3 {
-        let untracked_tree = stash_commit.parent(2)?.tree()?;
-        let duplicates: std::collections::HashSet<String> =
-            diffs[0].0.deltas().map(|d| delta_path(&d)).collect();
-        diffs.push((
-            repo.diff_tree_to_tree(None, Some(&untracked_tree), None)?,
-            duplicates,
-        ));
-    }
-
-    // Collect file stats
-    let mut files: Vec<StashFile> = Vec::new();
-    let mut total_additions: u32 = 0;
-    let mut total_deletions: u32 = 0;
-
-    // Get stats if requested (default true)
-    if stat.unwrap_or(true) {
-        for (diff, skip) in &diffs {
-            let (additions, deletions) = collect_diff_files(diff, skip, &mut files)?;
-            total_additions += additions;
-            total_deletions += deletions;
-        }
-    }
-
-    // Generate patch if requested
-    let patch_output = if patch.unwrap_or(false) {
-        let mut patch_buf = Vec::new();
-        for (diff, skip) in &diffs {
-            diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
-                // Skip the duplicate-path deltas left out of the file list, so
-                // the patch shows the same set of files the stat does.
-                if !skip.is_empty() && skip.contains(&delta_path(&delta)) {
-                    return true;
-                }
-
-                // Add the origin character for context/add/delete lines
-                let origin = line.origin();
-                if origin == '+' || origin == '-' || origin == ' ' {
-                    patch_buf.push(origin as u8);
-                }
-                patch_buf.extend_from_slice(line.content());
-                true
-            })?;
-        }
-        Some(String::from_utf8_lossy(&patch_buf).to_string())
-    } else {
-        None
-    };
-
-    Ok(StashShowResult {
-        index,
-        oid: stash_oid.to_string(),
-        message,
-        files,
-        total_additions,
-        total_deletions,
-        patch: patch_output,
+        Ok(StashShowResult {
+            index,
+            oid: stash_oid.to_string(),
+            message,
+            files,
+            total_additions,
+            total_deletions,
+            patch: patch_output,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

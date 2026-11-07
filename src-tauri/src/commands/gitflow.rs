@@ -41,39 +41,42 @@ impl Default for GitFlowConfig {
 /// Get the current git flow configuration
 #[command]
 pub async fn get_gitflow_config(path: String) -> Result<GitFlowConfig> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let config = repo.config()?;
 
-    let initialized = config.get_string("gitflow.branch.master").is_ok();
+        let initialized = config.get_string("gitflow.branch.master").is_ok();
 
-    if !initialized {
-        return Ok(GitFlowConfig::default());
-    }
+        if !initialized {
+            return Ok(GitFlowConfig::default());
+        }
 
-    Ok(GitFlowConfig {
-        initialized: true,
-        master_branch: config
-            .get_string("gitflow.branch.master")
-            .unwrap_or_else(|_| "main".to_string()),
-        develop_branch: config
-            .get_string("gitflow.branch.develop")
-            .unwrap_or_else(|_| "develop".to_string()),
-        feature_prefix: config
-            .get_string("gitflow.prefix.feature")
-            .unwrap_or_else(|_| "feature/".to_string()),
-        release_prefix: config
-            .get_string("gitflow.prefix.release")
-            .unwrap_or_else(|_| "release/".to_string()),
-        hotfix_prefix: config
-            .get_string("gitflow.prefix.hotfix")
-            .unwrap_or_else(|_| "hotfix/".to_string()),
-        support_prefix: config
-            .get_string("gitflow.prefix.support")
-            .unwrap_or_else(|_| "support/".to_string()),
-        version_tag_prefix: config
-            .get_string("gitflow.prefix.versiontag")
-            .unwrap_or_else(|_| "v".to_string()),
+        Ok(GitFlowConfig {
+            initialized: true,
+            master_branch: config
+                .get_string("gitflow.branch.master")
+                .unwrap_or_else(|_| "main".to_string()),
+            develop_branch: config
+                .get_string("gitflow.branch.develop")
+                .unwrap_or_else(|_| "develop".to_string()),
+            feature_prefix: config
+                .get_string("gitflow.prefix.feature")
+                .unwrap_or_else(|_| "feature/".to_string()),
+            release_prefix: config
+                .get_string("gitflow.prefix.release")
+                .unwrap_or_else(|_| "release/".to_string()),
+            hotfix_prefix: config
+                .get_string("gitflow.prefix.hotfix")
+                .unwrap_or_else(|_| "hotfix/".to_string()),
+            support_prefix: config
+                .get_string("gitflow.prefix.support")
+                .unwrap_or_else(|_| "support/".to_string()),
+            version_tag_prefix: config
+                .get_string("gitflow.prefix.versiontag")
+                .unwrap_or_else(|_| "v".to_string()),
+        })
     })
+    .await
 }
 
 /// Initialize git flow in the repository
@@ -89,208 +92,214 @@ pub async fn init_gitflow(
     support_prefix: Option<String>,
     version_tag_prefix: Option<String>,
 ) -> Result<GitFlowConfig> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    // The local level specifically. set_str already landed here, but the
-    // rollback below also has to READ what .git/config holds: repo.config()
-    // resolves through the user's global and system files too, so a snapshot
-    // taken from it would "restore" an inherited value by writing it into the
-    // repository, inventing a local key that was never there.
-    let mut config = repo.config()?.open_level(git2::ConfigLevel::Local)?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        // The local level specifically. set_str already landed here, but the
+        // rollback below also has to READ what .git/config holds: repo.config()
+        // resolves through the user's global and system files too, so a snapshot
+        // taken from it would "restore" an inherited value by writing it into the
+        // repository, inventing a local key that was never there.
+        let mut config = repo.config()?.open_level(git2::ConfigLevel::Local)?;
 
-    let develop = develop_branch.unwrap_or_else(|| "develop".to_string());
-    let feature = feature_prefix.unwrap_or_else(|| "feature/".to_string());
-    let release = release_prefix.unwrap_or_else(|| "release/".to_string());
-    let hotfix = hotfix_prefix.unwrap_or_else(|| "hotfix/".to_string());
-    let support = support_prefix.unwrap_or_else(|| "support/".to_string());
-    let version_tag = version_tag_prefix.unwrap_or_else(|| "v".to_string());
+        let develop = develop_branch.unwrap_or_else(|| "develop".to_string());
+        let feature = feature_prefix.unwrap_or_else(|| "feature/".to_string());
+        let release = release_prefix.unwrap_or_else(|| "release/".to_string());
+        let hotfix = hotfix_prefix.unwrap_or_else(|| "hotfix/".to_string());
+        let support = support_prefix.unwrap_or_else(|| "support/".to_string());
+        let version_tag = version_tag_prefix.unwrap_or_else(|| "v".to_string());
 
-    // gitflow.branch.master must name a branch that EXISTS. Every hotfix start
-    // and every release/hotfix finish resolves it and fails with
-    // BranchNotFound when it does not, and get_gitflow_config keys
-    // `initialized` off this very entry — so once a wrong name is written the
-    // panel never offers the init section again and there is no way back
-    // inside the app. Writing the "main" default on a repository whose default
-    // branch is "master" did exactly that: develop was cut from master through
-    // the fallback below, but the name the fallback resolved was thrown away.
-    let master = match master_branch {
-        // An explicitly requested branch is honoured or refused — never
-        // silently swapped for a different one.
-        Some(requested) => {
-            if repo
-                .find_branch(&requested, git2::BranchType::Local)
-                .is_err()
-            {
-                return Err(GitnadoError::BranchNotFound(requested));
+        // gitflow.branch.master must name a branch that EXISTS. Every hotfix start
+        // and every release/hotfix finish resolves it and fails with
+        // BranchNotFound when it does not, and get_gitflow_config keys
+        // `initialized` off this very entry — so once a wrong name is written the
+        // panel never offers the init section again and there is no way back
+        // inside the app. Writing the "main" default on a repository whose default
+        // branch is "master" did exactly that: develop was cut from master through
+        // the fallback below, but the name the fallback resolved was thrown away.
+        let master = match master_branch {
+            // An explicitly requested branch is honoured or refused — never
+            // silently swapped for a different one.
+            Some(requested) => {
+                if repo
+                    .find_branch(&requested, git2::BranchType::Local)
+                    .is_err()
+                {
+                    return Err(GitnadoError::BranchNotFound(requested));
+                }
+                requested
             }
-            requested
+            None => ["main", "master"]
+                .into_iter()
+                .find(|name| repo.find_branch(name, git2::BranchType::Local).is_ok())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    GitnadoError::OperationFailed(
+                        "Cannot find a main or master branch to base Git Flow on".to_string(),
+                    )
+                })?,
+        };
+
+        // Ensure develop branch exists. Whether THIS call created it matters: if
+        // the config below cannot be persisted the branch has to go back, or a
+        // retry would silently reuse a develop cut from a base the user may no
+        // longer have selected. A develop that was already there is left alone.
+        let mut created_develop = false;
+        if repo.find_branch(&develop, git2::BranchType::Local).is_err() {
+            // Create develop from the resolved master
+            let base = repo
+                .find_branch(&master, git2::BranchType::Local)
+                .map_err(|_| GitnadoError::BranchNotFound(master.clone()))?;
+            let commit = base.get().peel_to_commit()?;
+            repo.branch(&develop, &commit, false)?;
+            created_develop = true;
         }
-        None => ["main", "master"]
-            .into_iter()
-            .find(|name| repo.find_branch(name, git2::BranchType::Local).is_ok())
-            .map(str::to_string)
-            .ok_or_else(|| {
-                GitnadoError::OperationFailed(
-                    "Cannot find a main or master branch to base Git Flow on".to_string(),
-                )
-            })?,
-    };
 
-    // Ensure develop branch exists. Whether THIS call created it matters: if
-    // the config below cannot be persisted the branch has to go back, or a
-    // retry would silently reuse a develop cut from a base the user may no
-    // longer have selected. A develop that was already there is left alone.
-    let mut created_develop = false;
-    if repo.find_branch(&develop, git2::BranchType::Local).is_err() {
-        // Create develop from the resolved master
-        let base = repo
-            .find_branch(&master, git2::BranchType::Local)
-            .map_err(|_| GitnadoError::BranchNotFound(master.clone()))?;
-        let commit = base.get().peel_to_commit()?;
-        repo.branch(&develop, &commit, false)?;
-        created_develop = true;
-    }
+        // Written last, once every branch this config names is known to exist. A
+        // half-written gitflow config still reads as initialized, so an init that
+        // errored after this point used to leave the repository permanently stuck
+        // with a config pointing at branches that were never created.
+        //
+        // Each set_str is its own write to .git/config, so the sequence is not
+        // atomic: any of them can fail on its own (a lock held by another process,
+        // a disk that just filled, a key a hand-edit left as a multivar). Persist
+        // them as a unit instead — snapshot what the local config holds now, and
+        // on the first failure put every key back the way this call found it and
+        // drop a develop this call created, so a failed init leaves the repository
+        // as it was rather than half-configured.
+        //
+        // gitflow.branch.master is the key get_gitflow_config keys `initialized`
+        // off, so it goes LAST — writing the marker before the six values it
+        // vouches for would let a failure part-way through leave the repository
+        // flagged initialized while develop and the prefixes silently fall back to
+        // defaults at read time, and the panel would never offer the init section
+        // again.
+        let entries = [
+            ("gitflow.branch.develop", develop.as_str()),
+            ("gitflow.prefix.feature", feature.as_str()),
+            ("gitflow.prefix.release", release.as_str()),
+            ("gitflow.prefix.hotfix", hotfix.as_str()),
+            ("gitflow.prefix.support", support.as_str()),
+            ("gitflow.prefix.versiontag", version_tag.as_str()),
+            ("gitflow.branch.master", master.as_str()),
+        ];
+        let snapshot: Vec<(&str, Option<String>)> = entries
+            .iter()
+            .map(|(key, _)| (*key, config.get_string(key).ok()))
+            .collect();
 
-    // Written last, once every branch this config names is known to exist. A
-    // half-written gitflow config still reads as initialized, so an init that
-    // errored after this point used to leave the repository permanently stuck
-    // with a config pointing at branches that were never created.
-    //
-    // Each set_str is its own write to .git/config, so the sequence is not
-    // atomic: any of them can fail on its own (a lock held by another process,
-    // a disk that just filled, a key a hand-edit left as a multivar). Persist
-    // them as a unit instead — snapshot what the local config holds now, and
-    // on the first failure put every key back the way this call found it and
-    // drop a develop this call created, so a failed init leaves the repository
-    // as it was rather than half-configured.
-    //
-    // gitflow.branch.master is the key get_gitflow_config keys `initialized`
-    // off, so it goes LAST — writing the marker before the six values it
-    // vouches for would let a failure part-way through leave the repository
-    // flagged initialized while develop and the prefixes silently fall back to
-    // defaults at read time, and the panel would never offer the init section
-    // again.
-    let entries = [
-        ("gitflow.branch.develop", develop.as_str()),
-        ("gitflow.prefix.feature", feature.as_str()),
-        ("gitflow.prefix.release", release.as_str()),
-        ("gitflow.prefix.hotfix", hotfix.as_str()),
-        ("gitflow.prefix.support", support.as_str()),
-        ("gitflow.prefix.versiontag", version_tag.as_str()),
-        ("gitflow.branch.master", master.as_str()),
-    ];
-    let snapshot: Vec<(&str, Option<String>)> = entries
-        .iter()
-        .map(|(key, _)| (*key, config.get_string(key).ok()))
-        .collect();
-
-    if let Err(err) = entries
-        .iter()
-        .try_for_each(|(key, value)| config.set_str(key, value))
-    {
-        // Best effort, and deliberately so: the write error is what the user
-        // needs to see, and a rollback step that also fails must not mask it.
-        for (key, previous) in snapshot {
-            let _ = match previous {
-                Some(value) => config.set_str(key, &value),
-                None => config.remove(key),
-            };
-        }
-        if created_develop {
-            if let Ok(mut branch) = repo.find_branch(&develop, git2::BranchType::Local) {
-                let _ = branch.delete();
+        if let Err(err) = entries
+            .iter()
+            .try_for_each(|(key, value)| config.set_str(key, value))
+        {
+            // Best effort, and deliberately so: the write error is what the user
+            // needs to see, and a rollback step that also fails must not mask it.
+            for (key, previous) in snapshot {
+                let _ = match previous {
+                    Some(value) => config.set_str(key, &value),
+                    None => config.remove(key),
+                };
             }
+            if created_develop {
+                if let Ok(mut branch) = repo.find_branch(&develop, git2::BranchType::Local) {
+                    let _ = branch.delete();
+                }
+            }
+            return Err(err.into());
         }
-        return Err(err.into());
-    }
 
-    Ok(GitFlowConfig {
-        initialized: true,
-        master_branch: master,
-        develop_branch: develop,
-        feature_prefix: feature,
-        release_prefix: release,
-        hotfix_prefix: hotfix,
-        support_prefix: support,
-        version_tag_prefix: version_tag,
+        Ok(GitFlowConfig {
+            initialized: true,
+            master_branch: master,
+            develop_branch: develop,
+            feature_prefix: feature,
+            release_prefix: release,
+            hotfix_prefix: hotfix,
+            support_prefix: support,
+            version_tag_prefix: version_tag,
+        })
     })
+    .await
 }
 
 /// Start a git flow feature branch
 #[command]
 pub async fn gitflow_start_feature(path: String, name: String) -> Result<Branch> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    // Every gitflow start/finish switches branches (checkout_tree + set_head)
-    // without being called checkout, so the hand-placed ensure_checkoutable
-    // calls in branch.rs missed all six. Switching out of a paused rebase or
-    // an unresolved merge orphans the state on disk: the still-visible Abort
-    // then yanks the user back to the original branch, discarding whatever
-    // they did on the new one.
-    crate::commands::branch::ensure_checkoutable(&repo)?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        // Every gitflow start/finish switches branches (checkout_tree + set_head)
+        // without being called checkout, so the hand-placed ensure_checkoutable
+        // calls in branch.rs missed all six. Switching out of a paused rebase or
+        // an unresolved merge orphans the state on disk: the still-visible Abort
+        // then yanks the user back to the original branch, discarding whatever
+        // they did on the new one.
+        crate::commands::branch::ensure_checkoutable(&repo)?;
+        let config = repo.config()?;
 
-    let develop = config
-        .get_string("gitflow.branch.develop")
-        .unwrap_or_else(|_| "develop".to_string());
-    let prefix = config
-        .get_string("gitflow.prefix.feature")
-        .unwrap_or_else(|_| "feature/".to_string());
+        let develop = config
+            .get_string("gitflow.branch.develop")
+            .unwrap_or_else(|_| "develop".to_string());
+        let prefix = config
+            .get_string("gitflow.prefix.feature")
+            .unwrap_or_else(|_| "feature/".to_string());
 
-    let branch_name = format!("{}{}", prefix, name);
+        let branch_name = format!("{}{}", prefix, name);
 
-    // Create branch from develop
-    let develop_branch = repo
-        .find_branch(&develop, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?;
+        // Create branch from develop
+        let develop_branch = repo
+            .find_branch(&develop, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?;
 
-    let commit = develop_branch.get().peel_to_commit()?;
-    let branch = repo.branch(&branch_name, &commit, false)?;
-    let reference = branch.get();
+        let commit = develop_branch.get().peel_to_commit()?;
+        let branch = repo.branch(&branch_name, &commit, false)?;
+        let reference = branch.get();
 
-    // Checkout the new branch. The checkout is fallible — a dirty file whose
-    // content differs between the two branches conflicts — and the ref already
-    // exists by now, so a failure is rolled back: otherwise the panel shows an
-    // error while the refs watcher makes the branch appear in the sidebar, and
-    // a retry dead-ends on "already exists". create_branch does the same.
-    //
-    // No ensure_not_checked_out_elsewhere here (unlike the finishes, which
-    // hoist one per branch they switch to): `repo.branch(.., false)` above
-    // already failed if the name existed, so a BRAND NEW branch cannot be held
-    // by another worktree. Calling it would in fact be wrong — the guard falls
-    // back to the segment after the first '/' when the full name has no local
-    // branch, so a fresh `feature/x` would be tested as `x` and a worktree
-    // holding an unrelated `x` would block the start.
-    //
-    // libgit2 runs no hooks; canonical `git flow` shells out to git checkout,
-    // so post-checkout fires there. branch.rs fires it for every checkout.
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
-    let switch = (|| -> Result<()> {
-        let obj = reference.peel(git2::ObjectType::Commit)?;
-        repo.checkout_tree(&obj, None)?;
-        repo.set_head(reference.name().map_err(|_| {
-            GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
-        })?)?;
-        Ok(())
-    })();
-    if let Err(e) = switch {
-        if let Ok(mut created) = repo.find_branch(&branch_name, git2::BranchType::Local) {
-            let _ = created.delete();
+        // Checkout the new branch. The checkout is fallible — a dirty file whose
+        // content differs between the two branches conflicts — and the ref already
+        // exists by now, so a failure is rolled back: otherwise the panel shows an
+        // error while the refs watcher makes the branch appear in the sidebar, and
+        // a retry dead-ends on "already exists". create_branch does the same.
+        //
+        // No ensure_not_checked_out_elsewhere here (unlike the finishes, which
+        // hoist one per branch they switch to): `repo.branch(.., false)` above
+        // already failed if the name existed, so a BRAND NEW branch cannot be held
+        // by another worktree. Calling it would in fact be wrong — the guard falls
+        // back to the segment after the first '/' when the full name has no local
+        // branch, so a fresh `feature/x` would be tested as `x` and a worktree
+        // holding an unrelated `x` would block the start.
+        //
+        // libgit2 runs no hooks; canonical `git flow` shells out to git checkout,
+        // so post-checkout fires there. branch.rs fires it for every checkout.
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
+        let switch = (|| -> Result<()> {
+            let obj = reference.peel(git2::ObjectType::Commit)?;
+            repo.checkout_tree(&obj, None)?;
+            repo.set_head(reference.name().map_err(|_| {
+                GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
+            })?)?;
+            Ok(())
+        })();
+        if let Err(e) = switch {
+            if let Ok(mut created) = repo.find_branch(&branch_name, git2::BranchType::Local) {
+                let _ = created.delete();
+            }
+            return Err(e);
         }
-        return Err(e);
-    }
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
 
-    Ok(Branch {
-        name: branch_name.clone(),
-        shorthand: branch_name,
-        is_head: true,
-        is_remote: false,
-        upstream: None,
-        target_oid: commit.id().to_string(),
-        ahead_behind: None,
-        last_commit_timestamp: Some(commit.time().seconds()),
-        is_stale: false,
+        Ok(Branch {
+            name: branch_name.clone(),
+            shorthand: branch_name,
+            is_head: true,
+            is_remote: false,
+            upstream: None,
+            target_oid: commit.id().to_string(),
+            ahead_behind: None,
+            last_commit_timestamp: Some(commit.time().seconds()),
+            is_stale: false,
+        })
     })
+    .await
 }
 
 /// Outcome of a git-flow finish.
@@ -456,158 +465,161 @@ pub async fn gitflow_finish_feature(
     delete_branch: Option<bool>,
     squash: Option<bool>,
 ) -> Result<GitFlowFinishResult> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    // Every gitflow start/finish switches branches (checkout_tree + set_head)
-    // without being called checkout, so the hand-placed ensure_checkoutable
-    // calls in branch.rs missed all six. Switching out of a paused rebase or
-    // an unresolved merge orphans the state on disk: the still-visible Abort
-    // then yanks the user back to the original branch, discarding whatever
-    // they did on the new one.
-    crate::commands::branch::ensure_checkoutable(&repo)?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        // Every gitflow start/finish switches branches (checkout_tree + set_head)
+        // without being called checkout, so the hand-placed ensure_checkoutable
+        // calls in branch.rs missed all six. Switching out of a paused rebase or
+        // an unresolved merge orphans the state on disk: the still-visible Abort
+        // then yanks the user back to the original branch, discarding whatever
+        // they did on the new one.
+        crate::commands::branch::ensure_checkoutable(&repo)?;
+        let config = repo.config()?;
 
-    let develop = config
-        .get_string("gitflow.branch.develop")
-        .unwrap_or_else(|_| "develop".to_string());
-    let prefix = config
-        .get_string("gitflow.prefix.feature")
-        .unwrap_or_else(|_| "feature/".to_string());
+        let develop = config
+            .get_string("gitflow.branch.develop")
+            .unwrap_or_else(|_| "develop".to_string());
+        let prefix = config
+            .get_string("gitflow.prefix.feature")
+            .unwrap_or_else(|_| "feature/".to_string());
 
-    // Every branch this finish will switch to is validated HERE, before any
-    // mutation — see finish_release_like, where the same check sat inline next
-    // to the second checkout and so fired only after master had already been
-    // merged and tagged. This finish switches once and happens to do it first,
-    // so it was safe by accident; the guard is hoisted anyway so the invariant
-    // ("worktree ownership is settled before we touch anything") is the same
-    // in all three finishes rather than a property of statement order.
-    crate::commands::branch::ensure_not_checked_out_elsewhere(&repo, &develop)?;
+        // Every branch this finish will switch to is validated HERE, before any
+        // mutation — see finish_release_like, where the same check sat inline next
+        // to the second checkout and so fired only after master had already been
+        // merged and tagged. This finish switches once and happens to do it first,
+        // so it was safe by accident; the guard is hoisted anyway so the invariant
+        // ("worktree ownership is settled before we touch anything") is the same
+        // in all three finishes rather than a property of statement order.
+        crate::commands::branch::ensure_not_checked_out_elsewhere(&repo, &develop)?;
 
-    let branch_name = format!("{}{}", prefix, name);
+        let branch_name = format!("{}{}", prefix, name);
 
-    // Get feature branch commit
-    let feature_branch = repo
-        .find_branch(&branch_name, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?;
-    let feature_commit = feature_branch.get().peel_to_commit()?;
+        // Get feature branch commit
+        let feature_branch = repo
+            .find_branch(&branch_name, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?;
+        let feature_commit = feature_branch.get().peel_to_commit()?;
 
-    // Checkout develop
-    let develop_branch = repo
-        .find_branch(&develop, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?;
-    let develop_obj = develop_branch.get().peel(git2::ObjectType::Commit)?;
-    // libgit2 runs no hooks; canonical `git flow` shells out to git checkout,
-    // so post-checkout fires there. branch.rs fires it for every checkout.
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
-    repo.checkout_tree(&develop_obj, None)?;
-    repo.set_head(develop_branch.get().name().map_err(|_| {
-        GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
-    })?)?;
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+        // Checkout develop
+        let develop_branch = repo
+            .find_branch(&develop, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?;
+        let develop_obj = develop_branch.get().peel(git2::ObjectType::Commit)?;
+        // libgit2 runs no hooks; canonical `git flow` shells out to git checkout,
+        // so post-checkout fires there. branch.rs fires it for every checkout.
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
+        repo.checkout_tree(&develop_obj, None)?;
+        repo.set_head(develop_branch.get().name().map_err(|_| {
+            GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
+        })?)?;
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
 
-    // Merge feature into develop
-    let annotated_commit = repo.find_annotated_commit(feature_commit.id())?;
+        // Merge feature into develop
+        let annotated_commit = repo.find_annotated_commit(feature_commit.id())?;
 
-    if squash.unwrap_or(false) {
-        // Squash merge: the changes must actually be committed (single
-        // parent, no merge commit). Conflicts abort BEFORE any branch
-        // deletion so the user can resolve them.
-        //
-        // An ancestry check handles externally completed merges. The marker
-        // handles Gitnado's own squash commit because a squash never makes
-        // the feature tip an ancestor of develop, and develop may have moved
-        // before the user retries failed branch cleanup.
-        let develop_commit = develop_branch.get().peel_to_commit()?;
-        let squash_already_finished = completed_squash_is_reachable(
-            &repo,
-            &branch_name,
-            feature_commit.id(),
-            develop_commit.id(),
-        )?;
-        let (analysis, _) = repo.merge_analysis(&[&annotated_commit])?;
-        if !squash_already_finished && !analysis.is_up_to_date() {
-            repo.merge(&[&annotated_commit], None, None)?;
-            if repo.index()?.has_conflicts() {
-                return Err(GitnadoError::MergeConflict);
-            }
-            let mut index = repo.index()?;
-            let tree_oid = index.write_tree()?;
-            // A previous squash finish leaves the feature tip unmerged by
-            // ancestry, so merge_analysis remains normal on retry even though
-            // develop already has the exact resulting tree. Do not mint an
-            // empty duplicate squash commit; finish the pending cleanup only.
-            let created_squash_commit = tree_oid != develop_commit.tree_id();
-            if created_squash_commit {
-                let tree = repo.find_tree(tree_oid)?;
-                let sig = repo.signature()?;
-                let message = format!("Squashed branch '{}' into {}", branch_name, develop);
-                repo.commit(
-                    Some("HEAD"),
-                    &sig,
-                    &sig,
-                    &message,
-                    &tree,
-                    &[&develop_commit],
-                )?;
-            }
-            let squash_commit = repo.head()?.peel_to_commit()?;
-            repo.cleanup_state()?;
-            if let Err(error) = record_completed_squash(
+        if squash.unwrap_or(false) {
+            // Squash merge: the changes must actually be committed (single
+            // parent, no merge commit). Conflicts abort BEFORE any branch
+            // deletion so the user can resolve them.
+            //
+            // An ancestry check handles externally completed merges. The marker
+            // handles Gitnado's own squash commit because a squash never makes
+            // the feature tip an ancestor of develop, and develop may have moved
+            // before the user retries failed branch cleanup.
+            let develop_commit = develop_branch.get().peel_to_commit()?;
+            let squash_already_finished = completed_squash_is_reachable(
                 &repo,
                 &branch_name,
                 feature_commit.id(),
-                squash_commit.id(),
-            ) {
-                tracing::warn!("Failed to record completed GitFlow squash: {}", error);
+                develop_commit.id(),
+            )?;
+            let (analysis, _) = repo.merge_analysis(&[&annotated_commit])?;
+            if !squash_already_finished && !analysis.is_up_to_date() {
+                repo.merge(&[&annotated_commit], None, None)?;
+                if repo.index()?.has_conflicts() {
+                    return Err(GitnadoError::MergeConflict);
+                }
+                let mut index = repo.index()?;
+                let tree_oid = index.write_tree()?;
+                // A previous squash finish leaves the feature tip unmerged by
+                // ancestry, so merge_analysis remains normal on retry even though
+                // develop already has the exact resulting tree. Do not mint an
+                // empty duplicate squash commit; finish the pending cleanup only.
+                let created_squash_commit = tree_oid != develop_commit.tree_id();
+                if created_squash_commit {
+                    let tree = repo.find_tree(tree_oid)?;
+                    let sig = repo.signature()?;
+                    let message = format!("Squashed branch '{}' into {}", branch_name, develop);
+                    repo.commit(
+                        Some("HEAD"),
+                        &sig,
+                        &sig,
+                        &message,
+                        &tree,
+                        &[&develop_commit],
+                    )?;
+                }
+                let squash_commit = repo.head()?.peel_to_commit()?;
+                repo.cleanup_state()?;
+                if let Err(error) = record_completed_squash(
+                    &repo,
+                    &branch_name,
+                    feature_commit.id(),
+                    squash_commit.id(),
+                ) {
+                    tracing::warn!("Failed to record completed GitFlow squash: {}", error);
+                }
+                // git passes flag 1 to post-merge for a squash merge.
+                if created_squash_commit {
+                    crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["1"]);
+                }
             }
-            // git passes flag 1 to post-merge for a squash merge.
-            if created_squash_commit {
-                crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["1"]);
+        } else {
+            // Regular merge (no-ff)
+            let (analysis, _) = repo.merge_analysis(&[&annotated_commit])?;
+            if analysis.is_fast_forward() || analysis.is_normal() {
+                repo.merge(&[&annotated_commit], None, None)?;
+
+                // Conflicts must abort the finish (leaving MERGE_HEAD for the
+                // conflict-resolution flow) instead of silently skipping the
+                // commit and deleting the branch below.
+                if repo.index()?.has_conflicts() {
+                    return Err(GitnadoError::MergeConflict);
+                }
+
+                // Auto-commit merge
+                let mut index = repo.index()?;
+                let tree_oid = index.write_tree()?;
+                let tree = repo.find_tree(tree_oid)?;
+                let sig = repo.signature()?;
+                let develop_commit = develop_branch.get().peel_to_commit()?;
+                let parents = vec![&develop_commit, &feature_commit];
+                let message = format!("Merge branch '{}' into {}", branch_name, develop);
+                repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)?;
+                repo.cleanup_state()?;
+                // git runs post-merge after a merge commit (flag 0 = not a squash
+                // merge). merge.rs fires it; gitflow reimplements the merge inline
+                // and fired nothing.
+                crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["0"]);
             }
         }
-    } else {
-        // Regular merge (no-ff)
-        let (analysis, _) = repo.merge_analysis(&[&annotated_commit])?;
-        if analysis.is_fast_forward() || analysis.is_normal() {
-            repo.merge(&[&annotated_commit], None, None)?;
 
-            // Conflicts must abort the finish (leaving MERGE_HEAD for the
-            // conflict-resolution flow) instead of silently skipping the
-            // commit and deleting the branch below.
-            if repo.index()?.has_conflicts() {
-                return Err(GitnadoError::MergeConflict);
+        // Delete feature branch if requested
+        if delete_branch.unwrap_or(true) {
+            let result = delete_finished_branch(&repo, &path, &branch_name);
+            if result.branch_deleted {
+                let _ = std::fs::remove_file(squash_marker_path(&repo, &branch_name));
             }
-
-            // Auto-commit merge
-            let mut index = repo.index()?;
-            let tree_oid = index.write_tree()?;
-            let tree = repo.find_tree(tree_oid)?;
-            let sig = repo.signature()?;
-            let develop_commit = develop_branch.get().peel_to_commit()?;
-            let parents = vec![&develop_commit, &feature_commit];
-            let message = format!("Merge branch '{}' into {}", branch_name, develop);
-            repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)?;
-            repo.cleanup_state()?;
-            // git runs post-merge after a merge commit (flag 0 = not a squash
-            // merge). merge.rs fires it; gitflow reimplements the merge inline
-            // and fired nothing.
-            crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["0"]);
+            return Ok(result);
         }
-    }
 
-    // Delete feature branch if requested
-    if delete_branch.unwrap_or(true) {
-        let result = delete_finished_branch(&repo, &path, &branch_name);
-        if result.branch_deleted {
-            let _ = std::fs::remove_file(squash_marker_path(&repo, &branch_name));
-        }
-        return Ok(result);
-    }
-
-    Ok(GitFlowFinishResult {
-        branch_deleted: false,
-        branch_kept_reason: None,
+        Ok(GitFlowFinishResult {
+            branch_deleted: false,
+            branch_kept_reason: None,
+        })
     })
+    .await
 }
 
 /// Record that a squash finish's commit has landed on develop.
@@ -621,97 +633,103 @@ pub async fn gitflow_finish_feature(
 /// once its commit has landed and before it attempts the branch delete.
 #[command]
 pub async fn gitflow_record_squash_finish(path: String, name: String) -> Result<()> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let config = repo.config()?;
 
-    let develop = config
-        .get_string("gitflow.branch.develop")
-        .unwrap_or_else(|_| "develop".to_string());
-    let prefix = config
-        .get_string("gitflow.prefix.feature")
-        .unwrap_or_else(|_| "feature/".to_string());
-    let branch_name = format!("{}{}", prefix, name);
+        let develop = config
+            .get_string("gitflow.branch.develop")
+            .unwrap_or_else(|_| "develop".to_string());
+        let prefix = config
+            .get_string("gitflow.prefix.feature")
+            .unwrap_or_else(|_| "feature/".to_string());
+        let branch_name = format!("{}{}", prefix, name);
 
-    let feature_commit = repo
-        .find_branch(&branch_name, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?
-        .get()
-        .peel_to_commit()?;
-    let develop_commit = repo
-        .find_branch(&develop, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?
-        .get()
-        .peel_to_commit()?;
+        let feature_commit = repo
+            .find_branch(&branch_name, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?
+            .get()
+            .peel_to_commit()?;
+        let develop_commit = repo
+            .find_branch(&develop, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?
+            .get()
+            .peel_to_commit()?;
 
-    record_completed_squash(
-        &repo,
-        &branch_name,
-        feature_commit.id(),
-        develop_commit.id(),
-    )
+        record_completed_squash(
+            &repo,
+            &branch_name,
+            feature_commit.id(),
+            develop_commit.id(),
+        )
+    })
+    .await
 }
 
 /// Start a git flow release branch
 #[command]
 pub async fn gitflow_start_release(path: String, version: String) -> Result<Branch> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    // Every gitflow start/finish switches branches (checkout_tree + set_head)
-    // without being called checkout, so the hand-placed ensure_checkoutable
-    // calls in branch.rs missed all six. Switching out of a paused rebase or
-    // an unresolved merge orphans the state on disk: the still-visible Abort
-    // then yanks the user back to the original branch, discarding whatever
-    // they did on the new one.
-    crate::commands::branch::ensure_checkoutable(&repo)?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        // Every gitflow start/finish switches branches (checkout_tree + set_head)
+        // without being called checkout, so the hand-placed ensure_checkoutable
+        // calls in branch.rs missed all six. Switching out of a paused rebase or
+        // an unresolved merge orphans the state on disk: the still-visible Abort
+        // then yanks the user back to the original branch, discarding whatever
+        // they did on the new one.
+        crate::commands::branch::ensure_checkoutable(&repo)?;
+        let config = repo.config()?;
 
-    let develop = config
-        .get_string("gitflow.branch.develop")
-        .unwrap_or_else(|_| "develop".to_string());
-    let prefix = config
-        .get_string("gitflow.prefix.release")
-        .unwrap_or_else(|_| "release/".to_string());
+        let develop = config
+            .get_string("gitflow.branch.develop")
+            .unwrap_or_else(|_| "develop".to_string());
+        let prefix = config
+            .get_string("gitflow.prefix.release")
+            .unwrap_or_else(|_| "release/".to_string());
 
-    let branch_name = format!("{}{}", prefix, version);
+        let branch_name = format!("{}{}", prefix, version);
 
-    let develop_branch = repo
-        .find_branch(&develop, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(develop))?;
+        let develop_branch = repo
+            .find_branch(&develop, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(develop))?;
 
-    let commit = develop_branch.get().peel_to_commit()?;
-    let branch = repo.branch(&branch_name, &commit, false)?;
-    let reference = branch.get();
+        let commit = develop_branch.get().peel_to_commit()?;
+        let branch = repo.branch(&branch_name, &commit, false)?;
+        let reference = branch.get();
 
-    // Rolled back on a failed checkout, and fires post-checkout — see
-    // gitflow_start_feature.
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
-    let switch = (|| -> Result<()> {
-        let obj = reference.peel(git2::ObjectType::Commit)?;
-        repo.checkout_tree(&obj, None)?;
-        repo.set_head(reference.name().map_err(|_| {
-            GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
-        })?)?;
-        Ok(())
-    })();
-    if let Err(e) = switch {
-        if let Ok(mut created) = repo.find_branch(&branch_name, git2::BranchType::Local) {
-            let _ = created.delete();
+        // Rolled back on a failed checkout, and fires post-checkout — see
+        // gitflow_start_feature.
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
+        let switch = (|| -> Result<()> {
+            let obj = reference.peel(git2::ObjectType::Commit)?;
+            repo.checkout_tree(&obj, None)?;
+            repo.set_head(reference.name().map_err(|_| {
+                GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
+            })?)?;
+            Ok(())
+        })();
+        if let Err(e) = switch {
+            if let Ok(mut created) = repo.find_branch(&branch_name, git2::BranchType::Local) {
+                let _ = created.delete();
+            }
+            return Err(e);
         }
-        return Err(e);
-    }
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
 
-    Ok(Branch {
-        name: branch_name.clone(),
-        shorthand: branch_name,
-        is_head: true,
-        is_remote: false,
-        upstream: None,
-        target_oid: commit.id().to_string(),
-        ahead_behind: None,
-        last_commit_timestamp: Some(commit.time().seconds()),
-        is_stale: false,
+        Ok(Branch {
+            name: branch_name.clone(),
+            shorthand: branch_name,
+            is_head: true,
+            is_remote: false,
+            upstream: None,
+            target_oid: commit.id().to_string(),
+            ahead_behind: None,
+            last_commit_timestamp: Some(commit.time().seconds()),
+            is_stale: false,
+        })
     })
+    .await
 }
 
 /// Finish a git flow release branch (merge into master and develop, tag)
@@ -741,265 +759,276 @@ async fn finish_release_like(
     version: String,
     tag_message: Option<String>,
     delete_branch: Option<bool>,
-    prefix_key: &str,
-    prefix_default: &str,
+    prefix_key: &'static str,
+    prefix_default: &'static str,
 ) -> Result<GitFlowFinishResult> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    // Backs both gitflow_finish_release and gitflow_finish_hotfix, and switches
-    // branches twice — see the comment on the start commands above.
-    crate::commands::branch::ensure_checkoutable(&repo)?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        // Backs both gitflow_finish_release and gitflow_finish_hotfix, and switches
+        // branches twice — see the comment on the start commands above.
+        crate::commands::branch::ensure_checkoutable(&repo)?;
+        let config = repo.config()?;
 
-    let master = config
-        .get_string("gitflow.branch.master")
-        .unwrap_or_else(|_| "main".to_string());
-    let develop = config
-        .get_string("gitflow.branch.develop")
-        .unwrap_or_else(|_| "develop".to_string());
-    let prefix = config
-        .get_string(prefix_key)
-        .unwrap_or_else(|_| prefix_default.to_string());
-    let tag_prefix = config
-        .get_string("gitflow.prefix.versiontag")
-        .unwrap_or_else(|_| "v".to_string());
+        let master = config
+            .get_string("gitflow.branch.master")
+            .unwrap_or_else(|_| "main".to_string());
+        let develop = config
+            .get_string("gitflow.branch.develop")
+            .unwrap_or_else(|_| "develop".to_string());
+        let prefix = config
+            .get_string(prefix_key)
+            .unwrap_or_else(|_| prefix_default.to_string());
+        let tag_prefix = config
+            .get_string("gitflow.prefix.versiontag")
+            .unwrap_or_else(|_| "v".to_string());
 
-    // BOTH branches this finish will switch to are validated up front, before
-    // any mutation. The develop check used to sit inline next to the
-    // develop-side checkout, which is reached only AFTER master has been
-    // checked out, merged, committed and tagged — so on the standard setup of
-    // a dedicated `develop` worktree the finish half-applied itself and then
-    // refused, with the release branch still alive, HEAD parked on master and
-    // no in-app way forward (the obvious retry skips the up-to-date master
-    // merge and the existing tag and refuses at the same line, forever).
-    // Refusing here leaves the repository exactly as it was.
-    crate::commands::branch::ensure_not_checked_out_elsewhere(&repo, &master)?;
-    crate::commands::branch::ensure_not_checked_out_elsewhere(&repo, &develop)?;
+        // BOTH branches this finish will switch to are validated up front, before
+        // any mutation. The develop check used to sit inline next to the
+        // develop-side checkout, which is reached only AFTER master has been
+        // checked out, merged, committed and tagged — so on the standard setup of
+        // a dedicated `develop` worktree the finish half-applied itself and then
+        // refused, with the release branch still alive, HEAD parked on master and
+        // no in-app way forward (the obvious retry skips the up-to-date master
+        // merge and the existing tag and refuses at the same line, forever).
+        // Refusing here leaves the repository exactly as it was.
+        crate::commands::branch::ensure_not_checked_out_elsewhere(&repo, &master)?;
+        crate::commands::branch::ensure_not_checked_out_elsewhere(&repo, &develop)?;
 
-    let branch_name = format!("{}{}", prefix, version);
-    let tag_name = format!("{}{}", tag_prefix, version);
+        let branch_name = format!("{}{}", prefix, version);
+        let tag_name = format!("{}{}", tag_prefix, version);
 
-    let release_branch = repo
-        .find_branch(&branch_name, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?;
-    let release_commit = release_branch.get().peel_to_commit()?;
+        let release_branch = repo
+            .find_branch(&branch_name, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?;
+        let release_commit = release_branch.get().peel_to_commit()?;
 
-    // A version tag left behind by an EARLIER pass of this same finish is
-    // expected — the develop side conflicted, the user resolved it and re-ran —
-    // and the tag block below adopts it. Any OTHER pre-existing tag belongs to
-    // someone else: a teammate's tag, an old cycle reusing the number, or the
-    // release/hotfix collision both flows produce because they share
-    // gitflow.prefix.versiontag. Adopting one of those merges, deletes the
-    // branch and reports success while the release ships untagged and the
-    // version resolves to unrelated code. A tag from our own pass always
-    // CONTAINS the release tip (it sits on the master merge commit, or on a
-    // master tip that already merged it); anything else is refused here, before
-    // any mutation, so the repository is left exactly as it was.
-    if let Ok(tag_ref) = repo.find_reference(&format!("refs/tags/{}", tag_name)) {
-        let from_this_finish = match tag_ref.peel_to_commit() {
-            Ok(tagged) => {
-                tagged.id() == release_commit.id()
-                    || repo.graph_descendant_of(tagged.id(), release_commit.id())?
+        // A version tag left behind by an EARLIER pass of this same finish is
+        // expected — the develop side conflicted, the user resolved it and re-ran —
+        // and the tag block below adopts it. Any OTHER pre-existing tag belongs to
+        // someone else: a teammate's tag, an old cycle reusing the number, or the
+        // release/hotfix collision both flows produce because they share
+        // gitflow.prefix.versiontag. Adopting one of those merges, deletes the
+        // branch and reports success while the release ships untagged and the
+        // version resolves to unrelated code. A tag from our own pass always
+        // CONTAINS the release tip (it sits on the master merge commit, or on a
+        // master tip that already merged it); anything else is refused here, before
+        // any mutation, so the repository is left exactly as it was.
+        if let Ok(tag_ref) = repo.find_reference(&format!("refs/tags/{}", tag_name)) {
+            let from_this_finish = match tag_ref.peel_to_commit() {
+                Ok(tagged) => {
+                    tagged.id() == release_commit.id()
+                        || repo.graph_descendant_of(tagged.id(), release_commit.id())?
+                }
+                // A tag that does not resolve to a commit is certainly not ours.
+                Err(_) => false,
+            };
+            if !from_this_finish {
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Tag '{}' already exists and does not contain '{}'. \
+                     Delete or rename the tag, or finish with a different version.",
+                    tag_name, branch_name
+                )));
             }
-            // A tag that does not resolve to a commit is certainly not ours.
-            Err(_) => false,
+        }
+
+        // Merge into master
+        let master_branch = repo
+            .find_branch(&master, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(master.clone()))?;
+        let master_obj = master_branch.get().peel(git2::ObjectType::Commit)?;
+        // post-checkout — see gitflow_finish_feature.
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
+        repo.checkout_tree(&master_obj, None)?;
+        repo.set_head(master_branch.get().name().map_err(|_| {
+            GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
+        })?)?;
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+
+        let annotated = repo.find_annotated_commit(release_commit.id())?;
+        let (master_analysis, _) = repo.merge_analysis(&[&annotated])?;
+
+        // Idempotency: on a re-run after resolving a develop-side conflict, master
+        // already contains the release, so the analysis is up-to-date. Skip the
+        // merge+commit entirely — re-merging would create a junk merge commit and
+        // the subsequent re-tag would fail with "tag already exists", stranding the
+        // branch. We still need a tag target for the (already-existing) tag below.
+        let master_merge_oid = if master_analysis.is_up_to_date() {
+            None
+        } else {
+            repo.merge(&[&annotated], None, None)?;
+
+            // Conflicts must abort the finish here — proceeding would tag nothing,
+            // check out develop over a conflicted tree, and delete the branch.
+            if repo.index()?.has_conflicts() {
+                return Err(GitnadoError::MergeConflict);
+            }
+
+            let mut index = repo.index()?;
+            let tree_oid = index.write_tree()?;
+            let tree = repo.find_tree(tree_oid)?;
+            let sig = repo.signature()?;
+            let master_commit = master_branch.get().peel_to_commit()?;
+            let parents = vec![&master_commit, &release_commit];
+            let message = format!("Merge branch '{}' into {}", branch_name, master);
+            let merge_oid = repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)?;
+            repo.cleanup_state()?;
+            // post-merge — see gitflow_finish_feature.
+            crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["0"]);
+            Some(merge_oid)
         };
-        if !from_this_finish {
-            return Err(GitnadoError::OperationFailed(format!(
-                "Tag '{}' already exists and does not contain '{}'. \
-                 Delete or rename the tag, or finish with a different version.",
-                tag_name, branch_name
-            )));
-        }
-    }
 
-    // Merge into master
-    let master_branch = repo
-        .find_branch(&master, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(master.clone()))?;
-    let master_obj = master_branch.get().peel(git2::ObjectType::Commit)?;
-    // post-checkout — see gitflow_finish_feature.
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
-    repo.checkout_tree(&master_obj, None)?;
-    repo.set_head(master_branch.get().name().map_err(|_| {
-        GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
-    })?)?;
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
-
-    let annotated = repo.find_annotated_commit(release_commit.id())?;
-    let (master_analysis, _) = repo.merge_analysis(&[&annotated])?;
-
-    // Idempotency: on a re-run after resolving a develop-side conflict, master
-    // already contains the release, so the analysis is up-to-date. Skip the
-    // merge+commit entirely — re-merging would create a junk merge commit and
-    // the subsequent re-tag would fail with "tag already exists", stranding the
-    // branch. We still need a tag target for the (already-existing) tag below.
-    let master_merge_oid = if master_analysis.is_up_to_date() {
-        None
-    } else {
-        repo.merge(&[&annotated], None, None)?;
-
-        // Conflicts must abort the finish here — proceeding would tag nothing,
-        // check out develop over a conflicted tree, and delete the branch.
-        if repo.index()?.has_conflicts() {
-            return Err(GitnadoError::MergeConflict);
+        // Create the tag on master. Skip when it already exists — validated above
+        // as this finish's own tag from an earlier pass (re-run after the
+        // develop-side conflict was resolved and tagged on the first pass) so we
+        // don't fail with "tag already exists". When it is MISSING we must still
+        // tag: on a re-run after a MASTER-side conflict was resolved via the dialog,
+        // master is already up-to-date so master_merge_oid is None — tag the current
+        // master tip (HEAD is on master here) so the release/hotfix isn't silently
+        // completed with no version tag.
+        if repo
+            .find_reference(&format!("refs/tags/{}", tag_name))
+            .is_err()
+        {
+            let sig = repo.signature()?;
+            let target_commit = match master_merge_oid {
+                Some(merge_oid) => repo.find_commit(merge_oid)?,
+                None => repo.head()?.peel_to_commit()?,
+            };
+            let tag_msg = tag_message.unwrap_or_else(|| format!("Release {}", version));
+            repo.tag(&tag_name, target_commit.as_object(), &sig, &tag_msg, false)?;
         }
 
-        let mut index = repo.index()?;
-        let tree_oid = index.write_tree()?;
-        let tree = repo.find_tree(tree_oid)?;
-        let sig = repo.signature()?;
-        let master_commit = master_branch.get().peel_to_commit()?;
-        let parents = vec![&master_commit, &release_commit];
-        let message = format!("Merge branch '{}' into {}", branch_name, master);
-        let merge_oid = repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)?;
-        repo.cleanup_state()?;
-        // post-merge — see gitflow_finish_feature.
-        crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["0"]);
-        Some(merge_oid)
-    };
+        // Merge into develop
+        let develop_branch = repo
+            .find_branch(&develop, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?;
+        let develop_obj = develop_branch.get().peel(git2::ObjectType::Commit)?;
+        // post-checkout for the develop-side switch too. The master switch above
+        // got it and this one did not — the same sibling-missed pattern.
+        let old_head_develop = crate::commands::hooks::head_oid_string(&repo);
+        repo.checkout_tree(&develop_obj, None)?;
+        repo.set_head(develop_branch.get().name().map_err(|_| {
+            GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
+        })?)?;
+        let new_head_develop = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(
+            &repo,
+            &old_head_develop,
+            &new_head_develop,
+            true,
+        );
 
-    // Create the tag on master. Skip when it already exists — validated above
-    // as this finish's own tag from an earlier pass (re-run after the
-    // develop-side conflict was resolved and tagged on the first pass) so we
-    // don't fail with "tag already exists". When it is MISSING we must still
-    // tag: on a re-run after a MASTER-side conflict was resolved via the dialog,
-    // master is already up-to-date so master_merge_oid is None — tag the current
-    // master tip (HEAD is on master here) so the release/hotfix isn't silently
-    // completed with no version tag.
-    if repo
-        .find_reference(&format!("refs/tags/{}", tag_name))
-        .is_err()
-    {
-        let sig = repo.signature()?;
-        let target_commit = match master_merge_oid {
-            Some(merge_oid) => repo.find_commit(merge_oid)?,
-            None => repo.head()?.peel_to_commit()?,
-        };
-        let tag_msg = tag_message.unwrap_or_else(|| format!("Release {}", version));
-        repo.tag(&tag_name, target_commit.as_object(), &sig, &tag_msg, false)?;
-    }
+        // Re-read release commit from the new HEAD context
+        let release_branch2 = repo
+            .find_branch(&branch_name, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?;
+        let release_commit2 = release_branch2.get().peel_to_commit()?;
+        let annotated2 = repo.find_annotated_commit(release_commit2.id())?;
+        let (develop_analysis, _) = repo.merge_analysis(&[&annotated2])?;
 
-    // Merge into develop
-    let develop_branch = repo
-        .find_branch(&develop, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(develop.clone()))?;
-    let develop_obj = develop_branch.get().peel(git2::ObjectType::Commit)?;
-    // post-checkout for the develop-side switch too. The master switch above
-    // got it and this one did not — the same sibling-missed pattern.
-    let old_head_develop = crate::commands::hooks::head_oid_string(&repo);
-    repo.checkout_tree(&develop_obj, None)?;
-    repo.set_head(develop_branch.get().name().map_err(|_| {
-        GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
-    })?)?;
-    let new_head_develop = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head_develop, &new_head_develop, true);
+        // Idempotency: on a re-run after the develop conflict was resolved via
+        // commit_merge, develop already contains the release, so skip the merge to
+        // avoid a duplicate merge commit and let branch deletion proceed.
+        if !develop_analysis.is_up_to_date() {
+            repo.merge(&[&annotated2], None, None)?;
 
-    // Re-read release commit from the new HEAD context
-    let release_branch2 = repo
-        .find_branch(&branch_name, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(branch_name.clone()))?;
-    let release_commit2 = release_branch2.get().peel_to_commit()?;
-    let annotated2 = repo.find_annotated_commit(release_commit2.id())?;
-    let (develop_analysis, _) = repo.merge_analysis(&[&annotated2])?;
+            // Same as the master merge: a conflicted develop merge must be surfaced
+            // (and the branch NOT deleted) so the user can resolve it.
+            if repo.index()?.has_conflicts() {
+                return Err(GitnadoError::MergeConflict);
+            }
 
-    // Idempotency: on a re-run after the develop conflict was resolved via
-    // commit_merge, develop already contains the release, so skip the merge to
-    // avoid a duplicate merge commit and let branch deletion proceed.
-    if !develop_analysis.is_up_to_date() {
-        repo.merge(&[&annotated2], None, None)?;
-
-        // Same as the master merge: a conflicted develop merge must be surfaced
-        // (and the branch NOT deleted) so the user can resolve it.
-        if repo.index()?.has_conflicts() {
-            return Err(GitnadoError::MergeConflict);
+            let mut index = repo.index()?;
+            let tree_oid = index.write_tree()?;
+            let tree = repo.find_tree(tree_oid)?;
+            let sig = repo.signature()?;
+            let develop_commit = develop_branch.get().peel_to_commit()?;
+            let parents = vec![&develop_commit, &release_commit2];
+            let message = format!("Merge branch '{}' into {}", branch_name, develop);
+            repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)?;
+            repo.cleanup_state()?;
+            // post-merge — see gitflow_finish_feature.
+            crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["0"]);
         }
 
-        let mut index = repo.index()?;
-        let tree_oid = index.write_tree()?;
-        let tree = repo.find_tree(tree_oid)?;
-        let sig = repo.signature()?;
-        let develop_commit = develop_branch.get().peel_to_commit()?;
-        let parents = vec![&develop_commit, &release_commit2];
-        let message = format!("Merge branch '{}' into {}", branch_name, develop);
-        repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &parents)?;
-        repo.cleanup_state()?;
-        // post-merge — see gitflow_finish_feature.
-        crate::commands::hooks::run_hook_noblock(&repo, "post-merge", &["0"]);
-    }
+        // Delete release branch
+        if delete_branch.unwrap_or(true) {
+            return Ok(delete_finished_branch(&repo, &path, &branch_name));
+        }
 
-    // Delete release branch
-    if delete_branch.unwrap_or(true) {
-        return Ok(delete_finished_branch(&repo, &path, &branch_name));
-    }
-
-    Ok(GitFlowFinishResult {
-        branch_deleted: false,
-        branch_kept_reason: None,
+        Ok(GitFlowFinishResult {
+            branch_deleted: false,
+            branch_kept_reason: None,
+        })
     })
+    .await
 }
 
 /// Start a git flow hotfix branch
 #[command]
 pub async fn gitflow_start_hotfix(path: String, version: String) -> Result<Branch> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    // Every gitflow start/finish switches branches (checkout_tree + set_head)
-    // without being called checkout, so the hand-placed ensure_checkoutable
-    // calls in branch.rs missed all six. Switching out of a paused rebase or
-    // an unresolved merge orphans the state on disk: the still-visible Abort
-    // then yanks the user back to the original branch, discarding whatever
-    // they did on the new one.
-    crate::commands::branch::ensure_checkoutable(&repo)?;
-    let config = repo.config()?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        // Every gitflow start/finish switches branches (checkout_tree + set_head)
+        // without being called checkout, so the hand-placed ensure_checkoutable
+        // calls in branch.rs missed all six. Switching out of a paused rebase or
+        // an unresolved merge orphans the state on disk: the still-visible Abort
+        // then yanks the user back to the original branch, discarding whatever
+        // they did on the new one.
+        crate::commands::branch::ensure_checkoutable(&repo)?;
+        let config = repo.config()?;
 
-    let master = config
-        .get_string("gitflow.branch.master")
-        .unwrap_or_else(|_| "main".to_string());
-    let prefix = config
-        .get_string("gitflow.prefix.hotfix")
-        .unwrap_or_else(|_| "hotfix/".to_string());
+        let master = config
+            .get_string("gitflow.branch.master")
+            .unwrap_or_else(|_| "main".to_string());
+        let prefix = config
+            .get_string("gitflow.prefix.hotfix")
+            .unwrap_or_else(|_| "hotfix/".to_string());
 
-    let branch_name = format!("{}{}", prefix, version);
+        let branch_name = format!("{}{}", prefix, version);
 
-    let master_branch = repo
-        .find_branch(&master, git2::BranchType::Local)
-        .map_err(|_| GitnadoError::BranchNotFound(master))?;
+        let master_branch = repo
+            .find_branch(&master, git2::BranchType::Local)
+            .map_err(|_| GitnadoError::BranchNotFound(master))?;
 
-    let commit = master_branch.get().peel_to_commit()?;
-    let branch = repo.branch(&branch_name, &commit, false)?;
-    let reference = branch.get();
+        let commit = master_branch.get().peel_to_commit()?;
+        let branch = repo.branch(&branch_name, &commit, false)?;
+        let reference = branch.get();
 
-    // Rolled back on a failed checkout, and fires post-checkout — see
-    // gitflow_start_feature.
-    let old_head = crate::commands::hooks::head_oid_string(&repo);
-    let switch = (|| -> Result<()> {
-        let obj = reference.peel(git2::ObjectType::Commit)?;
-        repo.checkout_tree(&obj, None)?;
-        repo.set_head(reference.name().map_err(|_| {
-            GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
-        })?)?;
-        Ok(())
-    })();
-    if let Err(e) = switch {
-        if let Ok(mut created) = repo.find_branch(&branch_name, git2::BranchType::Local) {
-            let _ = created.delete();
+        // Rolled back on a failed checkout, and fires post-checkout — see
+        // gitflow_start_feature.
+        let old_head = crate::commands::hooks::head_oid_string(&repo);
+        let switch = (|| -> Result<()> {
+            let obj = reference.peel(git2::ObjectType::Commit)?;
+            repo.checkout_tree(&obj, None)?;
+            repo.set_head(reference.name().map_err(|_| {
+                GitnadoError::OperationFailed("Invalid UTF-8 in branch reference name".to_string())
+            })?)?;
+            Ok(())
+        })();
+        if let Err(e) = switch {
+            if let Ok(mut created) = repo.find_branch(&branch_name, git2::BranchType::Local) {
+                let _ = created.delete();
+            }
+            return Err(e);
         }
-        return Err(e);
-    }
-    let new_head = crate::commands::hooks::head_oid_string(&repo);
-    crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
+        let new_head = crate::commands::hooks::head_oid_string(&repo);
+        crate::commands::hooks::run_post_checkout(&repo, &old_head, &new_head, true);
 
-    Ok(Branch {
-        name: branch_name.clone(),
-        shorthand: branch_name,
-        is_head: true,
-        is_remote: false,
-        upstream: None,
-        target_oid: commit.id().to_string(),
-        ahead_behind: None,
-        last_commit_timestamp: Some(commit.time().seconds()),
-        is_stale: false,
+        Ok(Branch {
+            name: branch_name.clone(),
+            shorthand: branch_name,
+            is_head: true,
+            is_remote: false,
+            upstream: None,
+            target_oid: commit.id().to_string(),
+            ahead_behind: None,
+            last_commit_timestamp: Some(commit.time().seconds()),
+            is_stale: false,
+        })
     })
+    .await
 }
 
 /// Finish a git flow hotfix branch (merge into master and develop, tag)

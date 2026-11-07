@@ -4,14 +4,14 @@
  */
 
 import { html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
 import * as aiService from '../../services/ai.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { loggers, handleExternalLink } from '../../utils/index.ts';
-import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
+import { GnProviderDialogBase, providerDialogBaseStyles, type PrReviewComment } from './gn-provider-dialog-base.ts';
 export type { PrReviewComment };
 import type {
   GitLabConnectionStatus,
@@ -46,47 +46,13 @@ export class GnGitLabDialog extends GnProviderDialogBase<
   TabType
 > {
   protected readonly providerDisplayName = 'GitLab';
+  protected readonly integrationType = 'gitlab' as const;
   protected override readonly reviewCommentNoun = 'MR' as const;
+  protected override readonly deferStoreSelectionDuringInit = true;
   static styles = [
     sharedStyles,
+    providerDialogBaseStyles,
     css`
-      .content {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-md);
-        min-height: 400px;
-        max-height: 70vh;
-      }
-
-      .tabs {
-        display: flex;
-        gap: var(--spacing-xs);
-        border-bottom: 1px solid var(--color-border);
-        padding-bottom: var(--spacing-sm);
-      }
-
-      .tab {
-        padding: var(--spacing-xs) var(--spacing-md);
-        border: none;
-        background: none;
-        color: var(--color-text-secondary);
-        font-size: var(--font-size-sm);
-        cursor: pointer;
-        border-radius: var(--radius-sm);
-        transition: all var(--transition-fast);
-      }
-
-      .tab:hover {
-        background: var(--color-bg-hover);
-        color: var(--color-text-primary);
-      }
-
-      .tab.active {
-        background: var(--color-primary-bg);
-        color: var(--color-primary);
-        font-weight: var(--font-weight-medium);
-      }
-
       /* Button styles */
       .btn {
         display: inline-flex;
@@ -151,26 +117,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         color: white;
       }
 
-      .connection-actions {
-        display: flex;
-        gap: var(--spacing-sm);
-        margin-left: auto;
-      }
-
-      .tab-content {
-        flex: 1;
-        overflow: auto;
-      }
-
-      .connection-status {
-        display: flex;
-        align-items: center;
-        gap: var(--spacing-md);
-        padding: var(--spacing-md);
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-md);
-      }
-
       .avatar {
         width: 48px;
         height: 48px;
@@ -190,74 +136,9 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         font-size: var(--font-size-lg);
       }
 
-      .user-info {
-        flex: 1;
-      }
-
-      .user-name {
-        font-weight: var(--font-weight-semibold);
-        color: var(--color-text-primary);
-      }
-
       .user-login {
         font-size: var(--font-size-sm);
         color: var(--color-text-secondary);
-      }
-
-      .token-form {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-md);
-      }
-
-      .form-group {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-xs);
-      }
-
-      .form-group label {
-        font-size: var(--font-size-sm);
-        font-weight: var(--font-weight-medium);
-        color: var(--color-text-secondary);
-      }
-
-      .form-group input,
-      .form-group textarea,
-      .form-group select {
-        padding: var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-md);
-        background: var(--color-bg-secondary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-sm);
-      }
-
-      .form-group textarea {
-        min-height: 100px;
-        resize: vertical;
-        font-family: inherit;
-      }
-
-      .form-group input:focus,
-      .form-group textarea:focus,
-      .form-group select:focus {
-        outline: none;
-        border-color: var(--color-primary);
-      }
-
-      .help-text {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-      }
-
-      .help-link {
-        color: var(--color-primary);
-        text-decoration: none;
-      }
-
-      .help-link:hover {
-        text-decoration: underline;
       }
 
       .mr-list, .issue-list, .pipeline-list {
@@ -281,14 +162,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         background: var(--color-bg-hover);
       }
 
-      .pr-card-wrapper {
-        display: flex;
-        flex-direction: column;
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-md);
-        overflow: hidden;
-      }
-
       .pr-card-wrapper .mr-item {
         border-radius: 0;
       }
@@ -297,118 +170,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         display: flex;
         gap: var(--spacing-xs);
         align-items: center;
-      }
-
-      .pr-comments-drawer {
-        border-top: 1px solid var(--color-border);
-        padding: var(--spacing-md);
-        background: var(--color-bg-secondary);
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-sm);
-      }
-
-      .pr-comments-list {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-sm);
-        max-height: 240px;
-        overflow-y: auto;
-      }
-
-      .pr-comment-item {
-        padding: var(--spacing-sm);
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-sm);
-        border: 1px solid var(--color-border);
-      }
-
-      .pr-comment-header {
-        display: flex;
-        align-items: center;
-        gap: var(--spacing-sm);
-        margin-bottom: var(--spacing-xs);
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-      }
-
-      .pr-comment-author {
-        font-weight: var(--font-weight-semibold);
-        color: var(--color-text-primary);
-      }
-
-      .pr-comment-location {
-        font-family: var(--font-family-mono);
-        background: var(--color-bg-hover);
-        color: var(--color-primary);
-        padding: 1px 6px;
-        border-radius: var(--radius-sm);
-      }
-
-      .pr-comment-body {
-        font-size: var(--font-size-sm);
-        color: var(--color-text-primary);
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .pr-comments-empty {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-        padding: var(--spacing-xs) 0;
-      }
-
-      .pr-comment-form {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-xs);
-        margin-top: var(--spacing-xs);
-      }
-
-      .pr-comment-inline-fields {
-        display: flex;
-        gap: var(--spacing-xs);
-      }
-
-      .pr-comment-file-input {
-        flex: 1;
-        padding: 6px var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono);
-      }
-
-      .pr-comment-line-input {
-        width: 90px;
-        padding: 6px var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono);
-      }
-
-      .pr-comment-input-row {
-        display: flex;
-        gap: var(--spacing-xs);
-        align-items: flex-end;
-      }
-
-      .pr-comment-body-input {
-        flex: 1;
-        padding: var(--spacing-xs) var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-sm);
-        font-family: inherit;
-        resize: vertical;
-        min-height: 48px;
       }
 
       .mr-number, .issue-number {
@@ -626,31 +387,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         justify-content: flex-end;
       }
 
-      .empty-state {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: var(--spacing-xl);
-        color: var(--color-text-muted);
-        text-align: center;
-      }
-
-      .empty-state svg {
-        width: 48px;
-        height: 48px;
-        margin-bottom: var(--spacing-md);
-        opacity: 0.5;
-      }
-
-      .loading {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: var(--spacing-xl);
-        color: var(--color-text-muted);
-      }
-
       .error {
         padding: var(--spacing-md);
         background: var(--color-error-bg);
@@ -769,14 +505,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
     `,
   ];
 
-  /**
-   * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
-   * this dialog was opened with a return target (the profile manager).
-   */
-  @property({ type: Boolean }) backButton = false;
-  /** Profile name for the "Adding to <name>" breadcrumb; empty when standalone. */
-  @property({ type: String }) attachToProfileName = '';
-
   @state() private mergeRequests: GitLabMergeRequest[] = [];
   @state() private issues: GitLabIssue[] = [];
   @state() private pipelines: GitLabPipeline[] = [];
@@ -842,83 +570,46 @@ export class GnGitLabDialog extends GnProviderDialogBase<
       }
     });
 
-    // Subscribe to unified profile store. When the active profile changes,
-    // re-derive the preferred account so a profile switch is reflected here.
-    let lastActiveProfileId = unifiedProfileStore.getState().activeProfile?.id ?? null;
-    const applyAccount = (account: IntegrationAccount | undefined) => {
-      if (!account) return;
-      this.selectedAccountId = account.id;
-      if (account.config.type === 'gitlab' && account.config.instanceUrl) {
-        this.instanceUrlInput = account.config.instanceUrl;
-      }
-    };
-    this.unsubscribeStore = unifiedProfileStore.subscribe((state) => {
-      this.accounts = getAccountsByType('gitlab');
-      if (this.selectedAccountId && !this.accounts.some(a => a.id === this.selectedAccountId)) {
-        this.selectedAccountId = null;
-      }
-      const selectMatchingCandidate = () => {
-        const candidate =
-          getActiveProfilePreferredAccount('gitlab') ??
-          selectDefaultGlobalAccount('gitlab') ??
-          this.accounts[0];
-        if (this.detectedRepo) {
-          const detectedNorm = this.normalizeInstanceUrl(this.detectedRepo.instanceUrl);
-          const candidateNorm =
-            candidate?.config.type === 'gitlab'
-              ? this.normalizeInstanceUrl(candidate.config.instanceUrl)
-              : '';
-          const matching =
-            candidate && (!candidateNorm || candidateNorm === detectedNorm)
-              ? candidate
-              : this.accounts.find(
-                  (a) =>
-                    a.config.type === 'gitlab' &&
-                    (!a.config.instanceUrl ||
-                      this.normalizeInstanceUrl(a.config.instanceUrl) === detectedNorm)
-                );
-          if (matching) {
-            applyAccount(matching);
-          }
-        } else {
-          applyAccount(candidate);
-        }
-      };
-      const activeProfileId = state.activeProfile?.id ?? null;
-      if (activeProfileId !== lastActiveProfileId) {
-        // Track the id either way so this doesn't re-fire, but DON'T clobber a
-        // half-completed "Add account" flow or an in-flight loadInitialData()
-        // that is about to detect the repo and match the host.
-        lastActiveProfileId = activeProfileId;
-        if (!this.isAddingAccount && !this.initInFlight && this.accounts.length > 0) {
-          selectMatchingCandidate();
-        }
-      } else if (
-        !this.isAddingAccount &&
-        !this.initInFlight &&
-        !this.selectedAccountId &&
-        this.accounts.length > 0
-      ) {
-        selectMatchingCandidate();
-      }
-    });
-
-    // Initialize from current state
-    this.accounts = getAccountsByType('gitlab');
-    if (this.accounts.length > 0 && !this.selectedAccountId && !this.open) {
-      applyAccount(
-        getActiveProfilePreferredAccount('gitlab') ?? selectDefaultGlobalAccount('gitlab') ?? this.accounts[0],
-      );
-    }
+    this.setupUnifiedProfileSubscription({ skipInitialSelectionWhenOpen: true });
 
     if (this.open) {
       await this.loadInitialData();
     }
   }
 
-  disconnectedCallback(): void {
+  protected override applyStoreSelectedAccount(account: IntegrationAccount | undefined): void {
+    if (!account) return;
+    this.selectedAccountId = account.id;
+    if (account.config.type === 'gitlab' && account.config.instanceUrl) {
+      this.instanceUrlInput = account.config.instanceUrl;
+    }
+  }
+
+  protected override resolveStorePreferredAccount(): IntegrationAccount | undefined {
+    const candidate =
+      getActiveProfilePreferredAccount('gitlab') ??
+      selectDefaultGlobalAccount('gitlab') ??
+      this.accounts[0];
+    if (this.detectedRepo) {
+      const detectedNorm = this.normalizeInstanceUrl(this.detectedRepo.instanceUrl);
+      const candidateNorm =
+        candidate?.config.type === 'gitlab'
+          ? this.normalizeInstanceUrl(candidate.config.instanceUrl)
+          : '';
+      return candidate && (!candidateNorm || candidateNorm === detectedNorm)
+        ? candidate
+        : this.accounts.find(
+            (a) =>
+              a.config.type === 'gitlab' &&
+              (!a.config.instanceUrl ||
+                this.normalizeInstanceUrl(a.config.instanceUrl) === detectedNorm),
+          );
+    }
+    return candidate;
+  }
+
+  override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.unsubscribeStore?.();
 
     // Clean up OAuth listeners
     if (this.oauthCompleteHandler) {
@@ -1016,18 +707,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         this.isLoading = false;
         this.isDetectingRepo = false;
       }
-    }
-  }
-
-  /**
-   * Mirror a verified connection result into the shared unified-profile store so
-   * other views (e.g. the profile manager's status dots) reflect it immediately.
-   */
-  private syncSharedConnectionStatus(connected: boolean): void {
-    if (this.selectedAccountId) {
-      unifiedProfileStore
-        .getState()
-        .setAccountConnectionStatus(this.selectedAccountId, connected ? 'connected' : 'disconnected');
     }
   }
 
@@ -1197,23 +876,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
     // overwriting the previously-selected account's token.
     this.beginAddAccount();
     this.tokenInput = '';
-  }
-
-  /**
-   * Handle manage accounts request
-   */
-  private handleManageAccounts(e: Event): void {
-    // Consume the account-selector's bubbling/composed event so it can't ALSO
-    // reach the host — otherwise the host would receive both it and our re-dispatch
-    // below, firing its handler twice (the second pass corrupts reversible-Back state).
-    e.stopPropagation();
-    this.dispatchEvent(
-      new CustomEvent('manage-accounts', {
-        detail: { integrationType: 'gitlab' },
-        bubbles: true,
-        composed: true,
-      })
-    );
   }
 
   protected async detectRepo(loadData = true, updateInstanceInput = true): Promise<void> {
@@ -2115,10 +1777,6 @@ export class GnGitLabDialog extends GnProviderDialogBase<
       : [...this.createIssueLabels, label];
   }
 
-  private handleClose(): void {
-    this.dispatchEvent(new CustomEvent('close'));
-  }
-
   private renderConnectionTab() {
     if (this.connectionStatus?.connected && this.connectionStatus.user) {
       const user = this.connectionStatus.user;
@@ -2646,9 +2304,7 @@ export class GnGitLabDialog extends GnProviderDialogBase<
         @close=${this.handleClose}
       >
         <div class="content">
-          ${this.attachToProfileName
-            ? html`<div class="attach-breadcrumb" data-testid="attach-breadcrumb">Adding to <strong>${this.attachToProfileName}</strong></div>`
-            : nothing}
+          ${this.renderAttachBreadcrumb()}
           ${this.renderDetectedRepo()}
 
           ${this.accounts.length > 0 || this.connectionStatus?.connected ? html`

@@ -1144,7 +1144,7 @@ test.describe('Profile CRUD Operations', () => {
     expect(saveCommands.length).toBeGreaterThan(0);
   });
 
-  test('delete profile should invoke delete_profile command', async ({ page }) => {
+  test('delete profile should invoke delete_unified_profile command', async ({ page }) => {
     // Set up with existing profiles
     await setupProfilesAndAccounts(page, {
       profiles: [testProfiles.work, testProfiles.personal],
@@ -1317,7 +1317,6 @@ test.describe('Profile CRUD Operations', () => {
 
     // Inject error for save commands
     await injectCommandError(page, 'save_unified_profile', 'Failed to save profile: disk full');
-    await injectCommandError(page, 'save_profile', 'Failed to save profile: disk full');
     await injectCommandError(page, 'create_profile', 'Failed to save profile: disk full');
 
     const saveButton = page.getByRole('button', { name: 'Save Profile' });

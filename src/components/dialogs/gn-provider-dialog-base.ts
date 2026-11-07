@@ -15,16 +15,297 @@
  * - Common empty states (`renderNoRepo`) and formatting utilities
  */
 
-import { LitElement, html, nothing, type TemplateResult } from 'lit';
+import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import * as gitService from '../../services/git.service.ts';
 import * as unifiedProfileService from '../../services/unified-profile.service.ts';
-import { unifiedProfileStore } from '../../stores/unified-profile.store.ts';
+import {
+  unifiedProfileStore,
+  getAccountsByType,
+  selectDefaultGlobalAccount,
+  getActiveProfilePreferredAccount,
+} from '../../stores/unified-profile.store.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { openExternalUrl } from '../../utils/external-link.ts';
 import type { CommandResult } from '../../types/api.types.ts';
-import type { IntegrationAccount } from '../../types/unified-profile.types.ts';
+import type { IntegrationAccount, IntegrationType } from '../../types/unified-profile.types.ts';
+
+/**
+ * Shared CSS rules for all Git hosting provider dialogs:
+ * - Dialog content & tab bar layout
+ * - Connection status header & token form fields
+ * - Inline PR/MR review comments drawer
+ * - Empty, loading, and error states
+ */
+export const providerDialogBaseStyles = css`
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    min-height: 400px;
+    max-height: 70vh;
+  }
+
+  .tabs {
+    display: flex;
+    gap: var(--spacing-xs);
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: var(--spacing-sm);
+  }
+
+  .tab {
+    padding: var(--spacing-xs) var(--spacing-md);
+    border: none;
+    background: none;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+  }
+
+  .tab:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+  }
+
+  .tab.active {
+    background: var(--color-primary-bg);
+    color: var(--color-primary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .tab-content {
+    flex: 1;
+    overflow: auto;
+  }
+
+  .connection-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-md);
+  }
+
+  .user-info {
+    flex: 1;
+  }
+
+  .user-name {
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .token-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+  }
+
+  .form-group label {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+  }
+
+  .form-group input,
+  .form-group textarea,
+  .form-group select {
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+  }
+
+  .form-group textarea {
+    min-height: 100px;
+    resize: vertical;
+    font-family: inherit;
+  }
+
+  .form-group input:focus,
+  .form-group textarea:focus,
+  .form-group select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+
+  .help-text {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
+  .help-link {
+    color: var(--color-primary);
+    text-decoration: none;
+  }
+
+  .help-link:hover {
+    text-decoration: underline;
+  }
+
+  .pr-card-wrapper {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .pr-comments-drawer {
+    border-top: 1px solid var(--color-border);
+    padding: var(--spacing-md);
+    background: var(--color-bg-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+  }
+
+  .pr-comments-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .pr-comment-item {
+    padding: var(--spacing-sm);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+  }
+
+  .pr-comment-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+  }
+
+  .pr-comment-author {
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .pr-comment-location {
+    font-family: var(--font-family-mono);
+    background: var(--color-bg-hover);
+    color: var(--color-primary);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  .pr-comment-body {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .pr-comments-empty {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    padding: var(--spacing-xs) 0;
+  }
+
+  .pr-comment-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-xs);
+  }
+
+  .pr-comment-inline-fields {
+    display: flex;
+    gap: var(--spacing-xs);
+  }
+
+  .pr-comment-file-input {
+    flex: 1;
+    padding: 6px var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xs);
+    font-family: var(--font-family-mono);
+  }
+
+  .pr-comment-line-input {
+    width: 90px;
+    padding: 6px var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xs);
+    font-family: var(--font-family-mono);
+  }
+
+  .pr-comment-input-row {
+    display: flex;
+    gap: var(--spacing-xs);
+    align-items: flex-end;
+  }
+
+  .pr-comment-body-input {
+    flex: 1;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    resize: vertical;
+    min-height: 48px;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xl);
+    color: var(--color-text-muted);
+    text-align: center;
+  }
+
+  .empty-state svg {
+    width: 48px;
+    height: 48px;
+    margin-bottom: var(--spacing-md);
+    opacity: 0.5;
+  }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xl);
+    color: var(--color-text-muted);
+  }
+
+  .connection-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    margin-left: auto;
+  }
+`;
 
 export interface PrReviewComment {
   id: string | number;
@@ -54,6 +335,8 @@ export abstract class GnProviderDialogBase<
 > extends LitElement {
   @property({ type: Boolean, reflect: true }) open = false;
   @property({ type: String }) repositoryPath = '';
+  @property({ type: Boolean }) backButton = false;
+  @property({ type: String }) attachToProfileName = '';
 
   @state() protected activeTab: TTab = 'connection' as TTab;
   @state() protected connectionStatus: TConnectionStatus | null = null;
@@ -93,6 +376,9 @@ export abstract class GnProviderDialogBase<
 
   /** Human-readable provider name used in common empty-state copy. */
   protected abstract readonly providerDisplayName: string;
+
+  /** Canonical integration type for account management events. */
+  protected abstract readonly integrationType: IntegrationType;
 
   /** Noun used in comment error messages ('PR' or 'MR'). */
   protected readonly reviewCommentNoun: 'PR' | 'MR' = 'PR';
@@ -140,6 +426,133 @@ export abstract class GnProviderDialogBase<
   /** Optional hook invoked when `open` transitions to `true` before `loadInitialData()`. */
   protected onBeforeOpen(): void {
     // Subclasses can override (e.g. Bitbucket data-ready attribute, ADO Entra flow cleanup)
+  }
+
+  /** Optional hook invoked before closing or navigating to manage-accounts. */
+  protected onBeforeCloseOrNavigate(): void {
+    // Subclasses can override (e.g. ADO Entra flow cleanup)
+  }
+
+  /**
+   * Sync `this.accounts` from `unifiedProfileStore` for `this.integrationType`.
+   * Subclasses may override to avoid replacing `this.accounts` when shallowly unchanged.
+   */
+  protected syncAccountsFromStore(): void {
+    this.accounts = getAccountsByType(this.integrationType);
+  }
+
+  /**
+   * Apply a store-selected account to component state (e.g. setting `selectedAccountId`
+   * and any account-specific form inputs like `instanceUrlInput` or `organizationInput`).
+   */
+  protected applyStoreSelectedAccount(account: IntegrationAccount | undefined): void {
+    this.selectedAccountId = account?.id ?? null;
+  }
+
+  /**
+   * Resolve the preferred account when `unifiedProfileStore` emits a profile switch or
+   * initial account list. Subclasses can override to match against `this.detectedRepo`
+   * (e.g. GitLab instance URL or Azure DevOps organization).
+   */
+  protected resolveStorePreferredAccount(includeGlobalDefault: boolean): IntegrationAccount | undefined {
+    const preferred = getActiveProfilePreferredAccount(this.integrationType);
+    if (preferred) return preferred;
+    if (includeGlobalDefault) {
+      return selectDefaultGlobalAccount(this.integrationType) ?? this.accounts[0];
+    }
+    return this.accounts[0];
+  }
+
+  /**
+   * Whether a store subscription update should skip re-selecting an account while
+   * `initInFlight` is active (used by host-matching providers like GitLab and ADO).
+   */
+  protected readonly deferStoreSelectionDuringInit: boolean = false;
+
+  /**
+   * Subscribe to `unifiedProfileStore` and initialize `accounts` / `selectedAccountId`.
+   * Automatically cleaned up in `disconnectedCallback()`.
+   */
+  protected setupUnifiedProfileSubscription(options?: { skipInitialSelectionWhenOpen?: boolean }): void {
+    let lastActiveProfileId = unifiedProfileStore.getState().activeProfile?.id ?? null;
+    this.unsubscribeStore = unifiedProfileStore.subscribe((state) => {
+      this.syncAccountsFromStore();
+      if (this.selectedAccountId && !this.accounts.some((a) => a.id === this.selectedAccountId)) {
+        this.selectedAccountId = null;
+      }
+      const activeProfileId = state.activeProfile?.id ?? null;
+      const deferForInit = this.deferStoreSelectionDuringInit && this.initInFlight;
+      if (activeProfileId !== lastActiveProfileId) {
+        lastActiveProfileId = activeProfileId;
+        if (!this.isAddingAccount && !deferForInit && this.accounts.length > 0) {
+          this.applyStoreSelectedAccount(
+            this.resolveStorePreferredAccount(this.deferStoreSelectionDuringInit),
+          );
+        } else if (!this.isAddingAccount && !deferForInit && this.accounts.length === 0) {
+          this.selectedAccountId = null;
+        }
+      } else if (
+        !this.isAddingAccount &&
+        !deferForInit &&
+        !this.selectedAccountId &&
+        this.accounts.length > 0
+      ) {
+        this.applyStoreSelectedAccount(this.resolveStorePreferredAccount(true));
+      }
+    });
+
+    this.syncAccountsFromStore();
+    if (
+      this.accounts.length > 0 &&
+      !this.selectedAccountId &&
+      !(options?.skipInitialSelectionWhenOpen && this.open)
+    ) {
+      const initial =
+        getActiveProfilePreferredAccount(this.integrationType) ??
+        selectDefaultGlobalAccount(this.integrationType) ??
+        this.accounts[0];
+      this.applyStoreSelectedAccount(initial);
+    }
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.unsubscribeStore?.();
+  }
+
+  /**
+   * Mirror a verified connection result into the shared unified-profile store so
+   * other views (e.g. the profile manager's status dots) reflect it immediately.
+   */
+  protected syncSharedConnectionStatus(connected: boolean, accountId: string | null = this.selectedAccountId): void {
+    if (accountId) {
+      unifiedProfileStore
+        .getState()
+        .setAccountConnectionStatus(accountId, connected ? 'connected' : 'disconnected');
+    }
+  }
+
+  protected handleManageAccounts(e: Event): void {
+    this.onBeforeCloseOrNavigate();
+    e.stopPropagation();
+    this.dispatchEvent(
+      new CustomEvent('manage-accounts', {
+        detail: { integrationType: this.integrationType },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  protected handleClose(): void {
+    this.onBeforeCloseOrNavigate();
+    this.dispatchEvent(new CustomEvent('close'));
+  }
+
+  protected renderAttachBreadcrumb(): TemplateResult | typeof nothing {
+    return this.attachToProfileName
+      ? html`<div class="attach-breadcrumb" data-testid="attach-breadcrumb">Adding to <strong>${this.attachToProfileName}</strong></div>`
+      : nothing;
   }
 
   /** Whether interactive account setup (e.g. "+ Add Account" or org picker) is still pending. */

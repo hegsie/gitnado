@@ -70,6 +70,7 @@ pub fn get_app_version() -> String {
 }
 
 /// Build information for supply chain transparency
+#[cfg(test)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildInfo {
@@ -80,7 +81,7 @@ pub struct BuildInfo {
 }
 
 /// Get build information for security/transparency display
-#[command]
+#[cfg(test)]
 pub fn get_build_info() -> BuildInfo {
     BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),

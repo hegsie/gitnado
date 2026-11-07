@@ -57,45 +57,48 @@ pub struct ReflogEntry {
 /// Get the reflog entries for HEAD
 #[command]
 pub async fn get_reflog(path: String, limit: Option<usize>) -> Result<Vec<ReflogEntry>> {
-    let repo = git2::Repository::open(Path::new(&path))?;
-    let reflog = repo.reflog("HEAD")?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
+        let reflog = repo.reflog("HEAD")?;
 
-    let limit_count = limit.unwrap_or(100);
-    let mut entries = Vec::new();
+        let limit_count = limit.unwrap_or(100);
+        let mut entries = Vec::new();
 
-    for (index, entry) in reflog.iter().enumerate() {
-        if entries.len() >= limit_count {
-            break;
+        for (index, entry) in reflog.iter().enumerate() {
+            if entries.len() >= limit_count {
+                break;
+            }
+
+            let oid = entry.id_new();
+            let message = entry.message().ok().flatten().unwrap_or("").to_string();
+
+            // Parse action from message (format is usually "action: details")
+            let action = message
+                .split(':')
+                .next()
+                .unwrap_or("unknown")
+                .trim()
+                .to_string();
+
+            entries.push(ReflogEntry {
+                oid: oid.to_string(),
+                short_id: oid.to_string()[..7.min(oid.to_string().len())].to_string(),
+                index,
+                action,
+                message,
+                timestamp: entry.committer().when().seconds(),
+                author: entry
+                    .committer()
+                    .name()
+                    .ok()
+                    .unwrap_or("Unknown")
+                    .to_string(),
+            });
         }
 
-        let oid = entry.id_new();
-        let message = entry.message().ok().flatten().unwrap_or("").to_string();
-
-        // Parse action from message (format is usually "action: details")
-        let action = message
-            .split(':')
-            .next()
-            .unwrap_or("unknown")
-            .trim()
-            .to_string();
-
-        entries.push(ReflogEntry {
-            oid: oid.to_string(),
-            short_id: oid.to_string()[..7.min(oid.to_string().len())].to_string(),
-            index,
-            action,
-            message,
-            timestamp: entry.committer().when().seconds(),
-            author: entry
-                .committer()
-                .name()
-                .ok()
-                .unwrap_or("Unknown")
-                .to_string(),
-        });
-    }
-
-    Ok(entries)
+        Ok(entries)
+    })
+    .await
 }
 
 /// Reset HEAD to a specific reflog entry (undo operation)
@@ -106,78 +109,65 @@ pub async fn reset_to_reflog(
     mode: String,
     expected_oid: Option<String>,
 ) -> Result<ReflogEntry> {
-    let repo = git2::Repository::open(Path::new(&path))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(Path::new(&path))?;
 
-    // Extract entry info before any borrows
-    let (target_oid_str, message, timestamp, author) = {
-        let reflog = repo.reflog("HEAD")?;
-        let entry = reflog.get(reflog_index).ok_or_else(|| {
-            crate::error::GitnadoError::OperationFailed(format!(
-                "Reflog entry {} not found",
-                reflog_index
-            ))
-        })?;
+        // Extract entry info before any borrows
+        let (target_oid_str, message, timestamp, author) = {
+            let reflog = repo.reflog("HEAD")?;
+            let entry = reflog.get(reflog_index).ok_or_else(|| {
+                crate::error::GitnadoError::OperationFailed(format!(
+                    "Reflog entry {} not found",
+                    reflog_index
+                ))
+            })?;
 
-        let oid_str = entry.id_new().to_string();
+            let oid_str = entry.id_new().to_string();
 
-        // `reflog_index` is a POSITION: anything that writes HEAD's reflog (a
-        // commit or checkout from a terminal, or a second window) shifts every
-        // entry down by one. The caller listed the reflog earlier and showed the
-        // user a specific commit, so verify the position still holds that commit
-        // before resetting — otherwise a hard reset discards uncommitted work to
-        // land somewhere the user never chose.
-        if let Some(expected) = &expected_oid {
-            if &oid_str != expected {
-                return Err(crate::error::GitnadoError::OperationFailed(
-                    "The reflog changed since this entry was listed — refresh and try again."
-                        .to_string(),
-                ));
+            if let Some(expected) = &expected_oid {
+                if &oid_str != expected {
+                    return Err(crate::error::GitnadoError::OperationFailed(
+                        "The reflog changed since this entry was listed — refresh and try again."
+                            .to_string(),
+                    ));
+                }
             }
-        }
-        let msg = entry.message().ok().flatten().unwrap_or("").to_string();
-        let committer = entry.committer();
-        let ts = committer.when().seconds();
-        let auth = committer.name().ok().unwrap_or("Unknown").to_string();
+            let msg = entry.message().ok().flatten().unwrap_or("").to_string();
+            let committer = entry.committer();
+            let ts = committer.when().seconds();
+            let auth = committer.name().ok().unwrap_or("Unknown").to_string();
 
-        (oid_str, msg, ts, auth)
-    };
+            (oid_str, msg, ts, auth)
+        };
 
-    let target_oid = git2::Oid::from_str(&target_oid_str)?;
-    let target_commit = repo.find_commit(target_oid)?;
+        let target_oid = git2::Oid::from_str(&target_oid_str)?;
+        let target_commit = repo.find_commit(target_oid)?;
 
-    // Determine reset type
-    let reset_type = match mode.as_str() {
-        "soft" => git2::ResetType::Soft,
-        "mixed" => git2::ResetType::Mixed,
-        "hard" => git2::ResetType::Hard,
-        _ => git2::ResetType::Mixed,
-    };
+        // Determine reset type
+        let reset_type = match mode.as_str() {
+            "soft" => git2::ResetType::Soft,
+            "mixed" => git2::ResetType::Mixed,
+            "hard" => git2::ResetType::Hard,
+            _ => git2::ResetType::Mixed,
+        };
 
-    // A MIXED or HARD reset triggers libgit2's repository state cleanup, which
-    // would delete any in-progress rebase/bisect/sequencer state.
-    //
-    // A SOFT reset skips that cleanup, but it still repoints HEAD — and doing
-    // that under a paused rebase leaves the sequencer's orig-head/onto files
-    // describing a base the user never chose, so Continue replays onto the
-    // wrong commit. `rewrite.rs`'s reset applies this check for every mode, so
-    // gating it on the type here meant the same soft reset was refused from the
-    // graph and allowed from Undo History. Round 30 shared the helper between
-    // the two paths but not the condition; this finishes that.
-    ensure_resettable(&repo)?;
+        ensure_resettable(&repo)?;
 
-    // Perform the reset
-    repo.reset(target_commit.as_object(), reset_type, None)?;
+        // Perform the reset
+        repo.reset(target_commit.as_object(), reset_type, None)?;
 
-    // Return info about where we reset to
-    Ok(ReflogEntry {
-        oid: target_oid_str.clone(),
-        short_id: target_oid_str[..7.min(target_oid_str.len())].to_string(),
-        index: reflog_index,
-        action: "reset".to_string(),
-        message,
-        timestamp,
-        author,
+        // Return info about where we reset to
+        Ok(ReflogEntry {
+            oid: target_oid_str.clone(),
+            short_id: target_oid_str[..7.min(target_oid_str.len())].to_string(),
+            index: reflog_index,
+            action: "reset".to_string(),
+            message,
+            timestamp,
+            author,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

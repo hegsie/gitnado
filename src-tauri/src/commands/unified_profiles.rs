@@ -9,9 +9,8 @@ use tauri::command;
 
 use crate::error::{GitnadoError, Result};
 use crate::models::{
-    CachedUser, IntegrationAccount, IntegrationAccountsConfig, IntegrationType,
-    ProfileIntegrationAccount, ProfilesConfig, UnifiedProfile, UnifiedProfilesConfig,
-    PROFILE_COLORS, UNIFIED_PROFILES_CONFIG_VERSION,
+    CachedUser, IntegrationAccount, IntegrationAccountsConfig, IntegrationType, ProfilesConfig,
+    UnifiedProfile, UnifiedProfilesConfig, PROFILE_COLORS, UNIFIED_PROFILES_CONFIG_VERSION,
 };
 use crate::utils::create_command;
 
@@ -398,109 +397,6 @@ pub async fn get_repository_preferred_account(
     Ok(config
         .get_repository_preferred_account(&profile_id, &integration_type, repo_url.as_deref())
         .cloned())
-}
-
-// =============================================================================
-// Deprecated Profile-Scoped Account Commands (kept for backward compatibility)
-// =============================================================================
-
-/// Add an integration account to a profile
-/// @deprecated Use save_global_account instead
-#[command]
-pub async fn add_account_to_profile(
-    _profile_id: String,
-    account: ProfileIntegrationAccount,
-) -> Result<ProfileIntegrationAccount> {
-    // Convert to global account and save
-    let global_account = IntegrationAccount {
-        id: account.id.clone(),
-        name: account.name.clone(),
-        integration_type: account.integration_type.clone(),
-        config: account.config.clone(),
-        color: account.color.clone(),
-        cached_user: account.cached_user.clone(),
-        url_patterns: Vec::new(),
-        is_default: account.is_default_for_type,
-    };
-
-    let mut config = load_unified_profiles_config()?;
-    config.save_account(global_account);
-    save_unified_profiles_config(&config)?;
-    Ok(account)
-}
-
-/// Update an integration account within a profile
-/// @deprecated Use save_global_account instead
-#[command]
-pub async fn update_account_in_profile(
-    _profile_id: String,
-    account: ProfileIntegrationAccount,
-) -> Result<ProfileIntegrationAccount> {
-    let global_account = IntegrationAccount {
-        id: account.id.clone(),
-        name: account.name.clone(),
-        integration_type: account.integration_type.clone(),
-        config: account.config.clone(),
-        color: account.color.clone(),
-        cached_user: account.cached_user.clone(),
-        url_patterns: Vec::new(),
-        is_default: account.is_default_for_type,
-    };
-
-    let mut config = load_unified_profiles_config()?;
-    config.save_account(global_account);
-    save_unified_profiles_config(&config)?;
-    Ok(account)
-}
-
-/// Remove an integration account from a profile
-/// @deprecated Use delete_global_account instead
-#[command]
-pub async fn remove_account_from_profile(_profile_id: String, account_id: String) -> Result<()> {
-    let mut config = load_unified_profiles_config()?;
-    config.delete_account(&account_id);
-    save_unified_profiles_config(&config)?;
-    Ok(())
-}
-
-/// Set an account as the default for its type within a profile
-/// @deprecated Use set_profile_default_account instead
-#[command]
-pub async fn set_default_account_in_profile(profile_id: String, account_id: String) -> Result<()> {
-    let mut config = load_unified_profiles_config()?;
-
-    // Find the account to get its type
-    let integration_type = config
-        .get_account(&account_id)
-        .map(|a| a.integration_type.clone())
-        .ok_or_else(|| GitnadoError::OperationFailed("Account not found".to_string()))?;
-
-    // Set as profile's preferred account
-    if let Some(profile) = config.get_profile_mut(&profile_id) {
-        profile.set_default_account(integration_type, account_id);
-    }
-
-    save_unified_profiles_config(&config)?;
-    Ok(())
-}
-
-/// Update cached user info for an account within a profile
-/// @deprecated Use update_global_account_cached_user instead
-#[command]
-pub async fn update_profile_account_cached_user(
-    _profile_id: String,
-    account_id: String,
-    user: CachedUser,
-) -> Result<()> {
-    let mut config = load_unified_profiles_config()?;
-
-    let account = config
-        .get_account_mut(&account_id)
-        .ok_or_else(|| GitnadoError::OperationFailed("Account not found".to_string()))?;
-
-    account.update_cached_user(user);
-    save_unified_profiles_config(&config)?;
-    Ok(())
 }
 
 // =============================================================================
@@ -1288,22 +1184,6 @@ pub async fn delete_migration_backup() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Get an account from global accounts (for compatibility during transition)
-///
-/// V10: The former return type `(String, IntegrationAccount)` always carried an
-/// empty profile-id string, which was misleading.  The tuple has been collapsed
-/// to `Option<IntegrationAccount>`.  Any TypeScript caller that destructured
-/// `[profileId, account]` must be updated to receive a plain account object.
-///
-/// @deprecated Use get_global_account instead
-#[command]
-pub async fn get_account_from_any_profile(
-    account_id: String,
-) -> Result<Option<IntegrationAccount>> {
-    let config = load_unified_profiles_config()?;
-    Ok(config.get_account(&account_id).cloned())
 }
 
 /// Get account for a repository by integration type (from the assigned/detected profile)

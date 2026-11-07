@@ -15,20 +15,6 @@ use crate::utils::{apply_token_credential_helper, create_command};
 // Structs from HEAD (feature branch)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Result of a garbage collection operation
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GcResult {
-    /// Whether the operation completed successfully
-    pub success: bool,
-    /// Human-readable message about the operation
-    pub message: String,
-    /// Number of objects before GC (if available)
-    pub objects_before: Option<u64>,
-    /// Number of objects after GC (if available)
-    pub objects_after: Option<u64>,
-}
-
 /// Result of a prune operation for remote tracking branches
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,19 +25,8 @@ pub struct PruneResult {
     pub branches_pruned: Vec<String>,
 }
 
-/// Result of a repository integrity check (fsck)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsckResult {
-    /// Whether the repository is valid (no errors)
-    pub is_valid: bool,
-    /// List of errors found
-    pub errors: Vec<String>,
-    /// List of warnings found
-    pub warnings: Vec<String>,
-}
-
 /// Information about repository size and storage
+#[cfg(test)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoSizeInfo {
@@ -105,6 +80,7 @@ pub struct PackInfo {
 // ──────────────────────────────────────────────────────────────────────────────
 
 /// Count loose objects in the repository
+#[cfg(test)]
 fn count_loose_objects(git_dir: &Path) -> u32 {
     let objects_dir = git_dir.join("objects");
     let mut count = 0u32;
@@ -123,6 +99,7 @@ fn count_loose_objects(git_dir: &Path) -> u32 {
 }
 
 /// Count pack files in the repository
+#[cfg(test)]
 fn count_pack_files(git_dir: &Path) -> u32 {
     let pack_dir = git_dir.join("objects").join("pack");
     if !pack_dir.is_dir() {
@@ -145,6 +122,7 @@ fn count_pack_files(git_dir: &Path) -> u32 {
 }
 
 /// Calculate directory size recursively
+#[cfg(test)]
 fn calculate_dir_size(path: &Path) -> u64 {
     if !path.is_dir() {
         return 0;
@@ -171,77 +149,6 @@ fn calculate_dir_size(path: &Path) -> u64 {
 // ──────────────────────────────────────────────────────────────────────────────
 // Commands from HEAD (feature branch)
 // ──────────────────────────────────────────────────────────────────────────────
-
-/// Run garbage collection on a repository
-///
-/// This runs `git gc` to clean up unnecessary files and optimize the repository.
-#[command]
-pub async fn run_garbage_collection(
-    path: String,
-    aggressive: bool,
-    prune: Option<String>,
-) -> Result<GcResult> {
-    let repo_path = Path::new(&path);
-
-    // Verify the repository exists
-    if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(GitnadoError::RepositoryNotFound(path));
-    }
-
-    // Get objects count before GC
-    let git_dir = if repo_path.join(".git").exists() {
-        repo_path.join(".git")
-    } else {
-        repo_path.to_path_buf() // bare repository
-    };
-    let objects_before = Some(count_loose_objects(&git_dir) as u64);
-
-    // Build the git gc command
-    let mut cmd = create_command("git");
-    cmd.current_dir(&path);
-    cmd.arg("gc");
-
-    if aggressive {
-        cmd.arg("--aggressive");
-    }
-
-    if let Some(ref prune_date) = prune {
-        cmd.arg(format!("--prune={}", prune_date));
-    }
-
-    // Execute the command
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git gc: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // Get objects count after GC
-    let objects_after = Some(count_loose_objects(&git_dir) as u64);
-
-    if output.status.success() {
-        let message = if stdout.trim().is_empty() && stderr.trim().is_empty() {
-            "Garbage collection completed successfully".to_string()
-        } else {
-            format!("{}{}", stdout.trim(), stderr.trim())
-        };
-
-        Ok(GcResult {
-            success: true,
-            message,
-            objects_before,
-            objects_after,
-        })
-    } else {
-        Ok(GcResult {
-            success: false,
-            message: format!("Garbage collection failed: {}", stderr.trim()),
-            objects_before,
-            objects_after: None,
-        })
-    }
-}
 
 /// The URL a remote points at, or `None` when the repository does not name it.
 ///
@@ -375,84 +282,10 @@ pub async fn prune_remote_tracking_branches(
     })
 }
 
-/// Verify repository integrity using fsck
-///
-/// This runs `git fsck` to check the connectivity and validity of objects.
-#[command]
-pub async fn verify_repository(path: String, full: bool) -> Result<FsckResult> {
-    let repo_path = Path::new(&path);
-
-    // Verify the repository exists
-    if !repo_path.join(".git").exists() && !repo_path.join("HEAD").exists() {
-        return Err(GitnadoError::RepositoryNotFound(path));
-    }
-
-    // Build the git fsck command
-    let mut cmd = create_command("git");
-    cmd.current_dir(&path);
-    cmd.arg("fsck");
-
-    if full {
-        cmd.arg("--full");
-    }
-
-    // Execute the command
-    let output = cmd
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to execute git fsck: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // Parse output for errors and warnings
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-
-    // Combine stdout and stderr for parsing
-    let combined = format!("{}{}", stdout, stderr);
-
-    for line in combined.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // Classify the message
-        let lower = line.to_lowercase();
-        if lower.contains("error")
-            || lower.contains("missing")
-            || lower.contains("broken")
-            || lower.contains("corrupt")
-            || lower.contains("invalid")
-        {
-            errors.push(line.to_string());
-        } else if lower.contains("warning") || lower.contains("dangling") {
-            warnings.push(line.to_string());
-        } else if !lower.contains("checking") && !lower.contains("verifying") {
-            // Other messages that aren't status updates
-            if lower.contains("notice") {
-                warnings.push(line.to_string());
-            } else {
-                // Could be informational or an issue
-                warnings.push(line.to_string());
-            }
-        }
-    }
-
-    // Repository is valid if there are no errors (warnings are acceptable)
-    let is_valid = errors.is_empty() && output.status.success();
-
-    Ok(FsckResult {
-        is_valid,
-        errors,
-        warnings,
-    })
-}
-
 /// Get repository size information
 ///
 /// Returns information about the repository's storage usage.
-#[command]
+#[cfg(test)]
 pub async fn get_repo_size_info(path: String) -> Result<RepoSizeInfo> {
     let repo_path = Path::new(&path);
 
@@ -793,47 +626,6 @@ mod tests {
 
     // ── Tests from HEAD (feature branch) ─────────────────────────────────
 
-    #[tokio::test]
-    async fn test_run_garbage_collection_basic() {
-        let repo = TestRepo::with_initial_commit();
-
-        let result = run_garbage_collection(repo.path_str(), false, None).await;
-
-        assert!(result.is_ok());
-        let gc_result = result.unwrap();
-        assert!(gc_result.success);
-    }
-
-    #[tokio::test]
-    async fn test_run_garbage_collection_aggressive() {
-        let repo = TestRepo::with_initial_commit();
-
-        let result = run_garbage_collection(repo.path_str(), true, None).await;
-
-        assert!(result.is_ok());
-        let gc_result = result.unwrap();
-        assert!(gc_result.success);
-    }
-
-    #[tokio::test]
-    async fn test_run_garbage_collection_with_prune() {
-        let repo = TestRepo::with_initial_commit();
-
-        let result =
-            run_garbage_collection(repo.path_str(), false, Some("2.weeks.ago".to_string())).await;
-
-        assert!(result.is_ok());
-        let gc_result = result.unwrap();
-        assert!(gc_result.success);
-    }
-
-    #[tokio::test]
-    async fn test_run_garbage_collection_invalid_path() {
-        let result = run_garbage_collection("/nonexistent/path".to_string(), false, None).await;
-
-        assert!(result.is_err());
-    }
-
     /// The frontend enumerates the repo's remotes, so an empty list reaches
     /// here for a repo that has none. It must be a no-op, not an error.
     #[tokio::test]
@@ -1072,37 +864,6 @@ mod tests {
         let _policy = no_policy();
         let result =
             prune_remote_tracking_branches("/nonexistent/path".to_string(), vec![], None).await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_verify_repository_basic() {
-        let repo = TestRepo::with_initial_commit();
-
-        let result = verify_repository(repo.path_str(), false).await;
-
-        assert!(result.is_ok());
-        let fsck_result = result.unwrap();
-        assert!(fsck_result.is_valid);
-        assert!(fsck_result.errors.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_verify_repository_full() {
-        let repo = TestRepo::with_initial_commit();
-
-        let result = verify_repository(repo.path_str(), true).await;
-
-        assert!(result.is_ok());
-        let fsck_result = result.unwrap();
-        assert!(fsck_result.is_valid);
-        assert!(fsck_result.errors.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_verify_repository_invalid_path() {
-        let result = verify_repository("/nonexistent/path".to_string(), false).await;
 
         assert!(result.is_err());
     }

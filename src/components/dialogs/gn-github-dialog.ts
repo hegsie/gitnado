@@ -4,12 +4,12 @@
  */
 
 import { html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { invokeCommand } from '../../services/tauri-api.ts';
 import { loggers, handleExternalLink } from '../../utils/index.ts';
-import { GnProviderDialogBase, type PrReviewComment } from './gn-provider-dialog-base.ts';
+import { GnProviderDialogBase, providerDialogBaseStyles, type PrReviewComment } from './gn-provider-dialog-base.ts';
 export type { PrReviewComment };
 import type {
   GitHubConnectionStatus,
@@ -55,74 +55,15 @@ export class GnGitHubDialog extends GnProviderDialogBase<
   TabType
 > {
   protected readonly providerDisplayName = 'GitHub';
+  protected readonly integrationType = 'github' as const;
   static styles = [
     sharedStyles,
+    providerDialogBaseStyles,
     css`
-      .content {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-md);
-        min-height: 400px;
-        max-height: 70vh;
-      }
-
-      .tabs {
-        display: flex;
-        gap: var(--spacing-xs);
-        border-bottom: 1px solid var(--color-border);
-        padding-bottom: var(--spacing-sm);
-      }
-
-      .tab {
-        padding: var(--spacing-xs) var(--spacing-md);
-        border: none;
-        background: none;
-        color: var(--color-text-secondary);
-        font-size: var(--font-size-sm);
-        cursor: pointer;
-        border-radius: var(--radius-sm);
-        transition: all var(--transition-fast);
-      }
-
-      .tab:hover {
-        background: var(--color-bg-hover);
-        color: var(--color-text-primary);
-      }
-
-      .tab.active {
-        background: var(--color-primary-bg);
-        color: var(--color-primary);
-        font-weight: var(--font-weight-medium);
-      }
-
-      .tab-content {
-        flex: 1;
-        overflow: auto;
-      }
-
-      /* Connection Tab */
-      .connection-status {
-        display: flex;
-        align-items: center;
-        gap: var(--spacing-md);
-        padding: var(--spacing-md);
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-md);
-      }
-
       .avatar {
         width: 48px;
         height: 48px;
         border-radius: 50%;
-      }
-
-      .user-info {
-        flex: 1;
-      }
-
-      .user-name {
-        font-weight: var(--font-weight-semibold);
-        color: var(--color-text-primary);
       }
 
       .user-login {
@@ -143,12 +84,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
         background: var(--color-bg-hover);
         border-radius: var(--radius-sm);
         color: var(--color-text-muted);
-      }
-
-      .token-form {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-md);
       }
 
       /* Auth method toggle */
@@ -254,54 +189,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
         to { transform: rotate(360deg); }
       }
 
-      .form-group {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-xs);
-      }
-
-      .form-group label {
-        font-size: var(--font-size-sm);
-        font-weight: var(--font-weight-medium);
-        color: var(--color-text-secondary);
-      }
-
-      .form-group input,
-      .form-group textarea {
-        padding: var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-md);
-        background: var(--color-bg-secondary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-sm);
-      }
-
-      .form-group textarea {
-        min-height: 100px;
-        resize: vertical;
-        font-family: inherit;
-      }
-
-      .form-group input:focus,
-      .form-group textarea:focus {
-        outline: none;
-        border-color: var(--color-primary);
-      }
-
-      .help-text {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-      }
-
-      .help-link {
-        color: var(--color-primary);
-        text-decoration: none;
-      }
-
-      .help-link:hover {
-        text-decoration: underline;
-      }
-
       /* PR List */
       .pr-list {
         display: flex;
@@ -324,128 +211,8 @@ export class GnGitHubDialog extends GnProviderDialogBase<
         background: var(--color-bg-hover);
       }
 
-      .pr-card-wrapper {
-        display: flex;
-        flex-direction: column;
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-md);
-        overflow: hidden;
-      }
-
       .pr-card-wrapper .pr-item {
         border-radius: 0;
-      }
-
-      .pr-comments-drawer {
-        border-top: 1px solid var(--color-border);
-        padding: var(--spacing-md);
-        background: var(--color-bg-secondary);
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-sm);
-      }
-
-      .pr-comments-list {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-sm);
-        max-height: 240px;
-        overflow-y: auto;
-      }
-
-      .pr-comment-item {
-        padding: var(--spacing-sm);
-        background: var(--color-bg-tertiary);
-        border-radius: var(--radius-sm);
-        border: 1px solid var(--color-border);
-      }
-
-      .pr-comment-header {
-        display: flex;
-        align-items: center;
-        gap: var(--spacing-sm);
-        margin-bottom: var(--spacing-xs);
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-      }
-
-      .pr-comment-author {
-        font-weight: var(--font-weight-semibold);
-        color: var(--color-text-primary);
-      }
-
-      .pr-comment-location {
-        font-family: var(--font-family-mono);
-        background: var(--color-bg-hover);
-        color: var(--color-primary);
-        padding: 1px 6px;
-        border-radius: var(--radius-sm);
-      }
-
-      .pr-comment-body {
-        font-size: var(--font-size-sm);
-        color: var(--color-text-primary);
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .pr-comments-empty {
-        font-size: var(--font-size-xs);
-        color: var(--color-text-muted);
-        padding: var(--spacing-xs) 0;
-      }
-
-      .pr-comment-form {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacing-xs);
-        margin-top: var(--spacing-xs);
-      }
-
-      .pr-comment-inline-fields {
-        display: flex;
-        gap: var(--spacing-xs);
-      }
-
-      .pr-comment-file-input {
-        flex: 1;
-        padding: 6px var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono);
-      }
-
-      .pr-comment-line-input {
-        width: 90px;
-        padding: 6px var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono);
-      }
-
-      .pr-comment-input-row {
-        display: flex;
-        gap: var(--spacing-xs);
-        align-items: flex-end;
-      }
-
-      .pr-comment-body-input {
-        flex: 1;
-        padding: var(--spacing-xs) var(--spacing-sm);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-sm);
-        background: var(--color-bg-primary);
-        color: var(--color-text-primary);
-        font-size: var(--font-size-sm);
-        font-family: inherit;
-        resize: vertical;
-        min-height: 48px;
       }
 
       .pr-number {
@@ -749,38 +516,12 @@ export class GnGitHubDialog extends GnProviderDialogBase<
         padding: var(--spacing-sm) 0;
       }
 
-      /* Empty/Error States */
-      .empty-state {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: var(--spacing-xl);
-        text-align: center;
-        color: var(--color-text-muted);
-      }
-
-      .empty-state svg {
-        width: 48px;
-        height: 48px;
-        margin-bottom: var(--spacing-md);
-        opacity: 0.5;
-      }
-
       .error-message {
         padding: var(--spacing-md);
         background: var(--color-error-bg);
         color: var(--color-error);
         border-radius: var(--radius-md);
         font-size: var(--font-size-sm);
-      }
-
-      .loading {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: var(--spacing-xl);
-        color: var(--color-text-muted);
       }
 
       /* Buttons */
@@ -840,12 +581,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
         color: white;
       }
 
-      .connection-actions {
-        display: flex;
-        gap: var(--spacing-sm);
-        margin-left: auto;
-      }
-
       /* Filter row */
       .filter-row {
         display: flex;
@@ -890,20 +625,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
       }
     `,
   ];
-
-  /**
-   * Show a back arrow instead of a close ×. Set explicitly by the host ONLY when
-   * this dialog was opened with a return target (the profile manager), so the
-   * arrow's presence reflects HOW the dialog was opened — not unrelated global
-   * state.
-   */
-  @property({ type: Boolean }) backButton = false;
-  /**
-   * Name of the profile the connected account will be attached to, when opened
-   * from the profile manager's attach flow. Drives the "Adding to <name>"
-   * breadcrumb. Empty when opened standalone.
-   */
-  @property({ type: String }) attachToProfileName = '';
 
   @state() private pullRequests: PullRequestSummary[] = [];
   @state() private workflowRuns: WorkflowRun[] = [];
@@ -996,53 +717,15 @@ export class GnGitHubDialog extends GnProviderDialogBase<
     // Listen for OAuth complete events
     window.addEventListener('oauth-complete', this.boundOAuthComplete as unknown as EventListener);
 
-    // Subscribe to unified profile store - get global accounts. Track the
-    // active profile so that switching profiles re-derives the preferred
-    // account instead of stickily keeping whatever the user manually selected
-    // under a previous profile.
-    let lastActiveProfileId = unifiedProfileStore.getState().activeProfile?.id ?? null;
-    this.unsubscribeStore = unifiedProfileStore.subscribe((state) => {
-      this.accounts = getAccountsByType('github');
-      // If selected account was deleted, reset to null
-      if (this.selectedAccountId && !this.accounts.some(a => a.id === this.selectedAccountId)) {
-        this.selectedAccountId = null;
-      }
-      const activeProfileId = state.activeProfile?.id ?? null;
-      if (activeProfileId !== lastActiveProfileId) {
-        // Active profile changed — re-derive the preferred account for the new
-        // profile, even if the user had a selection from the previous profile.
-        // Track the id either way so this doesn't re-fire, but DON'T clobber a
-        // half-completed "Add account" flow (selectedAccountId is intentionally
-        // null then; a background store emit must not re-select an existing
-        // account, or the next save would overwrite it).
-        lastActiveProfileId = activeProfileId;
-        if (!this.isAddingAccount) {
-          const preferred = getActiveProfilePreferredAccount('github');
-          this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
-        }
-      } else if (!this.isAddingAccount && !this.selectedAccountId && this.accounts.length > 0) {
-        // First-time selection: prefer the active profile's default, falling
-        // back to the global default.
-        const preferred = getActiveProfilePreferredAccount('github') ?? selectDefaultGlobalAccount('github');
-        this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
-      }
-    });
-
-    // Initialize from current state
-    this.accounts = getAccountsByType('github');
-    if (this.accounts.length > 0 && !this.selectedAccountId) {
-      const preferred = getActiveProfilePreferredAccount('github') ?? selectDefaultGlobalAccount('github');
-      this.selectedAccountId = preferred?.id ?? this.accounts[0]?.id ?? null;
-    }
+    this.setupUnifiedProfileSubscription();
 
     if (this.open) {
       await this.loadInitialData();
     }
   }
 
-  disconnectedCallback(): void {
+  override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.unsubscribeStore?.();
     this.oauthUnsubscribe?.();
     window.removeEventListener('oauth-complete', this.boundOAuthComplete as unknown as EventListener);
   }
@@ -1144,19 +827,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
     }
   }
 
-  /**
-   * Mirror a verified connection result into the shared unified-profile store so
-   * other views (e.g. the profile manager's status dots) reflect it immediately,
-   * rather than waiting for their own re-check.
-   */
-  private syncSharedConnectionStatus(connected: boolean): void {
-    if (this.selectedAccountId) {
-      unifiedProfileStore
-        .getState()
-        .setAccountConnectionStatus(this.selectedAccountId, connected ? 'connected' : 'disconnected');
-    }
-  }
-
   private async checkConnection(): Promise<void> {
     const generation = this.loadGeneration;
     const accountId = this.selectedAccountId;
@@ -1254,24 +924,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
     this.isLoadingMoreIssues = false;
     this.isLoadingMoreReleases = false;
     this.tokenInput = '';
-  }
-
-  /**
-   * Handle manage accounts request
-   */
-  private handleManageAccounts(e: Event): void {
-    // Consume the account-selector's bubbling/composed event so it can't ALSO
-    // reach the host — otherwise the host would receive both it and our re-dispatch
-    // below, firing its handler twice (the second pass corrupts reversible-Back state).
-    e.stopPropagation();
-    // Re-dispatch with this provider's canonical type for the host to open accounts.
-    this.dispatchEvent(
-      new CustomEvent('manage-accounts', {
-        detail: { integrationType: 'github' },
-        bubbles: true,
-        composed: true,
-      })
-    );
   }
 
   protected async detectRepo(loadData = true): Promise<void> {
@@ -2335,10 +1987,6 @@ export class GnGitHubDialog extends GnProviderDialogBase<
     });
   }
 
-  private handleClose(): void {
-    this.dispatchEvent(new CustomEvent('close'));
-  }
-
   /**
    * The badge to show for a pull request.
    *
@@ -3125,9 +2773,7 @@ export class GnGitHubDialog extends GnProviderDialogBase<
         @close=${this.handleClose}
       >
         <div class="content">
-          ${this.attachToProfileName
-            ? html`<div class="attach-breadcrumb" data-testid="attach-breadcrumb">Adding to <strong>${this.attachToProfileName}</strong></div>`
-            : nothing}
+          ${this.renderAttachBreadcrumb()}
           ${this.detectedRepo ? html`
             <div class="repo-info">
               <svg class="repo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

@@ -51,32 +51,6 @@ fn pagelen_query_param(pagelen: Option<u32>, default_pagelen: u32) -> String {
 }
 
 // ============================================================================
-// Credential Management (handled by frontend credential service via OS keyring - these are stubs)
-// ============================================================================
-
-/// Store Bitbucket credentials - handled by frontend credential service (OS keyring)
-#[command]
-pub async fn store_bitbucket_credentials(_username: String, _app_password: String) -> Result<()> {
-    // Credential storage is now handled by frontend credential service (OS keyring)
-    Ok(())
-}
-
-/// Get Bitbucket credentials - handled by frontend credential service (OS keyring)
-#[command]
-pub async fn get_bitbucket_credentials() -> Result<Option<(String, String)>> {
-    // Credential storage is now handled by frontend credential service (OS keyring)
-    // Return None - credentials should be passed from frontend
-    Ok(None)
-}
-
-/// Delete Bitbucket credentials - handled by frontend credential service (OS keyring)
-#[command]
-pub async fn delete_bitbucket_credentials() -> Result<()> {
-    // Credential storage is now handled by frontend credential service (OS keyring)
-    Ok(())
-}
-
-// ============================================================================
 // Types
 // ============================================================================
 
@@ -246,18 +220,14 @@ pub async fn check_bitbucket_connection(
     username: Option<String>,
     app_password: Option<String>,
 ) -> Result<BitbucketConnectionStatus> {
-    // Use provided credentials, or fall back to stored credentials
     let credentials = match (username, app_password) {
         (Some(u), Some(p)) if !u.is_empty() && !p.is_empty() => (u, p),
-        _ => match get_bitbucket_credentials().await? {
-            Some(c) => c,
-            None => {
-                return Ok(BitbucketConnectionStatus {
-                    connected: false,
-                    user: None,
-                })
-            }
-        },
+        _ => {
+            return Ok(BitbucketConnectionStatus {
+                connected: false,
+                user: None,
+            })
+        }
     };
 
     let client = api_client()?;
@@ -2472,29 +2442,6 @@ mod tests {
     async fn test_detect_bitbucket_repo_invalid_path() {
         let result = detect_bitbucket_repo("/nonexistent/path".to_string()).await;
         assert!(result.is_err());
-    }
-
-    // ========================================================================
-    // Credential Stub Tests
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_store_credentials_stub() {
-        let result = store_bitbucket_credentials("user".to_string(), "password".to_string()).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_get_credentials_stub() {
-        let result = get_bitbucket_credentials().await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none()); // Always returns None as stub
-    }
-
-    #[tokio::test]
-    async fn test_delete_credentials_stub() {
-        let result = delete_bitbucket_credentials().await;
-        assert!(result.is_ok());
     }
 
     #[test]

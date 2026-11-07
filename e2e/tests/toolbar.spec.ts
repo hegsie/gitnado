@@ -554,7 +554,6 @@ test.describe('Toolbar - Extended Tests', () => {
     await startCommandCaptureWithMocks(page, {
       clone_repository: clonedRepo,
       open_repository: clonedRepo,
-      get_repository_info: clonedRepo,
     });
 
     // Open clone dialog
@@ -603,14 +602,6 @@ test.describe('Toolbar - Extended Tests', () => {
         state: 'clean',
       },
       open_repository: {
-        path: '/tmp/new-init-repo',
-        name: 'new-init-repo',
-        isValid: true,
-        isBare: false,
-        headRef: null,
-        state: 'clean',
-      },
-      get_repository_info: {
         path: '/tmp/new-init-repo',
         name: 'new-init-repo',
         isValid: true,

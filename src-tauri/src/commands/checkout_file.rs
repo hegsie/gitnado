@@ -35,6 +35,7 @@ fn resolve_commit<'repo>(
 /// Git's filemode for a symlink tree entry.
 const FILEMODE_LINK: i32 = 0o120000;
 /// Git's filemode for an executable blob tree entry.
+#[cfg(unix)]
 const FILEMODE_BLOB_EXECUTABLE: i32 = 0o100755;
 
 /// Find a blob for a file path in a commit's tree, with the entry's filemode.
