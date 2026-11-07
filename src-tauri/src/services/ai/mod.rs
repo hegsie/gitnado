@@ -7,6 +7,7 @@
 pub mod config;
 pub mod local;
 pub mod mcp;
+pub mod mcp_client;
 pub mod providers;
 
 use async_trait::async_trait;

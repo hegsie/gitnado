@@ -118,6 +118,7 @@ import * as updateService from '../update.service.ts';
 import * as unifiedProfileService from '../unified-profile.service.ts';
 import * as aiService from '../ai.service.ts';
 import * as oauthService from '../oauth.service.ts';
+import * as mcpService from '../mcp.service.ts';
 import { embeddingIndexService } from '../embedding-index.service.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 
@@ -129,6 +130,8 @@ import { settingsStore } from '../../stores/settings.store.ts';
  * `get_remote_status` touch only on-disk state — all deliberately absent.
  */
 const NETWORK_COMMANDS = new Set([
+  // MCP client mode: contacts a user-configured external MCP server.
+  'list_external_mcp_tools', 'preview_external_mcp_context',
   // git operations
   'clone_repository', 'fetch', 'pull', 'push', 'push_tag', 'delete_remote_tag',
   'delete_remote_branch',
@@ -213,6 +216,15 @@ const LOCAL_COMMANDS = new Set([
   // Agent hooks bridge: writes .claude/settings.local.json and a git-dir script.
   'get_agent_hooks_status', 'install_agent_hooks', 'uninstall_agent_hooks',
   'get_agent_attribution',
+  // The MCP server Gitnado hosts on loopback, and the list of external MCP
+  // servers (saving one stores a token in the keyring; nothing is contacted).
+  'start_mcp_server', 'stop_mcp_server', 'get_mcp_status', 'get_mcp_config',
+  'set_mcp_config', 'regenerate_mcp_token', 'list_external_mcp_servers',
+  'save_external_mcp_server', 'remove_external_mcp_server',
+  'get_mcp_write_settings', 'set_mcp_write_settings',
+  'get_pending_mcp_consents', 'respond_mcp_consent',
+  'list_mcp_clients', 'create_mcp_client', 'revoke_mcp_client',
+  'get_mcp_stdio_command',
   // keyring reads/writes and the local-AI + embedding operations that only
   // touch this machine. Gating any of these would make offline mode hide the
   // controls that turn offline mode off, or refuse an already-downloaded model.
@@ -433,6 +445,8 @@ const SWEPT_MODULES: Array<{ label: string; entries: Array<[string, unknown]> }>
   // claimed to sweep "every service that invokes a command capable of leaving
   // the machine" without listing it.
   { label: 'unified-profile.service', entries: Object.entries(unifiedProfileService) },
+  // MCP client mode contacts user-configured external MCP servers.
+  { label: 'mcp.service', entries: Object.entries(mcpService) },
   // The AI providers: with OpenAI / Anthropic / Gemini selected, "Generate
   // commit message" posts the staged diff. It gates itself, but it was not
   // swept — so the gate held only for as long as someone remembered it.

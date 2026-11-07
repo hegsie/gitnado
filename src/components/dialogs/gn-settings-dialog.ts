@@ -25,6 +25,7 @@ import * as localAiService from '../../services/local-ai.service.ts';
 import * as mcpService from '../../services/mcp.service.ts';
 import '../mcp/gn-mcp-write-settings.ts';
 import '../mcp/gn-mcp-clients.ts';
+import '../mcp/gn-mcp-external-servers.ts';
 import * as gitService from '../../services/git.service.ts';
 import type { MergeToolInfo, AvailableDiffTool } from '../../services/git.service.ts';
 import { avatarBlockedExplanation, GRAVATAR_HOST } from '../../utils/avatar-policy.ts';
@@ -2630,6 +2631,8 @@ export class GnSettingsDialog extends LitElement {
           <gn-mcp-clients .port=${this.mcpPort}></gn-mcp-clients>
 
           <gn-mcp-write-settings></gn-mcp-write-settings>
+
+          <gn-mcp-external-servers></gn-mcp-external-servers>
         </div>
 
         <div class="settings-section">
