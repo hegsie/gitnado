@@ -751,3 +751,146 @@ export function getProviderDisplayName(providerType: AiProviderType): string {
 export function providerRequiresApiKey(providerType: AiProviderType): boolean {
   return providerType === 'open_ai' || providerType === 'anthropic' || providerType === 'github_copilot' || providerType === 'google_gemini';
 }
+
+// ========================================================================
+// Per-Feature Model Routing (#637) & AI Privacy & Activity Ledger (#638)
+// ========================================================================
+
+/**
+ * Task tiers for per-feature model routing.
+ * Wire format of Rust `AiTaskTier` (`#[serde(rename_all = "snake_case")]`).
+ */
+export type AiTaskTier = 'fast_text' | 'code_review' | 'reasoning_merge';
+
+/**
+ * Per-task routing override for an AI task tier.
+ */
+export interface AiTaskRoute {
+  provider: AiProviderType;
+  model: string | null;
+}
+
+/**
+ * Privacy & routing badge metadata for an AI route.
+ */
+export interface AiPrivacyBadgeInfo {
+  providerType: AiProviderType;
+  providerName: string;
+  model: string;
+  isLocal: boolean;
+  tier: AiTaskTier | null;
+}
+
+/**
+ * Single entry in the bounded AI Privacy & Activity Ledger.
+ */
+export interface AiLedgerEntry {
+  id: number;
+  timestamp: number;
+  feature: string;
+  taskTier: AiTaskTier;
+  providerType: AiProviderType;
+  model: string;
+  isLocal: boolean;
+  promptBytes: number;
+  responseBytes: number;
+  estimatedTokens: number;
+  durationMs: number;
+  success: boolean;
+  errorMessage: string | null;
+  promptPreview: string;
+}
+
+/**
+ * Aggregated local vs cloud privacy summary across the AI activity ledger.
+ */
+export interface AiPrivacySummary {
+  totalCalls: number;
+  localCalls: number;
+  cloudCalls: number;
+  totalEstimatedTokens: number;
+  localPercentage: number;
+}
+
+/**
+ * True when `providerType` executes locally (`local_inference`, `ollama`, `lm_studio`).
+ */
+export function isLocalProvider(providerType: AiProviderType): boolean {
+  return isLocalAiProvider(providerType);
+}
+
+/**
+ * Get per-task AI routing overrides.
+ */
+export async function getAiTaskRoutes(): Promise<
+  CommandResult<Partial<Record<AiTaskTier, AiTaskRoute>>>
+> {
+  return invokeCommand<Partial<Record<AiTaskTier, AiTaskRoute>>>('get_ai_task_routes');
+}
+
+/**
+ * Set or clear a per-task AI routing override for `tier`.
+ */
+export async function setAiTaskRoute(
+  tier: AiTaskTier,
+  route: AiTaskRoute | null,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>('set_ai_task_route', { tier, route });
+}
+
+/**
+ * Get the bounded AI privacy & activity ledger entries (newest first).
+ */
+export async function getAiLedger(): Promise<CommandResult<AiLedgerEntry[]>> {
+  return invokeCommand<AiLedgerEntry[]>('get_ai_ledger');
+}
+
+/**
+ * Clear the AI privacy & activity ledger.
+ */
+export async function clearAiLedger(): Promise<CommandResult<void>> {
+  return invokeCommand<void>('clear_ai_ledger');
+}
+
+/**
+ * Get aggregated privacy summary across the AI activity ledger.
+ */
+export async function getAiPrivacySummary(): Promise<CommandResult<AiPrivacySummary>> {
+  return invokeCommand<AiPrivacySummary>('get_ai_privacy_summary');
+}
+
+export {
+  explainGitTarget,
+  explainGitTargetStream,
+  suggestBranchName,
+  suggestStashMessage,
+  type ExplainTargetType,
+  type AiExplanation,
+  type AiExplainTokenEvent,
+  type BranchNameSuggestion,
+} from './ai-explain.service.ts';
+
+export {
+  suggestHunkSplits,
+  stageHunkGroup,
+  suggestFixupTargets,
+  type HunkRef,
+  type AiHunkSplitGroup,
+  type FixupTargetSuggestion,
+} from './ai-staging.service.ts';
+
+export {
+  reviewBranchDiff,
+  suggestCommentResolutionPatch,
+  applyCommentResolutionPatch,
+  explainCiFailure,
+  type AiReviewSeverity,
+  type AiReviewCategory,
+  type AiReviewRiskLevel,
+  type AiReviewFinding,
+  type AiBranchReviewResult,
+  type CommentResolutionPatch,
+  type CiFailureExplanation,
+} from './ai-review.service.ts';
+
+

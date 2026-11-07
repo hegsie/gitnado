@@ -36,7 +36,29 @@ pub struct ModelEntry {
     pub context_length: u32,
 }
 
+impl ModelEntry {
+    /// Returns the SHA-256 checksum if it is a valid 64-character hex string.
+    pub fn sha256_checksum(&self) -> Option<&str> {
+        if self.sha256.len() == 64 && self.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            Some(&self.sha256)
+        } else {
+            None
+        }
+    }
+}
+
 const GB: u64 = 1_073_741_824;
+
+/// Curated model IDs in the default local registry
+pub const MODEL_REGISTRY: &[&str] = &[
+    "gemma-3-1b-q4km",
+    "llama-3.2-1b-q4km",
+    "phi-4-mini-q4km",
+    "gemma-3-4b-q4km",
+    "gemma-3-4b-it-q4km",
+    "qwen-2.5-coder-7b-q4km",
+    "qwen-2.5-coder-14b-q4km",
+];
 
 /// Registry of known local AI models
 pub struct ModelRegistry {
@@ -100,12 +122,39 @@ impl Default for ModelRegistry {
                     context_length: 8192,
                 },
                 ModelEntry {
+                    id: "gemma-3-4b-it-q4km".to_string(),
+                    display_name: "Gemma 3 4B Instruct Q4_K_M".to_string(),
+                    hf_repo: "unsloth/gemma-3-4b-it-GGUF".to_string(),
+                    hf_filename: "gemma-3-4b-it-Q4_K_M.gguf".to_string(),
+                    sha256: "04a43a22e8d2003deda5acc262f68ec1005fa76c735a9962a8c77042a74a7d19"
+                        .to_string(),
+                    size_bytes: 2_500 * 1_048_576,
+                    min_ram_bytes: 16 * GB,
+                    tier: ModelTier::Standard,
+                    architecture: "gemma3".to_string(),
+                    context_length: 8192,
+                },
+                ModelEntry {
                     id: "qwen-2.5-coder-7b-q4km".to_string(),
                     display_name: "Qwen 2.5 Coder 7B (Q4_K_M)".to_string(),
                     hf_repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF".to_string(),
                     hf_filename: "qwen2.5-coder-7b-instruct-q4_k_m.gguf".to_string(),
-                    sha256: String::new(),
-                    size_bytes: 4_680 * 1_048_576,
+                    sha256: "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c"
+                        .to_string(),
+                    size_bytes: 4_683_073_536,
+                    min_ram_bytes: 32 * GB,
+                    tier: ModelTier::Pro,
+                    architecture: "qwen2".to_string(),
+                    context_length: 8192,
+                },
+                ModelEntry {
+                    id: "qwen-2.5-coder-14b-q4km".to_string(),
+                    display_name: "Qwen 2.5 Coder 14B Instruct Q4_K_M".to_string(),
+                    hf_repo: "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF".to_string(),
+                    hf_filename: "qwen2.5-coder-14b-instruct-q4_k_m.gguf".to_string(),
+                    sha256: "c1e659736d89ac1065fb495330fb824d94001974a4bfa78e7270e43476a8d940"
+                        .to_string(),
+                    size_bytes: 8_988_110_272,
                     min_ram_bytes: 32 * GB,
                     tier: ModelTier::Pro,
                     architecture: "qwen2".to_string(),
@@ -179,7 +228,21 @@ mod tests {
     fn test_get_all_returns_known_models() {
         let reg = registry();
         let all = reg.get_all();
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), MODEL_REGISTRY.len());
+    }
+
+    #[test]
+    fn test_all_curated_entries_have_valid_sha256() {
+        let reg = registry();
+        for entry in reg.get_all() {
+            assert!(
+                entry.sha256_checksum().is_some(),
+                "Model '{}' is missing a valid 64-hex SHA-256 checksum (got '{}')",
+                entry.id,
+                entry.sha256
+            );
+        }
     }
 
     #[test]
@@ -188,6 +251,14 @@ mod tests {
         let entry = reg.get_by_id("gemma-3-1b-q4km");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().display_name, "Gemma 3 1B (Q4_K_M)");
+
+        let qwen14 = reg.get_by_id("qwen-2.5-coder-14b-q4km");
+        assert!(qwen14.is_some());
+        assert_eq!(qwen14.unwrap().tier, ModelTier::Pro);
+
+        let gemma4b = reg.get_by_id("gemma-3-4b-it-q4km");
+        assert!(gemma4b.is_some());
+        assert_eq!(gemma4b.unwrap().tier, ModelTier::Standard);
     }
 
     #[test]
@@ -210,7 +281,7 @@ mod tests {
     fn test_get_for_tier_standard() {
         let reg = registry();
         let models = reg.get_for_tier(ModelTier::Standard);
-        assert_eq!(models.len(), 2);
+        assert_eq!(models.len(), 3);
         for m in &models {
             assert_eq!(m.tier, ModelTier::Standard);
         }
@@ -220,9 +291,12 @@ mod tests {
     fn test_get_for_tier_pro() {
         let reg = registry();
         let models = reg.get_for_tier(ModelTier::Pro);
-        assert_eq!(models.len(), 1);
+        assert_eq!(models.len(), 2);
         assert_eq!(models[0].id, "qwen-2.5-coder-7b-q4km");
-        assert_eq!(models[0].tier, ModelTier::Pro);
+        assert_eq!(models[1].id, "qwen-2.5-coder-14b-q4km");
+        for m in &models {
+            assert_eq!(m.tier, ModelTier::Pro);
+        }
     }
 
     #[test]

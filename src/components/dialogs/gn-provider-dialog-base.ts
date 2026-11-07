@@ -18,6 +18,13 @@
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import * as gitService from '../../services/git.service.ts';
+import * as aiReviewService from '../../services/ai-review.service.ts';
+import type {
+  AiBranchReviewResult,
+  AiReviewFinding,
+  CommentResolutionPatch,
+  CiFailureExplanation,
+} from '../../services/ai-review.service.ts';
 import * as unifiedProfileService from '../../services/unified-profile.service.ts';
 import {
   unifiedProfileStore,
@@ -30,6 +37,7 @@ import { showToast } from '../../services/notification.service.ts';
 import { openExternalUrl } from '../../utils/external-link.ts';
 import type { CommandResult } from '../../types/api.types.ts';
 import type { IntegrationAccount, IntegrationType } from '../../types/unified-profile.types.ts';
+import './gn-ai-review-panel.ts';
 
 /**
  * Shared CSS rules for all Git hosting provider dialogs:
@@ -305,6 +313,37 @@ export const providerDialogBaseStyles = css`
     gap: var(--spacing-sm);
     margin-left: auto;
   }
+
+  .pr-comments-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+  }
+
+  .pr-comments-drawer-title {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+  }
+
+  .pr-ai-review-btn,
+  .pr-generate-fix-btn,
+  .ci-explain-btn {
+    font-size: var(--font-size-xs);
+    padding: 2px 8px;
+  }
+
+  .pr-generate-fix-btn {
+    margin-left: auto;
+  }
+
+  .ci-explainer-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-xs);
+  }
 `;
 
 export interface PrReviewComment {
@@ -371,6 +410,20 @@ export abstract class GnProviderDialogBase<
   @state() protected postingCommentForPr: number | null = null;
   protected commentLoadGeneration = 0;
   protected commentPostGeneration = 0;
+
+  // AI Branch Review, Comment-to-Patch, and CI Failure Explainer state (#623, #624, #626)
+  @state() protected aiReviewByPr: Record<number, AiBranchReviewResult> = {};
+  @state() protected aiReviewLoadingForPr: number | null = null;
+  @state() protected aiPatchByPr: Record<number, CommentResolutionPatch> = {};
+  @state() protected aiPatchLoadingForPr: number | null = null;
+  @state() protected aiPatchLoadingForCommentId: string | number | null = null;
+  @state() protected applyingAiPatchForPr: number | null = null;
+  @state() protected aiReviewErrorByPr: Record<number, string> = {};
+  @state() protected activeCiCheckName: string | null = null;
+  @state() protected aiCiExplanation: CiFailureExplanation | null = null;
+  @state() protected aiCiLoading = false;
+  @state() protected aiCiError: string | null = null;
+  protected aiReviewGeneration = 0;
 
   protected unsubscribeStore?: () => void;
 
@@ -604,6 +657,7 @@ export abstract class GnProviderDialogBase<
   protected resetCommentDrawerState(): void {
     this.commentLoadGeneration++;
     this.commentPostGeneration++;
+    this.aiReviewGeneration++;
     this.expandedPrNumber = null;
     this.prComments = {};
     this.loadingCommentsForPr = null;
@@ -611,6 +665,17 @@ export abstract class GnProviderDialogBase<
     this.commentFilePathInput = '';
     this.commentLineInput = '';
     this.postingCommentForPr = null;
+    this.aiReviewByPr = {};
+    this.aiReviewLoadingForPr = null;
+    this.aiPatchByPr = {};
+    this.aiPatchLoadingForPr = null;
+    this.aiPatchLoadingForCommentId = null;
+    this.applyingAiPatchForPr = null;
+    this.aiReviewErrorByPr = {};
+    this.activeCiCheckName = null;
+    this.aiCiExplanation = null;
+    this.aiCiLoading = false;
+    this.aiCiError = null;
   }
 
   /**
@@ -1084,13 +1149,316 @@ export abstract class GnProviderDialogBase<
     }
   }
 
-  protected renderPrCommentsDrawer(prNumber: number, commitId?: string): TemplateResult {
+  protected async handleAiReviewBranch(
+    prNumber: number,
+    baseRef = 'main',
+    headRef?: string,
+  ): Promise<void> {
+    if (!this.repositoryPath || this.aiReviewLoadingForPr === prNumber) return;
+
+    const targetRepoPath = this.repositoryPath;
+    const gen = ++this.aiReviewGeneration;
+    this.aiReviewLoadingForPr = prNumber;
+    const nextErrors = { ...this.aiReviewErrorByPr };
+    delete nextErrors[prNumber];
+    this.aiReviewErrorByPr = nextErrors;
+
+    try {
+      const result = await aiReviewService.reviewBranchDiff(
+        targetRepoPath,
+        baseRef || 'main',
+        headRef ?? null,
+      );
+      if (this.repositoryPath !== targetRepoPath || this.aiReviewGeneration !== gen) {
+        return;
+      }
+
+      if (result.success && result.data) {
+        this.aiReviewByPr = {
+          ...this.aiReviewByPr,
+          [prNumber]: result.data,
+        };
+      } else {
+        const message = result.error?.message ?? 'Failed to run AI branch review';
+        this.aiReviewErrorByPr = {
+          ...this.aiReviewErrorByPr,
+          [prNumber]: message,
+        };
+        if (!gitService.isNetworkGateRefusal(result.error)) {
+          showToast(message, 'error');
+        }
+      }
+    } catch (err) {
+      if (this.repositoryPath !== targetRepoPath || this.aiReviewGeneration !== gen) {
+        return;
+      }
+      const message =
+        err instanceof Error ? err.message : 'Failed to run AI branch review';
+      this.aiReviewErrorByPr = {
+        ...this.aiReviewErrorByPr,
+        [prNumber]: message,
+      };
+      showToast(message, 'error');
+    } finally {
+      if (this.aiReviewGeneration === gen && this.aiReviewLoadingForPr === prNumber) {
+        this.aiReviewLoadingForPr = null;
+      }
+    }
+  }
+
+  protected async handlePostAiFindingComment(
+    prNumber: number,
+    finding: AiReviewFinding,
+    commitId?: string,
+  ): Promise<void> {
+    const fixSnippet = finding.suggestedFix
+      ? `\n\nSuggested fix:\n\`\`\`\n${finding.suggestedFix}\n\`\`\``
+      : '';
+    this.commentFilePathInput = finding.filePath || '';
+    this.commentLineInput = finding.line ? String(finding.line) : '';
+    this.commentBodyInput = `[**${finding.severity.toUpperCase()}** · ${finding.category}] **${finding.title}**\n\n${finding.message}${fixSnippet}`;
+    await this.handleAddPrComment(prNumber, commitId);
+  }
+
+  protected async handleGenerateCommentFix(
+    prNumber: number,
+    comment: PrReviewComment,
+  ): Promise<void> {
+    if (!this.repositoryPath || this.aiPatchLoadingForPr === prNumber) return;
+
+    const targetRepoPath = this.repositoryPath;
+    const gen = ++this.aiReviewGeneration;
+    this.aiPatchLoadingForPr = prNumber;
+    this.aiPatchLoadingForCommentId = comment.id;
+    const nextErrors = { ...this.aiReviewErrorByPr };
+    delete nextErrors[prNumber];
+    this.aiReviewErrorByPr = nextErrors;
+
+    try {
+      const result = await aiReviewService.suggestCommentResolutionPatch(
+        targetRepoPath,
+        comment.filePath ?? '',
+        comment.line ?? null,
+        comment.body,
+      );
+      if (this.repositoryPath !== targetRepoPath || this.aiReviewGeneration !== gen) {
+        return;
+      }
+
+      if (result.success && result.data) {
+        this.aiPatchByPr = {
+          ...this.aiPatchByPr,
+          [prNumber]: result.data,
+        };
+      } else {
+        const message =
+          result.error?.message ?? 'Failed to generate fix patch with AI';
+        this.aiReviewErrorByPr = {
+          ...this.aiReviewErrorByPr,
+          [prNumber]: message,
+        };
+        if (!gitService.isNetworkGateRefusal(result.error)) {
+          showToast(message, 'error');
+        }
+      }
+    } catch (err) {
+      if (this.repositoryPath !== targetRepoPath || this.aiReviewGeneration !== gen) {
+        return;
+      }
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to generate fix patch with AI';
+      this.aiReviewErrorByPr = {
+        ...this.aiReviewErrorByPr,
+        [prNumber]: message,
+      };
+      showToast(message, 'error');
+    } finally {
+      if (this.aiReviewGeneration === gen && this.aiPatchLoadingForPr === prNumber) {
+        this.aiPatchLoadingForPr = null;
+        this.aiPatchLoadingForCommentId = null;
+      }
+    }
+  }
+
+  protected async handleApplyCommentPatch(
+    prNumber: number,
+    patch: CommentResolutionPatch,
+  ): Promise<void> {
+    if (!this.repositoryPath || this.applyingAiPatchForPr === prNumber) return;
+
+    const targetRepoPath = this.repositoryPath;
+    this.applyingAiPatchForPr = prNumber;
+
+    try {
+      const result = await aiReviewService.applyCommentResolutionPatch(
+        targetRepoPath,
+        patch.unifiedDiff,
+      );
+      if (result.success) {
+        showToast('Applied suggested patch to working tree', 'success');
+        const nextPatches = { ...this.aiPatchByPr };
+        delete nextPatches[prNumber];
+        this.aiPatchByPr = nextPatches;
+        this.dispatchEvent(
+          new CustomEvent('repository-refresh', {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        window.dispatchEvent(new CustomEvent('repository-refresh'));
+      } else {
+        const message =
+          result.error?.message ?? 'Failed to apply patch to working tree';
+        this.aiReviewErrorByPr = {
+          ...this.aiReviewErrorByPr,
+          [prNumber]: message,
+        };
+        showToast(message, 'error');
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to apply patch to working tree';
+      this.aiReviewErrorByPr = {
+        ...this.aiReviewErrorByPr,
+        [prNumber]: message,
+      };
+      showToast(message, 'error');
+    } finally {
+      if (this.applyingAiPatchForPr === prNumber) {
+        this.applyingAiPatchForPr = null;
+      }
+    }
+  }
+
+  protected async handleExplainCiFailure(
+    checkName: string,
+    summary: string,
+    e?: Event,
+  ): Promise<void> {
+    e?.stopPropagation();
+    const gen = ++this.aiReviewGeneration;
+    this.activeCiCheckName = checkName;
+    this.aiCiLoading = true;
+    this.aiCiExplanation = null;
+    this.aiCiError = null;
+
+    try {
+      const result = await aiReviewService.explainCiFailure(
+        checkName,
+        summary,
+        this.repositoryPath || null,
+      );
+      if (this.aiReviewGeneration !== gen) return;
+
+      if (result.success && result.data) {
+        this.aiCiExplanation = result.data;
+      } else {
+        const message = result.error?.message ?? 'Failed to explain CI failure';
+        this.aiCiError = message;
+        if (!gitService.isNetworkGateRefusal(result.error)) {
+          showToast(message, 'error');
+        }
+      }
+    } catch (err) {
+      if (this.aiReviewGeneration !== gen) return;
+      const message =
+        err instanceof Error ? err.message : 'Failed to explain CI failure';
+      this.aiCiError = message;
+      showToast(message, 'error');
+    } finally {
+      if (this.aiReviewGeneration === gen) {
+        this.aiCiLoading = false;
+      }
+    }
+  }
+
+  protected renderCiFailureExplainerButton(
+    checkName: string,
+    summary: string,
+  ): TemplateResult {
+    const isActive = this.activeCiCheckName === checkName;
+    const isLoading = isActive && this.aiCiLoading;
+
+    return html`
+      <div
+        class="ci-explainer-container"
+        @click=${(e: Event) => e.stopPropagation()}
+      >
+        <button
+          class="btn btn-secondary ci-explain-btn"
+          data-testid="explain-ci-failure-btn"
+          ?disabled=${isLoading}
+          @click=${(e: Event) => this.handleExplainCiFailure(checkName, summary, e)}
+        >
+          ${isLoading ? 'Analyzing...' : 'Explain Failure'}
+        </button>
+        ${isActive && (this.aiCiLoading || this.aiCiExplanation || this.aiCiError)
+          ? html`
+              <gn-ai-review-panel
+                .ciLoading=${this.aiCiLoading}
+                .ciExplanation=${this.aiCiExplanation}
+                .error=${this.aiCiError}
+                @dismiss-ci=${() => {
+                  this.activeCiCheckName = null;
+                  this.aiCiExplanation = null;
+                  this.aiCiError = null;
+                }}
+              ></gn-ai-review-panel>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  protected renderPrCommentDrawer(
+    prNumber: number,
+    commitId?: string,
+    prBranches?: { baseRef: string; headRef?: string },
+  ): TemplateResult {
+    return this.renderPrCommentsDrawer(prNumber, commitId, prBranches);
+  }
+
+  protected renderPrCommentsDrawer(
+    prNumber: number,
+    commitId?: string,
+    prBranches?: { baseRef: string; headRef?: string },
+  ): TemplateResult {
     const comments = this.prComments[prNumber] ?? [];
     const isLoadingComments = this.loadingCommentsForPr === prNumber;
     const isPosting = this.postingCommentForPr === prNumber;
+    const isReviewLoading = this.aiReviewLoadingForPr === prNumber;
+    const reviewResult = this.aiReviewByPr[prNumber] ?? null;
+    const isPatchLoading = this.aiPatchLoadingForPr === prNumber;
+    const patchPreview = this.aiPatchByPr[prNumber] ?? null;
+    const isApplyingPatch = this.applyingAiPatchForPr === prNumber;
+    const aiError = this.aiReviewErrorByPr[prNumber] ?? null;
 
     return html`
       <div class="pr-comments-drawer" data-testid="pr-comments-drawer-${prNumber}" @click=${(e: Event) => e.stopPropagation()}>
+        ${this.repositoryPath
+          ? html`
+              <div class="pr-comments-drawer-header">
+                <span class="pr-comments-drawer-title">Review Comments</span>
+                <button
+                  class="btn btn-secondary pr-ai-review-btn"
+                  data-testid="ai-review-branch-btn-${prNumber}"
+                  ?disabled=${isReviewLoading}
+                  @click=${() =>
+                    this.handleAiReviewBranch(
+                      prNumber,
+                      prBranches?.baseRef ?? 'main',
+                      prBranches?.headRef,
+                    )}
+                >
+                  ${isReviewLoading ? 'Reviewing...' : 'AI Review Branch'}
+                </button>
+              </div>
+            `
+          : nothing}
         ${isLoadingComments ? html`
           <div class="pr-comments-empty">Loading comments...</div>
         ` : comments.length === 0 ? html`
@@ -1105,12 +1473,58 @@ export abstract class GnProviderDialogBase<
                     <span class="pr-comment-location">${c.filePath}${c.line ? `:${c.line}` : ''}</span>
                   ` : nothing}
                   <span class="pr-comment-date">${this.formatDate(c.createdAt)}</span>
+                  ${this.repositoryPath
+                    ? html`
+                        <button
+                          class="btn btn-secondary pr-generate-fix-btn"
+                          data-testid="generate-fix-btn-${c.id}"
+                          ?disabled=${isPatchLoading &&
+                          this.aiPatchLoadingForCommentId === c.id}
+                          @click=${() =>
+                            this.handleGenerateCommentFix(prNumber, c)}
+                        >
+                          ${isPatchLoading &&
+                          this.aiPatchLoadingForCommentId === c.id
+                            ? 'Generating...'
+                            : 'Generate Fix with AI'}
+                        </button>
+                      `
+                    : nothing}
                 </div>
                 <div class="pr-comment-body">${c.body}</div>
               </div>
             `)}
           </div>
         `}
+        <gn-ai-review-panel
+          .reviewResult=${reviewResult}
+          .reviewLoading=${isReviewLoading}
+          .patchPreview=${patchPreview}
+          .patchLoading=${isPatchLoading}
+          .applyingPatch=${isApplyingPatch}
+          .error=${aiError}
+          .canPostComment=${true}
+          @post-finding-comment=${(
+            e: CustomEvent<{ finding: AiReviewFinding }>,
+          ) =>
+            this.handlePostAiFindingComment(
+              prNumber,
+              e.detail.finding,
+              commitId,
+            )}
+          @apply-patch=${(e: CustomEvent<{ patch: CommentResolutionPatch }>) =>
+            this.handleApplyCommentPatch(prNumber, e.detail.patch)}
+          @dismiss-review=${() => {
+            const next = { ...this.aiReviewByPr };
+            delete next[prNumber];
+            this.aiReviewByPr = next;
+          }}
+          @dismiss-patch=${() => {
+            const next = { ...this.aiPatchByPr };
+            delete next[prNumber];
+            this.aiPatchByPr = next;
+          }}
+        ></gn-ai-review-panel>
         <div class="pr-comment-form">
           <div class="pr-comment-inline-fields">
             <input

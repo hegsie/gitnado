@@ -25,10 +25,21 @@ import type {
   SearchFileResult,
   SearchCommit,
 } from '../../services/git.service.ts';
+import { embeddingIndexService } from '../../services/embedding-index.service.ts';
 import { pushOverlay, removeOverlay, isTopOverlay } from '../../utils/overlay-stack.ts';
 import { containsDeepActiveElement } from '../../utils/focus.ts';
 
-export type SearchDialogMode = 'files' | 'diff' | 'commits';
+export type SearchDialogMode = 'files' | 'diff' | 'commits' | 'semantic';
+
+export interface SemanticSearchResult {
+  oid: string;
+  distance?: number;
+  summary: string;
+  similarity?: number;
+  matchedFiles?: string[];
+  matchedSymbols?: string[];
+  matchSources?: string[];
+}
 
 /** Mirrors the backend defaults so the "narrow your search" hint is truthful. */
 const FILE_MATCH_CAP = 500;
@@ -382,6 +393,39 @@ export class GnSearchDialog extends LitElement {
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+
+      .match-badges {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        margin-top: 2px;
+      }
+
+      .match-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 6px;
+        border-radius: var(--radius-sm);
+        font-family: var(--font-mono);
+        font-size: 10px;
+        line-height: 1.4;
+        max-width: 240px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .symbol-badge {
+        background: var(--color-bg-tertiary);
+        border: 1px solid var(--color-border);
+        color: var(--color-primary);
+      }
+
+      .file-badge {
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+      }
     `,
   ];
 
@@ -410,6 +454,7 @@ export class GnSearchDialog extends LitElement {
    */
   @state() private diffResultsStaged = false;
   @state() private commitResults: SearchCommit[] = [];
+  @state() private semanticResults: SemanticSearchResult[] = [];
 
   /**
    * Repo captured when the dialog opened. `repositoryPath` is live-bound to
@@ -476,6 +521,7 @@ export class GnSearchDialog extends LitElement {
     this.fileResults = [];
     this.diffResults = [];
     this.commitResults = [];
+    this.semanticResults = [];
     this.error = null;
     this.searched = false;
     this.capped = false;
@@ -579,6 +625,16 @@ export class GnSearchDialog extends LitElement {
         } else {
           this.fail(result.error?.message);
         }
+      } else if (mode === 'semantic') {
+        const results = (await embeddingIndexService.semanticSearch(
+          repoPath,
+          query,
+          COMMIT_CAP,
+        )) as SemanticSearchResult[];
+        if (token !== this.searchToken) return;
+        this.semanticResults = results ?? [];
+        this.capped = this.semanticResults.length >= COMMIT_CAP;
+        this.finishSuccess();
       } else {
         const result = await gitService.searchCommitsByContent(
           repoPath,
@@ -598,7 +654,13 @@ export class GnSearchDialog extends LitElement {
       }
     } catch (err) {
       if (token === this.searchToken) {
-        this.fail(err instanceof Error ? err.message : undefined);
+        const msg =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : undefined;
+        this.fail(msg);
       }
     } finally {
       if (token === this.searchToken) this.searching = false;
@@ -620,6 +682,7 @@ export class GnSearchDialog extends LitElement {
     this.fileResults = [];
     this.diffResults = [];
     this.commitResults = [];
+    this.semanticResults = [];
     this.capped = false;
     this.searched = true;
   }
@@ -631,6 +694,7 @@ export class GnSearchDialog extends LitElement {
   private get hasResults(): boolean {
     if (this.mode === 'files') return this.fileResults.length > 0;
     if (this.mode === 'diff') return this.diffResults.length > 0;
+    if (this.mode === 'semantic') return this.semanticResults.length > 0;
     return this.commitResults.length > 0;
   }
 
@@ -698,6 +762,7 @@ export class GnSearchDialog extends LitElement {
                 ['files', 'Files'],
                 ['diff', 'Diff'],
                 ['commits', 'Commits'],
+                ['semantic', 'Semantic'],
               ] as Array<[SearchDialogMode, string]>
             ).map(
               ([value, label]) => html`
@@ -721,7 +786,9 @@ export class GnSearchDialog extends LitElement {
                 ? 'Search tracked files…'
                 : this.mode === 'diff'
                   ? 'Search the current diff…'
-                  : 'Find commits that added or removed…'}
+                  : this.mode === 'semantic'
+                    ? 'Search commits by concept, symbol, or file…'
+                    : 'Find commits that added or removed…'}
               aria-label="Search query"
               .value=${this.query}
               @input=${(e: InputEvent) => {
@@ -814,6 +881,10 @@ export class GnSearchDialog extends LitElement {
       `;
     }
 
+    if (this.mode === 'semantic') {
+      return nothing;
+    }
+
     return html`
       <label>
         <input
@@ -863,7 +934,9 @@ export class GnSearchDialog extends LitElement {
         ? this.renderFileResults()
         : this.mode === 'diff'
           ? this.renderDiffResults()
-          : this.renderCommitResults()}
+          : this.mode === 'semantic'
+            ? this.renderSemanticResults()
+            : this.renderCommitResults()}
     `;
   }
 
@@ -880,7 +953,7 @@ export class GnSearchDialog extends LitElement {
       const n = this.diffResults.length;
       return `${n} ${n === 1 ? 'match' : 'matches'}`;
     }
-    const n = this.commitResults.length;
+    const n = this.mode === 'semantic' ? this.semanticResults.length : this.commitResults.length;
     const base = `${n} ${n === 1 ? 'commit' : 'commits'}`;
     return this.capped ? `${base} — showing the first ${COMMIT_CAP}, narrow your search` : base;
   }
@@ -962,6 +1035,37 @@ export class GnSearchDialog extends LitElement {
           `,
         ),
       )}
+    `;
+  }
+
+  private renderSemanticResults() {
+    return html`
+      ${this.semanticResults.map((r) => {
+        const symbols = (r.matchedSymbols ?? []).slice(0, 3);
+        const files = (r.matchedFiles ?? []).slice(0, 2);
+        return this.renderRowButton(
+          () => this.emitAndClose('show-commit', { oid: r.oid }),
+          'commit-item',
+          html`
+            <span class="commit-top">
+              <span class="commit-oid">${r.oid.slice(0, 7)}</span>
+              <span class="commit-message">${r.summary}</span>
+            </span>
+            ${symbols.length > 0 || files.length > 0
+              ? html`
+                  <span class="match-badges">
+                    ${symbols.map(
+                      (sym) => html`<span class="match-badge symbol-badge">${sym}</span>`,
+                    )}
+                    ${files.map(
+                      (file) => html`<span class="match-badge file-badge">${file}</span>`,
+                    )}
+                  </span>
+                `
+              : nothing}
+          `,
+        );
+      })}
     `;
   }
 }

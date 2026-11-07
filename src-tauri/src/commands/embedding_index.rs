@@ -6,7 +6,8 @@ use std::sync::Arc;
 use tauri::command;
 
 use crate::error::{GitnadoError, Result};
-use crate::services::embedding::vector_store::{EmbeddingIndexStatus, VectorSearchResult};
+use crate::services::embedding::embedding_index::SemanticSearchResult;
+use crate::services::embedding::vector_store::EmbeddingIndexStatus;
 use crate::services::embedding::SharedEmbeddingIndex;
 
 /// Build the embedding index for a repository
@@ -40,7 +41,7 @@ pub async fn semantic_search(
     path: String,
     query: String,
     limit: Option<usize>,
-) -> Result<Vec<VectorSearchResult>> {
+) -> Result<Vec<SemanticSearchResult>> {
     let limit = limit.unwrap_or(100);
     crate::services::embedding::embedding_index::semantic_search(&state, path, query, limit)
         .await

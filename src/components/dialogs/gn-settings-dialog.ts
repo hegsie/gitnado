@@ -26,6 +26,7 @@ import * as mcpService from '../../services/mcp.service.ts';
 import '../mcp/gn-mcp-write-settings.ts';
 import '../mcp/gn-mcp-clients.ts';
 import '../mcp/gn-mcp-external-servers.ts';
+import './gn-ai-routing-ledger.ts';
 import * as gitService from '../../services/git.service.ts';
 import type { MergeToolInfo, AvailableDiffTool } from '../../services/git.service.ts';
 import { avatarBlockedExplanation, GRAVATAR_HOST } from '../../utils/avatar-policy.ts';
@@ -2327,6 +2328,8 @@ export class GnSettingsDialog extends LitElement {
               ${msg('Refresh')}
             </button>
           </div>
+
+          <gn-ai-routing-ledger></gn-ai-routing-ledger>
         </div>
 
         <div class="settings-section">

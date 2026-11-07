@@ -194,6 +194,9 @@ const NETWORK_COMMANDS = new Set([
   'generate_changelog', 'analyze_staged_changes', 'generate_pr_description',
   'suggest_commit_splits', 'suggest_recompose', 'explain_conflict', 'find_reflog_entry',
   'is_ai_available', 'ai_unavailable_reason',
+  'explain_git_target', 'explain_git_target_stream', 'suggest_branch_name', 'suggest_stash_message',
+  'suggest_hunk_splits', 'suggest_fixup_targets',
+  'review_branch_diff', 'suggest_comment_resolution_patch', 'explain_ci_failure',
   // oauth.service: the token endpoint (github.com, gitlab, Entra, bitbucket)
   // and the OIDC issuer's `.well-known` document.
   'oauth_exchange_code', 'oauth_refresh_token', 'discover_oidc_provider',
@@ -267,6 +270,9 @@ const LOCAL_COMMANDS = new Set([
   // Ollama and LM Studio, both on localhost.
   'get_ai_providers', 'get_active_ai_provider', 'set_ai_provider',
   'set_ai_api_key', 'set_ai_model', 'auto_detect_ai_providers',
+  'get_ai_task_routes', 'set_ai_task_route', 'get_ai_ledger', 'clear_ai_ledger',
+  'get_ai_privacy_summary',
+  'stage_hunk_group', 'apply_comment_resolution_patch',
 
   // oauth.service: building the authorize URL (it mints PKCE values and binds
   // a LOOPBACK socket — nothing outbound), waiting on that loopback socket,

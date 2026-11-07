@@ -28,6 +28,37 @@ pub struct ProviderSettings {
     pub api_key: Option<String>,
 }
 
+/// Task tiers for per-feature AI model routing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiTaskTier {
+    /// Commit messages, branch naming, reflog matching
+    FastText,
+    /// Staged analysis (vibe check), conflict explanation, PR descriptions, changelogs
+    CodeReview,
+    /// Conflict resolution, commit splitting, history recomposition
+    ReasoningMerge,
+}
+
+impl AiTaskTier {
+    pub fn all() -> Vec<AiTaskTier> {
+        vec![
+            AiTaskTier::FastText,
+            AiTaskTier::CodeReview,
+            AiTaskTier::ReasoningMerge,
+        ]
+    }
+}
+
+/// Provider and optional model override for a specific task tier
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTaskRoute {
+    pub provider: AiProviderType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// Complete AI configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +70,10 @@ pub struct AiConfig {
     /// Per-provider settings
     #[serde(default)]
     pub providers: HashMap<AiProviderType, ProviderSettings>,
+
+    /// Per-task tier routing overrides
+    #[serde(default)]
+    pub task_routes: HashMap<AiTaskTier, AiTaskRoute>,
 }
 
 impl AiConfig {
@@ -111,5 +146,65 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = AiConfig::load(temp_dir.path()).unwrap();
         assert!(config.active_provider.is_none());
+        assert!(config.task_routes.is_empty());
+    }
+
+    #[test]
+    fn test_task_tier_serialization_and_task_routes_persistence() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path();
+
+        assert_eq!(
+            serde_json::to_string(&AiTaskTier::FastText).unwrap(),
+            "\"fast_text\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AiTaskTier::CodeReview).unwrap(),
+            "\"code_review\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AiTaskTier::ReasoningMerge).unwrap(),
+            "\"reasoning_merge\""
+        );
+
+        let mut config = AiConfig::default();
+        config.task_routes.insert(
+            AiTaskTier::FastText,
+            AiTaskRoute {
+                provider: AiProviderType::LocalInference,
+                model: None,
+            },
+        );
+        config.task_routes.insert(
+            AiTaskTier::ReasoningMerge,
+            AiTaskRoute {
+                provider: AiProviderType::Anthropic,
+                model: Some("claude-sonnet-4-5".to_string()),
+            },
+        );
+
+        config.save(config_dir).unwrap();
+        let loaded = AiConfig::load(config_dir).unwrap();
+        assert_eq!(loaded.task_routes.len(), 2);
+        assert_eq!(
+            loaded.task_routes.get(&AiTaskTier::FastText),
+            Some(&AiTaskRoute {
+                provider: AiProviderType::LocalInference,
+                model: None,
+            })
+        );
+        assert_eq!(
+            loaded.task_routes.get(&AiTaskTier::ReasoningMerge),
+            Some(&AiTaskRoute {
+                provider: AiProviderType::Anthropic,
+                model: Some("claude-sonnet-4-5".to_string()),
+            })
+        );
+
+        // Backwards compatibility with older config files missing `taskRoutes`
+        let legacy_json = r#"{"activeProvider":"ollama","providers":{}}"#;
+        let legacy: AiConfig = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(legacy.active_provider, Some(AiProviderType::Ollama));
+        assert!(legacy.task_routes.is_empty());
     }
 }

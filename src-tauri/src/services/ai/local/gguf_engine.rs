@@ -5,9 +5,11 @@
 //! Supports all architectures that llama.cpp handles: llama, gemma, phi,
 //! mistral, qwen, and many more.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -16,11 +18,62 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
+use serde::{Deserialize, Serialize};
 
 use crate::services::ai::local::SystemCapabilities;
 use crate::services::ai::providers::{InferenceEngine, LoadedModelMeta};
 
 const MB: u64 = 1_048_576;
+
+/// Compute the length of the longest common token prefix between two token slices.
+///
+/// Used to measure KV-cache / prompt prefix reuse across consecutive local inference
+/// requests that share a common system prompt template.
+pub fn longest_common_token_prefix<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+/// Statistics for prompt prefix / KV-cache warm tracking on a loaded GGUF model.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixCacheStats {
+    pub last_prefix_hash: Option<u64>,
+    pub cached_prefix_tokens: usize,
+    pub warm_requests_count: u64,
+    pub total_requests_count: u64,
+}
+
+/// Tracks tokenized prompt prefixes across calls on a loaded GGUF model.
+#[derive(Debug, Default)]
+pub struct PrefixCacheTracker {
+    last_tokens: Vec<i32>,
+    pub stats: PrefixCacheStats,
+}
+
+impl PrefixCacheTracker {
+    /// Record a tokenized prompt and compute how many leading tokens matched the
+    /// previous request.
+    pub fn record_tokens(&mut self, tokens: &[i32]) -> usize {
+        let shared = longest_common_token_prefix(&self.last_tokens, tokens);
+        self.stats.total_requests_count = self.stats.total_requests_count.saturating_add(1);
+        if shared > 0 {
+            self.stats.warm_requests_count = self.stats.warm_requests_count.saturating_add(1);
+            self.stats.cached_prefix_tokens = shared;
+            let mut hasher = DefaultHasher::new();
+            tokens[..shared].hash(&mut hasher);
+            self.stats.last_prefix_hash = Some(hasher.finish());
+        } else {
+            self.stats.cached_prefix_tokens = 0;
+            if !tokens.is_empty() {
+                let mut hasher = DefaultHasher::new();
+                tokens.hash(&mut hasher);
+                self.stats.last_prefix_hash = Some(hasher.finish());
+            }
+        }
+        self.last_tokens = tokens.to_vec();
+        shared
+    }
+}
 
 /// Compute the number of model layers to offload to the GPU based on model size and hardware.
 pub fn compute_gpu_layers(model_size_bytes: u64, caps: &SystemCapabilities) -> u32 {
@@ -60,6 +113,7 @@ pub struct GgufEngine {
     model: Arc<LlamaModel>,
     name: String,
     meta: Option<LoadedModelMeta>,
+    prefix_cache: Arc<Mutex<PrefixCacheTracker>>,
 }
 
 // Safety: LlamaBackend and LlamaModel are thread-safe for shared access.
@@ -113,7 +167,17 @@ impl GgufEngine {
             model: Arc::new(model),
             name: model_name,
             meta,
+            prefix_cache: Arc::new(Mutex::new(PrefixCacheTracker::default())),
         })
+    }
+
+    /// Return current KV-cache / prompt prefix reuse statistics for this loaded model.
+    pub fn prefix_cache_stats(&self) -> PrefixCacheStats {
+        self.prefix_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stats
+            .clone()
     }
 }
 
@@ -254,12 +318,25 @@ impl InferenceEngine for GgufEngine {
     async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, String> {
         let backend = self.backend.clone();
         let model = self.model.clone();
+        let prefix_cache = self.prefix_cache.clone();
         let prompt = prompt.to_string();
 
         // Run inference on a blocking thread — it's CPU/GPU-intensive
-        tokio::task::spawn_blocking(move || generate_tokens(&backend, &model, &prompt, max_tokens))
-            .await
-            .map_err(|e| format!("Inference task failed: {e}"))?
+        tokio::task::spawn_blocking(move || {
+            let vocab = model.vocab();
+            let raw_tokens: Vec<i32> = vocab
+                .tokenize(prompt.as_bytes(), true, true)
+                .into_iter()
+                .map(|t| t.0)
+                .collect();
+            {
+                let mut tracker = prefix_cache.lock().unwrap_or_else(|e| e.into_inner());
+                tracker.record_tokens(&raw_tokens);
+            }
+            generate_tokens(&backend, &model, &prompt, max_tokens)
+        })
+        .await
+        .map_err(|e| format!("Inference task failed: {e}"))?
     }
 
     fn model_name(&self) -> &str {
@@ -389,5 +466,46 @@ mod tests {
         let mut none_cb: Option<&mut dyn FnMut(&str)> = None;
         push_decoded_piece(&mut output, "!", &mut none_cb);
         assert_eq!(output, "feat(ai): stream tokens!");
+    }
+
+    #[test]
+    fn test_longest_common_token_prefix() {
+        assert_eq!(
+            longest_common_token_prefix(&[1, 2, 3, 4], &[1, 2, 9, 10]),
+            2
+        );
+        assert_eq!(longest_common_token_prefix(&[1, 2, 3], &[1, 2, 3]), 3);
+        assert_eq!(longest_common_token_prefix(&[1, 2, 3], &[4, 5, 6]), 0);
+        assert_eq!(longest_common_token_prefix::<i32>(&[], &[1, 2]), 0);
+    }
+
+    #[test]
+    fn test_prefix_cache_tracker_warm_reuse() {
+        let mut tracker = PrefixCacheTracker::default();
+        assert_eq!(tracker.stats.total_requests_count, 0);
+        assert_eq!(tracker.stats.warm_requests_count, 0);
+        assert_eq!(tracker.stats.cached_prefix_tokens, 0);
+
+        // First call: cold
+        let shared1 = tracker.record_tokens(&[10, 20, 30, 40, 50]);
+        assert_eq!(shared1, 0);
+        assert_eq!(tracker.stats.total_requests_count, 1);
+        assert_eq!(tracker.stats.warm_requests_count, 0);
+        assert_eq!(tracker.stats.cached_prefix_tokens, 0);
+        assert!(tracker.stats.last_prefix_hash.is_some());
+
+        // Second call with shared system prompt prefix [10, 20, 30]: warm!
+        let shared2 = tracker.record_tokens(&[10, 20, 30, 99, 100]);
+        assert_eq!(shared2, 3);
+        assert_eq!(tracker.stats.total_requests_count, 2);
+        assert_eq!(tracker.stats.warm_requests_count, 1);
+        assert_eq!(tracker.stats.cached_prefix_tokens, 3);
+
+        // Third call with completely different prefix: cold
+        let shared3 = tracker.record_tokens(&[77, 88]);
+        assert_eq!(shared3, 0);
+        assert_eq!(tracker.stats.total_requests_count, 3);
+        assert_eq!(tracker.stats.warm_requests_count, 1);
+        assert_eq!(tracker.stats.cached_prefix_tokens, 0);
     }
 }

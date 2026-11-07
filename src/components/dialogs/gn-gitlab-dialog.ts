@@ -1965,7 +1965,12 @@ export class GnGitLabDialog extends GnProviderDialogBase<
                 </button>
               </div>
             </div>
-            ${this.expandedPrNumber === mr.iid ? this.renderPrCommentsDrawer(mr.iid) : nothing}
+            ${this.expandedPrNumber === mr.iid
+              ? this.renderPrCommentsDrawer(mr.iid, undefined, {
+                  baseRef: mr.targetBranch,
+                  headRef: mr.sourceBranch,
+                })
+              : nothing}
           </div>
         `)}
       </div>
@@ -2076,6 +2081,13 @@ export class GnGitLabDialog extends GnProviderDialogBase<
                 <span>${this.formatDate(pipeline.createdAt)}</span>
                 <span>${pipeline.sha.substring(0, 8)}</span>
               </div>
+              ${pipeline.status.toLowerCase().includes('fail') ||
+              pipeline.status.toLowerCase().includes('error')
+                ? this.renderCiFailureExplainerButton(
+                    `Pipeline #${pipeline.iid} (${pipeline.ref})`,
+                    `GitLab pipeline #${pipeline.iid} on ${pipeline.ref} (${pipeline.sha}) failed with status: ${pipeline.status}`,
+                  )
+                : nothing}
             </div>
           </div>
         `)}

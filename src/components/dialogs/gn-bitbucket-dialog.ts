@@ -1802,7 +1802,12 @@ export class GnBitbucketDialog extends GnProviderDialogBase<
                 </button>
               </div>
             </div>
-            ${this.expandedPrNumber === pr.id ? this.renderPrCommentsDrawer(pr.id) : nothing}
+            ${this.expandedPrNumber === pr.id
+              ? this.renderPrCommentsDrawer(pr.id, undefined, {
+                  baseRef: pr.destinationBranch,
+                  headRef: pr.sourceBranch,
+                })
+              : nothing}
           </div>
         `)}
       </div>
@@ -1907,6 +1912,17 @@ export class GnBitbucketDialog extends GnProviderDialogBase<
                 <span>${pipeline.resultName ?? pipeline.stateName}</span>
                 <span>${this.formatDate(pipeline.createdOn)}</span>
               </div>
+              ${(pipeline.resultName ?? pipeline.stateName ?? '')
+                .toLowerCase()
+                .includes('fail') ||
+              (pipeline.resultName ?? pipeline.stateName ?? '')
+                .toLowerCase()
+                .includes('error')
+                ? this.renderCiFailureExplainerButton(
+                    `Pipeline #${pipeline.buildNumber} (${pipeline.targetBranch})`,
+                    `Bitbucket pipeline #${pipeline.buildNumber} on ${pipeline.targetBranch}: ${pipeline.resultName ?? pipeline.stateName}`,
+                  )
+                : nothing}
             </div>
           </div>
         `)}

@@ -2303,7 +2303,12 @@ export class GnGitHubDialog extends GnProviderDialogBase<
                 </button>
               </div>
             </div>
-            ${this.expandedPrNumber === pr.number ? this.renderPrCommentsDrawer(pr.number, pr.headSha) : nothing}
+            ${this.expandedPrNumber === pr.number
+              ? this.renderPrCommentsDrawer(pr.number, pr.headSha, {
+                  baseRef: pr.baseRef,
+                  headRef: pr.headRef,
+                })
+              : nothing}
           </div>
         `)}
       </div>
@@ -2352,6 +2357,13 @@ export class GnGitHubDialog extends GnProviderDialogBase<
                 <span>${run.event}</span>
                 <span>${this.formatDate(run.createdAt)}</span>
               </div>
+              ${(run.conclusion ?? run.status ?? '').toLowerCase().includes('fail') ||
+              run.conclusion === 'timed_out'
+                ? this.renderCiFailureExplainerButton(
+                    run.name,
+                    `${run.name} #${run.runNumber} on ${run.headBranch} (${run.event}): ${run.conclusion ?? run.status}`,
+                  )
+                : nothing}
             </div>
             <a
               class="workflow-link"

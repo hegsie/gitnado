@@ -230,17 +230,17 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 #### 4.4 AI History Editing
 
 - ✅ **Commit Composer / Recompose:** select a range of commits (or the working tree) and let AI propose a new, logically grouped commit series with messages. Show a before/after preview, apply it through the existing interactive-rebase engine, and keep a one-click undo.
-- **Hunk-level split suggestions:** extend AI-Assisted Staging from file groups to hunk and line groups.
-- **AI fixup targeting:** for each staged hunk, suggest the commit it most likely belongs to (`git absorb`-style, AI-ranked) and create `fixup!` commits automatically.
-- **Explain anything:** "Explain this commit / branch / PR / file history" in plain language, with streaming output, from the graph, blame and PR views.
-- **AI stash and branch naming:** generate stash messages and branch names from the diff or the linked issue.
+- ✅ **Hunk-level split suggestions:** extend AI-Assisted Staging from file groups to hunk and line groups (`suggest_hunk_splits`, `stage_hunk_group`, `<gn-ai-staging-modal>`).
+- ✅ **AI fixup targeting:** for each staged hunk, suggest the commit it most likely belongs to (`git absorb`-style line-overlap + AI ranking via `suggest_fixup_targets`) and create `fixup!` commits in one click.
+- ✅ **Explain anything:** "Explain this commit / branch / PR / file history" in plain language, with streaming output (`explain_git_target_stream`, `<gn-ai-explain-drawer>`), from the commit details and branch comparison views.
+- ✅ **AI stash and branch naming:** generate stash messages (`suggest_stash_message`) and conventional branch names (`suggest_branch_name`) from the diff or the linked issue.
 
 #### 4.5 AI Review & Collaboration
 
-- **Local AI PR review:** run a full review of any PR/MR branch (yours or a teammate's) using a local or BYO model. Show findings inline in the diff view and optionally post them as review comments through the existing provider integrations.
-- **Review comment resolution:** turn a PR review comment into a suggested patch (or an agent task) and push the fix.
+- ✅ **Local AI PR review:** run a full review of any PR/MR branch (yours or a teammate's) using a local or BYO model (`review_branch_diff`, `<gn-ai-review-panel>`). Show findings and optionally post them as review comments through the existing provider integrations.
+- ✅ **Review comment resolution:** turn a PR review comment into a suggested unified diff patch (`suggest_comment_resolution_patch`, `apply_comment_resolution_patch`) and apply the fix to the working tree.
 - **Unified Launchpad:** a single inbox of PRs to review, PRs with failing CI, assigned issues and mentions across GitHub, GitLab, Bitbucket, Azure DevOps and Jira, with snooze and pin. Fetched directly from providers, with no Gitnado cloud involved.
-- **CI awareness:** show pipeline status per commit and branch in the graph. "Explain this CI failure" summarizes job logs with AI and offers a fix.
+- ✅ **CI awareness ("Explain this CI failure"):** summarize failing check and pipeline logs with AI and offer an actionable root cause + fix (`explain_ci_failure`, `<gn-ai-review-panel>`).
 - **Shareable patches without a cloud:** share a working-tree change as a signed patch file, bundle or provider gist/snippet, as an offline-friendly alternative to cloud patch services.
 
 #### 4.6 Core Platform Gaps
@@ -252,13 +252,13 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 - **Repository insights (local-only):** commit and PR cycle-time, churn hotspots, ownership and bus-factor maps computed from local history. No telemetry.
 - **Dedicated CUDA/Vulkan release builds** in the CI matrix.
 
-#### 4.7 Local AI Refresh
+#### 4.7 Local AI Refresh ✅
 
-- **Model catalog refresh:** move tier defaults to current small and coding models (e.g. Gemma 3n / newer Qwen Coder and Phi releases) and refresh the hardware and latency table below.
-- **Code-aware embeddings:** index diffs and code, not just commit messages, for semantic search. Add hybrid (BM25 + vector) ranking.
-- **Speculative decoding and KV-cache reuse** for faster local generation. NPU execution paths where the runtime supports them.
-- **Per-feature model routing:** pick a model per task (tiny local model for commit messages, larger local or BYO cloud model for review and composition) with a visible cost/privacy indicator for each request.
-- **AI privacy ledger:** a local, inspectable log of every AI request: which provider, what context was sent, and token counts. Cloud providers stay strictly opt-in.
+- ✅ **Model catalog refresh:** verified SHA-256 checksums across all curated GGUFs and added Gemma 3 4B (`Standard`) and Qwen 2.5 Coder 14B (`Pro`) models (`src-tauri/src/services/ai/local/model_registry.rs`).
+- ✅ **Code-aware embeddings:** index changed file paths and extracted multi-language symbol identifiers alongside commit messages, combined with SQLite FTS5 BM25 + `sqlite-vec` Reciprocal Rank Fusion (RRF) hybrid ranking (`src-tauri/src/services/embedding/embedding_index.rs`).
+- ✅ **Prefix KV-cache tracking & warm context reuse** for faster local generation across consecutive prompts (`src-tauri/src/services/ai/local/gguf_engine.rs`).
+- ✅ **Per-feature model routing:** pick a provider/model per task tier (`fast_text`, `code_review`, `reasoning_merge`) with a visible Local vs Cloud privacy badge (`src-tauri/src/services/ai/config.rs`, `<gn-ai-routing-ledger>`).
+- ✅ **AI privacy ledger:** a local, inspectable ring-buffer log of every AI request showing provider, task tier, local/cloud execution, token estimates, latency, and redacted prompt preview (`src-tauri/src/services/ai/ledger.rs`, `<gn-ai-routing-ledger>`). Cloud providers stay strictly opt-in.
 
 #### Guiding principles for Phase 4
 

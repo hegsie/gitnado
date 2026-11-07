@@ -22,6 +22,8 @@ import {
   type CoAuthor,
   type Trailer,
 } from '../../utils/commit-trailers.ts';
+import './gn-ai-staging-modal.ts';
+import type { AiStagingMode } from './gn-ai-staging-modal.ts';
 
 /**
  * Commit panel component
@@ -939,6 +941,10 @@ export class GnCommitPanel extends LitElement {
   @state() private splitSuggestion: import('../../services/ai.service.ts').CommitSplitSuggestion | null = null;
   @state() private isAnalyzingSplit: boolean = false;
   @state() private showSplitDetails: boolean = false;
+
+  // AI Hunk Split & Fixup modal state
+  @state() private showAiStagingModal: boolean = false;
+  @state() private aiStagingMode: AiStagingMode = 'hunk-split';
 
   // History state
   @state() private commitHistory: string[] = [];
@@ -1966,6 +1972,34 @@ export class GnCommitPanel extends LitElement {
     window.dispatchEvent(new CustomEvent('open-git-config'));
   }
 
+  private handleOpenAiStagingModal(mode: AiStagingMode): void {
+    this.aiStagingMode = mode;
+    this.showAiStagingModal = true;
+  }
+
+  private handleAiStagingChanged(
+    e: CustomEvent<{ commitMessage?: string; description?: string }>,
+  ): void {
+    if (e.detail?.commitMessage) {
+      const summary = e.detail.commitMessage;
+      const conventionalMatch = summary.match(
+        /^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+?\))?:\s*(.+)$/i,
+      );
+      if (conventionalMatch && this.conventionalMode) {
+        this.selectedType = conventionalMatch[1].toLowerCase();
+        if (conventionalMatch[2]) {
+          this.scope = conventionalMatch[2].slice(1, -1);
+        }
+        this.summary = conventionalMatch[3];
+      } else {
+        this.summary = summary;
+      }
+      if (e.detail.description) {
+        this.description = e.detail.description;
+      }
+    }
+  }
+
   render() {
     const summaryOverLimit = this.summary.length > this.SUMMARY_LIMIT;
     const identityMissing = this.identityLoaded && !this.hasIdentity;
@@ -2027,9 +2061,9 @@ export class GnCommitPanel extends LitElement {
         </div>
       ` : nothing}
 
-      ${this.aiAvailable && this.stagedCount > 0 ? html`
-        <div class="ai-checks">
-          <div class="check-buttons">
+      <div class="ai-checks">
+        <div class="check-buttons">
+          ${this.aiAvailable && this.stagedCount > 0 ? html`
             <button
               class="check-btn"
               @click=${this.handleVibeCheck}
@@ -2046,9 +2080,26 @@ export class GnCommitPanel extends LitElement {
             >
               ${this.isAnalyzingSplit ? 'Analyzing...' : html`<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.25a.25.25 0 0 1 .25-.25h5.5a.25.25 0 0 1 .25.25v5.5a.25.25 0 0 1-.25.25h-5.5a.25.25 0 0 1-.25-.25v-5.5zM5 11.75a.25.25 0 0 1 .25-.25h5.5a.25.25 0 0 1 .25.25v1.5a.25.25 0 0 1-.25.25h-5.5a.25.25 0 0 1-.25-.25v-1.5z"/></svg> Split Check`}
             </button>
-          </div>
+          ` : nothing}
+          <button
+            class="check-btn hunk-split-btn"
+            @click=${() => this.handleOpenAiStagingModal('hunk-split')}
+            ?disabled=${!this.repositoryPath}
+            title="Split diff hunks into atomic commit groups"
+          >
+            Hunk Split
+          </button>
+          <button
+            class="check-btn fixup-target-btn"
+            @click=${() => this.handleOpenAiStagingModal('fixup')}
+            ?disabled=${!this.repositoryPath}
+            title="Suggest a recent commit to target with fixup!"
+          >
+            Suggest Fixup Target
+          </button>
+        </div>
 
-          ${this.vibeCheckResult ? html`
+        ${this.aiAvailable && this.stagedCount > 0 && this.vibeCheckResult ? html`
             <div class="vibe-result ${this.vibeCheckResult.riskLevel}">
               <div class="vibe-summary" @click=${() => { this.showVibeDetails = !this.showVibeDetails; }}>
                 <span class="risk-badge ${this.vibeCheckResult.riskLevel}">${this.vibeCheckResult.riskLevel}</span>
@@ -2074,7 +2125,7 @@ export class GnCommitPanel extends LitElement {
             </div>
           ` : nothing}
 
-          ${this.splitSuggestion?.shouldSplit ? html`
+        ${this.aiAvailable && this.stagedCount > 0 && this.splitSuggestion?.shouldSplit ? html`
             <div class="split-result">
               <div class="split-header" @click=${() => { this.showSplitDetails = !this.showSplitDetails; }}>
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.25a.25.25 0 0 1 .25-.25h5.5a.25.25 0 0 1 .25.25v5.5a.25.25 0 0 1-.25.25h-5.5a.25.25 0 0 1-.25-.25v-5.5z"/></svg>
@@ -2098,8 +2149,7 @@ export class GnCommitPanel extends LitElement {
               ` : nothing}
             </div>
           ` : nothing}
-        </div>
-      ` : nothing}
+      </div>
 
       ${this.generationError ? html`
         <div class="error">${this.generationError}</div>
@@ -2262,6 +2312,16 @@ export class GnCommitPanel extends LitElement {
           ${this.isCommitting ? 'Committing...' : 'Commit'}
         </button>
       </div>
+
+      <gn-ai-staging-modal
+        .open=${this.showAiStagingModal}
+        .repositoryPath=${this.repositoryPath}
+        .mode=${this.aiStagingMode}
+        @close=${() => {
+          this.showAiStagingModal = false;
+        }}
+        @staging-changed=${this.handleAiStagingChanged}
+      ></gn-ai-staging-modal>
     `;
   }
 }

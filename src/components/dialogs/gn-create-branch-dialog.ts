@@ -3,10 +3,12 @@
  * Allows users to create a new branch from current HEAD or a specific ref
  */
 
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, state, property, query } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import { createBranch } from '../../services/git.service.ts';
+import { suggestBranchName } from '../../services/ai-explain.service.ts';
+import { showToast } from '../../services/notification.service.ts';
 import { containsDeepActiveElement } from '../../utils/focus.ts';
 import './gn-modal.ts';
 import type { GnModal } from './gn-modal.ts';
@@ -63,6 +65,81 @@ export class GnCreateBranchDialog extends LitElement {
       .field-hint {
         font-size: var(--font-size-xs);
         color: var(--color-text-muted);
+      }
+
+      .input-with-action {
+        display: flex;
+        align-items: stretch;
+        gap: var(--spacing-xs);
+      }
+
+      .input-with-action input {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .suggest-ai-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 var(--spacing-sm);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-medium);
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all var(--transition-fast);
+      }
+
+      .suggest-ai-btn:hover:not(:disabled) {
+        background: var(--color-primary);
+        color: white;
+        border-color: var(--color-primary);
+      }
+
+      .suggest-ai-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .suggest-ai-btn svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      .alternatives-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-top: 2px;
+      }
+
+      .alt-chip {
+        padding: 2px 8px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        font-family: var(--font-family-mono);
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+      }
+
+      .alt-chip:hover {
+        background: var(--color-bg-hover);
+        color: var(--color-primary);
+        border-color: var(--color-primary);
+      }
+
+      .rationale-hint {
+        font-size: var(--font-size-xs);
+        color: var(--color-text-secondary);
+        font-style: italic;
       }
 
       .checkbox-field {
@@ -168,6 +245,9 @@ export class GnCreateBranchDialog extends LitElement {
   @state() private branchName = '';
   @state() private checkoutAfterCreate = true;
   @state() private isCreating = false;
+  @state() private isSuggestingName = false;
+  @state() private suggestedAlternatives: string[] = [];
+  @state() private suggestionRationale = '';
   @state() private error = '';
 
   @query('gn-modal') private modal!: GnModal;
@@ -235,6 +315,46 @@ export class GnCreateBranchDialog extends LitElement {
     this.startPoint = '';
     this.checkoutAfterCreate = true;
     this.isCreating = false;
+    this.isSuggestingName = false;
+    this.suggestedAlternatives = [];
+    this.suggestionRationale = '';
+    this.error = '';
+  }
+
+  private async handleSuggestWithAi(): Promise<void> {
+    const repoPath = this.pinnedRepoPath || this.repositoryPath;
+    if (!repoPath || this.isSuggestingName || this.isCreating) return;
+
+    this.isSuggestingName = true;
+    this.error = '';
+
+    try {
+      const result = await suggestBranchName(repoPath);
+      if (!this.isOpen) return;
+      if (result.success && result.data) {
+        this.branchName = result.data.name;
+        this.suggestedAlternatives = result.data.alternatives ?? [];
+        this.suggestionRationale = result.data.rationale ?? '';
+      } else {
+        const msg = result.error?.message ?? 'Failed to suggest branch name with AI';
+        showToast(msg, 'error');
+      }
+    } catch (err) {
+      if (!this.isOpen) return;
+      const msg = err instanceof Error ? err.message : 'Failed to suggest branch name with AI';
+      showToast(msg, 'error');
+    } finally {
+      this.isSuggestingName = false;
+    }
+  }
+
+  private handleSelectAlternative(alt: string): void {
+    const previous = this.branchName;
+    this.branchName = alt;
+    this.suggestedAlternatives = [
+      ...this.suggestedAlternatives.filter((a) => a !== alt),
+      ...(previous && previous !== alt ? [previous] : []),
+    ];
     this.error = '';
   }
 
@@ -340,15 +460,50 @@ export class GnCreateBranchDialog extends LitElement {
         <div class="form" @keydown=${this.handleKeyDown}>
           <div class="field">
             <label for="branch-name-input">Branch Name</label>
-            <input
-              id="branch-name-input"
-              type="text"
-              placeholder="feature/my-new-feature"
-              .value=${this.branchName}
-              @input=${this.handleNameChange}
-              ?disabled=${this.isCreating}
-            />
-            <span class="field-hint">Use / to organize branches (e.g., feature/, bugfix/)</span>
+            <div class="input-with-action">
+              <input
+                id="branch-name-input"
+                type="text"
+                placeholder="feature/my-new-feature"
+                .value=${this.branchName}
+                @input=${this.handleNameChange}
+                ?disabled=${this.isCreating}
+              />
+              <button
+                class="suggest-ai-btn"
+                type="button"
+                data-testid="suggest-branch-ai-btn"
+                title="Suggest branch name from working tree changes with AI"
+                ?disabled=${this.isCreating || this.isSuggestingName}
+                @click=${this.handleSuggestWithAi}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M12 3l1.9 5.8a2 2 0 001.3 1.3L21 12l-5.8 1.9a2 2 0 00-1.3 1.3L12 21l-1.9-5.8a2 2 0 00-1.3-1.3L3 12l5.8-1.9a2 2 0 001.3-1.3L12 3z"></path>
+                </svg>
+                ${this.isSuggestingName ? 'Suggesting…' : 'Suggest with AI'}
+              </button>
+            </div>
+            ${this.suggestedAlternatives.length > 0
+              ? html`
+                  <div class="alternatives-row" data-testid="branch-alternatives">
+                    <span class="field-hint">Alternatives:</span>
+                    ${this.suggestedAlternatives.map(
+                      (alt) => html`
+                        <button
+                          class="alt-chip"
+                          type="button"
+                          @click=${() => this.handleSelectAlternative(alt)}
+                        >
+                          ${alt}
+                        </button>
+                      `,
+                    )}
+                  </div>
+                `
+              : nothing}
+            ${this.suggestionRationale
+              ? html`<span class="rationale-hint" data-testid="branch-rationale">${this.suggestionRationale}</span>`
+              : html`<span class="field-hint">Use / to organize branches (e.g., feature/, bugfix/)</span>`}
           </div>
 
           ${this.startPoint ? html`

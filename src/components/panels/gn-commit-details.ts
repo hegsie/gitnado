@@ -19,6 +19,7 @@ import { settingsStore } from '../../stores/settings.store.ts';
 import { restoreFileFromCommit } from '../../utils/restore-file.ts';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { join } from '@tauri-apps/api/path';
+import './gn-ai-explain-drawer.ts';
 
 const log = loggers.ui;
 
@@ -104,6 +105,39 @@ export class GnCommitDetails extends LitElement {
         color: var(--color-text-primary);
         margin-bottom: 4px;
         line-height: 1.3;
+      }
+
+      .commit-header-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--spacing-sm);
+      }
+
+      .explain-ai-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: all var(--transition-fast);
+      }
+
+      .explain-ai-btn:hover {
+        background: var(--color-primary);
+        color: white;
+        border-color: var(--color-primary);
+      }
+
+      .explain-ai-btn svg {
+        width: 12px;
+        height: 12px;
       }
 
       .commit-body {
@@ -693,6 +727,7 @@ export class GnCommitDetails extends LitElement {
 
   /** Agent session that wrote this commit, from the hooks bridge (#608). */
   @state() private agentAttribution: AgentAttribution | null = null;
+  @state() private showAiExplain = false;
 
   // --- Git notes ---
   @state() private notesRefs: string[] = [DEFAULT_NOTES_REF];
@@ -781,6 +816,7 @@ export class GnCommitDetails extends LitElement {
       // the NEW repo the moment a commit is selected, and Restore/Open would
       // join repo B's path with repo A's file.
       this.contextMenu = { ...this.contextMenu, visible: false };
+      this.showAiExplain = false;
       this.resetNotesState();
       this.refreshNotes();
     }
@@ -794,6 +830,7 @@ export class GnCommitDetails extends LitElement {
         this.selectedFilePath = null;
         this.signatureInfo = null;
         this.authorAvatarUrl = null;
+        this.showAiExplain = false;
         this.loadFiles();
         this.loadCommitMetadata();
         this.parseIssueRefs();
@@ -1795,10 +1832,35 @@ export class GnCommitDetails extends LitElement {
 
       <div class="content">
         <div class="section">
-          <div class="commit-message">${this.commit.summary}</div>
+          <div class="commit-header-row">
+            <div class="commit-message">${this.commit.summary}</div>
+            <button
+              class="explain-ai-btn"
+              type="button"
+              data-testid="explain-commit-btn"
+              title="Explain this commit with AI"
+              @click=${() => {
+                this.showAiExplain = !this.showAiExplain;
+              }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 3l1.9 5.8a2 2 0 001.3 1.3L21 12l-5.8 1.9a2 2 0 00-1.3 1.3L12 21l-1.9-5.8a2 2 0 00-1.3-1.3L3 12l5.8-1.9a2 2 0 001.3-1.3L12 3z"></path>
+              </svg>
+              ${this.showAiExplain ? 'Hide Explanation' : 'Explain Commit'}
+            </button>
+          </div>
           ${this.commit.body
             ? html`<div class="commit-body">${this.commit.body}</div>`
             : ''}
+          <gn-ai-explain-drawer
+            .repositoryPath=${this.repositoryPath}
+            .targetType=${'commit'}
+            .targetId=${this.commit.oid}
+            .open=${this.showAiExplain}
+            @close=${() => {
+              this.showAiExplain = false;
+            }}
+          ></gn-ai-explain-drawer>
         </div>
 
         ${this.refs.length > 0

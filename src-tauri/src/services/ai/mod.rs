@@ -5,6 +5,7 @@
 //! (OpenAI, Anthropic) providers.
 
 pub mod config;
+pub mod ledger;
 pub mod local;
 pub mod mcp;
 pub mod mcp_client;
@@ -17,7 +18,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub use config::{AiConfig, ProviderSettings};
+pub use config::{AiConfig, AiTaskRoute, AiTaskTier, ProviderSettings};
+pub use ledger::{AiLedger, AiLedgerEntry, AiPrivacySummary, NewAiLedgerEntry};
 pub use providers::{
     AnthropicProvider, GeminiProvider, GithubCopilotProvider, LoadedModelMeta,
     LocalInferenceProvider, OllamaProvider, OpenAiCompatibleProvider,
@@ -150,6 +152,18 @@ pub struct AiUnavailable {
     /// affordances when AI was never set up still shows them, disabled, here —
     /// they worked before and the user needs to know why they stopped.
     pub provider_selected: bool,
+}
+
+/// Privacy & routing badge metadata for displaying whether an AI feature runs
+/// 100% locally or via a cloud provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPrivacyBadgeInfo {
+    pub provider_type: AiProviderType,
+    pub provider_name: String,
+    pub model: String,
+    pub is_local: bool,
+    pub tier: Option<AiTaskTier>,
 }
 
 /// Trait for AI providers
@@ -492,6 +506,8 @@ pub struct AiService {
     local_provider: LocalInferenceProvider,
     /// Shared local AI state for lazy model loading
     local_ai_state: Option<SharedLocalAiState>,
+    /// Bounded ring-buffer ledger of AI activity for privacy transparency
+    ledger: std::sync::Mutex<AiLedger>,
 }
 
 impl AiService {
@@ -505,6 +521,7 @@ impl AiService {
             providers: HashMap::new(),
             local_provider: LocalInferenceProvider::new(),
             local_ai_state: None,
+            ledger: std::sync::Mutex::new(AiLedger::new()),
         };
 
         // Initialize providers
@@ -657,6 +674,76 @@ impl AiService {
     /// is chosen and a request would fall back to whatever is reachable.
     pub fn active_provider_endpoint(&self) -> Option<String> {
         self.config.active_provider.map(|pt| self.endpoint_for(pt))
+    }
+
+    /// True if `provider_type` executes on this machine (`LocalInference`, or
+    /// `Ollama`/`LmStudio` configured on a loopback address).
+    pub fn is_local_provider(&self, provider_type: AiProviderType) -> bool {
+        match provider_type {
+            AiProviderType::LocalInference => true,
+            AiProviderType::Ollama | AiProviderType::LmStudio => {
+                let ep = self.endpoint_for(provider_type).to_ascii_lowercase();
+                ep.is_empty()
+                    || ep.starts_with("http://localhost")
+                    || ep.starts_with("http://127.0.0.1")
+                    || ep.starts_with("http://[::1]")
+                    || ep.starts_with("https://localhost")
+                    || ep.starts_with("https://127.0.0.1")
+                    || ep.starts_with("https://[::1]")
+            }
+            _ => false,
+        }
+    }
+
+    /// Get per-task routing overrides.
+    pub fn get_task_routes(&self) -> HashMap<AiTaskTier, AiTaskRoute> {
+        self.config.task_routes.clone()
+    }
+
+    /// Set or clear a per-task routing override for `tier`.
+    pub fn set_task_route(
+        &mut self,
+        tier: AiTaskTier,
+        route: Option<AiTaskRoute>,
+    ) -> Result<(), String> {
+        match route {
+            Some(r) => {
+                self.config.task_routes.insert(tier, r);
+            }
+            None => {
+                self.config.task_routes.remove(&tier);
+            }
+        }
+        self.save_config()
+    }
+
+    /// Return all recorded AI activity ledger entries (newest first).
+    pub fn get_ledger(&self) -> Vec<AiLedgerEntry> {
+        self.ledger.lock().unwrap_or_else(|e| e.into_inner()).list()
+    }
+
+    /// Clear the AI activity ledger.
+    pub fn clear_ledger(&self) {
+        self.ledger
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
+    /// Return aggregated local vs cloud call & token statistics.
+    pub fn get_privacy_summary(&self) -> AiPrivacySummary {
+        self.ledger
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .summary()
+    }
+
+    /// Append a new entry to the AI activity ledger.
+    pub fn record_ledger_entry(&self, entry: NewAiLedgerEntry) -> AiLedgerEntry {
+        self.ledger
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(entry)
     }
 
     /// Get information about all providers
@@ -967,6 +1054,76 @@ impl AiService {
         self.resolve_provider().await.ok()
     }
 
+    /// Resolve the provider and model for a specific [`AiTaskTier`].
+    ///
+    /// Checks if `config.task_routes` has an override for `tier` whose provider
+    /// is available and permitted by `security::guard_endpoint`, otherwise falls
+    /// back to [`AiService::resolve_provider`].
+    pub async fn resolve_provider_for_tier(
+        &self,
+        tier: AiTaskTier,
+    ) -> Result<(&dyn AiProvider, AiProviderType, Option<String>), String> {
+        if let Some(route) = self.config.task_routes.get(&tier) {
+            let pt = route.provider;
+            if pt == AiProviderType::LocalInference {
+                if let Err(e) = self.ensure_local_model_loaded().await {
+                    tracing::debug!("Lazy model load for tier {:?} skipped: {}", tier, e);
+                }
+            }
+            if crate::services::security::guard_endpoint(&self.endpoint_for(pt)).is_ok() {
+                if let Some(provider) = self.providers.get(&pt) {
+                    if provider.is_available().await {
+                        let model = route
+                            .model
+                            .clone()
+                            .filter(|m| !m.trim().is_empty())
+                            .or_else(|| {
+                                self.config.providers.get(&pt).and_then(|s| s.model.clone())
+                            });
+                        return Ok((provider.as_ref(), pt, model));
+                    }
+                }
+            }
+        }
+
+        let (provider, pt) = self.resolve_provider().await?;
+        let model = self.config.providers.get(&pt).and_then(|s| s.model.clone());
+        Ok((provider, pt, model))
+    }
+
+    /// Return privacy & routing badge information for the active route (or for
+    /// a specific task tier if `tier` is provided).
+    pub async fn active_route_info(&self, tier: Option<AiTaskTier>) -> Option<AiPrivacyBadgeInfo> {
+        let (pt, model_opt) = match tier {
+            Some(t) => {
+                let (_provider, pt, model) = self.resolve_provider_for_tier(t).await.ok()?;
+                (pt, model)
+            }
+            None => {
+                let (_provider, pt) = self.resolve_provider().await.ok()?;
+                let model = self.config.providers.get(&pt).and_then(|s| s.model.clone());
+                (pt, model)
+            }
+        };
+
+        let model = if pt == AiProviderType::LocalInference {
+            self.get_loaded_model_name()
+                .await
+                .or(model_opt)
+                .unwrap_or_else(|| pt.default_model().to_string())
+        } else {
+            model_opt.unwrap_or_else(|| pt.default_model().to_string())
+        };
+
+        Some(AiPrivacyBadgeInfo {
+            provider_type: pt,
+            provider_name: pt.display_name().to_string(),
+            model,
+            is_local: self.is_local_provider(pt),
+            tier,
+        })
+    }
+
     /// Save configuration to disk
     fn save_config(&self) -> Result<(), String> {
         self.config.save(&self.config_dir)
@@ -982,12 +1139,13 @@ impl AiService {
         Ok(provider.is_available().await)
     }
 
-    /// Generate a commit message using the active provider
+    /// Generate a commit message using the active (or `FastText` tier) provider
     pub async fn generate_commit_message(
         &self,
         diff: String,
     ) -> Result<GeneratedCommitMessage, String> {
-        let (provider, provider_type) = self.resolve_provider().await?;
+        let (provider, provider_type, model_override) =
+            self.resolve_provider_for_tier(AiTaskTier::FastText).await?;
 
         // Truncate diff if too long (skip for local inference — it handles
         // per-file truncation internally and needs all files for good summaries)
@@ -1002,16 +1160,120 @@ impl AiService {
             diff
         };
 
-        // Get the selected model for this provider
-        let model = self
-            .config
-            .providers
-            .get(&provider_type)
-            .and_then(|s| s.model.as_deref());
+        let model_name = model_override
+            .clone()
+            .unwrap_or_else(|| provider_type.default_model().to_string());
+        let is_local = self.is_local_provider(provider_type);
+        let prompt_bytes = COMMIT_MESSAGE_PROMPT.len() + truncated_diff.len();
+        let start = std::time::Instant::now();
 
-        provider
-            .generate_commit_message(&truncated_diff, model)
-            .await
+        let result = provider
+            .generate_commit_message(&truncated_diff, model_override.as_deref())
+            .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Ok(msg) => {
+                let response_bytes =
+                    msg.summary.len() + msg.body.as_ref().map(|b| b.len()).unwrap_or(0);
+                self.record_ledger_entry(NewAiLedgerEntry {
+                    feature: "commit_message".to_string(),
+                    task_tier: AiTaskTier::FastText,
+                    provider_type,
+                    model: model_name,
+                    is_local,
+                    prompt_bytes,
+                    response_bytes,
+                    duration_ms,
+                    success: true,
+                    error_message: None,
+                    prompt: truncated_diff,
+                });
+            }
+            Err(err) => {
+                self.record_ledger_entry(NewAiLedgerEntry {
+                    feature: "commit_message".to_string(),
+                    task_tier: AiTaskTier::FastText,
+                    provider_type,
+                    model: model_name,
+                    is_local,
+                    prompt_bytes,
+                    response_bytes: 0,
+                    duration_ms,
+                    success: false,
+                    error_message: Some(err.clone()),
+                    prompt: truncated_diff,
+                });
+            }
+        }
+
+        result
+    }
+
+    /// Generate free-form text for a specific feature and [`AiTaskTier`],
+    /// recording the execution in the AI Privacy & Activity Ledger.
+    pub async fn generate_text_for_feature(
+        &self,
+        feature: &str,
+        tier: AiTaskTier,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_tokens: Option<u32>,
+    ) -> Result<String, String> {
+        let (provider, provider_type, model_override) =
+            self.resolve_provider_for_tier(tier).await?;
+
+        let model_name = model_override
+            .clone()
+            .unwrap_or_else(|| provider_type.default_model().to_string());
+        let is_local = self.is_local_provider(provider_type);
+        let prompt_bytes = system_prompt.len() + user_prompt.len();
+        let start = std::time::Instant::now();
+
+        let result = provider
+            .generate_text(
+                system_prompt,
+                user_prompt,
+                model_override.as_deref(),
+                max_tokens,
+            )
+            .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        match &result {
+            Ok(response) => {
+                self.record_ledger_entry(NewAiLedgerEntry {
+                    feature: feature.to_string(),
+                    task_tier: tier,
+                    provider_type,
+                    model: model_name,
+                    is_local,
+                    prompt_bytes,
+                    response_bytes: response.len(),
+                    duration_ms,
+                    success: true,
+                    error_message: None,
+                    prompt: user_prompt.to_string(),
+                });
+            }
+            Err(err) => {
+                self.record_ledger_entry(NewAiLedgerEntry {
+                    feature: feature.to_string(),
+                    task_tier: tier,
+                    provider_type,
+                    model: model_name,
+                    is_local,
+                    prompt_bytes,
+                    response_bytes: 0,
+                    duration_ms,
+                    success: false,
+                    error_message: Some(err.clone()),
+                    prompt: user_prompt.to_string(),
+                });
+            }
+        }
+
+        result
     }
 
     /// Generate free-form text using the active provider
@@ -1021,18 +1283,14 @@ impl AiService {
         user_prompt: &str,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        let (provider, provider_type) = self.resolve_provider().await?;
-
-        // Get the selected model for this provider
-        let model = self
-            .config
-            .providers
-            .get(&provider_type)
-            .and_then(|s| s.model.as_deref());
-
-        provider
-            .generate_text(system_prompt, user_prompt, model, max_tokens)
-            .await
+        self.generate_text_for_feature(
+            "general",
+            AiTaskTier::CodeReview,
+            system_prompt,
+            user_prompt,
+            max_tokens,
+        )
+        .await
     }
 
     /// Load a GGUF model into the local inference engine.
@@ -1716,5 +1974,106 @@ mod tests {
             service.get_local_model_status().await,
             providers::LocalModelStatus::Unloaded
         );
+    }
+
+    #[tokio::test]
+    async fn test_task_route_override_and_fallback() {
+        let _policy = no_policy();
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = test_service(&dir);
+        set_key(&mut service, AiProviderType::Anthropic, "test-key");
+        set_key(&mut service, AiProviderType::GoogleGemini, "test-key");
+        service.config.active_provider = Some(AiProviderType::Anthropic);
+
+        // Route FastText to GoogleGemini with a specific model
+        service
+            .set_task_route(
+                AiTaskTier::FastText,
+                Some(AiTaskRoute {
+                    provider: AiProviderType::GoogleGemini,
+                    model: Some("gemini-2.5-flash".to_string()),
+                }),
+            )
+            .unwrap();
+
+        let (_, pt_fast, model_fast) = service
+            .resolve_provider_for_tier(AiTaskTier::FastText)
+            .await
+            .unwrap();
+        assert_eq!(pt_fast, AiProviderType::GoogleGemini);
+        assert_eq!(model_fast.as_deref(), Some("gemini-2.5-flash"));
+
+        // CodeReview has no override, so it falls back to active provider (Anthropic)
+        let (_, pt_review, _) = service
+            .resolve_provider_for_tier(AiTaskTier::CodeReview)
+            .await
+            .unwrap();
+        assert_eq!(pt_review, AiProviderType::Anthropic);
+
+        // If the routed provider for ReasoningMerge is unavailable, it falls back to active provider
+        service
+            .set_task_route(
+                AiTaskTier::ReasoningMerge,
+                Some(AiTaskRoute {
+                    provider: AiProviderType::OpenAi, // no API key configured
+                    model: None,
+                }),
+            )
+            .unwrap();
+        let (_, pt_merge, _) = service
+            .resolve_provider_for_tier(AiTaskTier::ReasoningMerge)
+            .await
+            .unwrap();
+        assert_eq!(pt_merge, AiProviderType::Anthropic);
+    }
+
+    #[tokio::test]
+    async fn test_ledger_recording_and_privacy_badge() {
+        let _policy = no_policy();
+        let (mut service, _config_dir, _models_dir) = service_fixture().await;
+        service
+            .set_active_provider(AiProviderType::Anthropic)
+            .unwrap();
+        service
+            .providers
+            .insert(AiProviderType::Anthropic, Box::new(StubProvider));
+
+        let badge = service
+            .active_route_info(Some(AiTaskTier::FastText))
+            .await
+            .unwrap();
+        assert_eq!(badge.provider_type, AiProviderType::Anthropic);
+        assert!(!badge.is_local);
+        assert_eq!(badge.tier, Some(AiTaskTier::FastText));
+
+        let _ = service
+            .generate_commit_message("diff --git a/x b/x".to_string())
+            .await
+            .unwrap();
+        let _ = service
+            .generate_text_for_feature(
+                "vibe_check",
+                AiTaskTier::CodeReview,
+                "sys",
+                "user diff",
+                Some(100),
+            )
+            .await
+            .unwrap();
+
+        let entries = service.get_ledger();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].feature, "vibe_check");
+        assert_eq!(entries[0].task_tier, AiTaskTier::CodeReview);
+        assert_eq!(entries[1].feature, "commit_message");
+        assert_eq!(entries[1].task_tier, AiTaskTier::FastText);
+
+        let summary = service.get_privacy_summary();
+        assert_eq!(summary.total_calls, 2);
+        assert_eq!(summary.cloud_calls, 2);
+        assert_eq!(summary.local_calls, 0);
+
+        service.clear_ledger();
+        assert!(service.get_ledger().is_empty());
     }
 }

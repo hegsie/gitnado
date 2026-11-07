@@ -5,13 +5,15 @@
 use crate::error::{GitnadoError, Result};
 use crate::services::ai::mcp_client::{self, SharedExternalServers};
 use crate::services::ai::{
-    AiProviderInfo, AiProviderType, AiService, AiState, AiUnavailable, AnalysisFinding,
-    CommitSplitSuggestion, ConflictExplanation, ConflictResolutionSuggestion, FindingCategory,
-    GeneratedChangelog, GeneratedCommitMessage, GeneratedPrDescription, ReflogMatch, RiskLevel,
-    Severity, StagedAnalysis, CHANGELOG_PROMPT, COMMIT_SPLIT_PROMPT, CONFLICT_EXPLAIN_PROMPT,
+    AiLedgerEntry, AiPrivacySummary, AiProviderInfo, AiProviderType, AiService, AiState,
+    AiTaskRoute, AiTaskTier, AiUnavailable, AnalysisFinding, CommitSplitSuggestion,
+    ConflictExplanation, ConflictResolutionSuggestion, FindingCategory, GeneratedChangelog,
+    GeneratedCommitMessage, GeneratedPrDescription, ReflogMatch, RiskLevel, Severity,
+    StagedAnalysis, CHANGELOG_PROMPT, COMMIT_SPLIT_PROMPT, CONFLICT_EXPLAIN_PROMPT,
     CONFLICT_RESOLUTION_PROMPT, MAX_CHANGELOG_BYTES, MAX_CONFLICT_CONTEXT_BYTES, MAX_DIFF_BYTES,
     PR_DESCRIPTION_PROMPT, RECOMPOSE_PROMPT, REFLOG_MATCH_PROMPT, VIBE_CHECK_PROMPT,
 };
+use std::collections::HashMap;
 use tauri::{command, State};
 
 /// Refuse an AI request that would leave the machine.
@@ -99,6 +101,50 @@ pub async fn test_ai_provider(
 pub async fn auto_detect_ai_providers(state: State<'_, AiState>) -> Result<Vec<AiProviderType>> {
     let service = state.read().await;
     Ok(service.auto_detect_providers().await)
+}
+
+/// Get per-task AI routing overrides
+#[command]
+pub async fn get_ai_task_routes(
+    state: State<'_, AiState>,
+) -> Result<HashMap<AiTaskTier, AiTaskRoute>> {
+    let service = state.read().await;
+    Ok(service.get_task_routes())
+}
+
+/// Set or clear a per-task AI routing override for `tier`
+#[command]
+pub async fn set_ai_task_route(
+    state: State<'_, AiState>,
+    tier: AiTaskTier,
+    route: Option<AiTaskRoute>,
+) -> Result<()> {
+    let mut service = state.write().await;
+    service
+        .set_task_route(tier, route)
+        .map_err(GitnadoError::OperationFailed)
+}
+
+/// Get the bounded AI privacy & activity ledger entries (newest first)
+#[command]
+pub async fn get_ai_ledger(state: State<'_, AiState>) -> Result<Vec<AiLedgerEntry>> {
+    let service = state.read().await;
+    Ok(service.get_ledger())
+}
+
+/// Clear the AI privacy & activity ledger
+#[command]
+pub async fn clear_ai_ledger(state: State<'_, AiState>) -> Result<()> {
+    let service = state.read().await;
+    service.clear_ledger();
+    Ok(())
+}
+
+/// Get aggregated privacy summary across the AI activity ledger
+#[command]
+pub async fn get_ai_privacy_summary(state: State<'_, AiState>) -> Result<AiPrivacySummary> {
+    let service = state.read().await;
+    Ok(service.get_privacy_summary())
 }
 
 /// Generate a commit message from staged changes
@@ -229,7 +275,13 @@ pub async fn suggest_conflict_resolution(
     }
 
     let response = service
-        .generate_text(CONFLICT_RESOLUTION_PROMPT, &user_prompt, None)
+        .generate_text_for_feature(
+            "conflict_resolution",
+            AiTaskTier::ReasoningMerge,
+            CONFLICT_RESOLUTION_PROMPT,
+            &user_prompt,
+            None,
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
@@ -263,7 +315,13 @@ pub async fn generate_changelog(
     let service = state.read().await;
     guard_ai_request(&service)?;
     let response = service
-        .generate_text(CHANGELOG_PROMPT, truncated, Some(2000))
+        .generate_text_for_feature(
+            "changelog",
+            AiTaskTier::FastText,
+            CHANGELOG_PROMPT,
+            truncated,
+            Some(2000),
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
@@ -321,7 +379,13 @@ pub async fn explain_conflict(
     let service = state.read().await;
     guard_ai_request(&service)?;
     let response = service
-        .generate_text(CONFLICT_EXPLAIN_PROMPT, &user_prompt, Some(500))
+        .generate_text_for_feature(
+            "conflict_explain",
+            AiTaskTier::CodeReview,
+            CONFLICT_EXPLAIN_PROMPT,
+            &user_prompt,
+            Some(500),
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
@@ -362,7 +426,13 @@ pub async fn find_reflog_entry(
     let service = state.read().await;
     guard_ai_request(&service)?;
     let response = service
-        .generate_text(&system_prompt, &reflog_text, Some(300))
+        .generate_text_for_feature(
+            "reflog_match",
+            AiTaskTier::FastText,
+            &system_prompt,
+            &reflog_text,
+            Some(300),
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
@@ -471,7 +541,13 @@ pub async fn analyze_staged_changes(
     let ai_error = match blocked {
         Some(reason) => Some(reason),
         None => match service
-            .generate_text(VIBE_CHECK_PROMPT, truncated, Some(1000))
+            .generate_text_for_feature(
+                "vibe_check",
+                AiTaskTier::CodeReview,
+                VIBE_CHECK_PROMPT,
+                truncated,
+                Some(1000),
+            )
             .await
         {
             Ok(response) => match parse_vibe_check_response(&response) {
@@ -566,7 +642,13 @@ pub async fn generate_pr_description(
     let service = state.read().await;
     guard_ai_request(&service)?;
     let response = service
-        .generate_text(&system_prompt, truncated, Some(1500))
+        .generate_text_for_feature(
+            "pr_description",
+            AiTaskTier::FastText,
+            &system_prompt,
+            truncated,
+            Some(1500),
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
@@ -606,7 +688,13 @@ pub async fn suggest_commit_splits(
     let service = state.read().await;
     guard_ai_request(&service)?;
     let response = service
-        .generate_text(COMMIT_SPLIT_PROMPT, truncated, Some(1500))
+        .generate_text_for_feature(
+            "commit_split",
+            AiTaskTier::CodeReview,
+            COMMIT_SPLIT_PROMPT,
+            truncated,
+            Some(1500),
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
 
@@ -630,7 +718,13 @@ pub async fn suggest_recompose(
     let service = state.read().await;
     guard_ai_request(&service)?;
     let response = service
-        .generate_text(RECOMPOSE_PROMPT, truncated, Some(2000))
+        .generate_text_for_feature(
+            "recompose",
+            AiTaskTier::ReasoningMerge,
+            RECOMPOSE_PROMPT,
+            truncated,
+            Some(2000),
+        )
         .await
         .map_err(GitnadoError::OperationFailed)?;
     parse_split_suggestion(&response)

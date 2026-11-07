@@ -2381,7 +2381,12 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
                 </button>
               </div>
             </div>
-            ${this.expandedPrNumber === pr.pullRequestId ? this.renderPrCommentsDrawer(pr.pullRequestId) : nothing}
+            ${this.expandedPrNumber === pr.pullRequestId
+              ? this.renderPrCommentsDrawer(pr.pullRequestId, undefined, {
+                  baseRef: pr.targetRefName.replace(/^refs\/heads\//, ''),
+                  headRef: pr.sourceRefName.replace(/^refs\/heads\//, ''),
+                })
+              : nothing}
           </div>
         `)}
       </div>
@@ -2491,6 +2496,13 @@ export class GnAzureDevOpsDialog extends GnProviderDialogBase<
                 <span>${this.formatDate(run.createdDate)}</span>
                 ${run.result ? html`<span>${run.result}</span>` : html`<span>${run.state}</span>`}
               </div>
+              ${(run.result ?? run.state ?? '').toLowerCase().includes('fail') ||
+              (run.result ?? run.state ?? '').toLowerCase().includes('error')
+                ? this.renderCiFailureExplainerButton(
+                    run.name,
+                    `Azure DevOps pipeline ${run.name} on ${run.sourceBranch}: ${run.result ?? run.state}`,
+                  )
+                : nothing}
             </div>
           </div>
         `)}

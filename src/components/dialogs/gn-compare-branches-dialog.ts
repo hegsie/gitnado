@@ -20,6 +20,7 @@ import type { Branch } from '../../types/git.types.ts';
 import { containsDeepActiveElement } from '../../utils/focus.ts';
 import type { GnModal } from './gn-modal.ts';
 import './gn-modal.ts';
+import '../panels/gn-ai-explain-drawer.ts';
 
 /** A ref the branch list does not contain, with the label to show for it. */
 export interface CompareExtraRef {
@@ -153,11 +154,39 @@ export class GnCompareBranchesDialog extends LitElement {
       .summary {
         display: flex;
         flex-wrap: wrap;
+        align-items: center;
         gap: var(--spacing-md);
         padding: var(--spacing-md);
         border: 1px solid var(--color-border);
         border-radius: var(--radius-md);
         background: var(--color-bg-tertiary);
+      }
+
+      .explain-compare-btn {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-primary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-medium);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+      }
+
+      .explain-compare-btn:hover {
+        background: var(--color-primary);
+        color: white;
+        border-color: var(--color-primary);
+      }
+
+      .explain-compare-btn svg {
+        width: 14px;
+        height: 14px;
       }
 
       .stat {
@@ -269,6 +298,7 @@ export class GnCompareBranchesDialog extends LitElement {
   @state() private comparing = false;
   @state() private error = '';
   @state() private comparison: BranchComparison | null = null;
+  @state() private showAiExplain = false;
 
   @query('gn-modal') private modal!: GnModal;
   @query('#compare-ref-select') private compareSelect?: HTMLSelectElement;
@@ -375,6 +405,7 @@ export class GnCompareBranchesDialog extends LitElement {
     this.comparing = false;
     this.error = '';
     this.comparison = null;
+    this.showAiExplain = false;
   }
 
   /**
@@ -469,12 +500,14 @@ export class GnCompareBranchesDialog extends LitElement {
     // The shown result belongs to the previous pair; leaving it up under new
     // selections reads as a comparison of refs that were never compared.
     this.comparison = null;
+    this.showAiExplain = false;
     this.error = '';
   }
 
   private handleCompareChange(e: Event): void {
     this.compareRef = (e.target as HTMLSelectElement).value;
     this.comparison = null;
+    this.showAiExplain = false;
     this.error = '';
   }
 
@@ -484,6 +517,7 @@ export class GnCompareBranchesDialog extends LitElement {
     this.baseRef = this.compareRef;
     this.compareRef = base;
     this.comparison = null;
+    this.showAiExplain = false;
     this.error = '';
   }
 
@@ -626,7 +660,40 @@ export class GnCompareBranchesDialog extends LitElement {
             <span class="deletions">-${c.totalDeletions}</span>
           </span>
         </div>
+        ${!identical
+          ? html`
+              <button
+                class="explain-compare-btn"
+                type="button"
+                data-testid="explain-comparison-btn"
+                title="Explain comparison with AI"
+                @click=${() => {
+                  this.showAiExplain = !this.showAiExplain;
+                }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M12 3l1.9 5.8a2 2 0 001.3 1.3L21 12l-5.8 1.9a2 2 0 00-1.3 1.3L12 21l-1.9-5.8a2 2 0 00-1.3-1.3L3 12l5.8-1.9a2 2 0 001.3-1.3L12 3z"></path>
+                </svg>
+                ${this.showAiExplain ? 'Hide Explanation' : 'Explain Comparison'}
+              </button>
+            `
+          : nothing}
       </div>
+
+      ${!identical
+        ? html`
+            <gn-ai-explain-drawer
+              .repositoryPath=${this.pinnedRepoPath}
+              .targetType=${'branch_compare'}
+              .baseRef=${c.baseRef}
+              .targetId=${c.compareRef}
+              .open=${this.showAiExplain}
+              @close=${() => {
+                this.showAiExplain = false;
+              }}
+            ></gn-ai-explain-drawer>
+          `
+        : nothing}
 
       ${identical
         ? html`<div class="status" data-testid="identical">
