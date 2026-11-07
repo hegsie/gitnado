@@ -2313,15 +2313,19 @@ export class GnCommitPanel extends LitElement {
         </button>
       </div>
 
-      <gn-ai-staging-modal
-        .open=${this.showAiStagingModal}
-        .repositoryPath=${this.repositoryPath}
-        .mode=${this.aiStagingMode}
-        @close=${() => {
-          this.showAiStagingModal = false;
-        }}
-        @staging-changed=${this.handleAiStagingChanged}
-      ></gn-ai-staging-modal>
+      ${this.showAiStagingModal
+        ? html`
+            <gn-ai-staging-modal
+              .open=${this.showAiStagingModal}
+              .repositoryPath=${this.repositoryPath}
+              .mode=${this.aiStagingMode}
+              @close=${() => {
+                this.showAiStagingModal = false;
+              }}
+              @staging-changed=${this.handleAiStagingChanged}
+            ></gn-ai-staging-modal>
+          `
+        : nothing}
     `;
   }
 }

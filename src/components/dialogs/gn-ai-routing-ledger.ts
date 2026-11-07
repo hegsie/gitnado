@@ -153,10 +153,38 @@ export class GnAiRoutingLedger extends LitElement {
       .tier-controls {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: var(--spacing-xs);
       }
 
-      select,
+      .tier-provider-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .tier-provider-btn {
+        padding: 3px 8px;
+        background: var(--color-bg-tertiary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+      }
+
+      .tier-provider-btn:hover {
+        background: var(--color-bg-hover);
+        color: var(--color-text-primary);
+      }
+
+      .tier-provider-btn.active {
+        background: var(--color-primary);
+        border-color: var(--color-primary);
+        color: white;
+      }
+
       input[type='text'] {
         padding: 5px 8px;
         background: var(--color-bg-tertiary);
@@ -306,7 +334,10 @@ export class GnAiRoutingLedger extends LitElement {
   }
 
   public async handleTierProviderChange(tier: AiTaskTier, providerValue: string): Promise<void> {
-    if (!providerValue) {
+    const normalized = providerValue.startsWith('route:')
+      ? providerValue.slice('route:'.length)
+      : providerValue;
+    if (!normalized) {
       const res = await aiService.setAiTaskRoute(tier, null);
       if (res.success) {
         const updated = { ...this.taskRoutes };
@@ -316,7 +347,7 @@ export class GnAiRoutingLedger extends LitElement {
       return;
     }
 
-    const provider = providerValue as AiProviderType;
+    const provider = normalized as AiProviderType;
     const existingModel = this.taskRoutes[tier]?.model ?? null;
     const route: AiTaskRoute = { provider, model: existingModel };
     const res = await aiService.setAiTaskRoute(tier, route);
@@ -426,30 +457,31 @@ export class GnAiRoutingLedger extends LitElement {
                 <span class="tier-desc">${meta.description}</span>
               </div>
               <div class="tier-controls">
-                <select
-                  class="tier-provider-select"
-                  data-tier=${meta.tier}
-                  .value=${selectedProvider}
-                  @change=${(e: Event) =>
-                    this.handleTierProviderChange(
-                      meta.tier,
-                      (e.target as HTMLSelectElement).value,
-                    )}
-                >
-                  <option value="" ?selected=${!selectedProvider}>
-                    Default (Active Provider)
-                  </option>
+                <div class="tier-provider-pills" role="group" aria-label="${meta.label} provider routing">
+                  <button
+                    type="button"
+                    class="tier-provider-btn ${!selectedProvider ? 'active' : ''}"
+                    data-tier=${meta.tier}
+                    data-provider=""
+                    @click=${() => this.handleTierProviderChange(meta.tier, '')}
+                  >
+                    Default
+                  </button>
                   ${this.providers.map(
                     (p) => html`
-                      <option
-                        value=${p.providerType}
-                        ?selected=${selectedProvider === p.providerType}
+                      <button
+                        type="button"
+                        class="tier-provider-btn ${selectedProvider === p.providerType ? 'active' : ''}"
+                        data-tier=${meta.tier}
+                        data-provider=${p.providerType}
+                        @click=${() => this.handleTierProviderChange(meta.tier, p.providerType)}
+                        title="${p.name} (${aiService.isLocalProvider(p.providerType) ? 'Local' : 'Cloud'})"
                       >
-                        ${p.name} (${aiService.isLocalProvider(p.providerType) ? 'Local' : 'Cloud'})
-                      </option>
+                        ${p.name}
+                      </button>
                     `,
                   )}
-                </select>
+                </div>
                 ${selectedProvider
                   ? html`
                       <input
