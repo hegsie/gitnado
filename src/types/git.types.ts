@@ -631,7 +631,15 @@ export interface CleanupCandidate {
   aheadBehind: AheadBehind | null;
   isRemote?: boolean;
   remoteName?: string | null;
+  /**
+   * How a merged branch reached HEAD: a true ancestor, replayed commit-by-
+   * commit ("Rebase and merge"), or folded into one commit ("Squash and
+   * merge"). Null when the branch is not merged.
+   */
+  mergeKind?: CleanupMergeKind | null;
 }
+
+export type CleanupMergeKind = 'ancestor' | 'rebase' | 'squash';
 
 /**
  * One branch in a stack of dependent branches (see `get_stacks`).

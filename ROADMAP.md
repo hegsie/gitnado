@@ -225,7 +225,7 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 - **First-class stacks:** declare a branch as stacked on another, see the stack as a single lane in the graph and branch list, and navigate up and down the stack. _(Declaring stacks, the branch-list Stacks section with restack status, and palette navigation are shipped; the single graph lane is still to do.)_
 - ✅ **Restack:** one-click restack of the entire stack after the base moves, using Ghost Rebase to predict conflicts before running it. Also handles a lower branch being squash-merged.
 - **Stacked PRs:** create and update one PR/MR per stack level on GitHub, GitLab, Bitbucket and Azure DevOps with correct base branches and an auto-maintained stack table in each description. Merge from the bottom and retarget the rest automatically. _(Create/update per level with correct bases and the stack table, and retargeting after the bottom merges, are shipped on all four providers via **Sync PRs**; merging from inside Gitnado is still to do.)_
-- **Better merged detection:** detect squash-merged and rebase-merged branches (patch-id / tree comparison) for branch cleanup and stack pruning.
+- ✅ **Better merged detection:** detect squash-merged and rebase-merged branches (patch-id / tree comparison) for branch cleanup and stack pruning.
 
 #### 4.4 AI History Editing
 
