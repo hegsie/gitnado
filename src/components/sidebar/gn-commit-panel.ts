@@ -983,6 +983,17 @@ export class GnCommitPanel extends LitElement {
   async connectedCallback(): Promise<void> {
     super.connectedCallback();
     this.loadCommitHistory();
+    await this.loadTemplates();
+    await this.loadConventionalTypes();
+    await this.loadGitTemplate();
+    await this.loadCommitRules();
+    await this.checkAiAvailability();
+    await this.loadAuthorName();
+    // "Always sign off" seeds a fresh draft; it never overrides a choice the
+    // user made on the draft in front of them, and it cannot arm a sign-off
+    // this repository has no identity to write (the identity load above has
+    // already settled by now).
+    this.signOff = settingsStore.getState().alwaysSignOff && this.hasIdentity;
     this._onDocumentClick = this._onDocumentClick.bind(this);
     document.addEventListener('click', this._onDocumentClick);
 
@@ -1023,24 +1034,11 @@ export class GnCommitPanel extends LitElement {
         // availability poll below still notices a model that loads later.
       });
 
-    void this.checkAiAvailability().then(() => {
-      // If AI isn't available yet, poll periodically to catch backend auto-loading
-      // a model on startup (which can take 10-30 seconds)
-      if (!this.aiAvailable && this.isConnected) {
-        this.startAiAvailabilityPolling();
-      }
-    });
-
-    await this.loadTemplates();
-    await this.loadConventionalTypes();
-    await this.loadGitTemplate();
-    await this.loadCommitRules();
-    await this.loadAuthorName();
-    // "Always sign off" seeds a fresh draft; it never overrides a choice the
-    // user made on the draft in front of them, and it cannot arm a sign-off
-    // this repository has no identity to write (the identity load above has
-    // already settled by now).
-    this.signOff = settingsStore.getState().alwaysSignOff && this.hasIdentity;
+    // If AI isn't available yet, poll periodically to catch backend auto-loading
+    // a model on startup (which can take 10-30 seconds)
+    if (!this.aiAvailable && this.isConnected) {
+      this.startAiAvailabilityPolling();
+    }
   }
 
   disconnectedCallback(): void {
