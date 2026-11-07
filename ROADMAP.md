@@ -215,9 +215,9 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 
 #### 4.2 MCP 2.0: Gitnado as the Agent's Git Brain
 
-- **Write tools behind a consent gate:** `stage`, `commit`, `create_branch`, `create_worktree`, `stash`, `checkout`. Every write is either previewed in the UI and approved, or allowed by a per-repo policy ("agents may commit on `agent/*` branches only").
-- **Higher-level read tools:** `semantic_search_history`, `explain_commit`, `predict_rebase_conflicts`, `get_conflicts`, `get_pr_comments`. These expose Gitnado's existing AI and analysis features to any MCP client.
-- **Transport and setup:** stdio and Streamable HTTP transports, a per-client token list with revoke, and one-click "Add to Claude Code / Cursor / VS Code" config snippets.
+- ✅ **Write tools behind a consent gate:** `stage`, `commit`, `create_branch`, `create_worktree`, `stash`, `checkout`. Every write is either previewed in the UI and approved, or allowed by a per-repo policy ("agents may commit on `agent/*` branches only").
+- ✅ **Higher-level read tools:** `semantic_search_history`, `explain_commit`, `predict_rebase_conflicts`, `get_conflicts`, `get_pr_comments`. These expose Gitnado's existing AI and analysis features to any MCP client.
+- ✅ **Transport and setup:** stdio and Streamable HTTP transports, a per-client token list with revoke, and one-click "Add to Claude Code / Cursor / VS Code" config snippets.
 - **MCP client mode:** let Gitnado's own AI features call user-configured MCP servers (issue trackers, docs, internal tools) for richer commit, PR and review context.
 
 #### 4.3 Stacked Branches & Stacked PRs

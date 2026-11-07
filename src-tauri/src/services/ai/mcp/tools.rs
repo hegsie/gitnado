@@ -190,7 +190,7 @@ struct SearchCommitsParams {
 /// Only allows access to repositories whose paths are in the `open_repos` list,
 /// or any valid git repository if the list is empty (for backwards compatibility
 /// during initial setup before repos are registered).
-fn validate_repo_path(repo_path: &str, open_repos: &[String]) -> Result<(), String> {
+pub(crate) fn validate_repo_path(repo_path: &str, open_repos: &[String]) -> Result<(), String> {
     let path = std::path::Path::new(repo_path);
 
     // Must be an absolute path

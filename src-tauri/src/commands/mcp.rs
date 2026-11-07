@@ -4,6 +4,8 @@
 //! the MCP server that allows external tools to query Gitnado.
 
 use crate::error::{GitnadoError, Result};
+use crate::services::ai::mcp::clients::{CreatedMcpClient, McpClientInfo};
+use crate::services::ai::mcp::write::{ConsentRequest, WriteSettings};
 use crate::services::ai::mcp::{McpConfig, McpState, McpStatus};
 use tauri::{command, State};
 
@@ -54,6 +56,86 @@ pub async fn regenerate_mcp_token(state: State<'_, McpState>) -> Result<String> 
     server
         .regenerate_auth_token()
         .map_err(GitnadoError::OperationFailed)
+}
+
+/// Write-tool settings: on/off and the saved "always allow" policies.
+#[command]
+pub async fn get_mcp_write_settings(state: State<'_, McpState>) -> Result<WriteSettings> {
+    Ok(state.read().await.write_gate().settings())
+}
+
+/// Replace the write-tool settings. Turning write tools off denies every
+/// request still waiting for an answer.
+#[command]
+pub async fn set_mcp_write_settings(
+    state: State<'_, McpState>,
+    settings: WriteSettings,
+) -> Result<()> {
+    let gate = state.read().await.write_gate();
+    gate.set_settings(settings)
+        .map_err(GitnadoError::OperationFailed)
+}
+
+/// Write requests waiting for the user (e.g. after the window reloaded).
+#[command]
+pub async fn get_pending_mcp_consents(state: State<'_, McpState>) -> Result<Vec<ConsentRequest>> {
+    Ok(state.read().await.write_gate().pending_requests())
+}
+
+/// Approve or deny a waiting write request. With `always_allow_pattern`,
+/// approving also saves a policy for this tool and repository.
+#[command]
+pub async fn respond_mcp_consent(
+    state: State<'_, McpState>,
+    id: u64,
+    approve: bool,
+    always_allow_pattern: Option<String>,
+) -> Result<()> {
+    let gate = state.read().await.write_gate();
+    gate.respond(id, approve, always_allow_pattern)
+        .map_err(GitnadoError::OperationFailed)
+}
+
+/// Named MCP client tokens (never the tokens themselves).
+#[command]
+pub async fn list_mcp_clients(state: State<'_, McpState>) -> Result<Vec<McpClientInfo>> {
+    Ok(state.read().await.clients().list())
+}
+
+/// Create a named client token. The token is returned only here.
+#[command]
+pub async fn create_mcp_client(
+    state: State<'_, McpState>,
+    name: String,
+) -> Result<CreatedMcpClient> {
+    let clients = state.read().await.clients();
+    clients.create(&name).map_err(GitnadoError::OperationFailed)
+}
+
+/// Revoke a client token; it stops working on the next request.
+#[command]
+pub async fn revoke_mcp_client(state: State<'_, McpState>, id: String) -> Result<()> {
+    let clients = state.read().await.clients();
+    clients.revoke(&id).map_err(GitnadoError::OperationFailed)
+}
+
+/// How to launch the stdio bridge: this executable plus `--mcp-stdio`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStdioCommand {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+#[command]
+pub async fn get_mcp_stdio_command() -> Result<McpStdioCommand> {
+    let exe = std::env::current_exe().map_err(|e| {
+        GitnadoError::OperationFailed(format!("Cannot locate the Gitnado executable: {e}"))
+    })?;
+    Ok(McpStdioCommand {
+        program: exe.to_string_lossy().into_owned(),
+        args: vec!["--mcp-stdio".to_string()],
+    })
 }
 
 #[cfg(test)]

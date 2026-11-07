@@ -30,6 +30,11 @@ use services::{
 
 /// Initialize the application
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// `gitnado --mcp-stdio`: bridge stdio JSON-RPC to the running MCP server.
+pub fn run_mcp_stdio_bridge() -> i32 {
+    services::ai::mcp::stdio::run_from_env()
+}
+
 pub fn run() {
     // Set up panic hook FIRST to capture crash information before abort
     // This runs even with panic="abort" in release builds
@@ -204,6 +209,20 @@ pub fn run() {
             let mcp_state = create_mcp_state(config_dir);
             app.manage(mcp_state.clone());
 
+            // MCP write tools ask the user through the UI and announce what
+            // they changed; the gate reaches the window through this emitter.
+            {
+                let handle = app.handle().clone();
+                mcp_state
+                    .blocking_read()
+                    .write_gate()
+                    .set_emitter(std::sync::Arc::new(
+                        move |event: &str, payload: serde_json::Value| {
+                            let _ = handle.emit(event, payload);
+                        },
+                    ));
+            }
+
             // Restart the MCP server if it was running when the app last exited.
             // A bind failure is recorded in the status so Settings can explain it.
             tauri::async_runtime::spawn(async move {
@@ -222,12 +241,24 @@ pub fn run() {
                 .app_data_dir()
                 .unwrap_or_default()
                 .join("embedding-indexes");
-            app.manage(std::sync::Arc::new(tokio::sync::RwLock::new(
-                crate::services::embedding::EmbeddingIndexState::new(
-                    embedding_models_dir,
-                    embedding_indexes_dir,
-                ),
-            )));
+            let embedding_index: crate::services::embedding::embedding_index::SharedEmbeddingIndex =
+                std::sync::Arc::new(tokio::sync::RwLock::new(
+                    crate::services::embedding::EmbeddingIndexState::new(
+                        embedding_models_dir,
+                        embedding_indexes_dir,
+                    ),
+                ));
+            app.manage(embedding_index.clone());
+
+            // Let the MCP insight tools (explain_commit, semantic_search_history)
+            // use the same AI service and semantic index as the UI.
+            {
+                let ai_state: tauri::State<'_, AiState> = app.state();
+                let mcp: tauri::State<'_, services::ai::mcp::McpState> = app.state();
+                let context = mcp.blocking_read().context();
+                context.set_ai(ai_state.inner().clone());
+                context.set_embeddings(embedding_index);
+            }
 
             tracing::info!("Application setup complete");
 
@@ -746,6 +777,14 @@ pub fn run() {
             commands::mcp::get_mcp_config,
             commands::mcp::set_mcp_config,
             commands::mcp::regenerate_mcp_token,
+            commands::mcp::get_mcp_write_settings,
+            commands::mcp::set_mcp_write_settings,
+            commands::mcp::get_pending_mcp_consents,
+            commands::mcp::respond_mcp_consent,
+            commands::mcp::list_mcp_clients,
+            commands::mcp::create_mcp_client,
+            commands::mcp::revoke_mcp_client,
+            commands::mcp::get_mcp_stdio_command,
             // OAuth authentication
             commands::oauth::oauth_get_authorize_url,
             commands::oauth::oauth_exchange_code,

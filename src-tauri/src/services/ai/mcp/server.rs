@@ -16,7 +16,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
+use super::clients::ClientRegistry;
+use super::insight::{self, McpContext};
 use super::tools;
+use super::write::{self, Decision, WriteGate};
 
 const MCP_CONFIG_FILE: &str = "mcp_config.json";
 
@@ -208,6 +211,16 @@ fn header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// The token of an `Authorization: Bearer <token>` header, if present.
+fn bearer_token(request: &str) -> Option<&str> {
+    let header = header_value(request, "authorization")?;
+    let (scheme, token) = header.split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|t| !t.is_empty())
+}
+
 /// Compare a presented secret against the expected one without leaking its
 /// contents through timing.
 ///
@@ -311,6 +324,9 @@ pub fn redact_authorization(request: &str) -> String {
         .join("\n")
 }
 
+/// MCP protocol revisions this server speaks, newest first.
+pub const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
 /// MCP server status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +343,8 @@ pub struct McpStatus {
 struct JsonRpcRequest {
     #[allow(dead_code)]
     jsonrpc: String,
+    /// Absent on notifications.
+    #[serde(default)]
     id: Value,
     method: String,
     params: Option<Value>,
@@ -383,10 +401,24 @@ pub struct McpServer {
     last_error: Option<String>,
     /// Token and origin rules enforced by the running accept loop
     auth: Arc<StdRwLock<AuthSettings>>,
+    /// Write tools: on/off, saved policies and pending consent requests
+    write_gate: Arc<WriteGate>,
+    /// App services (AI, semantic index) the insight tools call into
+    context: Arc<McpContext>,
+    /// Named per-client tokens accepted alongside the master token
+    clients: Arc<ClientRegistry>,
 }
 
 /// Shared MCP server state
 pub type McpState = Arc<RwLock<McpServer>>;
+
+/// What every request handler needs besides the open-repository list.
+#[derive(Clone)]
+struct RequestServices {
+    gate: Arc<WriteGate>,
+    context: Arc<McpContext>,
+    clients: Arc<ClientRegistry>,
+}
 
 /// Create a new MCP server state instance backed by the saved configuration
 pub fn create_mcp_state(config_dir: PathBuf) -> McpState {
@@ -408,6 +440,9 @@ impl McpServer {
 
         let server = Self {
             auth: Arc::new(StdRwLock::new(AuthSettings::from_config(&config))),
+            write_gate: Arc::new(WriteGate::load(&config_dir)),
+            context: Arc::new(McpContext::default()),
+            clients: Arc::new(ClientRegistry::load(&config_dir)),
             config,
             config_dir,
             running: Arc::new(AtomicBool::new(false)),
@@ -479,9 +514,23 @@ impl McpServer {
 
         let open_repos = self.open_repos.clone();
         let auth = self.auth.clone();
+        let services = RequestServices {
+            gate: self.write_gate.clone(),
+            context: self.context.clone(),
+            clients: self.clients.clone(),
+        };
 
         tokio::spawn(async move {
-            Self::run_server(listener, running, shutdown_rx, open_repos, auth, limits).await;
+            Self::run_server(
+                listener,
+                running,
+                shutdown_rx,
+                open_repos,
+                auth,
+                services,
+                limits,
+            )
+            .await;
         });
 
         // Remember that the server should come back up on the next launch
@@ -529,6 +578,21 @@ impl McpServer {
         }
     }
 
+    /// Write-tool settings and the consent broker
+    pub fn write_gate(&self) -> Arc<WriteGate> {
+        self.write_gate.clone()
+    }
+
+    /// App services available to the insight tools
+    pub fn context(&self) -> Arc<McpContext> {
+        self.context.clone()
+    }
+
+    /// Named per-client tokens
+    pub fn clients(&self) -> Arc<ClientRegistry> {
+        self.clients.clone()
+    }
+
     /// Get the current configuration
     pub fn get_config(&self) -> &McpConfig {
         &self.config
@@ -568,6 +632,7 @@ impl McpServer {
         mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
+        services: RequestServices,
         limits: ConnectionLimits,
     ) {
         // One permit per in-flight connection; the permit is released when the
@@ -597,10 +662,11 @@ impl McpServer {
                             };
                             let repos = open_repos.clone();
                             let auth = auth.clone();
+                            let services = services.clone();
                             tokio::spawn(async move {
                                 let _permit = permit;
-                                if let Err(e) =
-                                    Self::handle_connection(stream, repos, auth, limits).await
+                                if let Err(e) = Self::handle_connection(stream, repos, auth, services, limits)
+                                .await
                                 {
                                     tracing::warn!("MCP connection error: {}", e);
                                 }
@@ -620,6 +686,7 @@ impl McpServer {
         mut stream: tokio::net::TcpStream,
         open_repos: Arc<RwLock<Vec<String>>>,
         auth: Arc<StdRwLock<AuthSettings>>,
+        services: RequestServices,
         limits: ConnectionLimits,
     ) -> Result<(), String> {
         // Snapshot the auth rules once per connection so the lock is never held
@@ -731,7 +798,20 @@ impl McpServer {
 
         // Every other request must authenticate before it can reach the tools,
         // which expose the contents and history of every open repository
-        if let Err(rejection) = authorize_request(&request_str, &settings) {
+        // The master token, or a named client token. A client token never
+        // bypasses the origin check: only a 401 is retried against clients.
+        let auth = authorize_request(&request_str, &settings).or_else(|rejection| {
+            if rejection.status == 401 {
+                if let Some(id) =
+                    bearer_token(&request_str).and_then(|t| services.clients.verify(t))
+                {
+                    services.clients.touch(&id);
+                    return Ok(());
+                }
+            }
+            Err(rejection)
+        });
+        if let Err(rejection) = auth {
             // The head is logged with the Authorization value stripped: the
             // token must never reach the log
             tracing::warn!(
@@ -780,9 +860,18 @@ impl McpServer {
             }
         };
 
+        // Notifications (no id) get no JSON-RPC response; Streamable HTTP
+        // answers them with 202 Accepted and an empty body.
+        if rpc_request.id.is_null() && rpc_request.method.starts_with("notifications/") {
+            return Self::send_http_response(&mut stream, 202, "", &allow_origin).await;
+        }
+
         // Route to handler
-        let repos = open_repos.read().await;
-        let response = Self::handle_rpc_request(&rpc_request, &repos).await;
+        // Snapshot the list: a write tool may wait minutes for the user, and
+        // must not hold the lock that opening a repository needs meanwhile.
+        let repos = open_repos.read().await.clone();
+        let response =
+            Self::handle_rpc_request(&rpc_request, &repos, &services.gate, &services.context).await;
         let response_json = serde_json::to_string(&response).unwrap_or_default();
 
         Self::send_http_response(&mut stream, 200, &response_json, &allow_origin).await
@@ -792,11 +881,13 @@ impl McpServer {
     async fn handle_rpc_request(
         request: &JsonRpcRequest,
         open_repos: &[String],
+        gate: &WriteGate,
+        context: &McpContext,
     ) -> JsonRpcResponse {
         match request.method.as_str() {
             "initialize" => Self::handle_initialize(request),
-            "tools/list" => Self::handle_tools_list(request),
-            "tools/call" => Self::handle_tools_call(request, open_repos).await,
+            "tools/list" => Self::handle_tools_list(request, gate.enabled()),
+            "tools/call" => Self::handle_tools_call(request, open_repos, gate, context).await,
             _ => JsonRpcResponse::error(
                 request.id.clone(),
                 -32601,
@@ -807,8 +898,18 @@ impl McpServer {
 
     /// Handle the `initialize` method
     fn handle_initialize(request: &JsonRpcRequest) -> JsonRpcResponse {
+        // Answer with the client's protocol version when we speak it, else
+        // our newest; the client decides whether it can continue.
+        let requested = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("protocolVersion"))
+            .and_then(Value::as_str);
+        let version = requested
+            .filter(|v| SUPPORTED_PROTOCOL_VERSIONS.contains(v))
+            .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0]);
         let result = serde_json::json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": version,
             "capabilities": {
                 "tools": {}
             },
@@ -821,16 +922,99 @@ impl McpServer {
     }
 
     /// Handle the `tools/list` method
-    fn handle_tools_list(request: &JsonRpcRequest) -> JsonRpcResponse {
-        let tool_list = tools::get_tool_list();
+    fn handle_tools_list(request: &JsonRpcRequest, writes_enabled: bool) -> JsonRpcResponse {
+        let mut tool_list = tools::get_tool_list();
+        tool_list.extend(insight::insight_tool_list());
+        // Write tools are only advertised while the user has turned them on.
+        if writes_enabled {
+            tool_list.extend(write::write_tool_list());
+        }
         let result = serde_json::json!({
             "tools": tool_list
         });
         JsonRpcResponse::success(request.id.clone(), result)
     }
 
+    /// Run one of the higher-level read tools.
+    async fn call_insight_tool(
+        tool: &str,
+        arguments: &Value,
+        open_repos: &[String],
+        context: &McpContext,
+    ) -> Result<Value, String> {
+        let repo_path = arguments
+            .get("repo_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Missing required argument: repo_path".to_string())?;
+        tools::validate_repo_path(repo_path, open_repos)?;
+        insight::call(tool, arguments, repo_path, context).await
+    }
+
+    /// Run a write tool through the consent gate.
+    async fn call_write_tool(
+        tool: &str,
+        arguments: &Value,
+        open_repos: &[String],
+        gate: &WriteGate,
+    ) -> Result<Value, String> {
+        if !gate.enabled() {
+            return Err(
+                "Write tools are turned off. Enable them in Gitnado: Settings > MCP Server."
+                    .to_string(),
+            );
+        }
+        let repo_path = arguments
+            .get("repo_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Missing required argument: repo_path".to_string())?
+            .to_string();
+        // Writes are confined to repositories open in Gitnado — never "any
+        // repository on disk", even before the open list is known.
+        if open_repos.is_empty() {
+            return Err("No repositories are open in Gitnado".to_string());
+        }
+        tools::validate_repo_path(&repo_path, open_repos)?;
+
+        let prep_tool = tool.to_string();
+        let prep_args = arguments.clone();
+        let prep_repo = repo_path.clone();
+        let prepared =
+            tokio::task::spawn_blocking(move || write::prepare(&prep_tool, &prep_args, &prep_repo))
+                .await
+                .map_err(|e| e.to_string())??;
+
+        let decision = gate.authorize(tool, &prepared).await;
+        match decision {
+            Decision::Approved | Decision::AllowedByPolicy => {
+                let exec = prepared.clone();
+                let result = tokio::task::spawn_blocking(move || write::execute(&exec))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if result.is_ok() {
+                    gate.notify_applied(
+                        tool,
+                        &prepared.repo_path,
+                        &prepared.summary,
+                        decision == Decision::AllowedByPolicy,
+                    );
+                }
+                result
+            }
+            Decision::Denied => Err(format!("The user declined: {}", prepared.summary)),
+            Decision::TimedOut => Err(format!(
+                "No one approved this in Gitnado in time: {}",
+                prepared.summary
+            )),
+        }
+    }
+
     /// Handle the `tools/call` method
-    async fn handle_tools_call(request: &JsonRpcRequest, open_repos: &[String]) -> JsonRpcResponse {
+    async fn handle_tools_call(
+        request: &JsonRpcRequest,
+        open_repos: &[String],
+        gate: &WriteGate,
+        context: &McpContext,
+    ) -> JsonRpcResponse {
         let params = match &request.params {
             Some(p) => p,
             None => {
@@ -858,7 +1042,15 @@ impl McpServer {
             .cloned()
             .unwrap_or(Value::Object(serde_json::Map::new()));
 
-        match tools::call_tool(tool_name, &arguments, open_repos).await {
+        let outcome = if write::is_write_tool(tool_name) {
+            Self::call_write_tool(tool_name, &arguments, open_repos, gate).await
+        } else if insight::is_insight_tool(tool_name) {
+            Self::call_insight_tool(tool_name, &arguments, open_repos, context).await
+        } else {
+            tools::call_tool(tool_name, &arguments, open_repos).await
+        };
+
+        match outcome {
             Ok(result) => {
                 let content = serde_json::json!({
                     "content": [{
@@ -891,6 +1083,7 @@ impl McpServer {
         let status_text = match status {
             200 => "OK",
             400 => "Bad Request",
+            202 => "Accepted",
             401 => "Unauthorized",
             403 => "Forbidden",
             405 => "Method Not Allowed",
@@ -1129,7 +1322,8 @@ mod tests {
         let response = McpServer::handle_initialize(&request);
         assert!(response.result.is_some());
         let result = response.result.unwrap();
-        assert_eq!(result["protocolVersion"], "2024-11-05");
+        // No version requested: answer with the newest one supported.
+        assert_eq!(result["protocolVersion"], SUPPORTED_PROTOCOL_VERSIONS[0]);
         assert_eq!(result["serverInfo"]["name"], "gitnado");
         assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     }
@@ -1142,48 +1336,265 @@ mod tests {
             method: "tools/list".to_string(),
             params: None,
         };
-        let response = McpServer::handle_tools_list(&request);
+        let response = McpServer::handle_tools_list(&request, false);
         assert!(response.result.is_some());
         let result = response.result.unwrap();
         assert!(result["tools"].is_array());
         assert!(!result["tools"].as_array().unwrap().is_empty());
     }
 
+    fn rpc(method: &str, params: Option<Value>) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Value::Number(1.into()),
+            method: method.to_string(),
+            params,
+        }
+    }
+
+    fn tool_text(response: &JsonRpcResponse) -> (String, bool) {
+        let result = response.result.as_ref().expect("result");
+        (
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            result["isError"].as_bool().unwrap_or(false),
+        )
+    }
+
+    #[tokio::test]
+    async fn insight_tools_are_listed_and_confined_to_open_repositories() {
+        let list = McpServer::handle_tools_list(&rpc("tools/list", None), false);
+        let names: Vec<String> = list.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        for tool in insight::INSIGHT_TOOLS {
+            assert!(names.iter().any(|n| n == tool), "{tool} missing");
+        }
+
+        let open = crate::test_utils::TestRepo::with_initial_commit();
+        let other = crate::test_utils::TestRepo::with_initial_commit();
+        let gate = WriteGate::in_memory(Default::default(), Duration::from_secs(1));
+        let ctx = McpContext::default();
+
+        let call = |repo: String| {
+            rpc(
+                "tools/call",
+                Some(
+                    serde_json::json!({ "name": "get_conflicts", "arguments": { "repo_path": repo } }),
+                ),
+            )
+        };
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call(open.path_str()), &[open.path_str()], &gate, &ctx)
+                .await,
+        );
+        assert!(!is_error, "{text}");
+        assert!(text.contains("\"count\": 0"), "{text}");
+
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(
+                &call(other.path_str()),
+                &[open.path_str()],
+                &gate,
+                &ctx,
+            )
+            .await,
+        );
+        assert!(is_error);
+        assert!(text.contains("not an open repository"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn write_tools_are_listed_only_when_enabled() {
+        let names = |resp: JsonRpcResponse| -> Vec<String> {
+            resp.result.unwrap()["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let off = names(McpServer::handle_tools_list(
+            &rpc("tools/list", None),
+            false,
+        ));
+        assert!(!off.iter().any(|n| n == "commit"));
+        let on = names(McpServer::handle_tools_list(&rpc("tools/list", None), true));
+        for tool in write::WRITE_TOOLS {
+            assert!(on.iter().any(|n| n == tool), "{tool} missing");
+        }
+    }
+
+    #[tokio::test]
+    async fn write_tool_calls_are_refused_while_disabled_or_outside_open_repos() {
+        let t = crate::test_utils::TestRepo::with_initial_commit();
+        let call = rpc(
+            "tools/call",
+            Some(
+                serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "agent/x" } }),
+            ),
+        );
+
+        let off = WriteGate::in_memory(Default::default(), Duration::from_secs(1));
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call, &[t.path_str()], &off, &McpContext::default())
+                .await,
+        );
+        assert!(is_error);
+        assert!(text.contains("turned off"), "{text}");
+
+        let on = WriteGate::in_memory(
+            write::WriteSettings {
+                enabled: true,
+                policies: vec![],
+            },
+            Duration::from_secs(1),
+        );
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call, &[], &on, &McpContext::default()).await,
+        );
+        assert!(is_error);
+        assert!(text.contains("No repositories are open"), "{text}");
+        assert!(t
+            .repo()
+            .find_branch("agent/x", git2::BranchType::Local)
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn write_tool_runs_under_a_policy_and_is_announced() {
+        let t = crate::test_utils::TestRepo::with_initial_commit();
+        let gate = WriteGate::in_memory(
+            write::WriteSettings {
+                enabled: true,
+                policies: vec![write::WritePolicy {
+                    repo_path: t.path_str(),
+                    tool: "create_branch".into(),
+                    branch_pattern: "agent/*".into(),
+                }],
+            },
+            Duration::from_secs(1),
+        );
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+        let sink = events.clone();
+        gate.set_emitter(std::sync::Arc::new(move |e: &str, p: Value| {
+            sink.lock().unwrap().push((e.to_string(), p))
+        }));
+
+        let call = rpc(
+            "tools/call",
+            Some(
+                serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "agent/fix" } }),
+            ),
+        );
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(&call, &[t.path_str()], &gate, &McpContext::default())
+                .await,
+        );
+        assert!(!is_error, "{text}");
+        assert!(t
+            .repo()
+            .find_branch("agent/fix", git2::BranchType::Local)
+            .is_ok());
+        {
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 1, "no prompt, one applied event: {events:?}");
+            assert_eq!(events[0].0, write::WRITE_APPLIED_EVENT);
+            assert_eq!(events[0].1["byPolicy"], true);
+        }
+
+        // A branch outside the pattern needs approval; with no UI it is denied.
+        let gate_no_ui = WriteGate::in_memory(gate.settings(), Duration::from_secs(1));
+        let call = rpc(
+            "tools/call",
+            Some(
+                serde_json::json!({ "name": "create_branch", "arguments": { "repo_path": t.path_str(), "name": "main-copy" } }),
+            ),
+        );
+        let (text, is_error) = tool_text(
+            &McpServer::handle_rpc_request(
+                &call,
+                &[t.path_str()],
+                &gate_no_ui,
+                &McpContext::default(),
+            )
+            .await,
+        );
+        assert!(is_error);
+        assert!(text.contains("declined"), "{text}");
+        assert!(t
+            .repo()
+            .find_branch("main-copy", git2::BranchType::Local)
+            .is_err());
+    }
+
     #[tokio::test]
     async fn test_handle_unknown_method() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "unknown/method".to_string(),
             params: None,
         };
-        let response = McpServer::handle_rpc_request(&request, &[]).await;
+        let response = McpServer::handle_rpc_request(
+            &request,
+            &[],
+            &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+            &McpContext::default(),
+        )
+        .await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32601);
     }
 
     #[tokio::test]
     async fn test_handle_tools_call_missing_params() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/call".to_string(),
             params: None,
         };
-        let response = McpServer::handle_rpc_request(&request, &[]).await;
+        let response = McpServer::handle_rpc_request(
+            &request,
+            &[],
+            &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+            &McpContext::default(),
+        )
+        .await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602);
     }
 
     #[tokio::test]
     async fn test_handle_tools_call_missing_name() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Value::Number(1.into()),
             method: "tools/call".to_string(),
             params: Some(serde_json::json!({"arguments": {}})),
         };
-        let response = McpServer::handle_rpc_request(&request, &[]).await;
+        let response = McpServer::handle_rpc_request(
+            &request,
+            &[],
+            &WriteGate::in_memory(Default::default(), Duration::from_secs(1)),
+            &McpContext::default(),
+        )
+        .await;
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602);
     }
@@ -1893,8 +2304,158 @@ mod tests {
         }
     }
 
+    fn rpc_post(body: &str, headers: &[String]) -> String {
+        let mut request = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for h in headers {
+            request.push_str(h);
+            request.push_str("\r\n");
+        }
+        request.push_str("\r\n");
+        request.push_str(body);
+        request
+    }
+
+    #[tokio::test]
+    async fn client_tokens_authenticate_until_revoked() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _master) = started_server(&dir, Vec::new()).await;
+        let created = server.clients().create("Cursor").unwrap();
+        let auth = format!("Authorization: Bearer {}", created.token);
+
+        let response = send_raw(port, &tools_list_request(std::slice::from_ref(&auth))).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "got: {response}");
+        assert!(server.clients().list()[0].last_used_at.is_some());
+
+        server.clients().revoke(&created.client.id).unwrap();
+        let response = send_raw(port, &tools_list_request(&[auth])).await;
+        assert!(
+            response.starts_with("HTTP/1.1 401"),
+            "revoked token must stop working at once: {response}"
+        );
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_tokens_do_not_bypass_the_origin_check() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _) =
+            started_server(&dir, vec!["https://allowed.example".to_string()]).await;
+        let created = server.clients().create("Browser tool").unwrap();
+        let response = send_raw(
+            port,
+            &tools_list_request(&[
+                format!("Authorization: Bearer {}", created.token),
+                "Origin: https://evil.example".to_string(),
+            ]),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 403"), "got: {response}");
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn notifications_get_202_and_initialize_negotiates_the_version() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, token) = started_server(&dir, Vec::new()).await;
+        let auth = format!("Authorization: Bearer {token}");
+
+        let response = send_raw(
+            port,
+            &rpc_post(
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                std::slice::from_ref(&auth),
+            ),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 202"), "got: {response}");
+        assert!(
+            response.ends_with("\r\n\r\n"),
+            "202 has no body: {response:?}"
+        );
+
+        for (asked, expected) in [
+            ("2025-06-18", "2025-06-18"),
+            ("2025-03-26", "2025-03-26"),
+            ("2024-11-05", "2024-11-05"),
+            ("1999-01-01", "2025-06-18"),
+        ] {
+            let body = format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"{asked}","capabilities":{{}},"clientInfo":{{"name":"t","version":"1"}}}}}}"#
+            );
+            let response = send_raw(port, &rpc_post(&body, std::slice::from_ref(&auth))).await;
+            assert!(
+                response.contains(&format!("\"protocolVersion\":\"{expected}\"")),
+                "asked {asked}: {response}"
+            );
+        }
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stdio_bridge_round_trips_through_a_running_server() {
+        let _policy = crate::services::security::test_support::no_policy();
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let (mut server, port, _) = started_server(&dir, Vec::new()).await;
+        let created = server.clients().create("stdio client").unwrap();
+        let input = concat!(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            "\n"
+        );
+        let mut out = Vec::new();
+        super::super::stdio::bridge(
+            input.as_bytes(),
+            &mut out,
+            &format!("http://127.0.0.1:{port}/mcp"),
+            &created.token,
+        )
+        .await
+        .unwrap();
+        let lines: Vec<Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "the notification produces no output: {lines:?}"
+        );
+        assert_eq!(lines[0]["id"], 1);
+        assert_eq!(lines[0]["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(lines[1]["id"], 2);
+        assert!(lines[1]["result"]["tools"].as_array().unwrap().len() > 5);
+
+        // A wrong token comes back as a JSON-RPC error carrying the id.
+        let mut out = Vec::new();
+        super::super::stdio::bridge(
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/list"}"#.as_bytes(),
+            &mut out,
+            &format!("http://127.0.0.1:{port}/mcp"),
+            "gnc_wrong",
+        )
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(String::from_utf8(out).unwrap().trim()).unwrap();
+        assert_eq!(v["id"], 9);
+        assert!(v["error"].is_object(), "{v}");
+        server.stop().await.unwrap();
+    }
+
     #[tokio::test]
     async fn test_running_server_rejects_requests_without_a_token() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server(&dir, Vec::new()).await;
 
@@ -1920,6 +2481,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_regenerating_the_token_invalidates_the_old_one_immediately() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, old_token) = started_server(&dir, Vec::new()).await;
 
@@ -1941,6 +2505,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_running_server_enforces_allowed_origins() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) =
             started_server(&dir, vec!["http://localhost:5173".to_string()]).await;
@@ -1968,6 +2535,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_preflight_is_answered_without_a_token() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, _token) = started_server(&dir, Vec::new()).await;
 
@@ -1982,6 +2552,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_post_requests_still_require_a_token() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server(&dir, Vec::new()).await;
 
@@ -2003,6 +2576,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_client_that_sends_nothing_is_dropped_after_the_deadline() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, _token) = started_server_with_limits(
             &dir,
@@ -2027,6 +2603,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_client_that_stalls_mid_request_is_dropped_after_the_deadline() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server_with_limits(
             &dir,
@@ -2064,6 +2643,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_slow_but_legitimate_client_is_still_served() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         let (mut server, port, token) = started_server_with_limits(
             &dir,
@@ -2102,6 +2684,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_connections_past_the_cap_are_closed_and_the_slots_come_back() {
+        // Requests can reach the paranoid-mode gate (explain_commit), so
+        // hold the policy lock like every other gate-reaching test.
+        let _policy = crate::services::security::test_support::no_policy();
         let dir = TempDir::new().expect("Failed to create temp dir");
         // A deadline long enough that the two silent holders keep their slots
         // for the whole test

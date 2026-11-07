@@ -84,6 +84,7 @@ import './components/panels/gn-blame-view.ts';
 import './components/panels/gn-output-panel.ts';
 import './components/panels/gn-terminal-panel.ts';
 import type { GnTerminalPanel } from './components/panels/gn-terminal-panel.ts';
+import './components/mcp/gn-mcp-consent-dialog.ts';
 import './components/sidebar/gn-left-panel.ts';
 import './components/sidebar/gn-right-panel.ts';
 import './components/dialogs/gn-settings-dialog.ts';
@@ -6680,6 +6681,14 @@ export class AppShell extends LitElement {
         @open-file=${this.handleOpenFileFromPalette}
         @navigate-to-commit=${this.handleNavigateToCommit}
       ></gn-command-palette>
+
+      <gn-mcp-consent-dialog
+        @mcp-write-applied=${(e: CustomEvent<{ repositoryPath?: string }>) => {
+          // An agent changed a repository over MCP: refresh it like any other
+          // state-modifying operation.
+          this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
+        }}
+      ></gn-mcp-consent-dialog>
 
       ${this.activeRepository ? html`
         <gn-start-agent-dialog
