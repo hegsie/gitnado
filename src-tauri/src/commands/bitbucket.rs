@@ -1717,8 +1717,14 @@ pub async fn check_bitbucket_user_exists(
         app_password.as_deref(),
     )?;
 
-    let name_clean = author_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let email_clean = author_email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let name_clean = author_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let email_clean = author_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     if name_clean.is_none() && email_clean.is_none() {
         return Ok(ProviderUserStatus {
             status: "unknown".to_string(),

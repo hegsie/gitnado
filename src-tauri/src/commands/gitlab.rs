@@ -1310,10 +1310,18 @@ pub async fn check_gitlab_user_exists(
     let token = resolve_token(token)?;
 
     let mut queries = Vec::new();
-    if let Some(email) = author_email.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(email) = author_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         queries.push(email.to_string());
     }
-    if let Some(name) = author_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(name) = author_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if !queries.iter().any(|q| q.eq_ignore_ascii_case(name)) {
             queries.push(name.to_string());
         }
