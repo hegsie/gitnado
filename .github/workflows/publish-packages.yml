@@ -68,6 +68,28 @@ jobs:
             fi
           done
 
+      - name: Checkout workflow scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Normalize latest.json updater URLs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases/tags/${TAG}" > release.json
+          if jq -e '.assets[] | select(.name == "latest.json")' release.json > /dev/null; then
+            gh release download "${TAG}" -p latest.json --clobber
+            status=$(node .github/scripts/normalize-latest-json.mjs \
+              --latest latest.json \
+              --release release.json \
+              --repo "${{ github.repository }}")
+            if [ "$status" = "updated" ]; then
+              gh release upload "${TAG}" latest.json --clobber
+            fi
+          fi
+
       # Secrets are not readable in job-level `if` conditions, so surface their
       # presence as outputs and gate the downstream jobs on those.
       - name: Check publishing secrets

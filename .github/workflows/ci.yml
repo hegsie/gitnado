@@ -86,12 +86,17 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Capture CMake version for cache key
+        shell: bash
+        run: echo "CMAKE_VERSION=$(cmake --version | head -n1)" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
           prefix-key: ubuntu-22.04
+          env-vars: ImageOS CMAKE_VERSION
 
       - name: Install npm dependencies
         run: npm ci
@@ -138,12 +143,17 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Capture CMake version for cache key
+        shell: bash
+        run: echo "CMAKE_VERSION=$(cmake --version | head -n1)" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
           prefix-key: ubuntu-22.04
+          env-vars: ImageOS CMAKE_VERSION
 
       - name: Install npm dependencies
         run: npm ci
@@ -179,12 +189,17 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Capture CMake version for cache key
+        shell: bash
+        run: echo "CMAKE_VERSION=$(cmake --version | head -n1)" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
           prefix-key: macos-latest
+          env-vars: ImageOS CMAKE_VERSION
 
       - name: Install npm dependencies
         run: npm ci
@@ -218,12 +233,17 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Capture CMake version for cache key
+        shell: bash
+        run: echo "CMAKE_VERSION=$(cmake --version | head -n1)" >> "$GITHUB_ENV"
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
           prefix-key: windows-latest
+          env-vars: ImageOS CMAKE_VERSION
 
       - name: Install npm dependencies
         run: npm ci

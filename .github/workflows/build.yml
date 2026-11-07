@@ -190,3 +190,43 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
           if-no-files-found: ignore
           retention-days: 7
+
+  # tauri-action writes api.github.com/repos/.../releases/assets/<id> URLs into
+  # latest.json when releaseDraft is true. Rewrite them to direct
+  # /releases/download/vX.Y.Z/<name> URLs once all matrix builds finish so
+  # publishing the draft release from the GitHub UI works immediately.
+  finalize-release:
+    name: Normalize updater manifest
+    needs: [build]
+    if: (github.event_name == 'workflow_dispatch' && inputs.release)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Rewrite latest.json asset URLs to direct download URLs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(jq -r .version src-tauri/tauri.conf.json)"
+          gh api "repos/${{ github.repository }}/releases?per_page=20" \
+            | jq -e --arg tag "$tag" 'map(select(.tag_name == $tag)) | first' > release.json
+          gh release download "$tag" -p latest.json --clobber
+          status=$(node .github/scripts/normalize-latest-json.mjs \
+            --latest latest.json \
+            --release release.json \
+            --repo "${{ github.repository }}")
+          if [ "$status" = "updated" ]; then
+            gh release upload "$tag" latest.json --clobber
+          fi
+          cat latest.json
