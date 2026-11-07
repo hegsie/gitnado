@@ -15,6 +15,8 @@ import type {
   UndoAction,
   UndoHistory,
   CleanupCandidate,
+  Stack,
+  RestackPlan,
 } from "../../types/git.types.ts";
 import type {
   CreateBranchCommand,
@@ -171,6 +173,59 @@ export async function unsetUpstreamBranch(
   branch: string,
 ): Promise<CommandResult<void>> {
   return invokeCommand<void>("unset_upstream_branch", { path, branch });
+}
+
+/**
+ * Declare `branch` as stacked on `parent` (stored in the repository config).
+ */
+export async function setBranchParent(
+  path: string,
+  branch: string,
+  parent: string,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("set_branch_parent", { path, branch, parent });
+}
+
+/**
+ * Take `branch` out of its stack. Branches stacked on it keep their parent.
+ */
+export async function clearBranchParent(
+  path: string,
+  branch: string,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("clear_branch_parent", { path, branch });
+}
+
+/**
+ * Every stack of dependent branches in the repository, bottom to top.
+ */
+export async function getStacks(
+  path: string,
+): Promise<CommandResult<Stack[]>> {
+  return invokeCommand<Stack[]>("get_stacks", { path });
+}
+
+/**
+ * Predict restacking the stack based on `base` (a ghost run that changes
+ * nothing): per branch, whether it is up to date, replays cleanly, conflicts
+ * or is already merged.
+ */
+export async function previewRestack(
+  path: string,
+  base: string,
+): Promise<CommandResult<RestackPlan>> {
+  return invokeCommand<RestackPlan>("preview_restack", { path, base });
+}
+
+/**
+ * Replay every branch of the stack based on `base` onto its parent's tip.
+ * All-or-nothing: a conflict anywhere changes nothing.
+ */
+export async function restackStack(
+  path: string,
+  base: string,
+): Promise<CommandResult<RestackPlan>> {
+  return invokeCommand<RestackPlan>("restack", { path, base });
 }
 
 /**

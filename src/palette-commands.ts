@@ -59,6 +59,8 @@ export interface PaletteCommandHost {
   handleRunFsck(): Promise<void>;
   handleRunPrune(): Promise<void>;
   openBranchCleanup(): Promise<void>;
+  /** Check out the branch one level up or down the current branch's stack. */
+  navigateStack(direction: 'up' | 'down'): Promise<void>;
   openSearchDialog(mode: SearchDialogMode): void;
   openIntegrationStandalone(type: IntegrationType): void;
   refreshConflictDialogRepo(pinnedPath: string | null): void;
@@ -353,6 +355,20 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       category: 'action',
       icon: 'git-branch',
       action: shell.requiresRepository(() => { void shell.openBranchCleanup(); }),
+    },
+    {
+      id: 'stack-up',
+      label: 'Stack: check out the branch above',
+      category: 'action',
+      icon: 'git-branch',
+      action: shell.requiresRepository(() => { void shell.navigateStack('up'); }),
+    },
+    {
+      id: 'stack-down',
+      label: 'Stack: check out the branch below',
+      category: 'action',
+      icon: 'git-branch',
+      action: shell.requiresRepository(() => { void shell.navigateStack('down'); }),
     },
     {
       id: 'bisect',

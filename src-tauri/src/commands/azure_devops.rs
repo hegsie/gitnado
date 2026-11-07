@@ -1950,11 +1950,90 @@ pub async fn check_ado_user_exists(
     })
 }
 
+/// Fields to change on a pull request; `None` leaves a field as it is.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAdoPullRequestInput {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// New target branch (short name): retargets the pull request.
+    pub target_ref_name: Option<String>,
+}
+
+fn build_update_ado_pr_body(input: &UpdateAdoPullRequestInput) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    if let Some(title) = &input.title {
+        body.insert("title".into(), title.clone().into());
+    }
+    if let Some(description) = &input.description {
+        body.insert("description".into(), description.clone().into());
+    }
+    if let Some(target) = &input.target_ref_name {
+        let full = if target.starts_with("refs/") {
+            target.clone()
+        } else {
+            format!("refs/heads/{}", target)
+        };
+        body.insert("targetRefName".into(), full.into());
+    }
+    serde_json::Value::Object(body)
+}
+
+/// Update a pull request's title, description or target branch.
+#[command]
+pub async fn update_ado_pull_request(
+    organization: String,
+    project: String,
+    repository: String,
+    pull_request_id: u32,
+    input: UpdateAdoPullRequestInput,
+    token: Option<String>,
+) -> Result<()> {
+    let token = resolve_ado_token(token)?;
+    let url = build_api_url(
+        &organization,
+        &project,
+        &format!(
+            "git/repositories/{}/pullrequests/{}",
+            repository, pull_request_id
+        ),
+    );
+    let response = api_client()?
+        .patch(&url)
+        .header("Authorization", get_auth_header(&token))
+        .header("Content-Type", "application/json")
+        .json(&build_update_ado_pr_body(&input))
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to update pull request: {}", e))
+        })?;
+    provider_http::check_provider_response(response, "Azure DevOps").await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::security::test_support::no_policy;
     use base64::engine::general_purpose::STANDARD as BASE64;
+    #[test]
+    fn update_ado_pr_body_qualifies_the_target_ref() {
+        let body = build_update_ado_pr_body(&UpdateAdoPullRequestInput {
+            title: None,
+            description: Some("stack".into()),
+            target_ref_name: Some("feat-a".into()),
+        });
+        assert_eq!(
+            body,
+            serde_json::json!({ "description": "stack", "targetRefName": "refs/heads/feat-a" })
+        );
+        let full = build_update_ado_pr_body(&UpdateAdoPullRequestInput {
+            target_ref_name: Some("refs/heads/x".into()),
+            ..Default::default()
+        });
+        assert_eq!(full["targetRefName"], "refs/heads/x");
+    }
 
     // ========================================================================
     // Repository Listing Tests

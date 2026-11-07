@@ -5048,4 +5048,15 @@ theirs
             "post-merge must run after fast-forward too"
         );
     }
+
+    #[test]
+    fn stopped_commit_summary_reads_past_the_progress_carriage_return() {
+        let stderr = "Rebasing (1/1)\rerror: could not apply bf28cbb... x edits\nhint: Resolve all conflicts\n";
+        assert_eq!(stopped_commit_summary(stderr).as_deref(), Some("x edits"));
+        assert_eq!(
+            stopped_commit_summary("error: could not apply abc123 plain\n").as_deref(),
+            Some("plain")
+        );
+        assert_eq!(stopped_commit_summary("nothing here"), None);
+    }
 }

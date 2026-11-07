@@ -1730,12 +1730,88 @@ pub async fn check_bitbucket_user_exists(
     parse_bitbucket_members_status(&body, name_clean, email_clean)
 }
 
+/// Fields to change on a pull request. Bitbucket's update replaces the
+/// resource, so the title is always required.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBitbucketPullRequestInput {
+    pub title: String,
+    pub description: Option<String>,
+    /// New destination branch: retargets the pull request.
+    pub destination_branch: Option<String>,
+}
+
+fn build_update_bitbucket_pr_body(input: &UpdateBitbucketPullRequestInput) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert("title".into(), input.title.clone().into());
+    if let Some(description) = &input.description {
+        body.insert("description".into(), description.clone().into());
+    }
+    if let Some(destination) = &input.destination_branch {
+        body.insert(
+            "destination".into(),
+            serde_json::json!({ "branch": { "name": destination } }),
+        );
+    }
+    serde_json::Value::Object(body)
+}
+
+/// Update a pull request's title, description or destination branch.
+#[command]
+pub async fn update_bitbucket_pull_request(
+    workspace: String,
+    repo_slug: String,
+    id: u64,
+    input: UpdateBitbucketPullRequestInput,
+    token: Option<String>,
+    username: Option<String>,
+    app_password: Option<String>,
+) -> Result<()> {
+    let auth_header = get_auth_header_with_token(
+        token.as_deref(),
+        username.as_deref(),
+        app_password.as_deref(),
+    )?;
+    let url = format!(
+        "{}/repositories/{}/{}/pullrequests/{}",
+        BITBUCKET_API_BASE, workspace, repo_slug, id
+    );
+    let response = api_client()?
+        .put(&url)
+        .header("Authorization", auth_header)
+        .header("Content-Type", "application/json")
+        .json(&build_update_bitbucket_pr_body(&input))
+        .send()
+        .await
+        .map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to update pull request: {}", e))
+        })?;
+    provider_http::check_provider_response(response, "Bitbucket").await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::security::test_support::no_policy;
     use crate::test_utils::TestRepo;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    #[test]
+    fn update_bitbucket_pr_body_nests_the_destination() {
+        let body = build_update_bitbucket_pr_body(&UpdateBitbucketPullRequestInput {
+            title: "feat b".into(),
+            description: Some("stack".into()),
+            destination_branch: Some("feat-a".into()),
+        });
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "title": "feat b",
+                "description": "stack",
+                "destination": { "branch": { "name": "feat-a" } }
+            })
+        );
+    }
 
     #[test]
     fn test_pagelen_query_param() {

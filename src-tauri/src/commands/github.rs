@@ -3034,10 +3034,85 @@ pub async fn check_github_user_exists(
     })
 }
 
+/// Fields to change on a pull request; `None` leaves a field as it is.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePullRequestInput {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    /// New base branch: retargets the pull request.
+    pub base: Option<String>,
+}
+
+fn build_update_pull_request_body(input: &UpdatePullRequestInput) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    if let Some(title) = &input.title {
+        body.insert("title".into(), title.clone().into());
+    }
+    if let Some(text) = &input.body {
+        body.insert("body".into(), text.clone().into());
+    }
+    if let Some(base) = &input.base {
+        body.insert("base".into(), base.clone().into());
+    }
+    serde_json::Value::Object(body)
+}
+
+/// Update a pull request's title, description or base branch.
+#[command]
+pub async fn update_pull_request(
+    owner: String,
+    repo: String,
+    number: u32,
+    input: UpdatePullRequestInput,
+    token: Option<String>,
+) -> Result<()> {
+    let token = resolve_github_token(token).await?;
+    let client = api_client()?;
+    let response = client
+        .patch(format!(
+            "{}/repos/{}/{}/pulls/{}",
+            GITHUB_API_BASE, owner, repo, number
+        ))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("User-Agent", "Gitnado-Git-Client")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&build_update_pull_request_body(&input))
+        .send()
+        .await
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to update PR: {}", e)))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitnadoError::OperationFailed(format!(
+            "GitHub API error {}: {}",
+            status, body
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::security::test_support::no_policy;
+    #[test]
+    fn update_pull_request_body_sends_only_the_fields_given() {
+        let body = build_update_pull_request_body(&UpdatePullRequestInput {
+            title: None,
+            body: Some("stack".into()),
+            base: Some("feat-a".into()),
+        });
+        assert_eq!(
+            body,
+            serde_json::json!({ "body": "stack", "base": "feat-a" })
+        );
+        assert_eq!(
+            build_update_pull_request_body(&UpdatePullRequestInput::default()),
+            serde_json::json!({})
+        );
+    }
 
     // ========================================================================
     // GitHubUser Parsing Tests

@@ -634,6 +634,51 @@ export interface CleanupCandidate {
 }
 
 /**
+ * One branch in a stack of dependent branches (see `get_stacks`).
+ */
+export interface StackBranch {
+  name: string;
+  /** The branch this one is stacked on. */
+  parent: string;
+  /** 1 for a branch directly on the stack's base, 2 above that, … */
+  depth: number;
+  /** Commits on this branch its parent does not have. */
+  ahead: number;
+  /** Commits on the parent this branch lacks: > 0 means it needs a restack. */
+  behind: number;
+  isHead: boolean;
+  /** The parent branch no longer exists. */
+  parentMissing: boolean;
+}
+
+/** A base branch and the branches stacked on it, bottom to top. */
+export interface Stack {
+  base: string;
+  branches: StackBranch[];
+}
+
+/** What restacking does to one branch (see `preview_restack`). */
+export interface RestackStep {
+  branch: string;
+  /** The parent it is replayed onto (after skipping merged branches). */
+  onto: string;
+  status: 'upToDate' | 'restacked' | 'merged' | 'conflict' | 'blocked';
+  commits: number;
+  conflictFiles: string[];
+  conflictCommit: string | null;
+}
+
+/** A predicted or applied restack of one stack. */
+export interface RestackPlan {
+  base: string;
+  steps: RestackStep[];
+  /** Nothing conflicts, so a restack would apply. */
+  canApply: boolean;
+  /** A restack would change at least one branch. */
+  hasChanges: boolean;
+}
+
+/**
  * A workspace grouping related repositories
  */
 export interface Workspace {

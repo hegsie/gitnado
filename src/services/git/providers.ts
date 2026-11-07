@@ -292,6 +292,30 @@ export async function createPullRequest(
   });
 }
 
+/** Fields to change on a GitHub pull request; omitted fields stay as they are. */
+export interface UpdatePullRequestInput {
+  title?: string;
+  body?: string;
+  /** New base branch: retargets the pull request. */
+  base?: string;
+}
+
+export async function updatePullRequest(
+  owner: string,
+  repo: string,
+  number: number,
+  input: UpdatePullRequestInput,
+  token?: string | null,
+): Promise<CommandResult<void>> {
+  return invokeProviderCommand<void>("update_pull_request", {
+    owner,
+    repo,
+    number,
+    input,
+    token,
+  });
+}
+
 export interface PrReviewComment {
   id: string;
   author: string;
@@ -960,6 +984,32 @@ export async function createAdoPullRequest(
   });
 }
 
+/** Fields to change on an Azure DevOps pull request. */
+export interface UpdateAdoPullRequestInput {
+  title?: string;
+  description?: string;
+  /** New target branch (short name): retargets the pull request. */
+  targetRefName?: string;
+}
+
+export async function updateAdoPullRequest(
+  organization: string,
+  project: string,
+  repository: string,
+  pullRequestId: number,
+  input: UpdateAdoPullRequestInput,
+  token?: string | null,
+): Promise<CommandResult<void>> {
+  return invokeProviderCommand<void>("update_ado_pull_request", {
+    organization,
+    project,
+    repository,
+    pullRequestId,
+    input,
+    token,
+  });
+}
+
 export async function getAdoPrComments(
   organization: string,
   project: string,
@@ -1286,6 +1336,30 @@ export async function createGitLabMergeRequest(
   });
 }
 
+/** Fields to change on a GitLab merge request. */
+export interface UpdateMergeRequestInput {
+  title?: string;
+  description?: string;
+  /** New target branch: retargets the merge request. */
+  targetBranch?: string;
+}
+
+export async function updateGitLabMergeRequest(
+  instanceUrl: string,
+  projectPath: string,
+  iid: number,
+  input: UpdateMergeRequestInput,
+  token?: string | null,
+): Promise<CommandResult<void>> {
+  return invokeProviderCommand<void>("update_gitlab_merge_request", {
+    instanceUrl,
+    projectPath,
+    iid,
+    input,
+    token,
+  });
+}
+
 export async function getGitLabMrComments(
   instanceUrl: string,
   projectPath: string,
@@ -1576,6 +1650,30 @@ export async function createBitbucketPullRequest(
   return invokeProviderCommand<BitbucketPullRequest>("create_bitbucket_pull_request", {
     workspace,
     repoSlug,
+    input,
+    token,
+  });
+}
+
+/** Fields to change on a Bitbucket pull request (the title is always sent). */
+export interface UpdateBitbucketPullRequestInput {
+  title: string;
+  description?: string;
+  /** New destination branch: retargets the pull request. */
+  destinationBranch?: string;
+}
+
+export async function updateBitbucketPullRequest(
+  workspace: string,
+  repoSlug: string,
+  id: number,
+  input: UpdateBitbucketPullRequestInput,
+  token?: string | null,
+): Promise<CommandResult<void>> {
+  return invokeProviderCommand<void>("update_bitbucket_pull_request", {
+    workspace,
+    repoSlug,
+    id,
     input,
     token,
   });

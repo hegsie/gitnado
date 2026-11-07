@@ -11,14 +11,23 @@ import { dragDropService, type DragItem } from '../../services/drag-drop.service
 import { settingsStore } from '../../stores/settings.store.ts';
 import {
   detectPullRequestProvider,
+  getProviderToken,
   invalidateProviderDetection,
   type PullRequestProviderTarget,
 } from '../../services/pull-request.service.ts';
+import {
+  planStackPullRequests,
+  summarizeStackSync,
+  syncStackPullRequests,
+  type StackPrStep,
+} from '../../services/stack-pr.service.ts';
 import { repositoryStore } from '../../stores/repository.store.ts';
 import { fuzzyScore } from '../../utils/fuzzy-search.ts';
 import '../dialogs/gn-branch-cleanup-dialog.ts';
 import type { GnBranchCleanupDialog } from '../dialogs/gn-branch-cleanup-dialog.ts';
-import type { Branch } from '../../types/git.types.ts';
+import type { Branch, Stack } from '../../types/git.types.ts';
+import { findStackBranch } from '../../utils/stack-navigation.ts';
+import { restackConflictMessage, restackSummaryLines, restackedCount } from '../../utils/restack-plan.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
 import { rebasedOntoMessage } from '../../utils/rebase-messages.ts';
 import {
@@ -303,6 +312,65 @@ export class GnBranchList extends LitElement {
         padding: var(--spacing-xs) 0;
       }
 
+      .stack {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .stack-base {
+        padding: 2px 12px;
+        font-size: var(--font-size-xs, 11px);
+        color: var(--color-text-secondary);
+      }
+      .stack-base {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .stack-base .restack-btn + .restack-btn {
+        margin-left: 4px;
+      }
+      .stack-base > span {
+        margin-right: auto;
+      }
+      .restack-btn {
+        font-size: var(--font-size-xs, 11px);
+        padding: 0 6px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm, 3px);
+        background: transparent;
+        color: var(--color-text-primary);
+        cursor: pointer;
+      }
+      .restack-btn:hover:not([disabled]) {
+        background: var(--color-bg-hover);
+      }
+      .restack-btn[disabled] {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .stack-ahead {
+        margin-left: auto;
+        font-size: var(--font-size-xs, 11px);
+        color: var(--color-text-secondary);
+      }
+      .stack-badge {
+        font-size: var(--font-size-xs, 11px);
+        padding: 0 4px;
+        border-radius: var(--radius-sm, 3px);
+        background: var(--color-warning-bg, rgba(210, 153, 34, 0.15));
+        color: var(--color-warning, #d29922);
+        white-space: nowrap;
+      }
+      .stack-badge.warning,
+      .stacks-error {
+        color: var(--color-error, #f85149);
+      }
+      .stacks-error {
+        padding: 4px 12px;
+        font-size: var(--font-size-xs, 11px);
+      }
+
       .context-menu-item {
         display: flex;
         align-items: center;
@@ -574,9 +642,16 @@ export class GnBranchList extends LitElement {
 
   @state() private localBranchGroups: LocalBranchGroup[] = [];
   @state() private remoteGroups: BranchGroup[] = [];
+  /** Declared stacks of dependent branches (roadmap 4.3). */
+  @state() private stacks: Stack[] = [];
+  @state() private stacksError: string | null = null;
+  /** A stack's pull requests are being synced (network round trips). */
+  @state() private stackPrSyncing = false;
+  /** Local branches by name, for resolving stack rows to Branch objects. */
+  private localBranchesByName = new Map<string, Branch>();
   @state() private loading = true;
   @state() private error: string | null = null;
-  @state() private expandedGroups = new Set<string>(['local', 'local-ungrouped']);
+  @state() private expandedGroups = new Set<string>(['local', 'local-ungrouped', 'stacks']);
   /**
    * Groups the user deliberately collapsed, keyed by repository.
    *
@@ -972,7 +1047,7 @@ export class GnBranchList extends LitElement {
     this.error = null;
 
     try {
-      const [branchesResult, remotesResult, cleanupResult] = await Promise.all([
+      const [branchesResult, remotesResult, cleanupResult, stacksResult] = await Promise.all([
         gitService.getBranches(loadedPath),
         gitService.getRemotes(loadedPath),
         // The staleDays argument is what makes the badge and the cleanup
@@ -984,6 +1059,7 @@ export class GnBranchList extends LitElement {
           loadedPath,
           settingsStore.getState().staleBranchDays,
         ),
+        gitService.getStacks(loadedPath),
       ]);
 
       // A newer load for the SAME path supersedes this one entirely (its
@@ -1022,6 +1098,16 @@ export class GnBranchList extends LitElement {
 
       // Separate local and remote branches
       const localBranches = branches.filter((b) => !b.isRemote);
+      this.localBranchesByName = new Map(localBranches.map((b) => [b.name, b]));
+      // Stacks are an overlay on the branch list: a failure to read them is
+      // reported in their own section and never hides the branches.
+      if (stacksResult?.success) {
+        this.stacks = Array.isArray(stacksResult.data) ? stacksResult.data : [];
+        this.stacksError = null;
+      } else {
+        this.stacks = [];
+        this.stacksError = stacksResult?.error?.message ?? 'Failed to load stacks';
+      }
 
       // Group local branches by prefix (feature/, fix/, hotfix/, etc.)
       const localGroupMap = new Map<string | null, Branch[]>();
@@ -1059,6 +1145,7 @@ export class GnBranchList extends LitElement {
       // The always-present groups are re-derived too, so their state follows
       // the repository being shown rather than the last one.
       this.autoExpandGroup(newExpandedGroups, 'local');
+      this.autoExpandGroup(newExpandedGroups, 'stacks');
       this.autoExpandGroup(newExpandedGroups, 'local-ungrouped');
       for (const prefix of sortedPrefixes) {
         if (prefix !== null) {
@@ -1823,6 +1910,161 @@ export class GnBranchList extends LitElement {
     }
   }
 
+  /** Context menu "Stack on…": declare the branch's parent in its stack. */
+  private async handleStackOn(): Promise<void> {
+    const branch = this.contextMenu.branch;
+    if (!branch || branch.isRemote) return;
+    this.contextMenu = { ...this.contextMenu, visible: false };
+
+    // Captured before the prompt await: the window stays interactive and the
+    // user can switch tabs while it is open.
+    const repoPath = this.repositoryPath;
+    const current = findStackBranch(this.stacks, branch.name)?.parent;
+    const head = Array.from(this.localBranchesByName.values()).find((b) => b.isHead && b.name !== branch.name);
+    const fallback = this.localBranchesByName.has('main') && branch.name !== 'main' ? 'main' : '';
+    const answer = await showPrompt(
+      'Stack Branch',
+      `Stack "${branch.shorthand}" on which branch?`,
+      current ?? head?.name ?? fallback,
+    );
+    const parent = answer?.trim();
+    if (!parent) return;
+
+    try {
+      const result = await gitService.setBranchParent(repoPath, branch.name, parent);
+      if (result.success) {
+        showToast(`${branch.shorthand} is now stacked on ${parent}`, 'success');
+        await this.loadBranches();
+        this.dispatchBranchesChanged(repoPath);
+      } else {
+        showToast(`Failed to stack branch: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      }
+    } catch (err) {
+      showToast(`Failed to stack branch: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+    }
+  }
+
+  /**
+   * "Restack": predict the whole restack in a scratch worktree first, explain
+   * a conflict without touching anything, otherwise confirm what will move and
+   * apply it all at once.
+   */
+  private async handleRestack(base: string): Promise<void> {
+    const repoPath = this.repositoryPath;
+    if (!this.claimOperation(repoPath)) return;
+    try {
+      const preview = await gitService.previewRestack(repoPath, base);
+      if (!preview.success || !preview.data) {
+        showToast(`Could not check the stack: ${preview.error?.message ?? 'Unknown error'}`, 'error');
+        return;
+      }
+      const plan = preview.data;
+      const conflict = restackConflictMessage(plan);
+      if (conflict) {
+        showToast(conflict, 'error');
+        return;
+      }
+      if (!plan.hasChanges) {
+        showToast(`The stack on ${base} is already up to date`, 'info');
+        await this.loadBranches();
+        return;
+      }
+      const confirmed = await showConfirm(
+        'Restack',
+        `Restack the branches on ${base}?\n\n${restackSummaryLines(plan).join('\n')}\n\nThis rewrites their commits.`,
+        'warning',
+      );
+      if (!confirmed) return;
+
+      const result = await gitService.restackStack(repoPath, base);
+      if (result.success && result.data) {
+        const n = restackedCount(result.data);
+        showToast(n > 0 ? `Restacked ${n} branch${n === 1 ? '' : 'es'} on ${base}` : `Stack on ${base} updated`, 'success');
+        await this.loadBranches();
+        this.dispatchBranchesChanged(repoPath);
+      } else {
+        showToast(`Restack failed: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      }
+    } finally {
+      this.releaseOperation(repoPath);
+    }
+  }
+
+  /**
+   * "Sync PRs": one request per branch of the stack on the detected provider,
+   * each based on the branch below it, each with a stack table. Plans first
+   * (read-only), confirms what it will create or retarget, then syncs.
+   */
+  private async handleSyncStackPrs(stack: Stack): Promise<void> {
+    const target = this.prProvider;
+    if (!target || this.stackPrSyncing) return;
+    const repoPath = this.repositoryPath;
+    const noun = target.itemNoun;
+    this.stackPrSyncing = true;
+    try {
+      const token = await getProviderToken(target);
+      if (!token) {
+        showToast(`Connect a ${target.providerName} account to sync ${target.itemNounPlural}`, 'error');
+        return;
+      }
+      const plan = await planStackPullRequests(stack, this.localBranchesByName, target, token);
+      if (!plan.success || !plan.data) {
+        showToast(`Could not read ${target.itemNounPlural} from ${target.providerName}: ${plan.error?.message ?? 'Unknown error'}`, 'error');
+        return;
+      }
+      const steps = plan.data;
+      const describe = (st: StackPrStep): string => {
+        switch (st.action) {
+          case 'create': return `• ${st.branch}: open a ${noun} into ${st.base}`;
+          case 'retarget': return `• ${st.branch}: retarget ${noun} ${st.existing?.number ?? ''} from ${st.existing?.targetBranch} to ${st.base}`;
+          case 'refresh': return `• ${st.branch}: update the stack table on ${noun} ${st.existing?.number ?? ''}`;
+          case 'skip': return `• ${st.branch}: skipped — ${st.reason}`;
+        }
+      };
+      if (!steps.some((st) => st.action !== 'skip')) {
+        showToast(`Nothing to sync: ${steps.map((st) => `${st.branch} — ${st.reason}`).join('; ')}`, 'warning');
+        return;
+      }
+      const confirmed = await showConfirm(
+        `Sync stack ${target.itemNounPlural}`,
+        `On ${target.providerName} (${target.repoLabel}):\n\n${steps.map(describe).join('\n')}`,
+        'info',
+      );
+      if (!confirmed) return;
+
+      const outcomes = await syncStackPullRequests(repoPath, stack, this.localBranchesByName, steps, target, token);
+      const summary = summarizeStackSync(outcomes, noun);
+      showToast(summary.message, summary.ok ? 'success' : 'error');
+      // The request list refreshes on the app's repository refresh.
+      this.dispatchBranchesChanged(repoPath);
+    } catch (err) {
+      showToast(`Failed to sync ${target.itemNounPlural}: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+    } finally {
+      this.stackPrSyncing = false;
+    }
+  }
+
+  /** Context menu "Remove from stack": forget the branch's declared parent. */
+  private async handleRemoveFromStack(): Promise<void> {
+    const branch = this.contextMenu.branch;
+    if (!branch || branch.isRemote) return;
+    this.contextMenu = { ...this.contextMenu, visible: false };
+
+    const repoPath = this.repositoryPath;
+    try {
+      const result = await gitService.clearBranchParent(repoPath, branch.name);
+      if (result.success) {
+        showToast(`${branch.shorthand} removed from its stack`, 'success');
+        await this.loadBranches();
+        this.dispatchBranchesChanged(repoPath);
+      } else {
+        showToast(`Failed to remove from stack: ${result.error?.message ?? 'Unknown error'}`, 'error');
+      }
+    } catch (err) {
+      showToast(`Failed to remove from stack: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+    }
+  }
+
   private async handleUnsetUpstream(): Promise<void> {
     const branch = this.contextMenu.branch;
     if (!branch || branch.isRemote) return;
@@ -2505,6 +2747,26 @@ export class GnBranchList extends LitElement {
           </button>
         ` : ''}
 
+        ${isLocal ? html`
+          <div class="context-menu-divider" role="separator"></div>
+          <button class="context-menu-item" role="menuitem" data-action="stack-on" @click=${this.handleStackOn}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="4" y="14" width="16" height="6" rx="1"></rect>
+              <rect x="6" y="4" width="12" height="6" rx="1"></rect>
+            </svg>
+            ${findStackBranch(this.stacks, branch.name) ? 'Change Stack Parent...' : 'Stack on...'}
+          </button>
+          ${findStackBranch(this.stacks, branch.name) ? html`
+            <button class="context-menu-item" role="menuitem" data-action="remove-from-stack" @click=${this.handleRemoveFromStack}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+              Remove from Stack
+            </button>
+          ` : ''}
+        ` : ''}
+
         ${isLocal && !isHead ? html`
           <div class="context-menu-divider" role="separator"></div>
           <button class="context-menu-item" role="menuitem" @click=${this.handleSetUpstream}>
@@ -2678,9 +2940,94 @@ export class GnBranchList extends LitElement {
     `;
   }
 
+  /**
+   * The "Stacks" section: each declared stack bottom-to-top, indented by
+   * depth, with what each level adds and whether it needs a restack. Rows
+   * act like branch rows (click selects, double-click checks out, right-click
+   * opens the branch menu), so moving up and down a stack is one gesture.
+   */
+  private renderStacks() {
+    if (this.stacksError) {
+      return html`<div class="stacks-error" role="status">Could not load stacks: ${this.stacksError}</div>`;
+    }
+    if (this.stacks.length === 0) return nothing;
+    const expanded = this.expandedGroups.has('stacks');
+    return html`
+      <div class="group stacks-group">
+        <div class="group-header"
+          role="button"
+          tabindex="0"
+          aria-expanded=${expanded}
+          aria-label="Stacks, ${this.stacks.length}"
+          @click=${() => this.toggleGroup('stacks')}
+          @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.toggleGroup('stacks'); } }}
+        >
+          <svg class="chevron ${expanded ? 'expanded' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+          <span class="group-name">Stacks</span>
+          <span class="group-count">${this.stacks.length}</span>
+        </div>
+        ${expanded ? this.stacks.map((stack) => html`
+          <ul class="stack" role="list" aria-label="Stack on ${stack.base}">
+            <li class="stack-base" role="listitem">
+              <span>on ${stack.base}</span>
+              ${stack.branches.some((b) => b.behind > 0 && !b.parentMissing) ? html`
+                <button
+                  class="restack-btn"
+                  data-base=${stack.base}
+                  ?disabled=${this.operationInProgress}
+                  title="Replay every branch of this stack onto its parent's latest commit"
+                  @click=${() => this.handleRestack(stack.base)}
+                >Restack</button>
+              ` : nothing}
+              ${this.prProvider ? html`
+                <button
+                  class="restack-btn sync-prs-btn"
+                  data-base=${stack.base}
+                  ?disabled=${this.stackPrSyncing}
+                  title="Open or update one ${this.prProvider.itemNoun} per branch of this stack on ${this.prProvider.providerName}, each based on the branch below it"
+                  @click=${() => this.handleSyncStackPrs(stack)}
+                >${this.prProvider.provider === 'gitlab' ? 'Sync MRs' : 'Sync PRs'}</button>
+              ` : nothing}
+            </li>
+            ${stack.branches.map((entry) => {
+              const branch = this.localBranchesByName.get(entry.name);
+              return html`
+                <li
+                  class="branch-item stack-branch ${entry.isHead ? 'active' : ''}"
+                  role="listitem"
+                  data-branch=${entry.name}
+                  style="padding-left: ${8 + entry.depth * 12}px"
+                  title=${entry.parentMissing
+                    ? `${entry.name}: its parent ${entry.parent} no longer exists`
+                    : `${entry.name}, stacked on ${entry.parent}`}
+                  @click=${() => branch && this.handleBranchClick(branch)}
+                  @dblclick=${() => branch && this.handleCheckout(branch)}
+                  @contextmenu=${(e: MouseEvent) => branch && this.handleContextMenu(e, branch)}
+                >
+                  ${this.renderBranchIcon(entry.isHead)}
+                  <span class="branch-name">${entry.name}</span>
+                  <span class="stack-ahead" title="${entry.ahead} commit${entry.ahead === 1 ? '' : 's'} on top of ${entry.parent}">+${entry.ahead}</span>
+                  ${entry.parentMissing ? html`
+                    <span class="stack-badge warning">parent missing</span>
+                  ` : entry.behind > 0 ? html`
+                    <span class="stack-badge" title="${entry.parent} has ${entry.behind} commit${entry.behind === 1 ? '' : 's'} this branch does not">needs restack</span>
+                  ` : nothing}
+                </li>
+              `;
+            })}
+          </ul>
+        `) : nothing}
+      </div>
+    `;
+  }
+
   private renderBody(): ReturnType<typeof html> {
     return html`
       ${this.renderControls()}
+
+      ${this.renderStacks()}
 
       <!-- Local branches -->
       ${this.localBranchGroups.length > 0 ? html`
