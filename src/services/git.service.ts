@@ -20,3 +20,4 @@ export * from "./git/remotes.ts";
 export * from "./git/security-credentials.ts";
 export * from "./git/providers.ts";
 export * from "./git/ai-workspace.ts";
+export * from "./git/checkpoints.ts";

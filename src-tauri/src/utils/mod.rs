@@ -5,6 +5,7 @@ mod blocking;
 pub mod cli_safety;
 mod command;
 mod editor_command;
+pub mod internal_refs;
 
 pub use blocking::blocking_git;
 pub use cli_safety::reject_flag_like;
@@ -15,6 +16,7 @@ pub use command::{
     GitCommand, GitCommandLog,
 };
 pub use editor_command::{copy_file_editor_command, todo_action_editor_command, TODO_FORMAT_ARGS};
+pub use internal_refs::{is_internal_ref, push_visible_refs};
 
 /// True once `deadline` has passed. `None` means no deadline.
 ///

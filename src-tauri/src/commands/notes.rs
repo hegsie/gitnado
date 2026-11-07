@@ -128,6 +128,11 @@ pub async fn get_notes_refs(path: String) -> Result<Vec<String>> {
 
     for r in (repo.references_glob("refs/notes/*")?).flatten() {
         if let Ok(name) = r.name() {
+            // Gitnado's own bookkeeping (agent attribution) is not a notes ref
+            // the user writes to.
+            if crate::utils::is_internal_ref(name) {
+                continue;
+            }
             refs.push(name.to_string());
         }
     }

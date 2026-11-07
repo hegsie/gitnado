@@ -10,7 +10,7 @@ import * as gitService from '../../services/git.service.ts';
 import { parseIssueReferences, isClosingKeyword } from '../../services/git.service.ts';
 import type { IssueReference } from '../../services/git.service.ts';
 import type { Commit, RefInfo, CommitFileEntry, FileStatus } from '../../types/git.types.ts';
-import type { GitNote, CommitSignatureInfo } from '../../services/git.service.ts';
+import type { AgentAttribution, GitNote, CommitSignatureInfo } from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { loggers, openExternalUrl } from '../../utils/index.ts';
@@ -451,6 +451,20 @@ export class GnCommitDetails extends LitElement {
       }
 
       /* Git Notes */
+      .agent-badge {
+        display: inline-block;
+        margin-top: var(--spacing-xs);
+        padding: 1px 8px;
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+      }
+
+      .agent-session {
+        font-family: var(--font-family-mono);
+      }
+
       .notes-header {
         display: flex;
         align-items: center;
@@ -677,6 +691,9 @@ export class GnCommitDetails extends LitElement {
   @state() private signatureInfo: CommitSignatureInfo | null = null;
   @state() private authorAvatarUrl: string | null = null;
 
+  /** Agent session that wrote this commit, from the hooks bridge (#608). */
+  @state() private agentAttribution: AgentAttribution | null = null;
+
   // --- Git notes ---
   @state() private notesRefs: string[] = [DEFAULT_NOTES_REF];
   @state() private notesRef: string = DEFAULT_NOTES_REF;
@@ -780,6 +797,7 @@ export class GnCommitDetails extends LitElement {
         this.loadFiles();
         this.loadCommitMetadata();
         this.parseIssueRefs();
+        void this.loadAgentAttribution();
         // The refresh above already reloads the note for the new commit, so
         // only load it here when the repository stayed the same.
         if (!repositoryChanged) {
@@ -788,6 +806,17 @@ export class GnCommitDetails extends LitElement {
         }
       }
     }
+  }
+
+  private async loadAgentAttribution(): Promise<void> {
+    this.agentAttribution = null;
+    const repoPath = this.repositoryPath;
+    const oid = this.commit?.oid;
+    if (!repoPath || !oid) return;
+    const result = await gitService.getAgentAttribution(repoPath, oid);
+    // Attribution is supplementary: a failed lookup simply shows no badge.
+    if (this.commit?.oid !== oid || this.repositoryPath !== repoPath) return;
+    this.agentAttribution = result.success ? (result.data ?? null) : null;
   }
 
   private parseIssueRefs(): void {
@@ -1865,6 +1894,18 @@ export class GnCommitDetails extends LitElement {
             ${this.formatRelativeTime(this.commit.author.timestamp)} &bull;
             ${this.formatDate(this.commit.author.timestamp)}
           </div>
+          ${this.agentAttribution
+            ? html`<div
+                class="agent-badge"
+                title=${this.agentAttribution.sessionId
+                  ? `Written during ${this.agentAttribution.agent} session ${this.agentAttribution.sessionId}`
+                  : `Written during a ${this.agentAttribution.agent} session`}
+              >
+                Written by ${this.agentAttribution.agent}${this.agentAttribution.sessionId
+                  ? html` · <span class="agent-session">${this.agentAttribution.sessionId.slice(0, 8)}</span>`
+                  : nothing}
+              </div>`
+            : nothing}
         </div>
 
         ${this.commit.committer.email !== this.commit.author.email

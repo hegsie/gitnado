@@ -95,6 +95,7 @@ export const DIALOG_REGISTRY = {
   startAgent: { repoScoped: true },
   changeFeed: { repoScoped: true },
   agentSessions: { repoScoped: true },
+  checkpoints: { repoScoped: true },
   search: { repoScoped: true },
   remotes: { repoScoped: true },
   clean: { repoScoped: true },

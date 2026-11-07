@@ -14,6 +14,7 @@ import * as remotesModule from "../git/remotes.ts";
 import * as securityCredentialsModule from "../git/security-credentials.ts";
 import * as providersModule from "../git/providers.ts";
 import * as aiWorkspaceModule from "../git/ai-workspace.ts";
+import * as checkpointsModule from "../git/checkpoints.ts";
 
 describe("git service domain modules", () => {
   it("shared.ts exports network gate and shared helper functions", () => {
@@ -407,6 +408,7 @@ describe("git service domain modules", () => {
       securityCredentialsModule,
       providersModule,
       aiWorkspaceModule,
+      checkpointsModule,
     ];
 
     let totalDomainExports = 0;

@@ -106,6 +106,9 @@ pub async fn shortlog(
             }
         } else if use_all {
             for r in repo.references()?.flatten() {
+                if r.name().is_ok_and(crate::utils::is_internal_ref) {
+                    continue;
+                }
                 if let Some(oid) = r.target() {
                     let _ = revwalk.push(oid);
                 }

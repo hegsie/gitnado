@@ -18,6 +18,7 @@ import {
   openRepositoryInFileManager,
   openRepositoryInTerminal,
 } from './services/open-location.service.ts';
+import { createCheckpoint } from './services/git/checkpoints.ts';
 
 /**
  * What the command table needs from app-shell.
@@ -559,7 +560,6 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => { dialogs.open('reflog'); }),
     },
     {
-<<<<<<< HEAD
       id: 'undo-last-action',
       label: 'Undo Last Git Action',
       category: 'action',
@@ -775,6 +775,33 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => { dialogs.open('agentSessions'); }),
     },
     {
+      id: 'checkpoints',
+      label: 'Checkpoints (working tree snapshots)',
+      category: 'action',
+      icon: 'refresh',
+      action: shell.requiresRepository(() => { dialogs.open('checkpoints'); }),
+    },
+    {
+      id: 'create-checkpoint',
+      label: 'Create checkpoint',
+      category: 'action',
+      icon: 'refresh',
+      action: shell.requiresRepository(() => {
+        const repoPath = shell.activeRepository!.repository.path;
+        void createCheckpoint(repoPath).then((result) => {
+          if (result.success && result.data) {
+            showToast(`Checkpoint "${result.data.label}" created`, 'success');
+          } else {
+            showToast(
+              `Failed to create checkpoint: ${result.error?.message ?? 'Unknown error'}`,
+              'error',
+            );
+          }
+        });
+      }),
+    },
+    {
+>>>>>>> origin/feat/608-agent-hooks-bridge
       id: 'describe',
       label: 'Describe commit (git describe)',
       category: 'action',
