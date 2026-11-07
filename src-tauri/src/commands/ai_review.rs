@@ -599,7 +599,13 @@ pub async fn review_branch_diff(
     );
 
     match service
-        .generate_text(BRANCH_REVIEW_PROMPT, &user_prompt, Some(1500))
+        .generate_text_for_feature(
+            "review_branch_diff",
+            crate::services::ai::AiTaskTier::CodeReview,
+            BRANCH_REVIEW_PROMPT,
+            &user_prompt,
+            Some(1500),
+        )
         .await
     {
         Ok(response) => parse_branch_review_response(&response, local_findings, files_reviewed),
@@ -898,7 +904,13 @@ pub async fn suggest_comment_resolution_patch(
     );
 
     let ai_response = service
-        .generate_text(COMMENT_RESOLUTION_PROMPT, &user_prompt, Some(1500))
+        .generate_text_for_feature(
+            "suggest_comment_resolution_patch",
+            crate::services::ai::AiTaskTier::CodeReview,
+            COMMENT_RESOLUTION_PROMPT,
+            &user_prompt,
+            Some(1500),
+        )
         .await?;
 
     let repo_path_buf = repo_root.to_path_buf();
@@ -1157,7 +1169,13 @@ pub async fn explain_ci_failure(
     }
 
     let response = service
-        .generate_text(CI_FAILURE_EXPLAIN_PROMPT, &user_prompt, Some(1000))
+        .generate_text_for_feature(
+            "explain_ci_failure",
+            crate::services::ai::AiTaskTier::CodeReview,
+            CI_FAILURE_EXPLAIN_PROMPT,
+            &user_prompt,
+            Some(1000),
+        )
         .await?;
 
     parse_ci_failure_response(&response, trimmed_name, heuristic_step, heuristic_files)

@@ -350,8 +350,11 @@ async fn check_and_install_update(app: &tauri::AppHandle) -> Result<()> {
 
             tracing::info!("Update installed successfully, restarting...");
 
-            // The app will restart automatically after installation
-            Ok(())
+            // On Windows, tauri-plugin-updater spawns the installer and exits the
+            // process inside `download_and_install`. On macOS and Linux,
+            // `download_and_install` swaps the `.app` bundle / AppImage in place and
+            // returns `Ok(())` without relaunching the running process.
+            app.restart();
         }
         Ok(None) => {
             tracing::debug!("check_and_install_update: No update available");

@@ -424,6 +424,8 @@ export abstract class GnProviderDialogBase<
   @state() protected aiCiLoading = false;
   @state() protected aiCiError: string | null = null;
   protected aiReviewGeneration = 0;
+  protected aiPatchGeneration = 0;
+  protected aiCiExplainGeneration = 0;
 
   protected unsubscribeStore?: () => void;
 
@@ -658,6 +660,8 @@ export abstract class GnProviderDialogBase<
     this.commentLoadGeneration++;
     this.commentPostGeneration++;
     this.aiReviewGeneration++;
+    this.aiPatchGeneration++;
+    this.aiCiExplainGeneration++;
     this.expandedPrNumber = null;
     this.prComments = {};
     this.loadingCommentsForPr = null;
@@ -1227,7 +1231,7 @@ export abstract class GnProviderDialogBase<
     if (!this.repositoryPath || this.aiPatchLoadingForPr === prNumber) return;
 
     const targetRepoPath = this.repositoryPath;
-    const gen = ++this.aiReviewGeneration;
+    const gen = ++this.aiPatchGeneration;
     this.aiPatchLoadingForPr = prNumber;
     this.aiPatchLoadingForCommentId = comment.id;
     const nextErrors = { ...this.aiReviewErrorByPr };
@@ -1241,7 +1245,7 @@ export abstract class GnProviderDialogBase<
         comment.line ?? null,
         comment.body,
       );
-      if (this.repositoryPath !== targetRepoPath || this.aiReviewGeneration !== gen) {
+      if (this.repositoryPath !== targetRepoPath || this.aiPatchGeneration !== gen) {
         return;
       }
 
@@ -1262,7 +1266,7 @@ export abstract class GnProviderDialogBase<
         }
       }
     } catch (err) {
-      if (this.repositoryPath !== targetRepoPath || this.aiReviewGeneration !== gen) {
+      if (this.repositoryPath !== targetRepoPath || this.aiPatchGeneration !== gen) {
         return;
       }
       const message =
@@ -1275,7 +1279,7 @@ export abstract class GnProviderDialogBase<
       };
       showToast(message, 'error');
     } finally {
-      if (this.aiReviewGeneration === gen && this.aiPatchLoadingForPr === prNumber) {
+      if (this.aiPatchGeneration === gen && this.aiPatchLoadingForPr === prNumber) {
         this.aiPatchLoadingForPr = null;
         this.aiPatchLoadingForCommentId = null;
       }
@@ -1340,7 +1344,7 @@ export abstract class GnProviderDialogBase<
     e?: Event,
   ): Promise<void> {
     e?.stopPropagation();
-    const gen = ++this.aiReviewGeneration;
+    const gen = ++this.aiCiExplainGeneration;
     this.activeCiCheckName = checkName;
     this.aiCiLoading = true;
     this.aiCiExplanation = null;
@@ -1352,7 +1356,7 @@ export abstract class GnProviderDialogBase<
         summary,
         this.repositoryPath || null,
       );
-      if (this.aiReviewGeneration !== gen) return;
+      if (this.aiCiExplainGeneration !== gen) return;
 
       if (result.success && result.data) {
         this.aiCiExplanation = result.data;
@@ -1364,13 +1368,13 @@ export abstract class GnProviderDialogBase<
         }
       }
     } catch (err) {
-      if (this.aiReviewGeneration !== gen) return;
+      if (this.aiCiExplainGeneration !== gen) return;
       const message =
         err instanceof Error ? err.message : 'Failed to explain CI failure';
       this.aiCiError = message;
       showToast(message, 'error');
     } finally {
-      if (this.aiReviewGeneration === gen) {
+      if (this.aiCiExplainGeneration === gen) {
         this.aiCiLoading = false;
       }
     }

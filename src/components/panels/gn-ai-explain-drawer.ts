@@ -237,6 +237,7 @@ export class GnAiExplainDrawer extends LitElement {
   private unlistenStream: UnlistenFn | null = null;
   private requestGeneration = 0;
   private lastLoadedKey = '';
+  private attemptedKey = '';
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -285,13 +286,16 @@ export class GnAiExplainDrawer extends LitElement {
       }
     }
 
+    if (changed.has('open') && this.open && this.error) {
+      this.attemptedKey = '';
+      this.error = null;
+    }
+
     if (
       this.open &&
       this.repositoryPath &&
       this.targetId &&
-      key !== this.lastLoadedKey &&
-      !this.loading &&
-      !this.error
+      key !== this.attemptedKey
     ) {
       void this.loadExplanation();
     }
@@ -302,6 +306,7 @@ export class GnAiExplainDrawer extends LitElement {
     const key = `${this.repositoryPath}|${this.targetType}|${this.targetId}|${this.baseRef}|${this.filePath}`;
     if (!force && key === this.lastLoadedKey && this.explanation) return;
 
+    this.attemptedKey = key;
     const gen = ++this.requestGeneration;
     this.loading = true;
     this.error = null;

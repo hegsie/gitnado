@@ -594,11 +594,16 @@ pub async fn suggest_hunk_splits(
     let truncated_prompt = truncate_at_char_boundary(&prompt, MAX_DIFF_BYTES);
 
     let service = state.read().await;
-    guard_ai_request(&service)?;
 
-    if service.has_available_provider().await {
+    if guard_ai_request(&service).is_ok() && service.has_available_provider().await {
         if let Ok(response) = service
-            .generate_text(HUNK_SPLIT_SYSTEM_PROMPT, truncated_prompt, Some(1500))
+            .generate_text_for_feature(
+                "suggest_hunk_splits",
+                crate::services::ai::AiTaskTier::ReasoningMerge,
+                HUNK_SPLIT_SYSTEM_PROMPT,
+                truncated_prompt,
+                Some(1500),
+            )
             .await
         {
             if let Some(groups) = parse_llm_hunk_groups(&response, &extracted) {
@@ -701,6 +706,22 @@ fn apply_patch_to_index(repo_path: &str, patch: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Extract `(new_start, new_lines)` from a unified diff hunk header (`@@ -a,b +c,d @@`).
+///
+/// When an earlier hunk in the same file is staged into the index, the index (`-a,b`)
+/// line numbers of later unstaged hunks shift, whereas the working-tree (`+c,d`) line
+/// numbers remain unchanged.
+fn parse_new_range_from_header(header: &str) -> Option<(u32, u32)> {
+    let body = header.strip_prefix("@@")?.split("@@").next()?.trim();
+    let plus_part = body.split_whitespace().find(|tok| tok.starts_with('+'))?;
+    let nums = plus_part.strip_prefix('+')?;
+    if let Some((start_str, count_str)) = nums.split_once(',') {
+        Some((start_str.parse().ok()?, count_str.parse().ok()?))
+    } else {
+        Some((nums.parse().ok()?, 1))
+    }
+}
+
 /// Match a requested `HunkRef` against the extracted hunks of `file_path`.
 fn find_matching_hunk<'a>(
     candidates: &'a [&'a ExtractedHunk],
@@ -716,18 +737,32 @@ fn find_matching_hunk<'a>(
         return Some(exact);
     }
 
-    // 2. Match by header string (handles shifted hunk indices after an earlier
-    //    group from the same file was already staged).
     if !target.header.is_empty() {
+        // 2. Match by exact header string (handles shifted hunk indices when an earlier
+        //    group had net-zero line delta).
         if let Some(by_header) = candidates.iter().copied().find(|h| {
             !already_picked.contains(&h.hunk_index)
                 && (h.header == target.header || h.header.starts_with(target.header.trim()))
         }) {
             return Some(by_header);
         }
+
+        // 3. Match by working-tree (`+new_start,new_lines`) range, which is invariant
+        //    when earlier hunks in the same file are staged into the index and shift `-old_start`.
+        if let Some((new_start, new_lines)) = parse_new_range_from_header(&target.header) {
+            if let Some(by_new_range) = candidates.iter().copied().find(|h| {
+                !already_picked.contains(&h.hunk_index)
+                    && h.new_start == new_start
+                    && h.new_lines == new_lines
+            }) {
+                return Some(by_new_range);
+            }
+        }
+
+        return None;
     }
 
-    // 3. Fallback to index match regardless of header.
+    // 4. Only when no header was provided, match by index.
     candidates
         .iter()
         .copied()
@@ -1171,9 +1206,8 @@ pub async fn suggest_fixup_targets(
     }
 
     let service = state.read().await;
-    guard_ai_request(&service)?;
 
-    if service.has_available_provider().await {
+    if guard_ai_request(&service).is_ok() && service.has_available_provider().await {
         let mut user_prompt = String::from("Current uncommitted changes:\n");
         user_prompt.push_str(truncate_at_char_boundary(&diff_summary, MAX_DIFF_BYTES / 2));
         user_prompt.push_str("\n\nCandidate recent commits:\n");
@@ -1190,7 +1224,13 @@ pub async fn suggest_fixup_targets(
         }
 
         if let Ok(response) = service
-            .generate_text(FIXUP_TARGET_SYSTEM_PROMPT, &user_prompt, Some(800))
+            .generate_text_for_feature(
+                "suggest_fixup_targets",
+                crate::services::ai::AiTaskTier::ReasoningMerge,
+                FIXUP_TARGET_SYSTEM_PROMPT,
+                &user_prompt,
+                Some(800),
+            )
             .await
         {
             apply_llm_fixup_enrichment(&mut candidates, &response);

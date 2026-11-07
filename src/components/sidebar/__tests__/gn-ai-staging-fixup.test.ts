@@ -201,48 +201,24 @@ describe('gn-ai-staging-modal & ai-staging.service (#619, #620)', () => {
     expect(commitCreatedDetail).to.not.be.null;
   });
 
-  it('enforces network policy gating when offlineMode is enabled with a cloud AI provider', async () => {
+  it('allows deterministic local hunk splits and fixup targets when offlineMode is enabled', async () => {
     settingsStore.setState({
       offlineMode: true,
       remoteAllowlist: [],
     });
 
-    mockInvoke = async (command: string) => {
-      if (command === 'get_active_ai_provider') return 'open_ai';
-      if (command === 'get_ai_providers') {
-        return [
-          {
-            providerType: 'open_ai',
-            name: 'OpenAI',
-            available: true,
-            probed: false,
-            requiresApiKey: true,
-            hasApiKey: true,
-            endpoint: 'https://api.openai.com/v1',
-            models: [],
-            selectedModel: null,
-          },
-        ];
-      }
-      return [];
-    };
-
     const splitResult = await suggestHunkSplits(REPO_PATH);
-    expect(splitResult.success).to.be.false;
-    expect(splitResult.error?.code).to.equal('BLOCKED');
+    expect(splitResult.success).to.be.true;
 
     const fixupResult = await suggestFixupTargets(REPO_PATH);
-    expect(fixupResult.success).to.be.false;
-    expect(fixupResult.error?.code).to.equal('BLOCKED');
+    expect(fixupResult.success).to.be.true;
 
-    // Neither backend command may be invoked when blocked by offline mode.
     expect(
-      invokeHistory.some(
-        (c) =>
-          c.command === 'suggest_hunk_splits' ||
-          c.command === 'suggest_fixup_targets',
-      ),
-    ).to.be.false;
+      invokeHistory.some((c) => c.command === 'suggest_hunk_splits'),
+    ).to.be.true;
+    expect(
+      invokeHistory.some((c) => c.command === 'suggest_fixup_targets'),
+    ).to.be.true;
   });
 
   it('opens gn-ai-staging-modal from gn-commit-panel triggers and populates message on staging-changed', async () => {

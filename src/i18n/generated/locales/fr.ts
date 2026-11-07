@@ -267,5 +267,8 @@
 'sf91953bcd738924a': str`Clé d'API ${0}`,
 'sfc9ea230eb3d1d8d': `Vif`,
 'sfcd8cc883a24a8f0': `Demander confirmation avant d'abandonner des modifications. La suppression de fichiers non suivis demande toujours confirmation.`,
+'s13352929d4858989': `Installer et redémarrer`,
+'sb5137a7885462e4e': `Installation...`,
+'sdc0738463d5a0472': `Impossible d'installer la mise à jour. Réessayez plus tard.`,
     };
   

@@ -234,6 +234,7 @@ export class GnAiStagingModal extends LitElement {
 
   @property({ type: Boolean, reflect: true }) open = false;
   @property({ type: String }) repositoryPath = '';
+  @property({ type: Number }) stagedCount = 0;
   @property({ type: String }) mode: AiStagingMode = 'hunk-split';
 
   @state() private hunkGroups: AiHunkSplitGroup[] = [];
@@ -331,6 +332,7 @@ export class GnAiStagingModal extends LitElement {
           }),
         );
         window.dispatchEvent(new CustomEvent('status-refresh'));
+        await this.loadCurrentMode();
       } else {
         const message = result.error?.message ?? 'Failed to stage hunk group';
         this.error = message;
@@ -357,6 +359,19 @@ export class GnAiStagingModal extends LitElement {
     const fixupMessage = `fixup! ${target.commitSummary}`;
 
     try {
+      if (this.stagedCount === 0 && target.overlappingFiles.length > 0) {
+        const stageResult = await gitService.stageFiles(this.repositoryPath, {
+          paths: target.overlappingFiles,
+        });
+        if (!stageResult.success) {
+          const message =
+            stageResult.error?.message ?? 'Failed to stage overlapping files for fixup';
+          this.error = message;
+          showToast(message, 'error');
+          return;
+        }
+      }
+
       const result = await gitService.createCommit(this.repositoryPath, {
         message: fixupMessage,
         amend: false,
@@ -490,7 +505,9 @@ export class GnAiStagingModal extends LitElement {
                 >
                   ${this.applyingIndex === idx
                     ? 'Creating...'
-                    : 'Create fixup! Commit'}
+                    : this.stagedCount === 0 && target.overlappingFiles.length > 0
+                      ? 'Stage & Create fixup! Commit'
+                      : 'Create fixup! Commit'}
                 </button>
               </div>
               <div class="badges">

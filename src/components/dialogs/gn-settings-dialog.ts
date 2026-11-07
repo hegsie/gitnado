@@ -18,7 +18,11 @@ import {
 import type { DiffWhitespaceMode } from '../../types/api.types.ts';
 import { supportedLocales, resolveLocale, type Locale } from '../../i18n/index.ts';
 import { sharedStyles } from '../../styles/shared-styles.ts';
-import { getAppVersion, checkForUpdate } from '../../services/update.service.ts';
+import {
+  getAppVersion,
+  checkForUpdate,
+  downloadAndInstallUpdate,
+} from '../../services/update.service.ts';
 import { openCloneDestinationDialog, openDialog, showConfirm } from '../../services/dialog.service.ts';
 import * as aiService from '../../services/ai.service.ts';
 import * as localAiService from '../../services/local-ai.service.ts';
@@ -446,6 +450,7 @@ export class GnSettingsDialog extends LitElement {
   @state() private updateError: string | null = null;
   @state() private resetting = false;
   @state() private latestVersion = '';
+  @state() private installingUpdate = false;
   @state() private fontSize: FontSize = 'medium';
   @state() private density: Density = 'comfortable';
   @state() private graphColorScheme: GraphColorScheme = 'default';
@@ -721,6 +726,7 @@ export class GnSettingsDialog extends LitElement {
       if (result.data.updateAvailable) {
         this.updateStatus = 'available';
         this.latestVersion = result.data.latestVersion ?? '';
+        await this.handleInstallUpdate();
       } else {
         this.updateStatus = 'up-to-date';
       }
@@ -732,6 +738,22 @@ export class GnSettingsDialog extends LitElement {
     this.updateStatus = 'failed';
     this.updateError =
       result.error?.message ?? msg('Could not check for updates. Try again later.');
+  }
+
+  private async handleInstallUpdate(): Promise<void> {
+    if (this.installingUpdate) return;
+    this.installingUpdate = true;
+    this.updateError = null;
+    try {
+      const installResult = await downloadAndInstallUpdate();
+      if (!installResult.success) {
+        this.updateStatus = 'failed';
+        this.updateError =
+          installResult.error?.message ?? msg('Failed to install update. Try again later.');
+      }
+    } finally {
+      this.installingUpdate = false;
+    }
   }
 
   private loadSettings(): void {
@@ -2658,10 +2680,18 @@ export class GnSettingsDialog extends LitElement {
             </div>
             <button
               class="check-update-btn"
-              @click=${this.handleCheckForUpdate}
-              ?disabled=${this.updateStatus === 'checking'}
+              @click=${this.updateStatus === 'available'
+                ? this.handleInstallUpdate
+                : this.handleCheckForUpdate}
+              ?disabled=${this.updateStatus === 'checking' || this.installingUpdate}
             >
-              ${this.updateStatus === 'checking' ? msg('Checking...') : msg('Check for Updates')}
+              ${this.updateStatus === 'checking'
+                ? msg('Checking...')
+                : this.installingUpdate
+                  ? msg('Installing...')
+                  : this.updateStatus === 'available'
+                    ? msg('Install & Restart')
+                    : msg('Check for Updates')}
             </button>
           </div>
         </div>

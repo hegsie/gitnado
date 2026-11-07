@@ -808,6 +808,18 @@
   <source>Comma-separated patterns naming branches agents work on; * matches anything</source>
   <target>Motifs séparés par des virgules désignant les branches où travaillent les agents ; * correspond à tout</target>
 </trans-unit>
+<trans-unit id="s13352929d4858989">
+  <source>Install &amp; Restart</source>
+  <target>Installer et redémarrer</target>
+</trans-unit>
+<trans-unit id="sb5137a7885462e4e">
+  <source>Installing...</source>
+  <target>Installation...</target>
+</trans-unit>
+<trans-unit id="sdc0738463d5a0472">
+  <source>Failed to install update. Try again later.</source>
+  <target>Impossible d'installer la mise à jour. Réessayez plus tard.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -160,12 +160,20 @@ pub async fn explain_git_target(
     let service = state.read().await;
     guard_ai_request(&service)?;
 
-    let (_provider, provider_type) = service.resolve_provider().await?;
+    let (_provider, provider_type, _model) = service
+        .resolve_provider_for_tier(crate::services::ai::AiTaskTier::CodeReview)
+        .await?;
     let provider_used = provider_type.display_name().to_string();
-    let is_local = is_local_provider(provider_type);
+    let is_local = service.is_local_provider(provider_type);
 
     let response = service
-        .generate_text(EXPLAIN_SYSTEM_PROMPT, &prompt_context, Some(1200))
+        .generate_text_for_feature(
+            "explain_git_target",
+            crate::services::ai::AiTaskTier::CodeReview,
+            EXPLAIN_SYSTEM_PROMPT,
+            &prompt_context,
+            Some(1200),
+        )
         .await?;
 
     Ok(parse_ai_explanation(
@@ -239,7 +247,13 @@ pub async fn suggest_branch_name(
     guard_ai_request(&service)?;
 
     let response = service
-        .generate_text(BRANCH_NAME_SYSTEM_PROMPT, &user_prompt, Some(400))
+        .generate_text_for_feature(
+            "suggest_branch_name",
+            crate::services::ai::AiTaskTier::FastText,
+            BRANCH_NAME_SYSTEM_PROMPT,
+            &user_prompt,
+            Some(400),
+        )
         .await?;
 
     Ok(parse_branch_name_suggestion(&response))
@@ -267,7 +281,13 @@ pub async fn suggest_stash_message(
     guard_ai_request(&service)?;
 
     let response = service
-        .generate_text(STASH_MESSAGE_SYSTEM_PROMPT, &user_prompt, Some(150))
+        .generate_text_for_feature(
+            "suggest_stash_message",
+            crate::services::ai::AiTaskTier::FastText,
+            STASH_MESSAGE_SYSTEM_PROMPT,
+            &user_prompt,
+            Some(150),
+        )
         .await?;
 
     Ok(clean_stash_message(&response, branch_name.as_deref()))

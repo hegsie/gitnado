@@ -2318,6 +2318,7 @@ export class GnCommitPanel extends LitElement {
             <gn-ai-staging-modal
               .open=${this.showAiStagingModal}
               .repositoryPath=${this.repositoryPath}
+              .stagedCount=${this.stagedCount}
               .mode=${this.aiStagingMode}
               @close=${() => {
                 this.showAiStagingModal = false;
