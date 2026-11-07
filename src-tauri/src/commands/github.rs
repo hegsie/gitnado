@@ -2873,7 +2873,11 @@ fn extract_github_noreply_username(email: &str) -> Option<String> {
         Some((_id, user)) => user,
         None => local,
     };
-    if !username.is_empty() && username.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !username.is_empty()
+        && username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
         Some(username.to_string())
     } else {
         None

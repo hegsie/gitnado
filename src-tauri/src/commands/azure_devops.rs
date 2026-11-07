@@ -1835,9 +1835,8 @@ struct ApiAdoIdentityEntry {
 }
 
 fn parse_ado_identities_status(body: &str) -> Result<ProviderUserStatus> {
-    let data: ApiAdoIdentitiesResponse = serde_json::from_str(body).map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to parse identities: {}", e))
-    })?;
+    let data: ApiAdoIdentitiesResponse = serde_json::from_str(body)
+        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to parse identities: {}", e)))?;
 
     if data.value.is_empty() {
         return Ok(ProviderUserStatus {
@@ -1878,10 +1877,18 @@ pub async fn check_ado_user_exists(
     let client = api_client()?;
 
     let mut queries = Vec::new();
-    if let Some(email) = author_email.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(email) = author_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         queries.push(email.to_string());
     }
-    if let Some(name) = author_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(name) = author_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if !queries.iter().any(|q| q.eq_ignore_ascii_case(name)) {
             queries.push(name.to_string());
         }
