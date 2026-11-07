@@ -572,6 +572,19 @@ export interface CommitSplitSuggestion {
 }
 
 /**
+ * Suggest how to regroup `base..HEAD` (or the uncommitted changes when `base`
+ * is null) into a series of commits, for the Commit Composer.
+ */
+export async function suggestRecompose(
+  repoPath: string,
+  base: string | null,
+): Promise<CommandResult<CommitSplitSuggestion>> {
+  const blocked = await checkAiNetworkAllowed<CommitSplitSuggestion>();
+  if (blocked) return blocked;
+  return invokeCommand<CommitSplitSuggestion>('suggest_recompose', { repoPath, base });
+}
+
+/**
  * Analyze staged changes for secrets, complexity, and quality issues
  */
 export async function analyzeStagedChanges(

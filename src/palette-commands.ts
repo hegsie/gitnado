@@ -61,6 +61,8 @@ export interface PaletteCommandHost {
   openBranchCleanup(): Promise<void>;
   /** Check out the branch one level up or down the current branch's stack. */
   navigateStack(direction: 'up' | 'down'): Promise<void>;
+  /** Put the branch back to before the last Commit Composer run ("Revert last recompose"). */
+  undoLastRecompose(): Promise<void>;
   openSearchDialog(mode: SearchDialogMode): void;
   openIntegrationStandalone(type: IntegrationType): void;
   refreshConflictDialogRepo(pinnedPath: string | null): void;
@@ -263,6 +265,20 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
         const dialog = shell.shadowRoot?.querySelector('gn-changelog-dialog');
         if (dialog) (dialog as import('./components/dialogs/gn-changelog-dialog.ts').GnChangelogDialog).open();
       }),
+    },
+    {
+      id: 'commit-composer',
+      label: 'Recompose commits (Commit Composer)',
+      category: 'action',
+      icon: 'git-commit',
+      action: shell.requiresRepository(() => { dialogs.open('commitComposer'); }),
+    },
+    {
+      id: 'undo-recompose',
+      label: 'Revert last recompose',
+      category: 'action',
+      icon: 'git-commit',
+      action: shell.requiresRepository(() => { void shell.undoLastRecompose(); }),
     },
     {
       id: 'smart-undo',
@@ -817,7 +833,6 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       }),
     },
     {
->>>>>>> origin/feat/608-agent-hooks-bridge
       id: 'describe',
       label: 'Describe commit (git describe)',
       category: 'action',

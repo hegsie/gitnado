@@ -229,7 +229,7 @@ Gitnado's advantage stays the same: everything above runs **locally, with no acc
 
 #### 4.4 AI History Editing
 
-- **Commit Composer / Recompose:** select a range of commits (or the working tree) and let AI propose a new, logically grouped commit series with messages. Show a before/after preview, apply it through the existing interactive-rebase engine, and keep a one-click undo.
+- ✅ **Commit Composer / Recompose:** select a range of commits (or the working tree) and let AI propose a new, logically grouped commit series with messages. Show a before/after preview, apply it through the existing interactive-rebase engine, and keep a one-click undo.
 - **Hunk-level split suggestions:** extend AI-Assisted Staging from file groups to hunk and line groups.
 - **AI fixup targeting:** for each staged hunk, suggest the commit it most likely belongs to (`git absorb`-style, AI-ranked) and create `fixup!` commits automatically.
 - **Explain anything:** "Explain this commit / branch / PR / file history" in plain language, with streaming output, from the graph, blame and PR views.

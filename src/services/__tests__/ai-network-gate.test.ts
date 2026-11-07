@@ -55,6 +55,7 @@ const PROVIDER_COMMANDS = new Set([
   'analyze_staged_changes',
   'generate_pr_description',
   'suggest_commit_splits',
+  'suggest_recompose',
   'explain_conflict',
   'find_reflog_entry',
   'test_ai_provider',

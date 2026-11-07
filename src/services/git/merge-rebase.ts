@@ -363,3 +363,71 @@ export async function autoDetectMergeTool(): Promise<CommandResult<MergeToolInfo
   return invokeCommand<MergeToolInfo | null>("auto_detect_merge_tool", {});
 }
 
+
+// ── Commit Composer / Recompose (roadmap 4.4, #618) ────────────────────────
+
+export interface RecomposeFile {
+  path: string;
+  status: "added" | "modified" | "deleted";
+}
+
+export interface RecomposeCommit {
+  oid: string;
+  summary: string;
+  files: string[];
+}
+
+/** What a recompose would replace: commits base..HEAD, or uncommitted changes. */
+export interface RecomposeSource {
+  mode: "range" | "worktree";
+  branch: string;
+  headOid: string;
+  baseOid: string;
+  commits: RecomposeCommit[];
+  files: RecomposeFile[];
+}
+
+/** One commit of the new series. */
+export interface RecomposeGroup {
+  message: string;
+  files: string[];
+}
+
+export interface RecomposeRecord {
+  branch: string;
+  before: string;
+  after: string;
+  mode: "range" | "worktree";
+  createdAt: number;
+}
+
+/** The commits `base..HEAD` (or, with no base, the uncommitted changes). */
+export async function getRecomposeSource(
+  path: string,
+  base: string | null,
+): Promise<CommandResult<RecomposeSource>> {
+  return invokeCommand<RecomposeSource>("get_recompose_source", { path, base });
+}
+
+/** Rewrite `base..HEAD` (or the uncommitted changes) as `groups`. */
+export async function applyRecompose(
+  path: string,
+  base: string | null,
+  groups: RecomposeGroup[],
+): Promise<CommandResult<RecomposeRecord>> {
+  return invokeCommand<RecomposeRecord>("apply_recompose", { path, base, groups });
+}
+
+/** The last recompose, while it can still be undone (null otherwise). */
+export async function getLastRecompose(
+  path: string,
+): Promise<CommandResult<RecomposeRecord | null>> {
+  return invokeCommand<RecomposeRecord | null>("get_last_recompose", { path });
+}
+
+/** Move the branch back to before the last recompose. */
+export async function undoRecompose(
+  path: string,
+): Promise<CommandResult<RecomposeRecord>> {
+  return invokeCommand<RecomposeRecord>("undo_recompose", { path });
+}
