@@ -72,6 +72,13 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
         ));
     }
 
+    // Cannot drop a merge commit directly
+    if target_commit.parent_count() > 1 {
+        return Err(GitnadoError::OperationFailed(
+            "Cannot drop a merge commit".to_string(),
+        ));
+    }
+
     // Get the current HEAD
     let head_commit = repo.head()?.peel_to_commit()?;
 
@@ -136,6 +143,13 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
     let signature = repo.signature()?;
 
     for commit in &commits_after_drop {
+        if commit.parent_count() > 1 {
+            return Err(GitnadoError::OperationFailed(format!(
+                "Cannot drop commit: descendant commit {} is a merge commit",
+                commit.id()
+            )));
+        }
+
         let current_base = repo.find_commit(current_base_oid)?;
 
         let new_tree = {
@@ -149,9 +163,6 @@ pub async fn drop_commit(path: String, commit_oid: String) -> Result<DropCommitR
 
             if merge_result.has_conflicts() {
                 // Conflicts occurred while replaying
-                let tree_oid = merge_result.write_tree_to(&repo)?;
-                let _tree = repo.find_tree(tree_oid)?;
-
                 return Ok(DropCommitResult {
                     success: false,
                     new_tip: current_base_oid.to_string(),

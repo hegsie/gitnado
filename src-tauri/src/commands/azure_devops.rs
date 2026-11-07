@@ -319,26 +319,6 @@ pub async fn check_ado_connection(
         data.display_name
     );
 
-    // Store git credentials in keyring for push/pull operations
-    // Username must be non-empty for macOS Keychain - use 'pat' as a placeholder
-    // Store for both dev.azure.com and {org}.visualstudio.com URL formats
-    use crate::services::credentials_service;
-    if let Err(e) = credentials_service::store_credentials("https://dev.azure.com", "pat", &token) {
-        error!("Failed to store git credentials for dev.azure.com: {}", e);
-    } else {
-        info!("Stored git credentials for dev.azure.com");
-    }
-
-    let visualstudio_url = format!("https://{}.visualstudio.com", organization);
-    if let Err(e) = credentials_service::store_credentials(&visualstudio_url, "pat", &token) {
-        error!(
-            "Failed to store git credentials for {}: {}",
-            visualstudio_url, e
-        );
-    } else {
-        info!("Stored git credentials for {}", visualstudio_url);
-    }
-
     Ok(AdoConnectionStatus {
         connected: true,
         user: Some(AdoUser {

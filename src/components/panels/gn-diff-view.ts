@@ -1233,10 +1233,13 @@ export class GnDiffView extends CodeRenderMixin(LitElement) {
 
   private async checkDiffToolAvailability(): Promise<void> {
     if (!this.repositoryPath) return;
+    const repoPath = this.repositoryPath;
     try {
-      const result = await gitService.getDiffToolConfig(this.repositoryPath);
+      const result = await gitService.getDiffToolConfig(repoPath);
+      if (this.repositoryPath !== repoPath) return;
       this.hasDiffTool = result.success && !!result.data?.tool;
     } catch {
+      if (this.repositoryPath !== repoPath) return;
       this.hasDiffTool = false;
     }
   }

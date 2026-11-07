@@ -109,7 +109,7 @@ pub async fn shortlog(
                 if r.name().is_ok_and(crate::utils::is_internal_ref) {
                     continue;
                 }
-                if let Some(oid) = r.target() {
+                if let Some(oid) = r.peel_to_commit().ok().map(|c| c.id()) {
                     let _ = revwalk.push(oid);
                 }
             }

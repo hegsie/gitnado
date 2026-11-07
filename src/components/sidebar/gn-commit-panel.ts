@@ -965,7 +965,12 @@ export class GnCommitPanel extends LitElement {
   // Reload the author identity when the repo refreshes (e.g. after applying a
   // profile that rewrote user.name/user.email in the repo's git config), so the
   // {{author}} template placeholder reflects the new identity.
-  private boundHandleRepositoryRefresh = () => this.loadAuthorName();
+  private boundHandleRepositoryRefresh = (e: Event): void => {
+    const detail = (e as CustomEvent<{ repoPath?: string; source?: string }>).detail;
+    if (detail?.source === 'sidebar-panel') return;
+    if (detail?.repoPath && detail.repoPath !== this.repositoryPath) return;
+    void this.loadAuthorName();
+  };
   // The Git Configuration dialog — which this panel's "Configure identity" hint
   // opens — announces a saved identity. Reload it straight away so the sign-off
   // control the user came to fix stops saying there is no identity, instead of
@@ -978,17 +983,6 @@ export class GnCommitPanel extends LitElement {
   async connectedCallback(): Promise<void> {
     super.connectedCallback();
     this.loadCommitHistory();
-    await this.loadTemplates();
-    await this.loadConventionalTypes();
-    await this.loadGitTemplate();
-    await this.loadCommitRules();
-    await this.checkAiAvailability();
-    await this.loadAuthorName();
-    // "Always sign off" seeds a fresh draft; it never overrides a choice the
-    // user made on the draft in front of them, and it cannot arm a sign-off
-    // this repository has no identity to write (the identity load above has
-    // already settled by now).
-    this.signOff = settingsStore.getState().alwaysSignOff && this.hasIdentity;
     this._onDocumentClick = this._onDocumentClick.bind(this);
     document.addEventListener('click', this._onDocumentClick);
 
@@ -1014,20 +1008,39 @@ export class GnCommitPanel extends LitElement {
     // Also listen for Tauri backend event when a model download completes and auto-loads
     listen<{ modelId: string; loaded?: boolean }>('model-download-complete', (event) => {
       if (event.payload.loaded) {
-        this.checkAiAvailability();
+        void this.checkAiAvailability();
       }
     })
-      .then(unlisten => { this.modelCompleteUnlisten = unlisten; })
+      .then(unlisten => {
+        if (!this.isConnected) {
+          safeUnlisten(unlisten);
+        } else {
+          this.modelCompleteUnlisten = unlisten;
+        }
+      })
       .catch(() => {
         // No Tauri event bridge (unit tests, plain browser): the periodic
         // availability poll below still notices a model that loads later.
       });
 
-    // If AI isn't available yet, poll periodically to catch backend auto-loading
-    // a model on startup (which can take 10-30 seconds)
-    if (!this.aiAvailable) {
-      this.startAiAvailabilityPolling();
-    }
+    void this.checkAiAvailability().then(() => {
+      // If AI isn't available yet, poll periodically to catch backend auto-loading
+      // a model on startup (which can take 10-30 seconds)
+      if (!this.aiAvailable && this.isConnected) {
+        this.startAiAvailabilityPolling();
+      }
+    });
+
+    await this.loadTemplates();
+    await this.loadConventionalTypes();
+    await this.loadGitTemplate();
+    await this.loadCommitRules();
+    await this.loadAuthorName();
+    // "Always sign off" seeds a fresh draft; it never overrides a choice the
+    // user made on the draft in front of them, and it cannot arm a sign-off
+    // this repository has no identity to write (the identity load above has
+    // already settled by now).
+    this.signOff = settingsStore.getState().alwaysSignOff && this.hasIdentity;
   }
 
   disconnectedCallback(): void {
@@ -1177,14 +1190,19 @@ export class GnCommitPanel extends LitElement {
   }
 
   private async checkAiAvailability(): Promise<void> {
-    this.aiAvailable = await aiService.isAiAvailable();
-    // A selected provider is never substituted, so "unavailable" usually means
-    // that one provider is unreachable rather than nothing being configured.
-    // Carry the reason so the tooltip can say which provider needs attention.
-    this.aiUnavailableReason = this.aiAvailable
-      ? ''
-      : ((await aiService.getAiUnavailableReason())?.reason ?? '');
-    console.log('[gn-commit-panel] checkAiAvailability:', this.aiAvailable);
+    try {
+      this.aiAvailable = await aiService.isAiAvailable();
+      // A selected provider is never substituted, so "unavailable" usually means
+      // that one provider is unreachable rather than nothing being configured.
+      // Carry the reason so the tooltip can say which provider needs attention.
+      this.aiUnavailableReason = this.aiAvailable
+        ? ''
+        : ((await aiService.getAiUnavailableReason())?.reason ?? '');
+      console.log('[gn-commit-panel] checkAiAvailability:', this.aiAvailable);
+    } catch {
+      this.aiAvailable = false;
+      this.aiUnavailableReason = '';
+    }
   }
 
   private loadCommitHistory(): void {
@@ -1254,7 +1272,9 @@ export class GnCommitPanel extends LitElement {
 
   private async loadGitTemplate(): Promise<void> {
     if (!this.repositoryPath) return;
-    const result = await gitService.getCommitTemplate(this.repositoryPath);
+    const repoPath = this.repositoryPath;
+    const result = await gitService.getCommitTemplate(repoPath);
+    if (this.repositoryPath !== repoPath) return;
     if (result.success && result.data) {
       // Parse the template - first line is summary, rest is description
       const expanded = this.expandTemplateVariables(result.data);
@@ -1436,14 +1456,16 @@ export class GnCommitPanel extends LitElement {
   private async loadCoAuthorSuggestions(): Promise<void> {
     if (!this.repositoryPath || this.loadingSuggestions) return;
 
+    const repoPath = this.repositoryPath;
     this.loadingSuggestions = true;
     this.suggestionsError = null;
     try {
       const result = await gitService.getCommitHistory({
-        path: this.repositoryPath,
+        path: repoPath,
         limit: 100,
         allBranches: true,
       });
+      if (this.repositoryPath !== repoPath) return;
 
       if (!result.success) {
         this.suggestionsError = result.error?.message ?? 'Could not read recent commit authors';
@@ -1465,6 +1487,7 @@ export class GnCommitPanel extends LitElement {
       }
       this.authorSuggestions = suggestions;
     } catch (err) {
+      if (this.repositoryPath !== repoPath) return;
       this.suggestionsError = err instanceof Error ? err.message : 'Could not read recent commit authors';
       this.authorSuggestions = [];
     } finally {
@@ -1602,12 +1625,14 @@ export class GnCommitPanel extends LitElement {
 
   private async fetchLastCommitMessage(): Promise<void> {
     if (!this.repositoryPath) return;
+    const repoPath = this.repositoryPath;
 
     try {
       const result = await gitService.getCommitHistory({
-        path: this.repositoryPath,
+        path: repoPath,
         limit: 1,
       });
+      if (this.repositoryPath !== repoPath) return;
 
       if (result.success && result.data && result.data.length > 0) {
         this.lastCommit = result.data[0];
@@ -1629,6 +1654,7 @@ export class GnCommitPanel extends LitElement {
         'error'
       );
     } catch (err) {
+      if (this.repositoryPath !== repoPath) return;
       console.error('Failed to fetch last commit:', err);
       showToast(`Failed to fetch last commit: ${err instanceof Error ? err.message : String(err)}`, 'error');
     }
@@ -1653,11 +1679,13 @@ export class GnCommitPanel extends LitElement {
   private async handleGenerateMessage(): Promise<void> {
     if (!this.repositoryPath || this.isGenerating) return;
 
+    const repoPath = this.repositoryPath;
     this.isGenerating = true;
     this.generationError = null;
 
     try {
-      const result = await aiService.generateCommitMessage(this.repositoryPath);
+      const result = await aiService.generateCommitMessage(repoPath);
+      if (this.repositoryPath !== repoPath) return;
 
       if (result.success && result.data) {
         // Parse conventional commit format if present
@@ -1681,6 +1709,7 @@ export class GnCommitPanel extends LitElement {
         this.generationError = result.error?.message ?? 'Failed to generate message';
       }
     } catch (err) {
+      if (this.repositoryPath !== repoPath) return;
       this.generationError = err instanceof Error ? err.message : 'Unknown error';
     } finally {
       this.isGenerating = false;
@@ -1690,12 +1719,14 @@ export class GnCommitPanel extends LitElement {
   private async handleVibeCheck(): Promise<void> {
     if (!this.repositoryPath || this.stagedCount === 0) return;
 
+    const repoPath = this.repositoryPath;
     this.isAnalyzing = true;
     this.vibeCheckResult = null;
     this.generationError = null;
 
     try {
-      const result = await aiService.analyzeStagedChanges(this.repositoryPath);
+      const result = await aiService.analyzeStagedChanges(repoPath);
+      if (this.repositoryPath !== repoPath) return;
 
       if (result.success && result.data) {
         this.vibeCheckResult = result.data;
@@ -1704,6 +1735,7 @@ export class GnCommitPanel extends LitElement {
         this.generationError = result.error?.message ?? 'Vibe check failed';
       }
     } catch (err) {
+      if (this.repositoryPath !== repoPath) return;
       this.generationError = err instanceof Error ? err.message : 'Vibe check failed';
     } finally {
       this.isAnalyzing = false;
@@ -1713,12 +1745,14 @@ export class GnCommitPanel extends LitElement {
   private async handleSuggestSplits(): Promise<void> {
     if (!this.repositoryPath || this.stagedCount === 0) return;
 
+    const repoPath = this.repositoryPath;
     this.isAnalyzingSplit = true;
     this.splitSuggestion = null;
     this.generationError = null;
 
     try {
-      const result = await aiService.suggestCommitSplits(this.repositoryPath);
+      const result = await aiService.suggestCommitSplits(repoPath);
+      if (this.repositoryPath !== repoPath) return;
 
       if (result.success && result.data) {
         this.splitSuggestion = result.data;
@@ -1731,6 +1765,7 @@ export class GnCommitPanel extends LitElement {
         this.generationError = result.error?.message ?? 'Split check failed';
       }
     } catch (err) {
+      if (this.repositoryPath !== repoPath) return;
       this.generationError = err instanceof Error ? err.message : 'Split check failed';
     } finally {
       this.isAnalyzingSplit = false;
@@ -1875,7 +1910,11 @@ export class GnCommitPanel extends LitElement {
         // ran IN — captured before the await. Without it the host falls back to
         // refreshing whichever tab is active, so a commit the user tabbed away
         // from would leave its own repo stale until the file watcher noticed.
-        window.dispatchEvent(new CustomEvent('repository-refresh', { detail: { repoPath } }));
+        window.dispatchEvent(
+          new CustomEvent('repository-refresh', {
+            detail: { repoPath, source: 'sidebar-panel' },
+          })
+        );
       } else if (!gitService.isNetworkGateRefusal(result.error)) {
         // A declined confirm — the pushed-amend warning, or the network gate —
         // is the user's own decision, already accounted for. Showing it in the

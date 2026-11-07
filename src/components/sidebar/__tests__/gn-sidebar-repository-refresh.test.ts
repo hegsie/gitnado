@@ -110,4 +110,42 @@ describe('sidebar repository-refresh subscriptions', () => {
     await fireRefreshAndSettle();
     expect(countCalls('get_gitflow_config')).to.equal(after);
   });
+
+  it('ignores repository-refresh events aimed at a different repoPath or from sidebar-panel', async () => {
+    await fixture(html`<gn-stash-list .repositoryPath=${REPO_PATH}></gn-stash-list>`);
+    await fixture(html`<gn-tag-list .repositoryPath=${REPO_PATH}></gn-tag-list>`);
+    await fixture(html`<gn-gitflow-panel .repositoryPath=${REPO_PATH}></gn-gitflow-panel>`);
+
+    const stashesBefore = countCalls('get_stashes');
+    const tagsBefore = countCalls('get_tags');
+    const gitflowBefore = countCalls('get_gitflow_config');
+
+    // Refresh for a different repo must be ignored
+    window.dispatchEvent(
+      new CustomEvent('repository-refresh', { detail: { repoPath: '/other/repo' } }),
+    );
+    // Intermediate sidebar-panel refresh must be ignored
+    window.dispatchEvent(
+      new CustomEvent('repository-refresh', {
+        detail: { repoPath: REPO_PATH, source: 'sidebar-panel' },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(countCalls('get_stashes')).to.equal(stashesBefore);
+    expect(countCalls('get_tags')).to.equal(tagsBefore);
+    expect(countCalls('get_gitflow_config')).to.equal(gitflowBefore);
+
+    // Refresh for matching repoPath reloads all three
+    window.dispatchEvent(
+      new CustomEvent('repository-refresh', {
+        detail: { repoPath: REPO_PATH, source: 'app-shell' },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(countCalls('get_stashes')).to.be.greaterThan(stashesBefore);
+    expect(countCalls('get_tags')).to.be.greaterThan(tagsBefore);
+    expect(countCalls('get_gitflow_config')).to.be.greaterThan(gitflowBefore);
+  });
 });

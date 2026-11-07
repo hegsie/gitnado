@@ -314,12 +314,11 @@ pub fn run() {
                 .item(&quit)
                 .build()?;
 
-            let _tray = TrayIconBuilder::new()
-                .icon(
-                    app.default_window_icon()
-                        .cloned()
-                        .expect("default window icon must be set in tauri.conf.json"),
-                )
+            let mut tray_builder = TrayIconBuilder::new();
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray_builder = tray_builder.icon(icon);
+            }
+            let _tray = tray_builder
                 .menu(&menu)
                 .tooltip("Gitnado")
                 .on_menu_event(

@@ -175,6 +175,19 @@ impl LocalInferenceProvider {
         *self.status.write().await = LocalModelStatus::Loading;
     }
 
+    /// Atomically claim the loading state.
+    ///
+    /// Returns `false` if the model is already `Loading` or `Ready`, and
+    /// otherwise transitions the status to `Loading` and returns `true`.
+    pub async fn try_start_loading(&self) -> bool {
+        let mut status = self.status.write().await;
+        if matches!(*status, LocalModelStatus::Loading | LocalModelStatus::Ready) {
+            return false;
+        }
+        *status = LocalModelStatus::Loading;
+        true
+    }
+
     /// Set status to error
     pub async fn set_error(&self) {
         *self.status.write().await = LocalModelStatus::Error;
@@ -956,15 +969,19 @@ mod tests {
         let provider = LocalInferenceProvider::new();
         assert_eq!(provider.get_status().await, LocalModelStatus::Unloaded);
 
-        provider.set_loading().await;
+        assert!(provider.try_start_loading().await);
         assert_eq!(provider.get_status().await, LocalModelStatus::Loading);
+        assert!(!provider.try_start_loading().await);
 
         provider.set_error().await;
         assert_eq!(provider.get_status().await, LocalModelStatus::Error);
+        assert!(provider.try_start_loading().await);
+        assert_eq!(provider.get_status().await, LocalModelStatus::Loading);
 
         let engine = MockEngine::new("test");
         provider.set_engine(Box::new(engine)).await;
         assert_eq!(provider.get_status().await, LocalModelStatus::Ready);
+        assert!(!provider.try_start_loading().await);
     }
 
     #[tokio::test]

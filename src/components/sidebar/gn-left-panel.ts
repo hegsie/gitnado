@@ -314,8 +314,18 @@ export class GnLeftPanel extends LitElement {
   private forwardRefresh(e?: Event): void {
     const repoPath = (e as CustomEvent<{ repositoryPath?: string }> | undefined)?.detail
       ?.repositoryPath;
-    this.dispatchEvent(new CustomEvent('repository-changed', { bubbles: true, composed: true }));
-    window.dispatchEvent(new CustomEvent('repository-refresh', { detail: { repoPath } }));
+    this.dispatchEvent(
+      new CustomEvent('repository-changed', {
+        detail: repoPath ? { repositoryPath: repoPath } : undefined,
+        bubbles: true,
+        composed: true,
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('repository-refresh', {
+        detail: { ...(repoPath ? { repoPath } : {}), source: 'sidebar-panel' },
+      })
+    );
   }
 
   private handleStashApplied(e?: Event): void {

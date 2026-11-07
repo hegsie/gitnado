@@ -819,7 +819,10 @@ export class GnBranchList extends LitElement {
     this.storeUnsubscribe = undefined;
   }
 
-  private handleRepositoryRefresh = (): void => {
+  private handleRepositoryRefresh = (e: Event): void => {
+    const detail = (e as CustomEvent<{ repoPath?: string; source?: string }>).detail;
+    if (detail?.source === 'sidebar-panel') return;
+    if (detail?.repoPath && detail.repoPath !== this.repositoryPath) return;
     this.loadBranches();
     // Adding or re-pointing a remote changes the answer, and a stale "no
     // provider" would silently keep the create-request entry disabled.

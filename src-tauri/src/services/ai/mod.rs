@@ -898,7 +898,18 @@ impl AiService {
         drop(local);
 
         tracing::info!("Lazy-loading local model: {}", display_name);
-        self.load_local_model(&model_path, display_name, meta).await
+        match self.load_local_model(&model_path, display_name, meta).await {
+            Ok(()) => Ok(()),
+            Err(_)
+                if matches!(
+                    self.local_provider.get_status().await,
+                    providers::LocalModelStatus::Loading | providers::LocalModelStatus::Ready
+                ) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// True if a downloaded local model is waiting to be lazy-loaded.
@@ -1303,16 +1314,11 @@ impl AiService {
         model_name: String,
         meta: Option<providers::LoadedModelMeta>,
     ) -> Result<(), String> {
-        // Guard: skip if a model is already loading or ready
-        let status = self.local_provider.get_status().await;
-        if status == providers::LocalModelStatus::Loading {
-            return Err("A model is already being loaded".to_string());
+        // Atomically claim the loading transition so concurrent callers cannot
+        // both start loading the same GGUF model in parallel.
+        if !self.local_provider.try_start_loading().await {
+            return Err("A model is already loaded or being loaded".to_string());
         }
-        if status == providers::LocalModelStatus::Ready {
-            tracing::info!("Replacing currently loaded model with '{}'", model_name);
-        }
-
-        self.local_provider.set_loading().await;
 
         let model_path = model_path.to_path_buf();
 
@@ -1321,15 +1327,15 @@ impl AiService {
             local::GgufEngine::load(&model_path, model_name, meta)
         })
         .await
-        .map_err(|e| format!("Model loading task failed: {e}"))?;
+        .map_err(|e| format!("Model loading task failed: {e}"));
 
         match result {
-            Ok(engine) => {
+            Ok(Ok(engine)) => {
                 self.local_provider.set_engine(Box::new(engine)).await;
                 tracing::info!("Local inference engine loaded and ready");
                 Ok(())
             }
-            Err(e) => {
+            Ok(Err(e)) | Err(e) => {
                 self.local_provider.set_error().await;
                 Err(e)
             }

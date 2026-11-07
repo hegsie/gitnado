@@ -993,88 +993,96 @@ pub async fn build_embedding_index(
     repo_path: String,
     app_handle: AppHandle,
 ) -> Result<usize, String> {
+    build_embedding_index_with_progress(state, repo_path, Some(&app_handle)).await
+}
+
+async fn build_embedding_index_with_progress(
+    state: &SharedEmbeddingIndex,
+    repo_path: String,
+    app_handle: Option<&AppHandle>,
+) -> Result<usize, String> {
     let (cancel_flag, db_path) = {
         let mut guard = state.write().await;
-        guard.ensure_engine()?;
         let cancel = guard.register_build(&repo_path);
         let db_path = guard.db_path_for_repo(&repo_path);
         (cancel, db_path)
     };
 
-    let repo_path_clone = repo_path.clone();
-    let commits = tokio::task::spawn_blocking(move || collect_commits(&repo_path_clone))
-        .await
-        .map_err(|e| format!("Failed to walk commits: {}", e))??;
+    let result: Result<usize, String> = async {
+        let store = EmbeddingIndex::open(&db_path)?;
+        let indexed_oids = store.get_indexed_oids()?;
+        let previously_indexed = indexed_oids.len();
 
-    let total_count = commits.len();
-    let store = EmbeddingIndex::open(&db_path)?;
-    let indexed_oids = store.get_indexed_oids()?;
+        let repo_path_clone = repo_path.clone();
+        let new_commits =
+            tokio::task::spawn_blocking(move || collect_commits(&repo_path_clone, &indexed_oids))
+                .await
+                .map_err(|e| format!("Failed to walk commits: {}", e))??;
 
-    let new_commits: Vec<_> = commits
-        .into_iter()
-        .filter(|c| !indexed_oids.contains(&c.oid))
-        .collect();
+        let total_count = previously_indexed + new_commits.len();
 
-    if new_commits.is_empty() {
-        let mut guard = state.write().await;
-        guard.finish_build(&repo_path);
-        return Ok(total_count);
-    }
-
-    let batch_size = 32;
-    let mut indexed_count = indexed_oids.len();
-
-    for chunk in new_commits.chunks(batch_size) {
-        if cancel_flag.load(Ordering::Relaxed) {
-            let mut guard = state.write().await;
-            guard.finish_build(&repo_path);
-            return Err("Build cancelled".to_string());
+        if new_commits.is_empty() {
+            state.write().await.ensure_engine()?;
+            return Ok(total_count);
         }
 
-        let texts: Vec<&str> = chunk.iter().map(|c| c.embedding_text.as_str()).collect();
+        let batch_size = 32;
+        let mut indexed_count = previously_indexed;
 
-        let embeddings = {
-            let mut guard = state.write().await;
-            let engine = guard.ensure_engine()?;
-            engine.embed_batch(&texts, batch_size)?
-        };
+        for chunk in new_commits.chunks(batch_size) {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("Build cancelled".to_string());
+            }
 
-        let items: Vec<IndexedCommitRecord> = chunk
-            .iter()
-            .zip(embeddings)
-            .map(|(c, emb)| IndexedCommitRecord {
-                oid: c.oid.clone(),
-                summary: c.summary.clone(),
-                message: c.message.clone(),
-                files: c.files.clone(),
-                symbols: c.symbols.clone(),
-                embedding: emb,
-            })
-            .collect();
+            let texts: Vec<&str> = chunk.iter().map(|c| c.embedding_text.as_str()).collect();
 
-        store.upsert_commits_batch(&items)?;
-        indexed_count += chunk.len();
+            let embeddings = {
+                let mut guard = state.write().await;
+                let engine = guard.ensure_engine()?;
+                engine.embed_batch(&texts, batch_size)?
+            };
 
-        let percent = if total_count > 0 {
-            (indexed_count as f64 / total_count as f64) * 100.0
-        } else {
-            100.0
-        };
+            let items: Vec<IndexedCommitRecord> = chunk
+                .iter()
+                .zip(embeddings)
+                .map(|(c, emb)| IndexedCommitRecord {
+                    oid: c.oid.clone(),
+                    summary: c.summary.clone(),
+                    message: c.message.clone(),
+                    files: c.files.clone(),
+                    symbols: c.symbols.clone(),
+                    embedding: emb,
+                })
+                .collect();
 
-        let _ = app_handle.emit(
-            "embedding-index-progress",
-            EmbeddingIndexProgress {
-                repo_path: repo_path.clone(),
-                indexed_count,
-                total_count,
-                percent,
-            },
-        );
+            store.upsert_commits_batch(&items)?;
+            indexed_count += chunk.len();
+
+            let percent = if total_count > 0 {
+                (indexed_count as f64 / total_count as f64) * 100.0
+            } else {
+                100.0
+            };
+
+            if let Some(handle) = app_handle {
+                let _ = handle.emit(
+                    "embedding-index-progress",
+                    EmbeddingIndexProgress {
+                        repo_path: repo_path.clone(),
+                        indexed_count,
+                        total_count,
+                        percent,
+                    },
+                );
+            }
+        }
+
+        Ok(total_count)
     }
+    .await;
 
-    let mut guard = state.write().await;
-    guard.finish_build(&repo_path);
-    Ok(total_count)
+    state.write().await.finish_build(&repo_path);
+    result
 }
 
 /// Incrementally update the embedding index with new commits.
@@ -1135,9 +1143,15 @@ pub async fn get_embedding_status(
     })
 }
 
-/// Collect all commits from a repository along with code-aware diff context
+/// Collect unindexed commits from a repository along with code-aware diff context
 /// (changed file paths and extracted symbol identifiers).
-fn collect_commits(repo_path: &str) -> Result<Vec<CollectedCommit>, String> {
+///
+/// Commits present in `already_indexed` are skipped immediately before looking up
+/// the commit object or computing tree diffs.
+fn collect_commits(
+    repo_path: &str,
+    already_indexed: &HashSet<String>,
+) -> Result<Vec<CollectedCommit>, String> {
     let repo =
         git2::Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {}", e))?;
 
@@ -1154,7 +1168,7 @@ fn collect_commits(repo_path: &str) -> Result<Vec<CollectedCommit>, String> {
     let max_commits = 100_000;
     let mut commits = Vec::new();
 
-    for oid_result in revwalk {
+    for oid_result in revwalk.take(max_commits) {
         if commits.len() >= max_commits {
             break;
         }
@@ -1164,12 +1178,16 @@ fn collect_commits(repo_path: &str) -> Result<Vec<CollectedCommit>, String> {
             Err(_) => continue,
         };
 
+        let oid_str = oid.to_string();
+        if already_indexed.contains(&oid_str) {
+            continue;
+        }
+
         let commit = match repo.find_commit(oid) {
             Ok(c) => c,
             Err(_) => continue,
         };
 
-        let oid_str = oid.to_string();
         let summary = commit.summary().ok().flatten().unwrap_or("").to_string();
         let raw_message = commit.message().ok().unwrap_or("").to_string();
 
@@ -1415,5 +1433,48 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].oid, "legacy_oid_001");
         assert_eq!(results[0].match_sources, vec!["bm25".to_string()]);
+    }
+
+    #[test]
+    fn test_collect_commits_skips_already_indexed_oids() {
+        let test_repo = TestRepo::with_initial_commit();
+        let initial_oid = test_repo.head_oid().to_string();
+        let second_oid = test_repo
+            .create_commit("Second commit", &[("a.rs", "pub fn alpha() {}\n")])
+            .to_string();
+        let third_oid = test_repo
+            .create_commit("Third commit", &[("b.rs", "pub fn beta() {}\n")])
+            .to_string();
+
+        let mut already_indexed = HashSet::new();
+        already_indexed.insert(initial_oid);
+        already_indexed.insert(second_oid);
+
+        let collected =
+            collect_commits(&test_repo.path_str(), &already_indexed).expect("collect commits");
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].oid, third_oid);
+        assert_eq!(collected[0].summary, "Third commit");
+        assert!(collected[0].files.contains(&"b.rs".to_string()));
+        assert!(collected[0].symbols.contains(&"beta".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_build_embedding_index_resets_is_building_on_error() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let models_dir = temp_dir.path().join("models");
+        let indexes_dir = temp_dir.path().join("indexes");
+        let state: SharedEmbeddingIndex = Arc::new(RwLock::new(EmbeddingIndexState::new(
+            models_dir,
+            indexes_dir,
+        )));
+
+        let invalid_repo = "/nonexistent/repo/path".to_string();
+        let result = build_embedding_index_with_progress(&state, invalid_repo.clone(), None).await;
+        assert!(result.is_err());
+        assert!(
+            !state.read().await.is_building(&invalid_repo),
+            "is_building must be reset to false when build_embedding_index fails"
+        );
     }
 }

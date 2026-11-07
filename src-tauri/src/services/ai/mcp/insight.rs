@@ -103,15 +103,20 @@ pub fn commit_explain_prompt(repo_path: &str, oid: &str) -> Result<(String, Stri
         .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
         .map_err(|e| e.message().to_string())?;
     let mut patch = String::new();
-    let _ = diff.print(git2::DiffFormat::Patch, |_, _, line| {
-        if patch.len() < MAX_EXPLAIN_DIFF_CHARS {
-            if matches!(line.origin(), '+' | '-' | ' ') {
-                patch.push(line.origin());
-            }
-            patch.push_str(&String::from_utf8_lossy(line.content()));
+    match diff.print(git2::DiffFormat::Patch, |_, _, line| {
+        if patch.len() >= MAX_EXPLAIN_DIFF_CHARS {
+            return false;
         }
-        true
-    });
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            patch.push(line.origin());
+        }
+        patch.push_str(&String::from_utf8_lossy(line.content()));
+        patch.len() < MAX_EXPLAIN_DIFF_CHARS
+    }) {
+        Ok(()) => (),
+        Err(e) if e.code() == git2::ErrorCode::User => (),
+        Err(e) => return Err(e.message().to_string()),
+    }
     let truncated = patch.len() >= MAX_EXPLAIN_DIFF_CHARS;
     let summary = commit.summary().ok().flatten().unwrap_or("").to_string();
     let author = commit.author();
@@ -410,6 +415,13 @@ mod tests {
 
         let (_, first) = commit_explain_prompt(&t.path_str(), "HEAD~1").unwrap();
         assert!(first.contains("first commit"));
+
+        let large_body = "line of content\n".repeat(1000);
+        let large_oid = t.create_commit("Large diff commit", &[("big.txt", &large_body)]);
+        let (large_summary, large_prompt) =
+            commit_explain_prompt(&t.path_str(), &large_oid.to_string()).unwrap();
+        assert_eq!(large_summary, "Large diff commit");
+        assert!(large_prompt.contains("Diff (truncated):"));
     }
 
     #[test]

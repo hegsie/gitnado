@@ -197,6 +197,8 @@ pub async fn create_tag(
         };
 
         let target_obj = repo.find_object(target_oid, None)?;
+        let target_oid = target_obj.peel_to_commit()?.id();
+        let target_obj = repo.find_object(target_oid, None)?;
 
         let (is_annotated, tagger) = if let Some(ref msg) = message {
             let signature = repo.signature()?;

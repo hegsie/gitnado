@@ -21,6 +21,7 @@ struct WalkCache {
 }
 
 const WALK_CACHE_MAX_ENTRIES: usize = 8;
+const MAX_INSPECTED_COMMITS: usize = 25_000;
 
 fn walk_cache() -> &'static Mutex<HashMap<String, WalkCache>> {
     static CACHE: OnceLock<Mutex<HashMap<String, WalkCache>>> = OnceLock::new();
@@ -41,7 +42,8 @@ fn refs_snapshot(repo: &git2::Repository) -> (u64, Vec<git2::Oid>) {
     // nothing else and would otherwise vanish from the graph and the total.
     if let Ok(head) = repo.head() {
         head.name().unwrap_or("").hash(&mut hasher);
-        if let Some(oid) = head.target() {
+        if let Ok(commit) = head.peel_to_commit() {
+            let oid = commit.id();
             oid.as_bytes().hash(&mut hasher);
             tips.push(oid);
         }
@@ -54,7 +56,8 @@ fn refs_snapshot(repo: &git2::Repository) -> (u64, Vec<git2::Oid>) {
                 continue;
             }
             reference.name().unwrap_or("").hash(&mut hasher);
-            if let Some(oid) = reference.target() {
+            if let Ok(commit) = reference.peel_to_commit() {
+                let oid = commit.id();
                 oid.as_bytes().hash(&mut hasher);
                 tips.push(oid);
             }
@@ -158,10 +161,14 @@ pub async fn get_commit_history(
             let start = git2::Oid::from_str(oid_str)?;
             revwalk.push(start)?;
         } else {
-            let start = repo
-                .head()?
-                .target()
-                .ok_or(GitnadoError::RepositoryNotOpen)?;
+            let head = match repo.head() {
+                Ok(head) => head,
+                Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
+                Err(e) => return Err(e.into()),
+            };
+            let Some(start) = head.target() else {
+                return Ok(vec![]);
+            };
             revwalk.push(start)?;
         }
 
@@ -232,8 +239,8 @@ pub async fn search_commits(
             let reference = repo
                 .resolve_reference_from_short_name(branch_name)
                 .map_err(|_| crate::error::GitnadoError::BranchNotFound(branch_name.clone()))?;
-            if let Some(oid) = reference.target() {
-                revwalk.push(oid)?;
+            if let Ok(commit) = reference.peel_to_commit() {
+                revwalk.push(commit.id())?;
             }
         } else {
             // Push all branch heads for complete search
@@ -241,8 +248,8 @@ pub async fn search_commits(
                 if reference.name().is_ok_and(crate::utils::is_internal_ref) {
                     continue;
                 }
-                if let Some(oid) = reference.target() {
-                    let _ = revwalk.push(oid);
+                if let Ok(commit) = reference.peel_to_commit() {
+                    let _ = revwalk.push(commit.id());
                 }
             }
         }
@@ -253,7 +260,7 @@ pub async fn search_commits(
 
         let mut results = Vec::new();
 
-        for oid_result in revwalk {
+        for oid_result in revwalk.take(MAX_INSPECTED_COMMITS) {
             if results.len() >= limit_count {
                 break;
             }
@@ -361,10 +368,14 @@ pub async fn get_file_history(
         revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
 
         // Start from HEAD
-        let head = repo
-            .head()?
-            .target()
-            .ok_or(GitnadoError::RepositoryNotOpen)?;
+        let head_ref = match repo.head() {
+            Ok(head) => head,
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        let Some(head) = head_ref.target() else {
+            return Ok(vec![]);
+        };
         revwalk.push(head)?;
 
         let limit_count = limit.unwrap_or(500);
@@ -372,7 +383,7 @@ pub async fn get_file_history(
         let mut entries: Vec<FileHistoryEntry> = Vec::new();
         let mut current_path = file_path.clone();
 
-        for oid_result in revwalk {
+        for oid_result in revwalk.take(MAX_INSPECTED_COMMITS) {
             if entries.len() >= limit_count {
                 break;
             }
@@ -386,6 +397,10 @@ pub async fn get_file_history(
                 Ok(c) => c,
                 Err(_) => continue,
             };
+
+            if commit.parent_count() > 1 {
+                continue;
+            }
 
             let tree = match commit.tree() {
                 Ok(t) => t,

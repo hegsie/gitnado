@@ -112,16 +112,20 @@ fn content_merged(repo: &Repository, branch: Oid, parent: Oid) -> bool {
     else {
         return false;
     };
-    let Ok(mut index) = repo.merge_trees(&base_tree, &our_tree, &their_tree, None) else {
+    let Ok(index) = repo.merge_trees(&base_tree, &our_tree, &their_tree, None) else {
         return false;
     };
     if index.has_conflicts() {
         return false;
     }
-    match index.write_tree_to(repo) {
-        Ok(merged) => merged == our_tree.id(),
-        Err(_) => false,
-    }
+    let onto_tree = match ours.tree() {
+        Ok(tree) => tree,
+        Err(_) => return false,
+    };
+    let Ok(diff) = repo.diff_tree_to_index(Some(&onto_tree), Some(&index), None) else {
+        return false;
+    };
+    diff.deltas().len() == 0
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {

@@ -417,8 +417,11 @@ export class GnAnalyticsPanel extends LitElement {
     }
   }
 
-  private handleRepositoryRefresh = (): void => {
+  private handleRepositoryRefresh = (e: Event): void => {
     if (!this.repositoryPath) return;
+    const detail = (e as CustomEvent<{ repoPath?: string; source?: string }>).detail;
+    if (detail?.source === 'sidebar-panel') return;
+    if (detail?.repoPath && detail.repoPath !== this.repositoryPath) return;
     this.needsReload = true;
     if (this.active) {
       this.scheduleReload();

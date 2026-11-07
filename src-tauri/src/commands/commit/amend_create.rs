@@ -939,7 +939,8 @@ pub async fn reword_commit(path: String, oid: String, message: String) -> Result
         // interpolated the message path into a DOUBLE-quoted `cp`, so a repository
         // whose path contained `$` or a quote made the shell rewrite the path and
         // the reword died on a message file that was never there.
-        let sequence_editor = crate::utils::todo_action_editor_command(&oid[..7], "reword");
+        let sequence_editor =
+            crate::utils::todo_action_editor_command(&oid[..std::cmp::min(7, oid.len())], "reword");
         let commit_editor = crate::utils::copy_file_editor_command(&msg_file);
 
         // Run the rebase

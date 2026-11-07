@@ -908,13 +908,16 @@ export class GnCommitDetails extends LitElement {
       return;
     }
 
-    log.debug('loadFiles: loading files for commit', this.commit.oid);
+    const repoPath = this.repositoryPath;
+    const commitOid = this.commit.oid;
+    log.debug('loadFiles: loading files for commit', commitOid);
     this.loadingFiles = true;
     this.files = [];
     this.filesError = null;
 
     try {
-      const result = await gitService.getCommitFiles(this.repositoryPath, this.commit.oid);
+      const result = await gitService.getCommitFiles(repoPath, commitOid);
+      if (this.repositoryPath !== repoPath || this.commit?.oid !== commitOid) return;
       log.debug('loadFiles: result', result);
       if (result.success && result.data) {
         this.files = result.data;
@@ -924,10 +927,13 @@ export class GnCommitDetails extends LitElement {
         this.filesError = result.error?.message ?? 'Failed to load changed files';
       }
     } catch (err) {
+      if (this.repositoryPath !== repoPath || this.commit?.oid !== commitOid) return;
       console.error('Failed to load commit files:', err);
       this.filesError = err instanceof Error ? err.message : 'Failed to load changed files';
     } finally {
-      this.loadingFiles = false;
+      if (this.repositoryPath === repoPath && this.commit?.oid === commitOid) {
+        this.loadingFiles = false;
+      }
     }
   }
 

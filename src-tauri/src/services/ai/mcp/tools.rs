@@ -234,6 +234,16 @@ pub async fn call_tool(
     arguments: &Value,
     open_repos: &[String],
 ) -> Result<Value, String> {
+    let name = name.to_string();
+    let arguments = arguments.clone();
+    let open_repos = open_repos.to_vec();
+
+    tokio::task::spawn_blocking(move || execute_tool(&name, &arguments, &open_repos))
+        .await
+        .map_err(|e| format!("Tool execution task failed: {}", e))?
+}
+
+fn execute_tool(name: &str, arguments: &Value, open_repos: &[String]) -> Result<Value, String> {
     match name {
         "get_commit_history" => {
             let params: CommitHistoryParams = serde_json::from_value(arguments.clone())
@@ -293,8 +303,9 @@ fn tool_get_commit_history(params: CommitHistoryParams) -> Result<Value, String>
             .resolve_reference_from_short_name(branch)
             .map_err(|e| format!("Failed to resolve branch '{}': {}", branch, e))?;
         let oid = reference
-            .target()
-            .ok_or_else(|| format!("Branch '{}' has no target", branch))?;
+            .peel_to_commit()
+            .map_err(|e| format!("Failed to resolve '{}' to commit: {}", branch, e))?
+            .id();
         revwalk
             .push(oid)
             .map_err(|e| format!("Failed to push to revwalk: {}", e))?;
@@ -526,14 +537,14 @@ fn tool_search_commits(params: SearchCommitsParams) -> Result<Value, String> {
         .revwalk()
         .map_err(|e| format!("Failed to create revwalk: {}", e))?;
 
-    revwalk
-        .push_head()
-        .map_err(|e| format!("Failed to push HEAD: {}", e))?;
+    if revwalk.push_head().is_err() {
+        return Ok(Value::Array(Vec::new()));
+    }
 
     revwalk.set_sorting(git2::Sort::TIME).ok();
 
     let mut results = Vec::new();
-    for oid_result in revwalk {
+    for oid_result in revwalk.take(50_000) {
         if results.len() >= max_results {
             break;
         }
@@ -1113,6 +1124,65 @@ mod tests {
     // ========================================================================
     // Invalid arguments tests
     // ========================================================================
+
+    #[tokio::test]
+    async fn test_get_commit_history_with_symbolic_head_and_annotated_tag() {
+        let test_repo = TestRepo::with_initial_commit();
+        let commit_oid = test_repo.create_commit("Tagged commit", &[("tag.txt", "tagged")]);
+
+        // Create an annotated tag pointing at the commit
+        {
+            let repo = test_repo.repo();
+            let obj = repo.find_object(commit_oid, None).unwrap();
+            let sig = repo.signature().unwrap();
+            repo.tag("v1.0.0", &obj, &sig, "Release v1.0.0", false)
+                .unwrap();
+        }
+
+        // Resolving symbolic ref "HEAD"
+        let head_result = call_tool(
+            "get_commit_history",
+            &serde_json::json!({
+                "repo_path": test_repo.path_str(),
+                "branch": "HEAD"
+            }),
+            &[],
+        )
+        .await;
+        assert!(head_result.is_ok(), "{:?}", head_result);
+        assert_eq!(head_result.unwrap().as_array().unwrap().len(), 2);
+
+        // Resolving annotated tag "v1.0.0"
+        let tag_result = call_tool(
+            "get_commit_history",
+            &serde_json::json!({
+                "repo_path": test_repo.path_str(),
+                "branch": "v1.0.0"
+            }),
+            &[],
+        )
+        .await;
+        assert!(tag_result.is_ok(), "{:?}", tag_result);
+        assert_eq!(tag_result.unwrap().as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_search_commits_unborn_head_returns_empty() {
+        let test_repo = TestRepo::new();
+
+        let result = call_tool(
+            "search_commits",
+            &serde_json::json!({
+                "repo_path": test_repo.path_str(),
+                "query": "feat"
+            }),
+            &[],
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().as_array().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn test_call_tool_invalid_arguments() {

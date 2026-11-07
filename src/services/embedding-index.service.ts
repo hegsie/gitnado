@@ -119,7 +119,11 @@ class EmbeddingIndexService {
   async cancelBuild(repoPath: string): Promise<void> {
     this.cancelEpochs.set(repoPath, (this.cancelEpochs.get(repoPath) ?? 0) + 1);
     this.buildingRepos.delete(repoPath);
-    await invoke<void>('cancel_embedding_build', { path: repoPath });
+    try {
+      await invoke<void>('cancel_embedding_build', { path: repoPath });
+    } catch {
+      // Ignore cancellation errors (e.g., no build was running or IPC unavailable)
+    }
   }
 
   /**

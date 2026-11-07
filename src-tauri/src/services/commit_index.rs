@@ -185,7 +185,7 @@ impl CommitIndex {
 
         let mut new_commits = Vec::new();
 
-        for oid_result in revwalk {
+        for oid_result in revwalk.take(MAX_INDEXED_COMMITS) {
             let oid = match oid_result {
                 Ok(o) => o,
                 Err(_) => continue,

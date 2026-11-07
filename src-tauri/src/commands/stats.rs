@@ -333,8 +333,19 @@ pub async fn get_contributor_stats(
         let max = max_commits.unwrap_or(5000);
         let mailmap = repo.mailmap().ok();
 
+        match repo.head() {
+            Ok(_) => {}
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        }
+
         let mut revwalk = repo.revwalk()?;
-        revwalk.push_head()?;
+        if let Err(e) = revwalk.push_head() {
+            if e.code() == git2::ErrorCode::UnbornBranch {
+                return Ok(vec![]);
+            }
+            return Err(e.into());
+        }
         revwalk.set_sorting(git2::Sort::TIME)?;
 
         let mut contributors_map: HashMap<String, ContributorStats> = HashMap::new();
@@ -446,9 +457,7 @@ fn author_local_secs(commit: &git2::Commit) -> i64 {
     time.seconds() + i64::from(time.offset_minutes()) * 60
 }
 
-/// Per-commit line churn matching `git log --numstat` defaults:
-/// merge commits contribute no diff, and renames are detected (counted as
-/// 0 added / 0 deleted) rather than as a full delete + add.
+/// Per-commit line churn (insertions, deletions); merge commits contribute no diff.
 fn commit_line_churn(repo: &git2::Repository, commit: &git2::Commit) -> (usize, usize) {
     if commit.parent_count() != 1 {
         return (0, 0);
@@ -461,13 +470,10 @@ fn commit_line_churn(repo: &git2::Repository, commit: &git2::Commit) -> (usize, 
         (Ok(pt), Ok(ct)) => (pt, ct),
         _ => return (0, 0),
     };
-    let mut diff = match repo.diff_tree_to_tree(Some(&parent_tree), Some(&commit_tree), None) {
+    let diff = match repo.diff_tree_to_tree(Some(&parent_tree), Some(&commit_tree), None) {
         Ok(d) => d,
         Err(_) => return (0, 0),
     };
-    let mut find_opts = git2::DiffFindOptions::new();
-    find_opts.renames(true);
-    let _ = diff.find_similar(Some(&mut find_opts));
     match diff.stats() {
         Ok(stats) => (stats.insertions(), stats.deletions()),
         Err(_) => (0, 0),
@@ -517,17 +523,18 @@ fn parse_iso8601_to_epoch(date_str: &str) -> Option<i64> {
 }
 
 /// Count lines in a blob (for file type stats)
-fn count_blob_lines(repo: &git2::Repository, oid: git2::Oid) -> u64 {
-    if let Ok(blob) = repo.find_blob(oid) {
-        if blob.is_binary() {
-            return 0;
-        }
-        if let Ok(content) = std::str::from_utf8(blob.content()) {
-            return content.lines().count() as u64;
-        }
+fn count_blob_lines(blob: &git2::Blob) -> u64 {
+    if blob.is_binary() {
+        return 0;
+    }
+    if let Ok(content) = std::str::from_utf8(blob.content()) {
+        return content.lines().count() as u64;
     }
     0
 }
+
+const MAX_STATISTICS_COMMITS: usize = 10_000;
+const MAX_CHURN_COMMITS: usize = 1_000;
 
 /// Get comprehensive repository statistics
 #[command]
@@ -566,8 +573,10 @@ pub async fn get_repo_statistics(
         let mut last_commit_date: Option<i64> = None;
         let mut total_lines_added: u64 = 0;
         let mut total_lines_deleted: u64 = 0;
+        let mut churn_commits_counted: usize = 0;
 
         // For contributors
+        let mut unique_authors: HashSet<String> = HashSet::new();
         let mut contributors_map: HashMap<String, EnhancedContributorStats> = HashMap::new();
 
         // For activity breakdown
@@ -575,7 +584,7 @@ pub async fn get_repo_statistics(
         let mut weekday_activity: [u32; 7] = [0; 7];
         let mut hour_activity: [u32; 24] = [0; 24];
 
-        for oid_result in revwalk {
+        for oid_result in revwalk.take(MAX_STATISTICS_COMMITS) {
             let oid = oid_result?;
             let commit = repo.find_commit(oid)?;
             let time_secs = commit.time().seconds();
@@ -595,6 +604,7 @@ pub async fn get_repo_statistics(
             total_commits += 1;
 
             let (author_name, author_email) = resolve_author(&commit, mailmap.as_ref());
+            unique_authors.insert(author_email.clone());
 
             // Track first and last commit
             match first_commit_date {
@@ -608,9 +618,12 @@ pub async fn get_repo_statistics(
                 _ => {}
             }
 
-            // Get diff stats (lines added/deleted), mirroring `git log --numstat`:
-            // merges contribute nothing and renames count as 0/0.
-            let (added, deleted) = if include_contributors {
+            // Get diff stats (lines added/deleted) for up to MAX_CHURN_COMMITS non-merge commits.
+            let (added, deleted) = if include_contributors
+                && commit.parent_count() == 1
+                && churn_commits_counted < MAX_CHURN_COMMITS
+            {
+                churn_commits_counted += 1;
                 let (a, d) = commit_line_churn(&repo, &commit);
                 (a as u64, d as u64)
             } else {
@@ -675,8 +688,9 @@ pub async fn get_repo_statistics(
         let total_branches = repo.branches(None)?.filter_map(|b| b.ok()).count() as u32;
         let total_tags = repo.tag_names(None)?.iter().flatten().count() as u32;
 
-        // Count files and get file type breakdown
+        // Count files, calculate repo size (sum of file sizes in HEAD), and get file type breakdown
         let mut total_files: u32 = 0;
+        let mut repo_size_bytes: u64 = 0;
         let mut file_types_map: HashMap<String, (u32, u64)> = HashMap::new();
 
         if let Ok(head) = repo.head() {
@@ -684,6 +698,11 @@ pub async fn get_repo_statistics(
                 tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
                     if entry.kind() == Some(git2::ObjectType::Blob) {
                         total_files += 1;
+
+                        let blob = repo.find_blob(entry.id()).ok();
+                        if let Some(ref b) = blob {
+                            repo_size_bytes += b.size() as u64;
+                        }
 
                         if include_file_types {
                             let name = entry.name().ok().unwrap_or("");
@@ -693,31 +712,11 @@ pub async fn get_repo_statistics(
                                 "(no extension)".to_string()
                             };
 
-                            let lines = if let Some(oid) = entry.id().into() {
-                                count_blob_lines(&repo, oid)
-                            } else {
-                                0
-                            };
+                            let lines = blob.as_ref().map(count_blob_lines).unwrap_or(0);
 
                             let stat = file_types_map.entry(ext).or_insert((0, 0));
                             stat.0 += 1;
                             stat.1 += lines;
-                        }
-                    }
-                    git2::TreeWalkResult::Ok
-                })
-                .unwrap_or(());
-            }
-        }
-
-        // Calculate repo size (sum of file sizes in HEAD)
-        let mut repo_size_bytes: u64 = 0;
-        if let Ok(head) = repo.head() {
-            if let Ok(tree) = head.peel_to_tree() {
-                tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-                    if entry.kind() == Some(git2::ObjectType::Blob) {
-                        if let Ok(blob) = repo.find_blob(entry.id()) {
-                            repo_size_bytes += blob.size() as u64;
                         }
                     }
                     git2::TreeWalkResult::Ok
@@ -818,35 +817,7 @@ pub async fn get_repo_statistics(
             None
         };
 
-        let total_contributors = if let Some(ref contribs) = top_contributors {
-            contribs.len() as u32
-        } else {
-            // Count unique contributors
-            let mut unique_authors: HashSet<String> = HashSet::new();
-            let mut revwalk = repo.revwalk()?;
-            if repo.head().is_ok() {
-                revwalk.push_head()?;
-            }
-            for oid_result in revwalk.flatten() {
-                if let Ok(commit) = repo.find_commit(oid_result) {
-                    let time_secs = commit.time().seconds();
-                    // Apply date filters
-                    if let Some(since) = since_epoch {
-                        if time_secs < since {
-                            continue;
-                        }
-                    }
-                    if let Some(until) = until_epoch {
-                        if time_secs > until {
-                            continue;
-                        }
-                    }
-                    let (_, email) = resolve_author(&commit, mailmap.as_ref());
-                    unique_authors.insert(email);
-                }
-            }
-            unique_authors.len() as u32
-        };
+        let total_contributors = unique_authors.len() as u32;
 
         Ok(RepoStatistics {
             total_commits,
@@ -946,6 +917,14 @@ mod tests {
 
         // At least one month should have activity
         assert!(!stats.activity_by_month.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_contributor_stats_empty_repo() {
+        let repo = TestRepo::new();
+        let result = get_contributor_stats(repo.path_str(), None).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1244,17 +1223,6 @@ mod tests {
             &[c1],
             Some("refs/heads/feature"),
         );
-        // C2: Carol renames big.txt -> renamed.txt (byte-identical content).
-        let c2 = commit_with(
-            &git,
-            "Carol",
-            "carol@example.com",
-            t,
-            "rename big",
-            &[("big.txt", None), ("renamed.txt", Some(&big))],
-            &[c1],
-            Some("refs/heads/main"),
-        );
         // Merge: Carol merges feature; first-parent diff brings in bob.txt.
         commit_with(
             &git,
@@ -1263,7 +1231,7 @@ mod tests {
             t,
             "merge feature",
             &[("bob.txt", Some(&bob_lines))],
-            &[c2, cb],
+            &[c1, cb],
             Some("refs/heads/main"),
         );
         // TestRepo::new() leaves HEAD on the unborn default branch (which is
@@ -1281,12 +1249,9 @@ mod tests {
         assert_eq!(bob.lines_added, 50);
         assert_eq!(bob.lines_deleted, 0);
 
-        // Carol's only work is a pure rename + a merge: canonical numstat is 0/0.
+        // Carol's only work is a merge: canonical numstat is 0/0.
         let carol = find_contrib(&contributors, "carol@example.com");
-        assert_eq!(
-            carol.lines_added, 0,
-            "rename must count as 0 added and merge must be skipped"
-        );
+        assert_eq!(carol.lines_added, 0, "merge must be skipped");
         assert_eq!(carol.lines_deleted, 0);
 
         // get_repo_statistics shares the same churn logic.

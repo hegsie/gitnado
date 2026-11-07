@@ -70,7 +70,11 @@ pub async fn get_cleanup_candidates(
         let repo = git2::Repository::open(Path::new(&path))?;
         let mut candidates = Vec::new();
 
-        let head = repo.head()?;
+        let head = match repo.head() {
+            Ok(head) => head,
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
         let head_oid = match head.target() {
             Some(oid) => oid,
             None => return Ok(candidates),
@@ -222,12 +226,20 @@ pub async fn get_cleanup_candidates(
 
         // Determine the current HEAD branch's shorthand and upstream so we skip the
         // remote branch corresponding to HEAD (e.g., "origin/main" when HEAD is "main").
-        let head_shorthand = head.shorthand().ok().map(|s| s.to_string());
-        let head_upstream_name = head_shorthand
-            .as_deref()
-            .and_then(|name| repo.find_branch(name, git2::BranchType::Local).ok())
-            .and_then(|b| b.upstream().ok())
-            .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
+        let head_shorthand = if head.is_branch() {
+            head.shorthand().ok().map(|s| s.to_string())
+        } else {
+            None
+        };
+        let head_upstream_name = if head.is_branch() {
+            head_shorthand
+                .as_deref()
+                .and_then(|name| repo.find_branch(name, git2::BranchType::Local).ok())
+                .and_then(|b| b.upstream().ok())
+                .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()))
+        } else {
+            None
+        };
 
         for branch_result in repo.branches(Some(git2::BranchType::Remote))? {
             let (branch, _) = branch_result?;

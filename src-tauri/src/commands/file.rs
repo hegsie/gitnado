@@ -485,7 +485,7 @@ pub async fn get_editor_config(path: String, global: bool) -> Result<EditorConfi
 pub async fn set_editor_config(path: String, editor: String, global: bool) -> Result<OpenResult> {
     let repo_path = Path::new(&path);
 
-    if !global && !repo_path.join(".git").exists() {
+    if !global && git2::Repository::open(repo_path).is_err() {
         return Err(GitnadoError::RepositoryNotFound(path));
     }
 

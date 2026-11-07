@@ -686,9 +686,11 @@ export class GnContextDashboard extends LitElement {
       this.behind = 0;
       return;
     }
+    const repoPath = this.activeRepository.repository.path;
 
     try {
-      const result = await getRemoteStatus(this.activeRepository.repository.path);
+      const result = await getRemoteStatus(repoPath);
+      if (this.activeRepository?.repository.path !== repoPath) return;
       if (result.success && result.data) {
         this.ahead = result.data.ahead;
         this.behind = result.data.behind;
@@ -697,6 +699,7 @@ export class GnContextDashboard extends LitElement {
         this.behind = 0;
       }
     } catch {
+      if (this.activeRepository?.repository.path !== repoPath) return;
       this.ahead = 0;
       this.behind = 0;
     }

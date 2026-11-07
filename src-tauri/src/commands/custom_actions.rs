@@ -34,7 +34,11 @@ pub struct ActionResult {
 
 /// Path to the custom actions config file within the repo
 fn actions_file_path(repo_path: &Path) -> std::path::PathBuf {
-    crate::utils::app_paths::repo_dir(&repo_path.join(".git")).join("custom_actions.json")
+    let git_dir = git2::Repository::open(repo_path)
+        .ok()
+        .map(|r| r.commondir().to_path_buf())
+        .unwrap_or_else(|| repo_path.join(".git"));
+    crate::utils::app_paths::repo_dir(&git_dir).join("custom_actions.json")
 }
 
 /// Read custom actions from disk
@@ -69,6 +73,9 @@ fn get_current_branch(repo_path: &Path) -> String {
         Ok(h) => h,
         Err(_) => return String::new(),
     };
+    if !head.is_branch() {
+        return String::new();
+    }
     head.shorthand().unwrap_or("").to_string()
 }
 
@@ -149,7 +156,7 @@ fn substitute_variables(
 #[command]
 pub async fn get_custom_actions(path: String) -> Result<Vec<CustomAction>> {
     let repo_path = Path::new(&path);
-    if !repo_path.join(".git").exists() {
+    if git2::Repository::open(repo_path).is_err() {
         return Err(GitnadoError::RepositoryNotFound(path));
     }
     read_actions(repo_path)
@@ -159,7 +166,7 @@ pub async fn get_custom_actions(path: String) -> Result<Vec<CustomAction>> {
 #[command]
 pub async fn save_custom_action(path: String, action: CustomAction) -> Result<Vec<CustomAction>> {
     let repo_path = Path::new(&path);
-    if !repo_path.join(".git").exists() {
+    if git2::Repository::open(repo_path).is_err() {
         return Err(GitnadoError::RepositoryNotFound(path));
     }
 
@@ -180,7 +187,7 @@ pub async fn save_custom_action(path: String, action: CustomAction) -> Result<Ve
 #[command]
 pub async fn delete_custom_action(path: String, action_id: String) -> Result<Vec<CustomAction>> {
     let repo_path = Path::new(&path);
-    if !repo_path.join(".git").exists() {
+    if git2::Repository::open(repo_path).is_err() {
         return Err(GitnadoError::RepositoryNotFound(path));
     }
 
@@ -211,7 +218,7 @@ pub async fn delete_custom_action(path: String, action_id: String) -> Result<Vec
 #[command]
 pub async fn run_custom_action(path: String, action_id: String) -> Result<ActionResult> {
     let repo_path = Path::new(&path);
-    if !repo_path.join(".git").exists() {
+    if git2::Repository::open(repo_path).is_err() {
         return Err(GitnadoError::RepositoryNotFound(path));
     }
 
@@ -678,5 +685,50 @@ mod tests {
         let repo = TestRepo::with_initial_commit();
         let branch = get_current_branch(&repo.path);
         assert_eq!(branch, "main");
+    }
+
+    #[test]
+    fn test_get_current_branch_detached_head() {
+        let repo = TestRepo::with_initial_commit();
+        let head_oid = repo.head_oid();
+        repo.repo().set_head_detached(head_oid).unwrap();
+        let branch = get_current_branch(&repo.path);
+        assert_eq!(branch, "");
+    }
+
+    #[tokio::test]
+    async fn test_custom_actions_in_linked_worktree() {
+        let repo = TestRepo::with_initial_commit();
+        let wt_parent = tempfile::tempdir().unwrap();
+        let wt_path = wt_parent.path().join("linked-wt");
+
+        {
+            let git = repo.repo();
+            git.worktree("linked-wt", &wt_path, None).unwrap();
+        }
+        assert!(
+            wt_path.join(".git").is_file(),
+            "linked worktree .git must be a file"
+        );
+
+        let wt_path_str = wt_path.to_string_lossy().to_string();
+        let action = make_action("wt-1", "Worktree Action", "echo from-wt");
+
+        let saved = save_custom_action(wt_path_str.clone(), action)
+            .await
+            .expect("save_custom_action should succeed inside linked worktree");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, "wt-1");
+
+        let fetched = get_custom_actions(wt_path_str)
+            .await
+            .expect("get_custom_actions should succeed inside linked worktree");
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0].name, "Worktree Action");
+
+        // Shared in common git dir, so main worktree also sees it
+        let from_main = get_custom_actions(repo.path_str()).await.unwrap();
+        assert_eq!(from_main.len(), 1);
+        assert_eq!(from_main[0].id, "wt-1");
     }
 }

@@ -719,7 +719,10 @@ pub async fn get_rebase_commits(path: String, onto: String) -> Result<RebasePlan
         .or_else(|_| repo.find_reference(&format!("refs/remotes/{}", onto)))
         .or_else(|_| repo.find_reference(&onto))
     {
-        Ok(r) => r.target().ok_or(GitnadoError::InvalidReference)?,
+        Ok(r) => r
+            .peel_to_commit()
+            .map_err(|_| GitnadoError::InvalidReference)?
+            .id(),
         Err(_) => repo.revparse_single(&onto)?.peel_to_commit()?.id(),
     };
 

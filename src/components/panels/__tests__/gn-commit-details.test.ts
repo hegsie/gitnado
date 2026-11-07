@@ -12,6 +12,7 @@ import { resetRefOpLocks } from '../../../utils/ref-lock.ts';
 
 let failingCommands: Set<string> = new Set();
 let mockFiles: unknown[] = [];
+let getCommitFilesOverride: ((args: unknown) => Promise<unknown[]>) | null = null;
 let cbId = 0;
 /** Every invoke made during a test, so restore can be asserted end to end. */
 const invokeHistory: Array<{ command: string; args?: unknown }> = [];
@@ -20,7 +21,7 @@ let confirmAnswer = 'Ok';
 
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 
-const mockInvoke: MockInvoke = async (command: string) => {
+const mockInvoke: MockInvoke = async (command: string, args?: unknown) => {
   if (command === 'plugin:notification|is_permission_granted') return false;
 
   // plugin-dialog 2.x routes confirm() through `message` and reads true only
@@ -32,6 +33,7 @@ const mockInvoke: MockInvoke = async (command: string) => {
   }
 
   if (command === 'get_commit_files') {
+    if (getCommitFilesOverride) return getCommitFilesOverride(args);
     return mockFiles;
   }
 
@@ -74,6 +76,7 @@ describe('gn-commit-details', () => {
   beforeEach(() => {
     failingCommands = new Set();
     mockFiles = [];
+    getCommitFilesOverride = null;
     invokeHistory.length = 0;
     confirmAnswer = 'Ok';
     uiStore.setState({ toasts: [] });
@@ -455,6 +458,45 @@ describe('gn-commit-details', () => {
       await el.updateComplete;
 
       expect(el.shadowRoot!.querySelector('.author-avatar')).to.be.null;
+    });
+  });
+
+  describe('stale loadFiles guard', () => {
+    it('discards out-of-order get_commit_files responses when commit changes mid-flight', async () => {
+      const secondCommit: Commit = { ...mockCommit, oid: 'def456abc789', shortId: 'def456a' };
+      let resolveFirst!: (files: unknown[]) => void;
+      const firstPromise = new Promise<unknown[]>((r) => {
+        resolveFirst = r;
+      });
+
+      getCommitFilesOverride = (args: unknown) => {
+        const { commitOid } = args as { commitOid: string };
+        if (commitOid === mockCommit.oid) {
+          return firstPromise;
+        }
+        return Promise.resolve([
+          { path: 'src/second.ts', status: 'modified', additions: 5, deletions: 0 },
+        ]);
+      };
+
+      const el = await fixture<GnCommitDetails>(
+        html`<gn-commit-details .repositoryPath=${'/test/repo'} .commit=${mockCommit}></gn-commit-details>`,
+      );
+
+      // Switch to secondCommit while firstCommit's get_commit_files is still pending
+      el.commit = secondCommit;
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 0));
+      await el.updateComplete;
+
+      // Now let the stale firstCommit request resolve
+      resolveFirst([{ path: 'src/stale-first.ts', status: 'added', additions: 1, deletions: 0 }]);
+      await new Promise((r) => setTimeout(r, 0));
+      await el.updateComplete;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const files = (el as any).files as Array<{ path: string }>;
+      expect(files.map((f) => f.path)).to.deep.equal(['src/second.ts']);
     });
   });
 });

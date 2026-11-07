@@ -65,9 +65,23 @@ pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
         let repo = git2::Repository::open(&path)
             .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repo: {}", e)))?;
 
-        let head = repo
-            .head()
-            .map_err(|e| GitnadoError::OperationFailed(format!("No HEAD: {}", e)))?;
+        let head = match repo.head() {
+            Ok(head) => head,
+            Err(e)
+                if e.code() == git2::ErrorCode::UnbornBranch
+                    || e.code() == git2::ErrorCode::NotFound =>
+            {
+                return Ok(RemoteStatus {
+                    ahead: 0,
+                    behind: 0,
+                    has_upstream: false,
+                    upstream_name: None,
+                });
+            }
+            Err(e) => {
+                return Err(GitnadoError::OperationFailed(format!("No HEAD: {}", e)));
+            }
+        };
 
         // Detached HEAD has no branch, so there is no upstream to compare
         // against — report "no upstream" rather than failing. shorthand()

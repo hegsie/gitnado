@@ -386,8 +386,6 @@ pub async fn fixup_commit(
                     repo.merge_trees(&parent_tree, &base_tree, &commit_tree, None)?;
 
                 if merge_result.has_conflicts() {
-                    // Write the conflicted index
-                    merge_result.write_tree_to(&repo)?;
                     return Err(GitnadoError::OperationFailed(format!(
                         "Conflict while replaying commit {}. Manual resolution required.",
                         commit.id()

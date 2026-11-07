@@ -1283,6 +1283,80 @@ mod tests {
         assert_eq!(a.summary().unwrap(), Some("Commit A"));
     }
 
+    #[tokio::test]
+    async fn test_drop_commit_conflict_returns_result_instead_of_err() {
+        let repo = TestRepo::with_initial_commit();
+
+        // Commit to drop creates file.txt = "line1"
+        let drop_oid = repo.create_commit("Drop this", &[("file.txt", "line1\n")]);
+        // Descendant modifies file.txt to "line2" (depends on drop_oid's change)
+        let tip_oid = repo.create_commit("Modify file", &[("file.txt", "line2\n")]);
+
+        let result = drop_commit(repo.path_str(), drop_oid.to_string()).await;
+        assert!(
+            result.is_ok(),
+            "conflicting drop_commit should return Ok(DropCommitResult), got {:?}",
+            result.err()
+        );
+        let drop_result = result.unwrap();
+        assert!(!drop_result.success);
+        assert!(drop_result.has_conflicts);
+        assert_eq!(drop_result.dropped_message, "Drop this");
+        assert_eq!(repo.head_oid(), tip_oid);
+    }
+
+    #[tokio::test]
+    async fn test_drop_commit_rejects_merge_commit_and_dropping_across_merge() {
+        let repo = TestRepo::with_initial_commit();
+        let main = repo.current_branch();
+
+        let before_merge = repo.create_commit("Before merge", &[("before.txt", "before")]);
+
+        repo.create_branch("side");
+        repo.checkout_branch("side");
+        let side_oid = repo.create_commit("Side work", &[("side.txt", "side")]);
+
+        repo.checkout_branch(&main);
+        repo.create_commit("Main work", &[("main.txt", "main")]);
+
+        // Create a real 2-parent merge commit
+        let merge_oid = {
+            let git = repo.repo();
+            let head = git.head().unwrap().peel_to_commit().unwrap();
+            let other = git.find_commit(side_oid).unwrap();
+            let mut merged = git.merge_commits(&head, &other, None).unwrap();
+            let tree_oid = merged.write_tree_to(&git).unwrap();
+            let tree = git.find_tree(tree_oid).unwrap();
+            let sig = git.signature().unwrap();
+            let oid = git
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    "Merge branch 'side'",
+                    &tree,
+                    &[&head, &other],
+                )
+                .unwrap();
+            let obj = git.find_object(oid, None).unwrap();
+            git.reset(&obj, git2::ResetType::Hard, None).unwrap();
+            oid
+        };
+
+        // 1. Directly dropping the merge commit must be rejected
+        let direct_err = drop_commit(repo.path_str(), merge_oid.to_string()).await;
+        assert!(direct_err.is_err(), "dropping a merge commit must fail");
+        assert_eq!(repo.head_oid(), merge_oid);
+
+        // 2. Dropping an ancestor commit across the merge commit must be rejected
+        let across_err = drop_commit(repo.path_str(), before_merge.to_string()).await;
+        assert!(
+            across_err.is_err(),
+            "dropping an ancestor across a merge commit must fail"
+        );
+        assert_eq!(repo.head_oid(), merge_oid);
+    }
+
     // ==================== Reorder Commits Tests ====================
 
     #[tokio::test]

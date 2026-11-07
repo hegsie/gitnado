@@ -1142,7 +1142,7 @@ export class AppShell extends LitElement {
   // handleWindowRefresh in an unbounded loop.
   private handleWindowRefresh = (e: Event): void => {
     const detail = (e as CustomEvent).detail as { source?: string; repoPath?: string } | undefined;
-    if (detail?.source === 'app-shell') return;
+    if (detail?.source === 'app-shell' || detail?.source === 'sidebar-panel') return;
     // When the refresh names the repo the operation ran on (a sidebar
     // stash/tag/branch success), pin to it — a plain handleRefresh would
     // refresh whichever tab is active if the user switched mid-operation,
@@ -4955,7 +4955,12 @@ export class AppShell extends LitElement {
       // `source: 'app-shell'` tag lets handleWindowRefresh ignore our own
       // emission so we don't loop back into a fresh handleRefresh.
       window.dispatchEvent(
-        new CustomEvent('repository-refresh', { detail: { source: 'app-shell' } }),
+        new CustomEvent('repository-refresh', {
+          detail: {
+            source: 'app-shell',
+            ...(refreshingPath ? { repoPath: refreshingPath } : {}),
+          },
+        }),
       );
       if (refreshingPath) {
         await this.ensureAutoFetchRunning(refreshingPath);
@@ -6200,7 +6205,8 @@ export class AppShell extends LitElement {
                 style="width: ${this.leftPanelWidth}px"
                 @tag-selected=${this.handleTagSelected}
                 @branch-selected=${this.handleBranchSelected}
-                @repository-changed=${() => this.handleRefresh()}
+                @repository-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
+                  this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
                 @create-tag=${(e: CustomEvent<{ targetRef?: string }>) =>
                   this.createTagDialog?.open(e.detail?.targetRef)}
                 @create-branch=${(e: CustomEvent<{ startPoint?: string }>) =>
@@ -6408,7 +6414,8 @@ export class AppShell extends LitElement {
                   @show-file-history=${this.handleShowFileHistory}
                   @copy-sha=${this.handleCopySha}
                   @notes-changed=${this.handleNotesChanged}
-                  @repository-changed=${() => this.handleRefresh()}
+                  @repository-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
+                    this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null)}
                 >
                   <gn-right-panel
                     .commit=${this.selectedCommit}

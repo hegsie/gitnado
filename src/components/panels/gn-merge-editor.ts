@@ -622,8 +622,8 @@ export class GnMergeEditor extends CodeRenderMixin(LitElement) {
     }
     if (changedProperties.has('repositoryPath')) {
       if (this.repositoryPath) {
-        await this.checkMergeToolAvailability();
-        await this.refreshAiAvailability();
+        void this.checkMergeToolAvailability();
+        void this.refreshAiAvailability();
       } else {
         this.mergeToolCheckSeq++;
         this.hasMergeTool = false;

@@ -213,9 +213,11 @@ export class GnRightPanel extends LitElement {
 
   private async detectGitHubRepo(): Promise<void> {
     if (!this.repositoryPath) return;
+    const repoPath = this.repositoryPath;
 
     try {
-      const result = await gitService.detectGitHubRepo(this.repositoryPath);
+      const result = await gitService.detectGitHubRepo(repoPath);
+      if (this.repositoryPath !== repoPath) return;
       if (result.success && result.data) {
         this.githubOwner = result.data.owner;
         this.githubRepo = result.data.repo;
@@ -224,6 +226,7 @@ export class GnRightPanel extends LitElement {
         this.githubRepo = '';
       }
     } catch {
+      if (this.repositoryPath !== repoPath) return;
       this.githubOwner = '';
       this.githubRepo = '';
     }
@@ -396,8 +399,18 @@ export class GnRightPanel extends LitElement {
   private handleCommitCreated(e?: Event): void {
     const repoPath = (e as CustomEvent<{ repositoryPath?: string }> | undefined)?.detail
       ?.repositoryPath;
-    this.dispatchEvent(new CustomEvent('repository-changed', { bubbles: true, composed: true }));
-    window.dispatchEvent(new CustomEvent('repository-refresh', { detail: { repoPath } }));
+    this.dispatchEvent(
+      new CustomEvent('repository-changed', {
+        detail: repoPath ? { repositoryPath: repoPath } : undefined,
+        bubbles: true,
+        composed: true,
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('repository-refresh', {
+        detail: { ...(repoPath ? { repoPath } : {}), source: 'sidebar-panel' },
+      })
+    );
   }
 }
 

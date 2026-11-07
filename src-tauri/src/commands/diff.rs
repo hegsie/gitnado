@@ -518,8 +518,12 @@ fn parse_diff(diff: &git2::Diff) -> Result<Vec<DiffFile>> {
             .unwrap_or_default();
 
         // Find or create file entry
-        let file_entry = if let Some(entry) = files.iter_mut().find(|f| f.path == file_path) {
-            entry
+        let file_entry = if files.last().is_some_and(|f| f.path == file_path) {
+            files
+                .last_mut()
+                .expect("files vec must be non-empty after last() check")
+        } else if let Some(pos) = files.iter().position(|f| f.path == file_path) {
+            &mut files[pos]
         } else {
             let status = match delta.status() {
                 git2::Delta::Added => FileStatus::New,
@@ -571,10 +575,8 @@ fn parse_diff(diff: &git2::Diff) -> Result<Vec<DiffFile>> {
         if let Some(hunk) = hunk {
             let header = String::from_utf8_lossy(hunk.header()).to_string();
 
-            // Check if this hunk already exists
-            let hunk_exists = file_entry.hunks.iter().any(|h| h.header == header);
-
-            if !hunk_exists {
+            // Check if this hunk is different from the active (last) hunk
+            if file_entry.hunks.last().is_none_or(|h| h.header != header) {
                 file_entry.hunks.push(DiffHunk {
                     header,
                     old_start: hunk.old_start(),
@@ -1069,6 +1071,8 @@ pub async fn get_file_blame(
             .unwrap_or(content_lines.len());
 
         let mut lines = Vec::new();
+        let mut commit_cache: std::collections::HashMap<git2::Oid, (String, String, i64, String)> =
+            std::collections::HashMap::new();
 
         for (i, line_content) in content_lines
             .iter()
@@ -1100,18 +1104,22 @@ pub async fn get_file_blame(
                 }
 
                 // Get commit details
-                let (author_name, author_email, timestamp, summary) =
-                    if let Ok(commit) = repo.find_commit(commit_id) {
-                        let author = commit.author();
-                        (
-                            author.name().unwrap_or("Unknown").to_string(),
-                            author.email().unwrap_or("").to_string(),
-                            author.when().seconds(),
-                            commit.summary().ok().flatten().unwrap_or("").to_string(),
-                        )
-                    } else {
-                        ("Unknown".to_string(), "".to_string(), 0, "".to_string())
-                    };
+                let (author_name, author_email, timestamp, summary) = commit_cache
+                    .entry(commit_id)
+                    .or_insert_with(|| {
+                        if let Ok(commit) = repo.find_commit(commit_id) {
+                            let author = commit.author();
+                            (
+                                author.name().unwrap_or("Unknown").to_string(),
+                                author.email().unwrap_or("").to_string(),
+                                author.when().seconds(),
+                                commit.summary().ok().flatten().unwrap_or("").to_string(),
+                            )
+                        } else {
+                            ("Unknown".to_string(), "".to_string(), 0, "".to_string())
+                        }
+                    })
+                    .clone();
 
                 lines.push(BlameLine {
                     line_number: line_num,

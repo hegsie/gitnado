@@ -368,6 +368,9 @@ pub async fn rename_branch(
                 // Re-fetch the branch after setting upstream
                 renamed_branch = repo.find_branch(&new_name, git2::BranchType::Local)?;
             }
+        } else if let Ok(mut b) = repo.find_branch(&new_name, git2::BranchType::Local) {
+            let _ = b.set_upstream(None);
+            renamed_branch = repo.find_branch(&new_name, git2::BranchType::Local)?;
         }
 
         let reference = renamed_branch.get();
@@ -1968,7 +1971,26 @@ mod tests {
     #[tokio::test]
     async fn test_rename_branch_with_update_tracking_false() {
         let repo = TestRepo::with_initial_commit();
+        repo.add_remote("origin", "https://example.com/repo.git");
         repo.create_branch("old-name");
+
+        // Configure an upstream tracking branch on old-name
+        {
+            let git = repo.repo();
+            let head_commit = git.head().unwrap().peel_to_commit().unwrap();
+            git.reference(
+                "refs/remotes/origin/old-name",
+                head_commit.id(),
+                true,
+                "remote tracking ref",
+            )
+            .unwrap();
+            let mut b = git
+                .find_branch("old-name", git2::BranchType::Local)
+                .unwrap();
+            b.set_upstream(Some("origin/old-name")).unwrap();
+            assert!(b.upstream().is_ok());
+        }
 
         let result = rename_branch(
             repo.path_str(),
@@ -1981,6 +2003,19 @@ mod tests {
         assert!(result.is_ok());
         let branch = result.unwrap();
         assert_eq!(branch.name, "new-name");
+        assert!(
+            branch.upstream.is_none(),
+            "update_tracking=Some(false) must clear upstream on returned Branch"
+        );
+
+        let git = repo.repo();
+        let renamed = git
+            .find_branch("new-name", git2::BranchType::Local)
+            .unwrap();
+        assert!(
+            renamed.upstream().is_err(),
+            "update_tracking=Some(false) must clear upstream in git config"
+        );
     }
 
     #[tokio::test]

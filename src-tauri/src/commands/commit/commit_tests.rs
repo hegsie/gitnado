@@ -2051,6 +2051,140 @@ mod tests {
         assert_eq!(time.offset_minutes(), 0);
     }
 
+    #[tokio::test]
+    async fn test_get_commit_history_and_file_history_unborn_repo() {
+        let repo = TestRepo::new();
+
+        let commits = get_commit_history(repo.path_str(), None, None, None, None)
+            .await
+            .expect("get_commit_history on unborn repo should return Ok(vec![])");
+        assert!(commits.is_empty());
+
+        let file_history =
+            get_file_history(repo.path_str(), "README.md".to_string(), None, Some(true))
+                .await
+                .expect("get_file_history on unborn repo should return Ok(vec![])");
+        assert!(file_history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_commits_with_annotated_tag_branch_filter() {
+        let repo = TestRepo::with_initial_commit();
+        let tagged_oid = repo.create_commit("Release v1.0", &[("version.txt", "1.0.0")]);
+        {
+            let git_repo = repo.repo();
+            let target_obj = git_repo
+                .find_object(tagged_oid, Some(git2::ObjectType::Commit))
+                .unwrap();
+            let sig = git_repo.signature().unwrap();
+            git_repo
+                .tag("v1.0-annotated", &target_obj, &sig, "Annotated v1.0", false)
+                .unwrap();
+        }
+        repo.create_commit("Post-release commit", &[("version.txt", "1.0.1-dev")]);
+
+        let commits = search_commits(
+            repo.path_str(),
+            Some("Release v1.0".to_string()),
+            None,
+            None,
+            None,
+            None,
+            Some("v1.0-annotated".to_string()),
+            Some(100),
+        )
+        .await
+        .expect("search_commits with annotated tag must resolve to its commit");
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].oid, tagged_oid.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_file_history_skips_merge_commit_for_branch_added_file() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit("Base work", &[("base.txt", "base")]);
+
+        // Create a side commit adding feature.txt, then a merge commit on HEAD
+        // whose first parent is on main (where feature.txt did not exist).
+        let (side_oid, merge_oid) = {
+            let git_repo = repo.repo();
+            let sig = git_repo.signature().unwrap();
+            let base = git_repo.head().unwrap().peel_to_commit().unwrap();
+
+            // Side commit adds feature.txt
+            let feature_blob = git_repo.blob(b"feature content\n").unwrap();
+            let mut side_builder = git_repo.treebuilder(Some(&base.tree().unwrap())).unwrap();
+            side_builder
+                .insert("feature.txt", feature_blob, 0o100644)
+                .unwrap();
+            let side_tree = git_repo.find_tree(side_builder.write().unwrap()).unwrap();
+            let side_oid = git_repo
+                .commit(
+                    None,
+                    &sig,
+                    &sig,
+                    "Add feature.txt on branch",
+                    &side_tree,
+                    &[&base],
+                )
+                .unwrap();
+
+            // Main commit touches main.txt
+            let main_blob = git_repo.blob(b"main content\n").unwrap();
+            let mut main_builder = git_repo.treebuilder(Some(&base.tree().unwrap())).unwrap();
+            main_builder
+                .insert("main.txt", main_blob, 0o100644)
+                .unwrap();
+            let main_tree = git_repo.find_tree(main_builder.write().unwrap()).unwrap();
+            let main_oid = git_repo
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    "Main branch commit",
+                    &main_tree,
+                    &[&base],
+                )
+                .unwrap();
+
+            // Merge commit has both main.txt and feature.txt
+            let mut merge_builder = git_repo.treebuilder(Some(&main_tree)).unwrap();
+            merge_builder
+                .insert("feature.txt", feature_blob, 0o100644)
+                .unwrap();
+            let merge_tree = git_repo.find_tree(merge_builder.write().unwrap()).unwrap();
+            let main_commit = git_repo.find_commit(main_oid).unwrap();
+            let side_commit = git_repo.find_commit(side_oid).unwrap();
+            let merge_oid = git_repo
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    "Merge feature branch",
+                    &merge_tree,
+                    &[&main_commit, &side_commit],
+                )
+                .unwrap();
+            (side_oid, merge_oid)
+        };
+
+        let entries =
+            get_file_history(repo.path_str(), "feature.txt".to_string(), None, Some(true))
+                .await
+                .unwrap();
+
+        let oids: Vec<&str> = entries.iter().map(|e| e.commit.oid.as_str()).collect();
+        assert!(
+            oids.contains(&side_oid.to_string().as_str()),
+            "the branch commit that added feature.txt must be in file history"
+        );
+        assert!(
+            !oids.contains(&merge_oid.to_string().as_str()),
+            "the merge commit must not be falsely attributed in file history"
+        );
+    }
+
     #[test]
     fn test_parse_iso8601_invalid_format() {
         let result = parse_iso8601_to_git_time("not-a-date");

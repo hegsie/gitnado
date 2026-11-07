@@ -376,7 +376,10 @@ export class GnGitflowPanel extends LitElement {
     window.removeEventListener('repository-refresh', this.handleRepositoryRefresh);
   }
 
-  private handleRepositoryRefresh = (): void => {
+  private handleRepositoryRefresh = (e: Event): void => {
+    const detail = (e as CustomEvent<{ repoPath?: string; source?: string }>).detail;
+    if (detail?.source === 'sidebar-panel') return;
+    if (detail?.repoPath && detail.repoPath !== this.repositoryPath) return;
     void this.loadConfig();
   };
 
