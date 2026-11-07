@@ -277,5 +277,31 @@ describe('commits.store', () => {
       expect(state.commits.length).to.equal(0);
       expect(state.commitsByRepo['/repo/alpha']).to.be.undefined;
     });
+
+    it('bounds cached repository tabs to 8 via LRU and caps background slice commits at 500', () => {
+      const store = commitsStore.getState();
+      for (let i = 1; i <= 10; i++) {
+        store.setActiveRepo(`/repo/${i}`);
+        store.setCommits([createMockCommit(`oid-${i}`)]);
+      }
+
+      const cachedKeys = Object.keys(commitsStore.getState().commitsByRepo);
+      expect(cachedKeys.length).to.equal(8);
+      expect(cachedKeys).to.not.include('/repo/1');
+      expect(cachedKeys).to.not.include('/repo/2');
+      expect(cachedKeys).to.include('/repo/10');
+
+      const largeList = Array.from({ length: 650 }, (_, idx) =>
+        createMockCommit(`large-${idx}`)
+      );
+      store.setCommits(largeList);
+      store.setHasMore(false);
+      // Switching away trims the outgoing background slice to 500 commits and marks hasMore = true
+      store.setActiveRepo('/repo/3');
+      const backgroundSlice = commitsStore.getState().commitsByRepo['/repo/10'];
+      expect(backgroundSlice.commits.length).to.equal(500);
+      expect(backgroundSlice.commitMap.size).to.equal(500);
+      expect(backgroundSlice.hasMore).to.be.true;
+    });
   });
 });

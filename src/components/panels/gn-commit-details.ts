@@ -825,25 +825,14 @@ export class GnCommitDetails extends LitElement {
     if (!this.repositoryPath || !this.commit) return;
     const repoPath = this.repositoryPath;
     const commitOid = this.commit.oid;
-    const authorEmail = this.commit.author.email;
-    const allowAvatar = Boolean(authorEmail) && shouldFetchAvatarsNow();
 
-    const [sigResult, avatarResult] = await Promise.all([
-      gitService.verifyCommitSignature(repoPath, commitOid),
-      allowAvatar
-        ? gitService.getAvatarUrl({ email: authorEmail, size: 40 })
-        : Promise.resolve({ success: false as const }),
-    ]);
+    void this.loadAuthorAvatar();
 
+    const sigResult = await gitService.verifyCommitSignature(repoPath, commitOid);
     if (this.repositoryPath !== repoPath || this.commit?.oid !== commitOid) return;
 
     if (sigResult.success && sigResult.data?.isSigned) {
       this.signatureInfo = sigResult.data;
-    }
-    if (shouldFetchAvatarsNow() && avatarResult.success && avatarResult.data?.gravatarUrl) {
-      this.authorAvatarUrl = avatarResult.data.gravatarUrl;
-    } else {
-      this.authorAvatarUrl = null;
     }
   }
 

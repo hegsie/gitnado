@@ -159,13 +159,10 @@ fn detect_signature_type(raw_output: &str, repo_path: &Path) -> Option<String> {
 }
 
 /// Verify the signature of a single commit
-#[command]
-pub async fn verify_commit_signature(
-    path: String,
+fn verify_commit_signature_sync(
+    repo_path: &Path,
     commit_id: String,
 ) -> Result<CommitSignatureInfo> {
-    let repo_path = Path::new(&path);
-
     // First, get structured signature info via git log format
     let log_output = run_git(
         repo_path,
@@ -179,6 +176,18 @@ pub async fn verify_commit_signature(
             let status = parse_status_char(status_char);
             let is_signed = status != SignatureStatus::Unsigned;
 
+            if !is_signed {
+                return Ok(CommitSignatureInfo {
+                    commit_id,
+                    is_signed: false,
+                    signature_status: SignatureStatus::Unsigned,
+                    signer_name: None,
+                    signer_email: None,
+                    key_id: None,
+                    signature_type: None,
+                });
+            }
+
             let key_id = parts
                 .get(1)
                 .map(|s| s.trim().to_string())
@@ -189,7 +198,7 @@ pub async fn verify_commit_signature(
 
             let raw_output = parts.get(3).unwrap_or(&"").to_string();
 
-            // Also try verify-commit for more detailed output
+            // Also try verify-commit for more detailed output on signed commits
             let verify_output =
                 run_git_combined(repo_path, &["verify-commit", "--raw", &commit_id]);
             let combined_raw = match verify_output {
@@ -197,15 +206,11 @@ pub async fn verify_commit_signature(
                 Err(_) => raw_output.clone(),
             };
 
-            let signature_type = if is_signed {
-                detect_signature_type(&combined_raw, repo_path)
-            } else {
-                None
-            };
+            let signature_type = detect_signature_type(&combined_raw, repo_path);
 
             Ok(CommitSignatureInfo {
                 commit_id,
-                is_signed,
+                is_signed: true,
                 signature_status: status,
                 signer_name,
                 signer_email,
@@ -225,159 +230,176 @@ pub async fn verify_commit_signature(
     }
 }
 
+/// Verify the signature of a single commit
+#[command]
+pub async fn verify_commit_signature(
+    path: String,
+    commit_id: String,
+) -> Result<CommitSignatureInfo> {
+    crate::utils::blocking_git(move || verify_commit_signature_sync(Path::new(&path), commit_id))
+        .await
+}
+
 /// Verify signatures for multiple commits in a batch
 #[command]
 pub async fn get_commits_signature_info(
     path: String,
     commit_ids: Vec<String>,
 ) -> Result<Vec<CommitSignatureInfo>> {
-    let repo_path = Path::new(&path);
-
     if commit_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Build a git log command to get signature info for all requested commits
-    // Use %H to get full commit hash so we can match results
-    let format = "%H|%G?|%GK|%GS";
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    // We need to iterate over the commits to get their info
-    // Use git log with specific revisions
-    let mut results = Vec::new();
+        // Build a git log command to get signature info for all requested commits
+        // Use %H to get full commit hash so we can match results
+        let format = "%H|%G?|%GK|%GS";
 
-    // For efficiency, try a single git log call with all commits
-    // We'll pass them as revision arguments
-    let mut args = vec![
-        "log".to_string(),
-        format!("--format={}", format),
-        "--no-walk".to_string(),
-    ];
-    for id in &commit_ids {
-        args.push(id.clone());
-    }
+        let mut results = Vec::new();
 
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let log_output = run_git(repo_path, &arg_refs);
+        let mut args = vec![
+            "log".to_string(),
+            format!("--format={}", format),
+            "--no-walk".to_string(),
+        ];
+        for id in &commit_ids {
+            args.push(id.clone());
+        }
 
-    match log_output {
-        Ok(output) => {
-            // Build a map of commit_id -> parsed info
-            let mut info_map = std::collections::HashMap::new();
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let log_output = run_git(repo_path, &arg_refs);
 
-            for line in output.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
+        match log_output {
+            Ok(output) => {
+                // Build a map of commit_id -> parsed info
+                let mut info_map = std::collections::HashMap::new();
+                let mut cached_format: Option<Option<String>> = None;
 
-                let parts: Vec<&str> = line.splitn(4, '|').collect();
-                if parts.is_empty() {
-                    continue;
-                }
+                for line in output.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
 
-                let full_hash = parts[0].trim().to_string();
-                let status_char = parts.get(1).unwrap_or(&"N");
-                let status = parse_status_char(status_char);
-                let is_signed = status != SignatureStatus::Unsigned;
+                    let parts: Vec<&str> = line.splitn(4, '|').collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
 
-                let key_id = parts
-                    .get(2)
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
+                    let full_hash = parts[0].trim().to_string();
+                    let status_char = parts.get(1).unwrap_or(&"N");
+                    let status = parse_status_char(status_char);
+                    let is_signed = status != SignatureStatus::Unsigned;
 
-                let signer_str = parts.get(3).unwrap_or(&"").trim();
-                let (signer_name, signer_email) = parse_signer(signer_str);
+                    let key_id = parts
+                        .get(2)
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
 
-                // Detect signature type from config if signed
-                let signature_type = if is_signed {
-                    run_git(repo_path, &["config", "--get", "gpg.format"])
-                        .ok()
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| Some("gpg".to_string()))
-                } else {
-                    None
-                };
+                    let signer_str = parts.get(3).unwrap_or(&"").trim();
+                    let (signer_name, signer_email) = parse_signer(signer_str);
 
-                info_map.insert(
-                    full_hash.clone(),
-                    CommitSignatureInfo {
-                        commit_id: full_hash,
-                        is_signed,
-                        signature_status: status,
-                        signer_name,
-                        signer_email,
-                        key_id,
-                        signature_type,
-                    },
-                );
-            }
-
-            // Return results in the same order as the input commit_ids
-            for id in &commit_ids {
-                if let Some(info) = info_map.remove(id) {
-                    results.push(info);
-                } else {
-                    // Check if a short hash matches
-                    let matched = info_map.keys().find(|k| k.starts_with(id)).cloned();
-
-                    if let Some(full_hash) = matched {
-                        if let Some(mut info) = info_map.remove(&full_hash) {
-                            info.commit_id = id.clone();
-                            results.push(info);
-                        }
+                    // Detect signature type from config if signed (cached once per batch)
+                    let signature_type = if is_signed {
+                        cached_format
+                            .get_or_insert_with(|| {
+                                run_git(repo_path, &["config", "--get", "gpg.format"])
+                                    .ok()
+                                    .filter(|s| !s.is_empty())
+                                    .or_else(|| Some("gpg".to_string()))
+                            })
+                            .clone()
                     } else {
-                        // Commit not found in batch output, return unsigned
-                        results.push(CommitSignatureInfo {
-                            commit_id: id.clone(),
-                            is_signed: false,
-                            signature_status: SignatureStatus::Unsigned,
-                            signer_name: None,
-                            signer_email: None,
-                            key_id: None,
-                            signature_type: None,
-                        });
+                        None
+                    };
+
+                    info_map.insert(
+                        full_hash.clone(),
+                        CommitSignatureInfo {
+                            commit_id: full_hash,
+                            is_signed,
+                            signature_status: status,
+                            signer_name,
+                            signer_email,
+                            key_id,
+                            signature_type,
+                        },
+                    );
+                }
+
+                // Return results in the same order as the input commit_ids
+                for id in &commit_ids {
+                    if let Some(info) = info_map.remove(id) {
+                        results.push(info);
+                    } else {
+                        // Check if a short hash matches
+                        let matched = info_map.keys().find(|k| k.starts_with(id)).cloned();
+
+                        if let Some(full_hash) = matched {
+                            if let Some(mut info) = info_map.remove(&full_hash) {
+                                info.commit_id = id.clone();
+                                results.push(info);
+                            }
+                        } else {
+                            // Commit not found in batch output, return unsigned
+                            results.push(CommitSignatureInfo {
+                                commit_id: id.clone(),
+                                is_signed: false,
+                                signature_status: SignatureStatus::Unsigned,
+                                signer_name: None,
+                                signer_email: None,
+                                key_id: None,
+                                signature_type: None,
+                            });
+                        }
                     }
                 }
             }
-        }
-        Err(_) => {
-            // Fallback: process each commit individually
-            for id in &commit_ids {
-                let info = verify_commit_signature(path.clone(), id.clone()).await?;
-                results.push(info);
+            Err(_) => {
+                // Fallback: process each commit individually
+                for id in &commit_ids {
+                    let info = verify_commit_signature_sync(repo_path, id.clone())?;
+                    results.push(info);
+                }
             }
         }
-    }
 
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 /// Get the signing configuration for a repository
 #[command]
 pub async fn get_signing_config(path: String) -> Result<SigningConfig> {
-    let repo_path = Path::new(&path);
+    crate::utils::blocking_git(move || {
+        let repo_path = Path::new(&path);
 
-    // Check commit.gpgsign
-    let signing_enabled = run_git(repo_path, &["config", "--get", "commit.gpgsign"])
-        .ok()
-        .map(|s| s.trim() == "true")
-        .unwrap_or(false);
+        // Check commit.gpgsign
+        let signing_enabled = run_git(repo_path, &["config", "--get", "commit.gpgsign"])
+            .ok()
+            .map(|s| s.trim() == "true")
+            .unwrap_or(false);
 
-    // Check user.signingkey
-    let signing_key = run_git(repo_path, &["config", "--get", "user.signingkey"])
-        .ok()
-        .filter(|s| !s.is_empty());
+        // Check user.signingkey
+        let signing_key = run_git(repo_path, &["config", "--get", "user.signingkey"])
+            .ok()
+            .filter(|s| !s.is_empty());
 
-    // Check gpg.format
-    let signing_format = run_git(repo_path, &["config", "--get", "gpg.format"])
-        .ok()
-        .filter(|s| !s.is_empty());
+        // Check gpg.format
+        let signing_format = run_git(repo_path, &["config", "--get", "gpg.format"])
+            .ok()
+            .filter(|s| !s.is_empty());
 
-    Ok(SigningConfig {
-        signing_enabled,
-        signing_key,
-        signing_format,
+        Ok(SigningConfig {
+            signing_enabled,
+            signing_key,
+            signing_format,
+        })
     })
+    .await
 }
 
 #[cfg(test)]

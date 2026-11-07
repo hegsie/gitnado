@@ -10,7 +10,7 @@ import type { GnExportImportDialog } from './components/dialogs/gn-export-import
 import type { GnDescribeDialog } from './components/dialogs/gn-describe-dialog.ts';
 import type { GnCompareBranchesDialog } from './components/dialogs/gn-compare-branches-dialog.ts';
 import { dialogs } from './stores/dialog.store.ts';
-import { uiStore } from './stores/index.ts';
+import { repositoryStore, uiStore } from './stores/index.ts';
 import { showToast } from './services/notification.service.ts';
 import { showConfirm, showPrompt } from './services/dialog.service.ts';
 import {
@@ -580,17 +580,123 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
     },
     {
       id: 'bookmark-repository',
-      label: 'Bookmark Current Repository',
+      label: 'Toggle Bookmark for Current Repository',
       category: 'action',
       icon: 'tag',
       action: shell.requiresRepository(async () => {
         const repo = shell.activeRepository!.repository;
         const git = await import('./services/git.service.ts');
-        const result = await git.addBookmark(repo.path, repo.name);
-        if (result.success) {
-          showToast(`Bookmarked ${repo.name}`, 'success');
+        const existingRes = await git.getBookmarks();
+        const isBookmarked =
+          existingRes.success && existingRes.data?.some(b => b.path === repo.path);
+        if (isBookmarked) {
+          const removeRes = await git.removeBookmark(repo.path);
+          if (removeRes.success) {
+            showToast(`Removed bookmark for ${repo.name}`, 'info');
+          } else {
+            showToast(removeRes.error?.message ?? 'Failed to remove bookmark', 'error');
+          }
         } else {
-          showToast(result.error?.message ?? 'Failed to bookmark repository', 'error');
+          const result = await git.addBookmark(repo.path, repo.name);
+          if (result.success) {
+            showToast(`Bookmarked ${repo.name}`, 'success');
+          } else {
+            showToast(result.error?.message ?? 'Failed to bookmark repository', 'error');
+          }
+        }
+      }),
+    },
+    {
+      id: 'open-bookmarked-repository',
+      label: 'Open Bookmarked Repository…',
+      category: 'navigation',
+      icon: 'folder',
+      action: async () => {
+        const git = await import('./services/git.service.ts');
+        const res = await git.getBookmarks();
+        if (!res.success || !res.data || res.data.length === 0) {
+          showToast('No bookmarked repositories yet', 'info');
+          return;
+        }
+        const names = res.data.map(b => `${b.name} (${b.path})`).join(', ');
+        const chosen = await showPrompt('Open Bookmarked Repository', `Choose bookmark by name or path (${names}):`);
+        if (!chosen) return;
+        const needle = chosen.trim().toLowerCase();
+        const match = res.data.find(
+          b => b.name.toLowerCase() === needle || b.path.toLowerCase() === needle
+        );
+        if (!match) {
+          showToast(`Bookmark "${chosen}" not found`, 'error');
+          return;
+        }
+        const openRes = await git.openRepository({ path: match.path });
+        if (openRes.success && openRes.data) {
+          repositoryStore.getState().addRepository(openRes.data);
+          showToast(`Opened ${match.name}`, 'success');
+        } else {
+          showToast(openRes.error?.message ?? `Failed to open ${match.name}`, 'error');
+        }
+      },
+    },
+    {
+      id: 'create-custom-action',
+      label: 'Create Custom Action…',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(async () => {
+        const repoPath = shell.activeRepository!.repository.path;
+        const name = await showPrompt('Create Custom Action', 'Action name:');
+        if (!name || !name.trim()) return;
+        const command = await showPrompt('Create Custom Action', `Shell command for "${name.trim()}":`);
+        if (!command || !command.trim()) return;
+        const git = await import('./services/git.service.ts');
+        const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `action-${Date.now()}`;
+        const saveRes = await git.saveCustomAction(repoPath, {
+          id,
+          name: name.trim(),
+          command: command.trim(),
+          arguments: null,
+          workingDirectory: null,
+          shortcut: null,
+          showInToolbar: false,
+          openInTerminal: false,
+          confirmBeforeRun: false,
+        });
+        if (saveRes.success) {
+          showToast(`Saved custom action "${name.trim()}"`, 'success');
+        } else {
+          showToast(saveRes.error?.message ?? 'Failed to save custom action', 'error');
+        }
+      }),
+    },
+    {
+      id: 'delete-custom-action',
+      label: 'Delete Custom Action…',
+      category: 'action',
+      icon: 'trash',
+      action: shell.requiresRepository(async () => {
+        const repoPath = shell.activeRepository!.repository.path;
+        const git = await import('./services/git.service.ts');
+        const actionsRes = await git.getCustomActions(repoPath);
+        if (!actionsRes.success || !actionsRes.data || actionsRes.data.length === 0) {
+          showToast('No custom actions configured for this repository', 'info');
+          return;
+        }
+        const names = actionsRes.data.map(a => a.name).join(', ');
+        const chosen = await showPrompt('Delete Custom Action', `Action to delete (${names}):`);
+        if (!chosen) return;
+        const match = actionsRes.data.find(
+          a => a.name.toLowerCase() === chosen.trim().toLowerCase() || a.id === chosen.trim()
+        );
+        if (!match) {
+          showToast(`Custom action "${chosen}" not found`, 'error');
+          return;
+        }
+        const delRes = await git.deleteCustomAction(repoPath, match.id);
+        if (delRes.success) {
+          showToast(`Deleted custom action "${match.name}"`, 'info');
+        } else {
+          showToast(delRes.error?.message ?? 'Failed to delete custom action', 'error');
         }
       }),
     },

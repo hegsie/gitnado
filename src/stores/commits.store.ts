@@ -68,6 +68,42 @@ function createEmptySlice(): RepoCommitsSlice {
   };
 }
 
+const MAX_CACHED_REPOS = 8;
+const MAX_CACHED_COMMITS_PER_REPO = 500;
+
+function trimSliceForCache(slice: RepoCommitsSlice): RepoCommitsSlice {
+  const cappedCommits =
+    slice.commits.length > MAX_CACHED_COMMITS_PER_REPO
+      ? slice.commits.slice(0, MAX_CACHED_COMMITS_PER_REPO)
+      : slice.commits;
+  const cappedMap =
+    cappedCommits.length === slice.commits.length
+      ? slice.commitMap
+      : new Map(cappedCommits.map((c) => [c.oid, c]));
+  return {
+    ...slice,
+    commits: cappedCommits,
+    commitMap: cappedMap,
+    hasMore: slice.hasMore || slice.commits.length > MAX_CACHED_COMMITS_PER_REPO,
+  };
+}
+
+function enforceRepoCacheLimit(
+  commitsByRepo: Record<string, RepoCommitsSlice>,
+  activeRepoPath: string | null
+): Record<string, RepoCommitsSlice> {
+  const keys = Object.keys(commitsByRepo);
+  if (keys.length <= MAX_CACHED_REPOS) return commitsByRepo;
+  const result = { ...commitsByRepo };
+  for (const key of keys) {
+    if (Object.keys(result).length <= MAX_CACHED_REPOS) break;
+    if (key !== activeRepoPath) {
+      delete result[key];
+    }
+  }
+  return result;
+}
+
 const initialState = {
   activeRepoPath: null as string | null,
   commitsByRepo: {} as Record<string, RepoCommitsSlice>,
@@ -86,9 +122,11 @@ export const commitsStore = createStore<CommitsState>((set, get) => ({
   setActiveRepo: (repoPath) =>
     set((state) => {
       if (state.activeRepoPath === repoPath) return state;
-      const updatedByRepo = { ...state.commitsByRepo };
+      let updatedByRepo = { ...state.commitsByRepo };
       if (state.activeRepoPath) {
-        updatedByRepo[state.activeRepoPath] = {
+        // Re-insert so MRU order is preserved at the tail of Object.keys
+        delete updatedByRepo[state.activeRepoPath];
+        updatedByRepo[state.activeRepoPath] = trimSliceForCache({
           commits: state.commits,
           commitMap: state.commitMap,
           isLoading: state.isLoading,
@@ -96,12 +134,14 @@ export const commitsStore = createStore<CommitsState>((set, get) => ({
           graphLayout: state.graphLayout,
           selection: state.selection,
           generation: state.generation,
-        };
+        });
       }
       const nextSlice = (repoPath && updatedByRepo[repoPath]) || createEmptySlice();
-      if (repoPath && !updatedByRepo[repoPath]) {
+      if (repoPath) {
+        delete updatedByRepo[repoPath];
         updatedByRepo[repoPath] = nextSlice;
       }
+      updatedByRepo = enforceRepoCacheLimit(updatedByRepo, repoPath);
       return {
         activeRepoPath: repoPath,
         commitsByRepo: updatedByRepo,
@@ -199,24 +239,30 @@ export const commitsStore = createStore<CommitsState>((set, get) => ({
       if (targetRepo && targetRepo !== state.activeRepoPath) {
         const slice = state.commitsByRepo[targetRepo] ?? createEmptySlice();
         const commits = [...slice.commits, ...newCommits];
-        const commitMap = new Map(commits.map((c) => [c.oid, c]));
+        const commitMap = new Map(slice.commitMap);
+        for (const c of newCommits) {
+          commitMap.set(c.oid, c);
+        }
         return {
           commitsByRepo: {
             ...state.commitsByRepo,
-            [targetRepo]: { ...slice, commits, commitMap },
+            [targetRepo]: trimSliceForCache({ ...slice, commits, commitMap }),
           },
         };
       }
       const commits = [...state.commits, ...newCommits];
-      const commitMap = new Map(commits.map((c) => [c.oid, c]));
+      const commitMap = new Map(state.commitMap);
+      for (const c of newCommits) {
+        commitMap.set(c.oid, c);
+      }
       const commitsByRepo = targetRepo
         ? {
             ...state.commitsByRepo,
-            [targetRepo]: {
+            [targetRepo]: trimSliceForCache({
               ...(state.commitsByRepo[targetRepo] ?? createEmptySlice()),
               commits,
               commitMap,
-            },
+            }),
           }
         : state.commitsByRepo;
       return { commits, commitMap, commitsByRepo };
