@@ -810,6 +810,7 @@ pub fn run() {
             commands::pty::pty_resize,
             commands::pty::pty_kill,
             commands::pty::pty_list,
+            commands::agent_sessions::list_agent_sessions,
             commands::terminal::open_file_manager,
             commands::terminal::open_in_editor,
             // Repository statistics

@@ -1,6 +1,7 @@
 //! Tauri command handlers
 
 pub mod advanced_search;
+pub mod agent_sessions;
 pub mod ai;
 pub mod archive;
 pub mod autofetch;

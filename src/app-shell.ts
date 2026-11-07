@@ -94,6 +94,7 @@ import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
 import './components/dialogs/gn-start-agent-dialog.ts';
 import './components/dialogs/gn-change-feed-dialog.ts';
+import './components/dialogs/gn-agent-sessions-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -1794,6 +1795,11 @@ export class AppShell extends LitElement {
             dismissed: 'agent change feed closed',
             running: 'accept/revert of an agent change',
             clearFlag: () => { dialogs.close('changeFeed'); },
+          },
+          'gn-agent-sessions-dialog': {
+            dismissed: 'agent sessions closed',
+            running: 'agent session refresh',
+            clearFlag: () => { dialogs.close('agentSessions'); },
           },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
@@ -6684,6 +6690,12 @@ export class AppShell extends LitElement {
             this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
           }}
         ></gn-change-feed-dialog>
+
+        <gn-agent-sessions-dialog
+          ?open=${dialogs.isOpen('agentSessions')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { dialogs.close('agentSessions'); }}
+        ></gn-agent-sessions-dialog>
 
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}

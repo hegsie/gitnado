@@ -559,6 +559,7 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
       action: shell.requiresRepository(() => { dialogs.open('reflog'); }),
     },
     {
+<<<<<<< HEAD
       id: 'undo-last-action',
       label: 'Undo Last Git Action',
       category: 'action',
@@ -765,6 +766,13 @@ export function buildPaletteCommands(shell: PaletteCommandHost): PaletteCommand[
           showToast(runRes.error?.message ?? runRes.data?.stderr ?? `Custom action "${match.name}" failed`, 'error');
         }
       }),
+    },
+    {
+      id: 'agent-sessions',
+      label: 'Agent Sessions (running coding agents)',
+      category: 'action',
+      icon: 'terminal',
+      action: shell.requiresRepository(() => { dialogs.open('agentSessions'); }),
     },
     {
       id: 'describe',
