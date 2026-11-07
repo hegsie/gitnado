@@ -4,7 +4,7 @@ mod fetch_pull;
 #[path = "remote/push.rs"]
 mod push_ops;
 #[cfg(test)]
-#[path = "remote/tests.rs"]
+#[path = "remote/remote_tests.rs"]
 mod test_suite;
 
 pub(crate) use fetch_pull::resolve_fetch_remote;

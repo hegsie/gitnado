@@ -4,7 +4,7 @@ mod conflicts;
 #[path = "merge/rebase.rs"]
 mod rebase_ops;
 #[cfg(test)]
-#[path = "merge/tests.rs"]
+#[path = "merge/merge_tests.rs"]
 mod test_suite;
 
 pub use conflicts::*;

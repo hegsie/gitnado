@@ -1047,18 +1047,18 @@ export class GnBranchList extends LitElement {
     this.error = null;
 
     try {
-      const [branchesResult, remotesResult, cleanupResult, stacksResult] = await Promise.all([
+      // Kick off cleanup candidate scanning in parallel, but do NOT block
+      // rendering the branch list on it: `getCleanupCandidates` runs merge
+      // detection across every branch only for the "Clean up" header badge,
+      // while `getBranches`, `getRemotes`, and `getStacks` are fast metadata
+      // reads that should populate the sidebar immediately.
+      const cleanupPromise = gitService.getCleanupCandidates(
+        loadedPath,
+        settingsStore.getState().staleBranchDays,
+      );
+      const [branchesResult, remotesResult, stacksResult] = await Promise.all([
         gitService.getBranches(loadedPath),
         gitService.getRemotes(loadedPath),
-        // The staleDays argument is what makes the badge and the cleanup
-        // dialog agree. Omitting it fell back to the backend's 90-day default,
-        // so the badge counted stale branches the dialog's Stale tab did not
-        // list (and kept counting them when the user set the window to 0 to
-        // disable staleness entirely).
-        gitService.getCleanupCandidates(
-          loadedPath,
-          settingsStore.getState().staleBranchDays,
-        ),
         gitService.getStacks(loadedPath),
       ]);
 
@@ -1218,10 +1218,14 @@ export class GnBranchList extends LitElement {
         };
       });
 
-      // The badge and the cleanup dialog share one source of truth: the
-      // backend's candidate list. Fetched in the Promise.all above to keep
-      // loadBranches to a single await point (extra await points perturb
-      // render timing for callers).
+      // Clear loading state immediately so the branch list renders without
+      // waiting for the background cleanup-candidate scan to finish.
+      this.loading = false;
+
+      const cleanupResult = await cleanupPromise;
+      if (this.branchesLoadSeq.get(loadedPath) !== seq || this.repositoryPath !== loadedPath) {
+        return;
+      }
       this.cleanupCheckFailed = !cleanupResult.success;
       this.cleanupCandidateNames = cleanupResult.success && cleanupResult.data
         ? new Set(cleanupResult.data.map(c => c.name))

@@ -352,7 +352,12 @@ pub(crate) fn resolve_pull_target(
         .find_branch(branch_name, git2::BranchType::Local)
         .ok()
         .and_then(|b| b.upstream().ok())
-        .and_then(|u| u.get().name().ok().map(|n| n.to_string()));
+        .and_then(|u| u.get().name().ok().map(|n| n.to_string()))
+        .or_else(|| {
+            repo.branch_upstream_name(head_refname)
+                .ok()
+                .and_then(|b| b.as_str().ok().map(|s| s.to_string()))
+        });
 
     let remote = resolve_pull_remote(repo, requested_remote, head_refname);
 
@@ -543,7 +548,28 @@ pub(crate) fn pull_branch(
         ));
     }
 
-    let fetch_head = repo.find_reference(&format!("refs/remotes/{}", remote_ref))?;
+    let fetch_head = match repo.find_reference(&format!("refs/remotes/{}", remote_ref)) {
+        Ok(r) => r,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            let has_configured_upstream = repo
+                .config()
+                .ok()
+                .and_then(|c| c.get_string(&format!("branch.{}.merge", branch_name)).ok())
+                .is_some();
+            if has_configured_upstream {
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Upstream branch '{}' no longer exists on remote '{}' (it may have been deleted after being merged). Switch to an active branch or unset the upstream branch.",
+                    remote_ref, effective_remote
+                )));
+            } else {
+                return Err(GitnadoError::OperationFailed(format!(
+                    "Remote branch '{}' was not found on remote '{}'. Push the branch with --set-upstream first.",
+                    remote_ref, effective_remote
+                )));
+            }
+        }
+        Err(e) => return Err(e.into()),
+    };
     let fetch_commit = repo.reference_to_annotated_commit(&fetch_head)?;
 
     let message: String;

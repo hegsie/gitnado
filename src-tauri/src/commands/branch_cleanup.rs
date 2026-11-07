@@ -13,7 +13,7 @@ use tauri::command;
 
 use crate::error::Result;
 use crate::models::AheadBehind;
-use crate::services::merge_detection::{detect_merge_kind, MergeKind};
+use crate::services::merge_detection::{MergeDetector, MergeKind};
 
 use super::branch_rules::load_rules;
 
@@ -98,6 +98,9 @@ pub async fn get_cleanup_candidates(
             super::branch_rules::is_deletion_prevented(&rules, branch_name)
         };
 
+        let config = repo.config().ok();
+        let mut merge_detector = MergeDetector::new(&repo, head_oid);
+
         for branch_result in repo.branches(Some(git2::BranchType::Local))? {
             let (branch, _) = branch_result?;
             let name = branch.name()?.unwrap_or("").to_string();
@@ -136,16 +139,15 @@ pub async fn get_cleanup_candidates(
                 })
                 .unwrap_or((None, None, None));
 
-            let upstream = branch
-                .upstream()
-                .ok()
+            let upstream_branch = branch.upstream().ok();
+            let upstream = upstream_branch
+                .as_ref()
                 .and_then(|u| u.name().ok().flatten().map(|n| n.to_string()));
 
             let protected = is_protected(&name);
 
             // Check if upstream is gone
             let is_gone = {
-                let config = repo.config().ok();
                 let has_merge = config
                     .as_ref()
                     .and_then(|c| c.get_string(&format!("branch.{}.merge", name)).ok())
@@ -155,10 +157,10 @@ pub async fn get_cleanup_candidates(
                     .and_then(|c| c.get_string(&format!("branch.{}.remote", name)).ok())
                     .is_some();
                 // Gone if upstream is configured but branch.upstream() fails
-                has_merge && has_remote && branch.upstream().is_err()
+                has_merge && has_remote && upstream_branch.is_none()
             };
 
-            let ahead_behind = if let Ok(upstream_branch) = branch.upstream() {
+            let ahead_behind = if let Some(ref upstream_branch) = upstream_branch {
                 if let Some(upstream_oid) = upstream_branch.get().target() {
                     repo.graph_ahead_behind(branch_oid, upstream_oid)
                         .ok()
@@ -183,7 +185,7 @@ pub async fn get_cleanup_candidates(
             // the branch's changes landed via rebase- or squash-merge. Detection
             // errors are treated as "not merged" so a failure never labels a
             // branch safe to delete.
-            let merge_kind = detect_merge_kind(&repo, branch_oid, head_oid).unwrap_or(None);
+            let merge_kind = merge_detector.detect(branch_oid).unwrap_or(None);
             let is_merged = merge_kind.is_some();
 
             // Check if stale
@@ -290,7 +292,7 @@ pub async fn get_cleanup_candidates(
                 .ok()
                 .map(|(ahead, behind)| AheadBehind { ahead, behind });
 
-            let merge_kind = detect_merge_kind(&repo, branch_oid, head_oid).unwrap_or(None);
+            let merge_kind = merge_detector.detect(branch_oid).unwrap_or(None);
             let is_merged = merge_kind.is_some();
 
             let is_stale = stale_days > 0

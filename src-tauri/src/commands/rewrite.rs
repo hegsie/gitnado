@@ -3,7 +3,7 @@
 mod cherry_pick_revert;
 mod history_rewrite;
 #[cfg(test)]
-#[path = "rewrite/tests.rs"]
+#[path = "rewrite/rewrite_tests.rs"]
 mod test_suite;
 
 pub use cherry_pick_revert::*;

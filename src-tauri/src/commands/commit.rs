@@ -3,7 +3,7 @@
 mod amend_create;
 mod history;
 #[cfg(test)]
-#[path = "commit/tests.rs"]
+#[path = "commit/commit_tests.rs"]
 mod test_suite;
 
 pub use amend_create::*;

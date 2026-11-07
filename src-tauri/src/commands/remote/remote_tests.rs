@@ -3180,4 +3180,31 @@ mod tests {
         handle.await.unwrap();
         assert!(registry.is_empty(), "released when the work really ends");
     }
+
+    #[test]
+    fn test_pull_with_deleted_upstream_reports_clear_error() {
+        let (_upstream, local, _branch) = pull_fixture();
+        // Create a local branch configured to track a remote branch that was
+        // deleted on origin (matching `git branch -vv` -> `[origin/gone-branch: gone]`).
+        local.create_branch("gone-branch");
+        local.checkout_branch("gone-branch");
+        let repo = local.repo();
+        let mut config = repo.config().unwrap();
+        config
+            .set_str("branch.gone-branch.remote", "origin")
+            .unwrap();
+        config
+            .set_str("branch.gone-branch.merge", "refs/heads/gone-branch")
+            .unwrap();
+        drop(config);
+        drop(repo);
+
+        let err = pull_with_deadline(&local, "gone-branch", None)
+            .expect_err("pulling a branch whose upstream was deleted on remote must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no longer exists on remote"),
+            "expected clear gone-upstream message, got: {msg}"
+        );
+    }
 }
