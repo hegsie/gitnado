@@ -8,5 +8,9 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # Same two zip versions and paths: ZipArchive::extract aborts on a symlink
+    # entry with a large declared size. Same reasoning as above — extract() is
+    # never reached. Remove all four once candle-core and tauri-plugin-updater
+    # move to zip >= 9.0.0.
     "RUSTSEC-2026-0429",
 ]

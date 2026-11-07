@@ -84,8 +84,16 @@ export const DIALOG_REGISTRY = {
    * last tab and the panel sprang open over the next repository opened.
    */
   outputPanel: { repoScoped: true },
+  /**
+   * The embedded terminal pane. Repo-scoped for the same reason as the output
+   * panel: it renders inside the repository block. Its shells live in
+   * terminal.service.ts and are unaffected by the flag.
+   */
+  terminalPanel: { repoScoped: true },
   conflict: { repoScoped: true },
   reflog: { repoScoped: true },
+  startAgent: { repoScoped: true },
+  changeFeed: { repoScoped: true },
   search: { repoScoped: true },
   remotes: { repoScoped: true },
   clean: { repoScoped: true },

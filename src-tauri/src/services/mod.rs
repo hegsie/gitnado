@@ -16,6 +16,7 @@ pub mod keyring_util;
 pub mod loopback_server;
 pub mod oauth;
 pub mod provider_http;
+pub mod pty;
 pub mod remote_ops;
 pub mod security;
 pub mod transfer_monitor;

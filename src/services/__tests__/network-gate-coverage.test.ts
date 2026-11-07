@@ -349,7 +349,7 @@ const LOCAL_COMMANDS = new Set([
   'set_merge_tool_config', 'set_note', 'set_profile_default_account', 'set_remote_url',
   'set_signing_key', 'set_sparse_checkout_patterns', 'set_tag_signing', 'set_upstream_branch',
   'set_user_identity', 'shortlog', 'skip_cherry_pick', 'skip_rebase_commit', 'skip_revert',
-  'squash_commits', 'stage_files', 'stage_hunk', 'stage_hunk_by_index', 'stage_lines',
+  'squash_commits', 'stage_files', 'stage_hunk', 'stage_hunk_by_index', 'discard_hunk_by_index', 'stage_lines',
   'stash_show', 'stop_auto_fetch', 'store_git_credentials', 'toggle_hook',
   'get_hook_execution_logs', 'clear_hook_execution_logs',
   'trigger_auto_fetch',

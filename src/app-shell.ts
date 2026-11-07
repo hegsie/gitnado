@@ -82,6 +82,8 @@ import './components/panels/gn-diff-view.ts';
 import type { GnDiffView } from './components/panels/gn-diff-view.ts';
 import './components/panels/gn-blame-view.ts';
 import './components/panels/gn-output-panel.ts';
+import './components/panels/gn-terminal-panel.ts';
+import type { GnTerminalPanel } from './components/panels/gn-terminal-panel.ts';
 import './components/sidebar/gn-left-panel.ts';
 import './components/sidebar/gn-right-panel.ts';
 import './components/dialogs/gn-settings-dialog.ts';
@@ -90,6 +92,8 @@ import './components/dialogs/gn-conflict-resolution-dialog.ts';
 import type { GitflowFinishContext } from './components/dialogs/gn-conflict-resolution-dialog.ts';
 import './components/dialogs/gn-command-palette.ts';
 import './components/dialogs/gn-reflog-dialog.ts';
+import './components/dialogs/gn-start-agent-dialog.ts';
+import './components/dialogs/gn-change-feed-dialog.ts';
 import './components/dialogs/gn-describe-dialog.ts';
 import './components/dialogs/gn-compare-branches-dialog.ts';
 import './components/dialogs/gn-search-dialog.ts';
@@ -384,6 +388,20 @@ export class AppShell extends LitElement {
         display: flex;
         flex-direction: column;
         overflow: hidden;
+      }
+
+      .terminal-panel-container {
+        height: 280px;
+        flex-shrink: 0;
+        border-top: 1px solid var(--color-border);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .terminal-panel-container gn-terminal-panel {
+        flex: 1;
+        min-height: 0;
       }
 
       .output-panel-container gn-output-panel {
@@ -900,6 +918,7 @@ export class AppShell extends LitElement {
   @query('gn-gitlab-dialog') private gitlabDialog?: GnGitLabDialog;
   @query('gn-bitbucket-dialog') private bitbucketDialog?: GnBitbucketDialog;
   @query('gn-azure-devops-dialog') private azureDevOpsDialog?: GnAzureDevOpsDialog;
+  @query('gn-terminal-panel') private terminalPanel?: GnTerminalPanel;
 
   private unsubscribe?: () => void;
   private unsubscribeUi?: () => void;
@@ -1766,6 +1785,16 @@ export class AppShell extends LitElement {
             dismissed: 'export/import cancelled',
             running: 'patch/bundle operation',
           },
+          'gn-start-agent-dialog': {
+            dismissed: 'agent task cancelled',
+            running: 'agent worktree setup',
+            clearFlag: () => { dialogs.close('startAgent'); },
+          },
+          'gn-change-feed-dialog': {
+            dismissed: 'agent change feed closed',
+            running: 'accept/revert of an agent change',
+            clearFlag: () => { dialogs.close('changeFeed'); },
+          },
           'gn-reflog-dialog': {
             dismissed: 'undo history closed',
             running: 'reset',
@@ -2096,6 +2125,7 @@ export class AppShell extends LitElement {
       openShortcuts: () => { dialogs.open('shortcuts'); },
       toggleLeftPanel: () => this.toggleLeftPanel(),
       toggleRightPanel: () => uiStore.getState().togglePanel('right'),
+      toggleTerminal: this.requiresRepository(() => this.toggleTerminalPanel()),
       openCommandPalette: () => this.openCommandPalette(),
       openReflog: this.requiresRepository(() => { dialogs.open('reflog'); }),
       // Wrapped like the palette entries: pressing Ctrl+Shift+F on the welcome
@@ -2387,6 +2417,21 @@ export class AppShell extends LitElement {
    * Hiding the left panel is refused while it hosts an open dialog — see
    * hasSidebarDialogOpen. Revealing it is always allowed.
    */
+  /** Show or hide the embedded terminal. Hiding never stops its shells. */
+  toggleTerminalPanel(): void {
+    dialogs.setOpen('terminalPanel', !dialogs.isOpen('terminalPanel'));
+  }
+
+  /**
+   * Show the terminal pane and start another shell in it. When opening the
+   * pane auto-starts its first shell, the panel's in-flight guard makes this
+   * call a no-op, so the user still gets exactly one new terminal.
+   */
+  openNewTerminal(): void {
+    dialogs.open('terminalPanel');
+    void this.updateComplete.then(() => this.terminalPanel?.newTerminal());
+  }
+
   toggleLeftPanel(): void {
     if (this.leftPanelVisible && this.hasSidebarDialogOpen()) {
       showToast('Close the open dialog before hiding the sidebar', 'info');
@@ -6242,6 +6287,16 @@ export class AppShell extends LitElement {
                           </div>
                         `
                       : ''}
+                ${dialogs.isOpen('terminalPanel')
+                  ? html`
+                      <div class="terminal-panel-container">
+                        <gn-terminal-panel
+                          .repositoryPath=${this.activeRepository.repository.path}
+                          @close=${() => { dialogs.close('terminalPanel'); }}
+                        ></gn-terminal-panel>
+                      </div>
+                    `
+                  : ''}
                 ${dialogs.isOpen('outputPanel')
                   ? html`
                       <div class="output-panel-container">
@@ -6611,6 +6666,25 @@ export class AppShell extends LitElement {
       ></gn-command-palette>
 
       ${this.activeRepository ? html`
+        <gn-start-agent-dialog
+          ?open=${dialogs.isOpen('startAgent')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          .defaultBaseRef=${this.activeRepository.currentBranch?.shorthand ?? 'HEAD'}
+          @close=${() => { dialogs.close('startAgent'); }}
+          @worktrees-changed=${(e: CustomEvent<{ repositoryPath?: string }>) => {
+            this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
+          }}
+        ></gn-start-agent-dialog>
+
+        <gn-change-feed-dialog
+          ?open=${dialogs.isOpen('changeFeed')}
+          .repositoryPath=${this.activeRepository.repository.path}
+          @close=${() => { dialogs.close('changeFeed'); }}
+          @change-feed-applied=${(e: CustomEvent<{ repositoryPath?: string }>) => {
+            this.refreshConflictDialogRepo(e.detail?.repositoryPath ?? null);
+          }}
+        ></gn-change-feed-dialog>
+
         <gn-reflog-dialog
           ?open=${dialogs.isOpen('reflog')}
           .repositoryPath=${this.activeRepository.repository.path}

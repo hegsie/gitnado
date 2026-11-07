@@ -453,6 +453,22 @@ export async function stageHunkByIndex(
 }
 
 /**
+ * Revert one unstaged hunk of a file in the working tree (reverse-applies it
+ * to the file on disk; the index is untouched).
+ */
+export async function discardHunkByIndex(
+  repoPath: string,
+  filePath: string,
+  hunkIndex: number,
+): Promise<CommandResult<void>> {
+  return invokeCommand<void>("discard_hunk_by_index", {
+    path: repoPath,
+    filePath,
+    hunkIndex,
+  });
+}
+
+/**
  * Unstage a specific hunk by its index
  * @param repoPath Repository path
  * @param filePath File path relative to repo root

@@ -14,6 +14,7 @@ import {
 } from '../../services/output-log.service.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
+import { dialogs } from '../../stores/dialog.store.ts';
 
 // The log store lives in output-log.service.ts (populated by the IPC layer);
 // re-export the store API here for existing consumers of this module.
@@ -335,6 +336,11 @@ export class GnOutputPanel extends LitElement {
     this.expandedEntries = new Set();
   }
 
+  /** The built-in terminal is the default; the external app stays one click away. */
+  private handleShowEmbeddedTerminal(): void {
+    dialogs.open('terminalPanel');
+  }
+
   private async handleOpenTerminal(): Promise<void> {
     if (!this.repositoryPath) return;
     const result = await gitService.openTerminal(this.repositoryPath);
@@ -434,11 +440,18 @@ export class GnOutputPanel extends LitElement {
           ${this.repositoryPath
             ? html`
                 <button
+                  class="terminal-btn embedded-terminal-btn"
+                  title="Show the built-in terminal for this repository"
+                  @click=${this.handleShowEmbeddedTerminal}
+                >
+                  Terminal
+                </button>
+                <button
                   class="terminal-btn open-terminal-btn"
-                  title="Open in Terminal"
+                  title="Open the repository in your system terminal app"
                   @click=${() => void this.handleOpenTerminal()}
                 >
-                  Open in Terminal
+                  External Terminal
                 </button>
               `
             : nothing}

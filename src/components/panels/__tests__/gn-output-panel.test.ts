@@ -285,6 +285,31 @@ describe('gn-output-panel', () => {
     });
   });
 
+  describe('built-in terminal button', () => {
+    it('opens the embedded terminal panel', async () => {
+      const { dialogs } = await import('../../../stores/dialog.store.ts');
+      dialogs.close('terminalPanel');
+      const el = await fixture<GnOutputPanel>(
+        html`<gn-output-panel .repositoryPath=${'/repo/a'}></gn-output-panel>`,
+      );
+      await el.updateComplete;
+
+      const btn = el.shadowRoot!.querySelector<HTMLButtonElement>('.embedded-terminal-btn')!;
+      expect(btn.textContent!.trim()).to.equal('Terminal');
+      btn.click();
+
+      expect(dialogs.isOpen('terminalPanel')).to.be.true;
+      expect(invokeCalls.some((c) => c.command === 'open_terminal')).to.be.false;
+      dialogs.close('terminalPanel');
+    });
+
+    it('is not offered without a repository', async () => {
+      const el = await fixture<GnOutputPanel>(html`<gn-output-panel></gn-output-panel>`);
+      await el.updateComplete;
+      expect(el.shadowRoot!.querySelector('.embedded-terminal-btn')).to.be.null;
+    });
+  });
+
   describe('filter input and Open in Terminal button', () => {
     it('filters entries by command and output text', async () => {
       const el = await fixture<GnOutputPanel>(html`<gn-output-panel></gn-output-panel>`);

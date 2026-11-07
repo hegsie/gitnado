@@ -48,6 +48,7 @@ pub mod oauth;
 pub mod patch;
 pub mod path_utils;
 pub mod pr_templates;
+pub mod pty;
 pub mod reflog;
 pub mod refs;
 pub mod remote;

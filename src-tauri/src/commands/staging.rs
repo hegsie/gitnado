@@ -805,6 +805,54 @@ pub async fn stage_hunk_by_index(path: String, file_path: String, hunk_index: u3
     .await
 }
 
+/// Revert a working-tree hunk: reverse-apply it to the file on disk, leaving
+/// the index (and so anything already staged) alone.
+fn reverse_apply_to_worktree(repo_path: &str, patch: &str) -> Result<()> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix("gitnado_hunk_")
+        .suffix(".patch")
+        .tempfile()?;
+    tmp.write_all(patch.as_bytes())?;
+    tmp.flush()?;
+    let output = create_command("git")
+        .args(["apply", "--reverse", "--unidiff-zero"])
+        .arg(tmp.path())
+        .current_dir(repo_path)
+        .output()?;
+    if !output.status.success() {
+        return Err(crate::error::GitnadoError::OperationFailed(format!(
+            "Failed to revert hunk: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(())
+}
+
+/// Revert one unstaged hunk of a file in the working tree, by index.
+///
+/// The working-tree counterpart of `stage_hunk_by_index`: the hunk is the
+/// unstaged change (index -> working tree), so reverse-applying it to the
+/// working tree puts that part of the file back to what the index has.
+#[command]
+pub async fn discard_hunk_by_index(path: String, file_path: String, hunk_index: u32) -> Result<()> {
+    let file_hunks = get_file_hunks(path.clone(), file_path.clone(), false).await?;
+
+    crate::utils::blocking_git(move || {
+        let hunk = file_hunks
+            .hunks
+            .iter()
+            .find(|h| h.index == hunk_index)
+            .ok_or_else(|| {
+                crate::error::GitnadoError::OperationFailed(format!(
+                    "Hunk index {} not found for file {}",
+                    hunk_index, file_path
+                ))
+            })?;
+        reverse_apply_to_worktree(&path, &build_hunk_patch(&file_path, hunk))
+    })
+    .await
+}
+
 /// Unstage a specific hunk by index
 ///
 /// Gets the staged hunks for a file, finds the one at the given index,
@@ -2017,5 +2065,56 @@ mod tests {
             remaining.hunks.is_empty(),
             "file should be fully staged after staging its only hunk"
         );
+    }
+
+    #[tokio::test]
+    async fn discard_hunk_by_index_reverts_only_that_hunk_in_the_working_tree() {
+        let repo = TestRepo::with_initial_commit();
+        let original: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        repo.create_commit("lines", &[("f.txt", &original)]);
+        let edited = original
+            .replace("line 2\n", "line 2 (agent)\n")
+            .replace("line 28\n", "line 28 (agent)\n");
+        std::fs::write(repo.path.join("f.txt"), &edited).unwrap();
+
+        let hunks = get_file_hunks(repo.path_str(), "f.txt".into(), false)
+            .await
+            .unwrap();
+        assert_eq!(hunks.hunks.len(), 2);
+
+        discard_hunk_by_index(repo.path_str(), "f.txt".into(), 0)
+            .await
+            .unwrap();
+        let now = std::fs::read_to_string(repo.path.join("f.txt")).unwrap();
+        assert!(now.contains("line 2\n") && !now.contains("line 2 (agent)"));
+        assert!(now.contains("line 28 (agent)"), "the other hunk is kept");
+        // Nothing was staged by it.
+        let staged = get_file_hunks(repo.path_str(), "f.txt".into(), true)
+            .await
+            .unwrap();
+        assert!(staged.hunks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discard_hunk_by_index_leaves_staged_changes_alone_and_rejects_bad_indexes() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit("one", &[("g.txt", "a\nb\nc\n")]);
+        std::fs::write(repo.path.join("g.txt"), "a\nB\nc\n").unwrap();
+        stage_files(repo.path_str(), vec!["g.txt".into()])
+            .await
+            .unwrap();
+        std::fs::write(repo.path.join("g.txt"), "a\nB\nc\nd\n").unwrap();
+
+        discard_hunk_by_index(repo.path_str(), "g.txt".into(), 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("g.txt")).unwrap(),
+            "a\nB\nc\n",
+            "only the unstaged addition is reverted"
+        );
+        assert!(discard_hunk_by_index(repo.path_str(), "g.txt".into(), 5)
+            .await
+            .is_err());
     }
 }
