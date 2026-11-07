@@ -1,6 +1,6 @@
 [package]
 name = "gitnado"
-version = "1.0.1"
+version = "1.1.0"
 description = "A fully-featured, open-source, cross-platform Git GUI client"
 authors = ["Gitnado Contributors"]
 homepage = "https://gitnado.dev"
