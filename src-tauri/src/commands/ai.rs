@@ -608,7 +608,7 @@ fn get_diff_stats(repo_path: &str, base_ref: &str, compare_ref: &str) -> Result<
 }
 
 /// Detect secrets in a diff using regex patterns (fast, no AI needed)
-fn detect_secrets(diff: &str) -> Vec<AnalysisFinding> {
+pub(crate) fn detect_secrets(diff: &str) -> Vec<AnalysisFinding> {
     let mut findings = Vec::new();
 
     let patterns: Vec<(&str, &str)> = vec![

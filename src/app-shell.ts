@@ -162,6 +162,7 @@ import type { Commit, RefInfo, StatusEntry, Tag, Branch, RepositoryState } from 
 import type { SearchFilter } from './components/toolbar/gn-search-bar.ts';
 import type { PaletteCommand } from './components/dialogs/gn-command-palette.ts';
 import { buildPaletteCommands, type PaletteCommandHost } from './palette-commands.ts';
+import { checkPushGuardrail } from './services/push-guardrail.service.ts';
 import * as gitService from './services/git.service.ts';
 import * as updateService from './services/update.service.ts';
 import * as unifiedProfileService from './services/unified-profile.service.ts';
@@ -3888,6 +3889,9 @@ export class AppShell extends LitElement {
       'error'
     );
     if (!confirmed) return;
+    // The same guardrail plain pushes go through: force-pushing agent output
+    // must not be the way around it.
+    if (!(await checkPushGuardrail(repoPath))) return;
 
     const opId = progressService.startOperation('push', 'Force pushing to remote...', {
       cancellable: true,

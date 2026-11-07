@@ -12,6 +12,8 @@ import {
   type FontSize,
   type Density,
   type GraphColorScheme,
+  type PushGuardrailMode,
+  type PushGuardrailScope,
 } from '../../stores/settings.store.ts';
 import type { DiffWhitespaceMode } from '../../types/api.types.ts';
 import { supportedLocales, resolveLocale, type Locale } from '../../i18n/index.ts';
@@ -460,6 +462,9 @@ export class GnSettingsDialog extends LitElement {
   @state() private autoStashOnCheckout = false;
   @state() private alwaysSignOff = false;
   @state() private staleBranchDays = 90;
+  @state() private pushGuardrail: PushGuardrailMode = 'warn';
+  @state() private pushGuardrailScope: PushGuardrailScope = 'agent';
+  @state() private agentBranchPattern = 'agent/*';
   @state() private networkOperationTimeout = 300;
 
   // Network & sync settings
@@ -749,6 +754,9 @@ export class GnSettingsDialog extends LitElement {
     this.autoStashOnCheckout = settings.autoStashOnCheckout;
     this.alwaysSignOff = settings.alwaysSignOff;
     this.staleBranchDays = settings.staleBranchDays;
+    this.pushGuardrail = settings.pushGuardrail;
+    this.pushGuardrailScope = settings.pushGuardrailScope;
+    this.agentBranchPattern = settings.agentBranchPattern;
     this.networkOperationTimeout = settings.networkOperationTimeout;
     this.autoFetchInterval = settings.autoFetchInterval;
     this.fetchOnFocus = settings.fetchOnFocus;
@@ -1076,6 +1084,27 @@ export class GnSettingsDialog extends LitElement {
       );
       return;
     }
+    window.dispatchEvent(new CustomEvent('settings-changed'));
+  }
+
+  private handlePushGuardrailChange(e: Event): void {
+    this.pushGuardrail = (e.target as HTMLSelectElement).value as PushGuardrailMode;
+    settingsStore.getState().setPushGuardrail(this.pushGuardrail);
+    window.dispatchEvent(new CustomEvent('settings-changed'));
+  }
+
+  private handlePushGuardrailScopeChange(e: Event): void {
+    this.pushGuardrailScope = (e.target as HTMLSelectElement).value as PushGuardrailScope;
+    settingsStore.getState().setPushGuardrailScope(this.pushGuardrailScope);
+    window.dispatchEvent(new CustomEvent('settings-changed'));
+  }
+
+  private handleAgentBranchPatternChange(e: Event): void {
+    // An emptied field falls back to the default rather than matching nothing,
+    // which would silently turn the agent-only guardrail off.
+    const value = (e.target as HTMLInputElement).value.trim() || 'agent/*';
+    this.agentBranchPattern = value;
+    settingsStore.getState().setAgentBranchPattern(value);
     window.dispatchEvent(new CustomEvent('settings-changed'));
   }
 
@@ -2018,6 +2047,53 @@ export class GnSettingsDialog extends LitElement {
             this.fetchOnFocus,
             'fetchOnFocus'
           )}
+        </div>
+
+        <div class="settings-section" id="agent-guardrails">
+          <div class="section-title">${msg('Agent Guardrails')}</div>
+
+          <div class="setting-row">
+            <div class="setting-label">
+              <span class="setting-name">${msg('Scan Before Push')}</span>
+              <span class="setting-description">${msg('Scan the commits a push would publish for secrets (local scan, no AI). Warn asks before pushing; Block refuses the push.')}</span>
+            </div>
+            <select id="push-guardrail-select" .value=${this.pushGuardrail} @change=${this.handlePushGuardrailChange}>
+              <option value="off">${msg('Off')}</option>
+              <option value="warn">${msg('Warn')}</option>
+              <option value="block">${msg('Block')}</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-label">
+              <span class="setting-name">${msg('Branches to Scan')}</span>
+              <span class="setting-description">${msg('Only agent branches (matching the pattern below), or every push')}</span>
+            </div>
+            <select
+              id="push-guardrail-scope-select"
+              .value=${this.pushGuardrailScope}
+              ?disabled=${this.pushGuardrail === 'off'}
+              @change=${this.handlePushGuardrailScopeChange}
+            >
+              <option value="agent">${msg('Agent branches')}</option>
+              <option value="all">${msg('All branches')}</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-label">
+              <span class="setting-name">${msg('Agent Branch Pattern')}</span>
+              <span class="setting-description">${msg('Comma-separated patterns naming branches agents work on; * matches anything')}</span>
+            </div>
+            <input
+              id="agent-branch-pattern-input"
+              type="text"
+              .value=${this.agentBranchPattern}
+              ?disabled=${this.pushGuardrail === 'off' || this.pushGuardrailScope === 'all'}
+              @change=${this.handleAgentBranchPatternChange}
+              style="width: 160px;"
+            />
+          </div>
         </div>
 
         <div class="settings-section">

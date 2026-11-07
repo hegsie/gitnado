@@ -760,6 +760,54 @@
   <source>Custom GGUF</source>
   <target>GGUF personnalisé</target>
 </trans-unit>
+<trans-unit id="scf8b8b68ba5e0f98">
+  <source>Agent Guardrails</source>
+  <target>Garde-fous des agents</target>
+</trans-unit>
+<trans-unit id="s604e0b21cd76c0b9">
+  <source>Scan Before Push</source>
+  <target>Analyser avant le push</target>
+</trans-unit>
+<trans-unit id="sd190e4605f2c6ca9">
+  <source>Scan the commits a push would publish for secrets (local scan, no AI). Warn asks before pushing; Block refuses the push.</source>
+  <target>Rechercher des secrets dans les commits qu'un push publierait (analyse locale, sans IA). Avertir demande avant de pousser ; Bloquer refuse le push.</target>
+</trans-unit>
+<trans-unit id="s302cbb19bf9a174a">
+  <source>Off</source>
+  <target>Désactivé</target>
+</trans-unit>
+<trans-unit id="s88c7a2022d5aa211">
+  <source>Warn</source>
+  <target>Avertir</target>
+</trans-unit>
+<trans-unit id="s2b2ae20d26f78ac2">
+  <source>Block</source>
+  <target>Bloquer</target>
+</trans-unit>
+<trans-unit id="s7e52fb9eb417e3f7">
+  <source>Branches to Scan</source>
+  <target>Branches à analyser</target>
+</trans-unit>
+<trans-unit id="s733e597f81f2730a">
+  <source>Only agent branches (matching the pattern below), or every push</source>
+  <target>Uniquement les branches d'agents (correspondant au motif ci-dessous), ou chaque push</target>
+</trans-unit>
+<trans-unit id="se14d8e303a7988ba">
+  <source>Agent branches</source>
+  <target>Branches d'agents</target>
+</trans-unit>
+<trans-unit id="s4573a518af68b9d0">
+  <source>All branches</source>
+  <target>Toutes les branches</target>
+</trans-unit>
+<trans-unit id="s65025376977dbddc">
+  <source>Agent Branch Pattern</source>
+  <target>Motif des branches d'agents</target>
+</trans-unit>
+<trans-unit id="s2090813274e4f63b">
+  <source>Comma-separated patterns naming branches agents work on; * matches anything</source>
+  <target>Motifs séparés par des virgules désignant les branches où travaillent les agents ; * correspond à tout</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
