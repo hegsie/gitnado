@@ -1,7 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const e2eDir = path.dirname(new URL(import.meta.url).pathname);
+const e2eDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   testDir: path.join(e2eDir, 'tests'),

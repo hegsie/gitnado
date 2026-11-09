@@ -1,16 +1,19 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
-      '@components': resolve(__dirname, 'src/components'),
-      '@stores': resolve(__dirname, 'src/stores'),
-      '@services': resolve(__dirname, 'src/services'),
-      '@types': resolve(__dirname, 'src/types'),
-      '@utils': resolve(__dirname, 'src/utils'),
-      '@styles': resolve(__dirname, 'src/styles'),
+      '@': resolve(rootDir, 'src'),
+      '@components': resolve(rootDir, 'src/components'),
+      '@stores': resolve(rootDir, 'src/stores'),
+      '@services': resolve(rootDir, 'src/services'),
+      '@types': resolve(rootDir, 'src/types'),
+      '@utils': resolve(rootDir, 'src/utils'),
+      '@styles': resolve(rootDir, 'src/styles'),
     },
   },
   build: {
