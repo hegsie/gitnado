@@ -25,6 +25,11 @@ import {
 import './gn-ai-staging-modal.ts';
 import type { AiStagingMode } from './gn-ai-staging-modal.ts';
 
+/** Fallback when get_conventional_types has not loaded (or failed). */
+const DEFAULT_CONVENTIONAL_TYPES = [
+  'feat', 'fix', 'docs', 'style', 'refactor', 'test', 'chore', 'perf', 'ci', 'build', 'revert',
+];
+
 /**
  * Commit panel component
  * Allows users to write commit messages and create commits
@@ -887,6 +892,12 @@ export class GnCommitPanel extends LitElement {
   @state() private conventionalTypes: ConventionalType[] = [];
   @state() private selectedType: string = 'feat';
   @state() private scope: string = '';
+  /**
+   * True only while the scope is one the user typed for THIS draft. A scope
+   * left by an earlier commit, or derived from a loaded/generated subject, is
+   * not a choice for the message being written now.
+   */
+  private scopeChosen = false;
 
   // Template variable state
   @state() private currentBranch: string = '';
@@ -924,6 +935,7 @@ export class GnCommitPanel extends LitElement {
   private originalDescription: string = '';
   private originalSignOff: boolean = false;
   private originalCoAuthors: CoAuthor[] = [];
+  private originalConventional = { mode: false, type: 'feat', scope: '', scopeChosen: false };
 
   // AI state
   @state() private aiAvailable: boolean = false;
@@ -958,7 +970,7 @@ export class GnCommitPanel extends LitElement {
   private readonly HISTORY_MAX_ENTRIES = 20;
 
   // Per-repo draft cache: preserves commit form state when switching repos
-  private draftCache = new Map<string, { summary: string; description: string; conventionalMode: boolean; selectedType: string; scope: string; signOff: boolean; coAuthors: CoAuthor[] }>();
+  private draftCache = new Map<string, { summary: string; description: string; conventionalMode: boolean; selectedType: string; scope: string; scopeChosen: boolean; signOff: boolean; coAuthors: CoAuthor[] }>();
 
   private boundHandleTriggerAmend = this.handleTriggerAmend.bind(this);
   private boundHandleAiSettingsChanged = () => this.checkAiAvailability();
@@ -1066,6 +1078,7 @@ export class GnCommitPanel extends LitElement {
           conventionalMode: this.conventionalMode,
           selectedType: this.selectedType,
           scope: this.scope,
+          scopeChosen: this.scopeChosen,
           signOff: this.signOff,
           coAuthors: this.coAuthors,
         });
@@ -1079,6 +1092,7 @@ export class GnCommitPanel extends LitElement {
         this.conventionalMode = draft.conventionalMode;
         this.selectedType = draft.selectedType;
         this.scope = draft.scope;
+        this.scopeChosen = draft.scopeChosen;
         this.signOff = draft.signOff;
         this.coAuthors = draft.coAuthors;
       } else {
@@ -1087,6 +1101,7 @@ export class GnCommitPanel extends LitElement {
         this.conventionalMode = false;
         this.selectedType = 'feat';
         this.scope = '';
+        this.scopeChosen = false;
         this.signOff = settingsStore.getState().alwaysSignOff;
         this.coAuthors = [];
       }
@@ -1176,7 +1191,7 @@ export class GnCommitPanel extends LitElement {
       // Enable amend mode and populate with commit message
       this.amend = true;
       this.lastCommit = event.detail.commit;
-      this.summary = event.detail.commit.summary;
+      this.applyExistingSubject(event.detail.commit.summary);
       this.description = event.detail.commit.body ?? '';
       this.adoptTrailersFromDescription();
 
@@ -1243,9 +1258,92 @@ export class GnCommitPanel extends LitElement {
   private handleHistorySelect(message: string): void {
     // Parse message: first line is summary, rest is description
     const lines = message.split('\n');
-    this.summary = lines[0] || '';
+    this.applyExistingSubject(lines[0] || '');
     this.description = lines.slice(1).join('\n').replace(/^\n+/, '').trimEnd();
     this.showHistory = false;
+  }
+
+  /**
+   * Split a `type(scope): text` subject into the conventional fields, or null
+   * when it is not one this form can rebuild byte-for-byte: a `!` breaking
+   * marker or a type missing from the selector would be dropped or swapped by
+   * buildCommitMessage, so those stay whole.
+   */
+  private parseConventionalSubject(
+    subject: string,
+    allowNormalization = false,
+  ): { type: string; scope: string; text: string } | null {
+    const match = subject.match(/^([A-Za-z]+)(?:\(([^()]*)\))?(!)?:\s*(.+)$/);
+    if (!match || match[3]) return null;
+    const type = match[1].toLowerCase();
+    const scope = match[2] ?? '';
+    const text = allowNormalization ? match[4].trim() : match[4];
+    const known = this.conventionalTypes.length > 0
+      ? this.conventionalTypes.some(t => t.typeName === type)
+      : DEFAULT_CONVENTIONAL_TYPES.includes(type);
+    if (!known) return null;
+    if (!allowNormalization && `${type}${scope ? `(${scope})` : ''}: ${text}` !== subject) {
+      return null;
+    }
+    return { type, scope, text };
+  }
+
+  /**
+   * Load an already-written subject (amend, history) into the form. With
+   * conventional mode on, buildCommitMessage prepends `type(scope): ` — so the
+   * subject's own prefix must move into those fields, and a subject that has
+   * no rebuildable prefix switches the mode off rather than being rewritten
+   * as `feat: <subject>`.
+   */
+  private applyExistingSubject(subject: string): void {
+    if (!this.conventionalMode) {
+      this.summary = subject;
+      return;
+    }
+    const parsed = this.parseConventionalSubject(subject);
+    if (parsed) {
+      this.selectedType = parsed.type;
+      this.scope = parsed.scope;
+      this.scopeChosen = false;
+      this.summary = parsed.text;
+    } else {
+      this.conventionalMode = false;
+      this.summary = subject;
+    }
+  }
+
+  /**
+   * Load an AI-suggested subject. A scope the user typed for this draft
+   * (`scopeChosen`) survives a suggestion that names none; any other scope —
+   * left by the previous commit or derived from an earlier message — is
+   * stale and cleared, so it never leaks into this one. A suggestion's own
+   * scope and type replace the fields; an unprefixed suggestion keeps the
+   * selected type.
+   */
+  private applyGeneratedSubject(subject: string): void {
+    if (!this.conventionalMode) {
+      this.summary = subject;
+      return;
+    }
+    const parsed = this.parseConventionalSubject(subject, true);
+    if (parsed) {
+      this.selectedType = parsed.type;
+      if (parsed.scope) {
+        this.scope = parsed.scope;
+        this.scopeChosen = false;
+      } else if (!this.scopeChosen) {
+        this.scope = '';
+      }
+      this.summary = parsed.text;
+    } else if (/^[A-Za-z]+(?:\([^()]*\))?!?:\s/.test(subject)) {
+      // Prefixed, but not rebuildable (breaking `!`, unknown type): keep it
+      // verbatim instead of producing `feat: feat!: ...`.
+      this.conventionalMode = false;
+      this.summary = subject;
+    } else {
+      if (!this.scopeChosen) this.scope = '';
+      this.summary = subject;
+    }
   }
 
   private handleClearHistory(): void {
@@ -1401,6 +1499,7 @@ export class GnCommitPanel extends LitElement {
   private handleScopeInput(e: Event): void {
     const target = e.target as HTMLInputElement;
     this.scope = target.value;
+    this.scopeChosen = target.value.trim().length > 0;
   }
 
   private buildCommitMessage(): string {
@@ -1612,6 +1711,12 @@ export class GnCommitPanel extends LitElement {
     this.originalDescription = this.description;
     this.originalSignOff = this.signOff;
     this.originalCoAuthors = this.coAuthors;
+    this.originalConventional = {
+      mode: this.conventionalMode,
+      type: this.selectedType,
+      scope: this.scope,
+      scopeChosen: this.scopeChosen,
+    };
   }
 
   private restoreDraftAfterAmend(): void {
@@ -1619,6 +1724,11 @@ export class GnCommitPanel extends LitElement {
     this.description = this.originalDescription;
     this.signOff = this.originalSignOff;
     this.coAuthors = this.originalCoAuthors;
+    // Amend may have moved the last commit's prefix into these fields.
+    this.conventionalMode = this.originalConventional.mode;
+    this.selectedType = this.originalConventional.type;
+    this.scope = this.originalConventional.scope;
+    this.scopeChosen = this.originalConventional.scopeChosen;
   }
 
   private async fetchLastCommitMessage(): Promise<void> {
@@ -1634,7 +1744,7 @@ export class GnCommitPanel extends LitElement {
 
       if (result.success && result.data && result.data.length > 0) {
         this.lastCommit = result.data[0];
-        this.summary = this.lastCommit.summary;
+        this.applyExistingSubject(this.lastCommit.summary);
         this.description = this.lastCommit.body ?? '';
         this.adoptTrailersFromDescription();
         return;
@@ -1686,21 +1796,7 @@ export class GnCommitPanel extends LitElement {
       if (this.repositoryPath !== repoPath) return;
 
       if (result.success && result.data) {
-        // Parse conventional commit format if present
-        const summary = result.data.summary;
-        const conventionalMatch = summary.match(
-          /^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+?\))?:\s*(.+)$/i
-        );
-
-        if (conventionalMatch && this.conventionalMode) {
-          this.selectedType = conventionalMatch[1].toLowerCase();
-          if (conventionalMatch[2]) {
-            this.scope = conventionalMatch[2].slice(1, -1); // Remove parentheses
-          }
-          this.summary = conventionalMatch[3];
-        } else {
-          this.summary = summary;
-        }
+        this.applyGeneratedSubject(result.data.summary);
 
         this.description = result.data.body ?? '';
       } else {
@@ -1826,6 +1922,9 @@ export class GnCommitPanel extends LitElement {
   private async handleCommit(): Promise<void> {
     if (!this.canCommit) return;
 
+    const wasAmending = this.amend;
+    const conventionalBeforeAmend = this.originalConventional;
+
     // Claimed, not just observed: canCommit is also the Cmd+Enter gate, and a
     // lock taken between that check and this call would otherwise slip through.
     const repoPath = this.repositoryPath;
@@ -1856,6 +1955,12 @@ export class GnCommitPanel extends LitElement {
         this.saveToHistory(message);
 
         if (this.repositoryPath === repoPath) {
+          if (wasAmending) {
+            this.conventionalMode = conventionalBeforeAmend.mode;
+            this.selectedType = conventionalBeforeAmend.type;
+            this.scope = conventionalBeforeAmend.scope;
+            this.scopeChosen = conventionalBeforeAmend.scopeChosen;
+          }
           this.success = `Created commit ${result.data?.shortId}`;
           this.summary = '';
           this.description = '';
@@ -1863,6 +1968,9 @@ export class GnCommitPanel extends LitElement {
           this.lastCommit = null;
           this.originalSummary = '';
           this.originalDescription = '';
+          // The scope stays in the field for a run of related commits, but
+          // it was chosen for the commit just made, not for the next one.
+          this.scopeChosen = false;
           // Co-authors belong to the commit that was just made, not to the next
           // one; sign-off falls back to the user's standing preference.
           this.coAuthors = [];
@@ -2018,19 +2126,7 @@ export class GnCommitPanel extends LitElement {
     e: CustomEvent<{ commitMessage?: string; description?: string }>,
   ): void {
     if (e.detail?.commitMessage) {
-      const summary = e.detail.commitMessage;
-      const conventionalMatch = summary.match(
-        /^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+?\))?:\s*(.+)$/i,
-      );
-      if (conventionalMatch && this.conventionalMode) {
-        this.selectedType = conventionalMatch[1].toLowerCase();
-        if (conventionalMatch[2]) {
-          this.scope = conventionalMatch[2].slice(1, -1);
-        }
-        this.summary = conventionalMatch[3];
-      } else {
-        this.summary = summary;
-      }
+      this.applyGeneratedSubject(e.detail.commitMessage);
       if (e.detail.description) {
         this.description = e.detail.description;
       }
