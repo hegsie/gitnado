@@ -8,9 +8,11 @@
 //! namespace (see `utils::internal_refs`).
 //!
 //! Restoring makes the working tree match the snapshot (removing files created
-//! since, never touching ignored files) and leaves HEAD where it is, with the
-//! difference shown as unstaged changes. A restore first takes an automatic
-//! "before restore" checkpoint, so it can itself be undone.
+//! since, never touching ignored files) and leaves HEAD where it is. The index
+//! is put back to what was staged when the checkpoint was taken if HEAD has
+//! not moved since; otherwise the difference shows as unstaged changes. A
+//! restore first takes an automatic "before restore" checkpoint — index
+//! included — so it can itself be undone.
 
 use std::path::Path;
 
@@ -22,6 +24,8 @@ use crate::error::{GitnadoError, Result};
 
 pub const CHECKPOINT_REF_PREFIX: &str = "refs/gitnado/checkpoints/";
 const MAX_LABEL_LEN: usize = 200;
+/// Trailer naming the commit that holds the index (staged state) snapshot.
+const INDEX_TRAILER: &str = "Index";
 
 /// A stored checkpoint.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -88,7 +92,7 @@ fn signature(repo: &Repository) -> Result<Signature<'static>> {
 }
 
 fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
-    message.lines().find_map(|line| {
+    message.lines().skip(1).find_map(|line| {
         line.strip_prefix(key)
             .and_then(|rest| rest.strip_prefix(": "))
             .map(str::trim)
@@ -117,10 +121,45 @@ fn snapshot_tree(repo: &Repository) -> Result<Oid> {
     Ok(result?)
 }
 
+/// Snapshot the index (what is staged) as a commit on top of HEAD, so a
+/// restore can put it back. `None` when there is nothing staged beyond HEAD,
+/// or the index cannot be written as a tree (unresolved conflicts) — a
+/// checkpoint must still be taken mid-merge, it just carries no index.
+fn snapshot_index(repo: &Repository, head: Option<&git2::Commit<'_>>) -> Result<Option<Oid>> {
+    let mut index = repo.index()?;
+    index.read(false)?;
+    if index.has_conflicts() {
+        return Ok(None);
+    }
+    let Ok(tree_oid) = index.write_tree_to(repo) else {
+        return Ok(None);
+    };
+    let head_tree = head.map(|c| c.tree_id());
+    let empty_unborn = head.is_none() && index.is_empty();
+    if head_tree == Some(tree_oid) || empty_unborn {
+        return Ok(None);
+    }
+    let sig = signature(repo)?;
+    let tree = repo.find_tree(tree_oid)?;
+    let parents: Vec<&git2::Commit<'_>> = head.into_iter().collect();
+    Ok(Some(repo.commit(
+        None,
+        &sig,
+        &sig,
+        "gitnado checkpoint index",
+        &tree,
+        &parents,
+    )?))
+}
+
 fn changed_files(repo: &Repository, commit: &git2::Commit<'_>) -> Result<Vec<CheckpointFile>> {
     let tree = commit.tree()?;
+    // Parent 0 is HEAD-at-the-time only when there was one; on an unborn
+    // branch the sole parent (if any) is the index snapshot.
+    let has_head = trailer(commit.message().unwrap_or(""), "Head").is_some();
     let base = match commit.parent_count() {
         0 => None,
+        _ if !has_head => None,
         _ => Some(commit.parent(0)?.tree()?),
     };
     let mut diff = repo.diff_tree_to_tree(base.as_ref(), Some(&tree), None)?;
@@ -200,9 +239,13 @@ pub fn create_checkpoint_in(
         validate_id(session)
             .map_err(|_| GitnadoError::OperationFailed(format!("Invalid session id: {session}")))?;
     }
-    let tree = repo.find_tree(snapshot_tree(repo)?)?;
-
     let head_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    // Before snapshot_tree, which stages everything into the shared in-memory
+    // index (and reloads it from disk afterwards).
+    let index_commit = snapshot_index(repo, head_commit.as_ref())?
+        .map(|oid| repo.find_commit(oid))
+        .transpose()?;
+    let tree = repo.find_tree(snapshot_tree(repo)?)?;
     let branch = repo
         .head()
         .ok()
@@ -225,9 +268,13 @@ pub fn create_checkpoint_in(
     if let Some(branch) = &branch {
         message.push_str(&format!("Branch: {branch}\n"));
     }
+    if let Some(index) = &index_commit {
+        message.push_str(&format!("{INDEX_TRAILER}: {}\n", index.id()));
+    }
 
     let sig = signature(repo)?;
-    let parents: Vec<&git2::Commit<'_>> = head_commit.iter().collect();
+    // The index snapshot is a parent too, purely so gc keeps it alive.
+    let parents: Vec<&git2::Commit<'_>> = head_commit.iter().chain(index_commit.iter()).collect();
     // update_ref = None: the commit is written without moving HEAD.
     let oid = repo.commit(None, &sig, &sig, &message, &tree, &parents)?;
 
@@ -278,12 +325,23 @@ pub fn restore_checkpoint_in(repo: &Repository, id: &str) -> Result<RestoreCheck
     checkout.force().remove_untracked(true);
     repo.checkout_tree(target.as_object(), Some(&mut checkout))?;
 
-    // checkout_tree also loaded the snapshot into the index. Put the index
-    // back on HEAD so the restored state shows up as unstaged changes rather
-    // than silently staged ones.
+    // checkout_tree also loaded the snapshot into the index. Put back the
+    // index the checkpoint recorded — what was staged — when HEAD is still
+    // the commit it was staged against; otherwise (HEAD moved, or an older
+    // checkpoint with no index snapshot) reset it to HEAD so the restored
+    // state shows up as unstaged changes rather than silently staged ones.
+    // Either way the backup above holds the index that was replaced.
+    let head_now = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let head_now_id = head_now.as_ref().map(|c| c.id().to_string());
+    let staged_tree = trailer(target.message().unwrap_or(""), INDEX_TRAILER)
+        .filter(|_| restored.head_oid == head_now_id)
+        .and_then(|oid| Oid::from_str(oid).ok())
+        .and_then(|oid| repo.find_commit(oid).ok())
+        .map(|c| c.tree())
+        .transpose()?;
     let mut index = repo.index()?;
-    match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
-        Some(head_tree) => index.read_tree(&head_tree)?,
+    match staged_tree.or(head_now.map(|c| c.tree()).transpose()?) {
+        Some(tree) => index.read_tree(&tree)?,
         None => index.clear()?,
     }
     index.write()?;
@@ -347,6 +405,15 @@ mod tests {
     use super::*;
     use crate::test_utils::TestRepo;
     use std::fs;
+
+    #[test]
+    fn trailer_ignores_subject_line() {
+        assert_eq!(
+            trailer("Head: label value\n\nHead: actual value", "Head"),
+            Some("actual value")
+        );
+        assert_eq!(trailer("Head: label value", "Head"), None);
+    }
 
     fn read(t: &TestRepo, name: &str) -> Option<String> {
         fs::read_to_string(t.path.join(name)).ok()
@@ -525,6 +592,104 @@ mod tests {
         // a working-tree deletion rather than vanishing from history.
         let st = t.repo().status_file(Path::new("b.txt")).unwrap();
         assert!(st.contains(git2::Status::WT_DELETED));
+    }
+
+    /// Content of `name` as recorded in the on-disk index.
+    fn staged(t: &TestRepo, name: &str) -> Option<String> {
+        let repo = t.repo();
+        let mut index = repo.index().unwrap();
+        index.read(true).unwrap();
+        let entry = index.get_path(Path::new(name), 0)?;
+        let blob = repo.find_blob(entry.id).unwrap();
+        Some(String::from_utf8(blob.content().to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn restore_brings_back_staged_only_content() {
+        let t = TestRepo::with_initial_commit();
+        // Partially staged: the index and the working tree disagree, and the
+        // staged version exists nowhere else.
+        t.create_file("README.md", "staged");
+        t.stage_file("README.md");
+        t.create_file("README.md", "worktree");
+        let cp = create_checkpoint(t.path_str(), None, None).await.unwrap();
+        assert_eq!(cp.files_changed, 1, "index snapshot is not a changed file");
+
+        // Lose the staged version: unstage and edit.
+        let repo = t.repo();
+        let head_tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let mut index = repo.index().unwrap();
+        index.read_tree(&head_tree).unwrap();
+        index.write().unwrap();
+        t.create_file("README.md", "later");
+
+        let result = restore_checkpoint(t.path_str(), cp.id).await.unwrap();
+        assert_eq!(read(&t, "README.md").as_deref(), Some("worktree"));
+        assert_eq!(staged(&t, "README.md").as_deref(), Some("staged"));
+
+        // And the replaced state comes back too, via the backup.
+        restore_checkpoint(t.path_str(), result.backup.id)
+            .await
+            .unwrap();
+        assert_eq!(read(&t, "README.md").as_deref(), Some("later"));
+        assert_ne!(staged(&t, "README.md").as_deref(), Some("staged"));
+    }
+
+    #[tokio::test]
+    async fn undoing_a_restore_brings_back_what_was_staged() {
+        let t = TestRepo::with_initial_commit();
+        let clean = create_checkpoint(t.path_str(), None, None).await.unwrap();
+        t.create_file("README.md", "staged");
+        t.stage_file("README.md");
+        t.create_file("README.md", "worktree");
+
+        let result = restore_checkpoint(t.path_str(), clean.id).await.unwrap();
+        assert_ne!(staged(&t, "README.md").as_deref(), Some("staged"));
+
+        restore_checkpoint(t.path_str(), result.backup.id)
+            .await
+            .unwrap();
+        assert_eq!(read(&t, "README.md").as_deref(), Some("worktree"));
+        assert_eq!(staged(&t, "README.md").as_deref(), Some("staged"));
+    }
+
+    #[tokio::test]
+    async fn staged_snapshot_is_not_reapplied_once_head_moved() {
+        let t = TestRepo::with_initial_commit();
+        t.create_file("README.md", "staged");
+        t.stage_file("README.md");
+        let cp = create_checkpoint(t.path_str(), None, None).await.unwrap();
+        // Unstage first: the helper commits the whole index.
+        let repo = t.repo();
+        let head_tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let mut index = repo.index().unwrap();
+        index.read_tree(&head_tree).unwrap();
+        index.write().unwrap();
+        t.create_commit("moved", &[("b.txt", "b")]);
+
+        restore_checkpoint(t.path_str(), cp.id).await.unwrap();
+        // Staged against a HEAD that is gone: shown unstaged against the new one.
+        let st = t.repo().status_file(Path::new("README.md")).unwrap();
+        assert!(st.contains(git2::Status::WT_MODIFIED));
+        assert!(!st.contains(git2::Status::INDEX_MODIFIED));
+    }
+
+    #[tokio::test]
+    async fn unborn_branch_with_staged_file_keeps_it_staged() {
+        let t = TestRepo::new();
+        t.create_file("first.txt", "hello");
+        t.stage_file("first.txt");
+        let cp = create_checkpoint(t.path_str(), None, None).await.unwrap();
+        assert_eq!(cp.head_oid, None);
+        assert_eq!(cp.files_changed, 1);
+
+        let repo = t.repo();
+        let mut index = repo.index().unwrap();
+        index.clear().unwrap();
+        index.write().unwrap();
+
+        restore_checkpoint(t.path_str(), cp.id).await.unwrap();
+        assert_eq!(staged(&t, "first.txt").as_deref(), Some("hello"));
     }
 
     #[tokio::test]

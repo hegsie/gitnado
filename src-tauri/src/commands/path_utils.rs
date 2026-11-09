@@ -46,14 +46,23 @@ pub fn validate_path_within_repo(repo_path: &Path, file_path: &str) -> Result<Pa
 
 /// Escape Git pathspec metacharacters so only the named path matches.
 pub fn literal_git_pathspec(path: &str) -> String {
-    let mut escaped = String::with_capacity(path.len());
+    let path = if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    };
+    let mut pattern = String::with_capacity(path.len());
     for character in path.chars() {
-        if matches!(character, '\\' | '*' | '?' | '[' | ']') {
-            escaped.push('\\');
+        match character {
+            '[' => pattern.push_str("[[]"),
+            ']' => pattern.push_str("[]]"),
+            '*' => pattern.push_str("[*]"),
+            '?' => pattern.push_str("[?]"),
+            '\\' => pattern.push_str("\\\\"),
+            _ => pattern.push(character),
         }
-        escaped.push(character);
     }
-    escaped
+    pattern
 }
 
 const MAX_SYMLINK_DEPTH: u8 = 32;
