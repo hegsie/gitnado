@@ -29,4 +29,3 @@ Four classes of defect are in scope, weighted equally:
    ```bash
    npm run lint && npm run typecheck && npm test && cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings
    ```
-5. **Convergence.** Re-run all three reviewers on the updated code until all three return `VERDICT: NO ISSUES FOUND` in the same round.

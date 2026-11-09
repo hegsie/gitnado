@@ -46,7 +46,6 @@ gitnado/
 ├── .github/                  # GitHub configuration
 │   ├── workflows/            # CI/CD pipelines
 │   └── copilot-instructions.md
-├── CLAUDE.md                 # Development guidelines for AI agents
 └── README.md                 # Project documentation
 ```
 
@@ -388,7 +387,6 @@ All workflows must pass before merging.
 ## Resources & Documentation
 
 - **Main Docs**: [README.md](../README.md)
-- **Development Guide**: [CLAUDE.md](../CLAUDE.md)
 - **Roadmap**: [ROADMAP.md](../ROADMAP.md)
 - **OAuth Setup**: [docs/oauth-setup.md](../docs/oauth-setup.md)
 - **Tauri Docs**: https://v2.tauri.app/
@@ -428,6 +426,5 @@ npm run test:e2e              # E2E tests
 ---
 
 **For more details**, see:
-- [CLAUDE.md](../CLAUDE.md) - Detailed development guidelines
 - [README.md](../README.md) - Project overview and features
 - [ROADMAP.md](../ROADMAP.md) - Planned features
