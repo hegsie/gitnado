@@ -129,7 +129,7 @@ Do **not** write findings to a file in the repo — report them in your message.
 
 ## Scaling up
 
-For a scope larger than ~5 files, fan out: run three independent hunters in parallel on three different models (Opus, Sonnet, Haiku), each auditing the **entire** scope holistically with this same prompt — do not assign each one a lens or a subset. Dedupe their findings, keep what survives Phase 3, and report the union. If the user asks for a fix pass afterwards, apply the fixes with tests and re-run all three hunters until every one returns `NO ISSUES FOUND` in the same round.
+For a scope larger than ~5 files, fan out: run three independent hunters in parallel on three different models (Opus, Sonnet, Haiku), each auditing the **entire** scope holistically with this same prompt — do not assign each one a lens or a subset. Dedupe their findings, keep what survives Phase 3, and report the union. If the user asks for a fix pass afterwards, apply the fixes with tests and report the results.
 
 Before handing back any fixes:
 

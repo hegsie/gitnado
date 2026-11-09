@@ -236,6 +236,10 @@ Pre-built binaries are available from the [Releases](https://github.com/hegsie/g
 | Linux | `.deb` or `.AppImage` |
 | Arch Linux | [AUR](https://aur.archlinux.org/packages/gitnado-bin) (community) |
 
+On Linux, saved credentials use keyutils backed by Secret Service. A running and
+unlocked Secret Service provider, such as GNOME Keyring or KWallet, is required
+to save and retrieve credentials; Gitnado reports an error if one is unavailable.
+
 ### Package Managers
 
 New releases are published to package managers automatically (see
@@ -601,7 +605,7 @@ describe('MyComponent', () => {
 });
 ```
 
-See [CLAUDE.md](CLAUDE.md) for detailed testing guidelines.
+See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed testing guidelines.
 
 ## Roadmap
 
@@ -826,7 +830,7 @@ Contributions are welcome! Gitnado is built by the community, for the community.
 - **Documentation**: Document public APIs and complex logic
 - **Accessibility**: Ensure UI changes are keyboard-accessible
 
-See [CLAUDE.md](CLAUDE.md) for detailed development guidelines.
+See [.github/copilot-instructions.md](.github/copilot-instructions.md) for detailed development guidelines.
 
 ## License
 

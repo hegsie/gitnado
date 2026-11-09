@@ -239,7 +239,7 @@ In `src/components/dialogs/gn-settings-dialog.ts`, 3 AI-related handlers dispatc
 
 **Missing events:** `handleThemeChange`, `handleFontSizeChange`, `handleDensityChange`, `handleGraphColorSchemeChange`, `handleBranchNameChange`, `handleToggle` (8 settings), `handleMergeToolChange`, `handleDiffToolChange`, `handleStaleBranchDaysChange`, `handleNetworkOperationTimeoutChange`, `handleAutoFetchIntervalChange`.
 
-Per CLAUDE.md: "All sibling handlers must follow the same pattern."
+Per the event-consistency guidance, all sibling handlers must follow the same pattern.
 
 ### 1.12 Tag List Inconsistent Event Dispatch Between Delete and Push
 
@@ -255,7 +255,7 @@ Both modify tag state and should follow the same pattern.
 
 **Severity: HIGH**
 
-Per CLAUDE.md: state-modifying operations must call `handleRefresh()`. Three handlers only call `graphCanvas?.refresh?.()`, skipping repository store updates, search index refresh, and `repository-refresh` event:
+Per the refresh guidance, state-modifying operations must call `handleRefresh()`. Three handlers only call `graphCanvas?.refresh?.()`, skipping repository store updates, search index refresh, and `repository-refresh` event:
 
 - Line 1324: `handleResetToCommit()` — after reset
 - Line 1378: `handleFixupCommit()` — after fixup
@@ -265,7 +265,7 @@ Per CLAUDE.md: state-modifying operations must call `handleRefresh()`. Three han
 
 ## 2. BUGS - Snake_case Tauri Parameters
 
-Per the CLAUDE.md instructions, Tauri automatically converts between Rust's `snake_case` and TypeScript's `camelCase`. These methods pass snake_case keys which won't match Rust parameter names.
+Tauri automatically converts between Rust's `snake_case` and TypeScript's `camelCase`. These methods pass snake_case keys which won't match Rust parameter names.
 
 ### 2.1 `searchCommits()` - 3 snake_case parameters
 
