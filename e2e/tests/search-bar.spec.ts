@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupOpenRepository, setupTauriMocks, initializeRepositoryStore, defaultMockData } from '../fixtures/tauri-mock';
+import { setupOpenRepository, defaultMockData } from '../fixtures/tauri-mock';
 import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandMock, waitForCommand } from '../fixtures/test-helpers';
 
 /**

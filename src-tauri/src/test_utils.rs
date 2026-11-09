@@ -23,21 +23,28 @@ static CONFIG_SANDBOX: OnceLock<TempDir> = OnceLock::new();
 /// Process-global by nature, so it runs once and covers every test in the
 /// binary; each TestRepo still sets its own repo-local user.name/email.
 fn isolate_git_config() {
-    let dir =
-        CONFIG_SANDBOX.get_or_init(|| TempDir::new().expect("Failed to create git config sandbox"));
-    // SAFETY: libgit2 documents these as process-global and not thread-safe
-    // against concurrent repository use. OnceLock makes the write happen
-    // exactly once, and it happens before this thread opens any repository.
-    unsafe {
-        for level in [
-            git2::ConfigLevel::System,
-            git2::ConfigLevel::Global,
-            git2::ConfigLevel::XDG,
-            git2::ConfigLevel::ProgramData,
-        ] {
-            let _ = git2::opts::set_search_path(level, dir.path());
+    CONFIG_SANDBOX.get_or_init(|| {
+        let dir = TempDir::new().expect("Failed to create git config sandbox");
+        // SAFETY: libgit2 documents these as process-global and not thread-safe
+        // against concurrent repository use, and `std::env::set_var` has the
+        // same constraint for process environment variables. Running inside the
+        // `OnceLock` initializer invoked by `isolate_git_config_before_any_test_thread`
+        // guarantees these mutations happen once before any test thread exists.
+        unsafe {
+            for level in [
+                git2::ConfigLevel::System,
+                git2::ConfigLevel::Global,
+                git2::ConfigLevel::XDG,
+                git2::ConfigLevel::ProgramData,
+            ] {
+                let _ = git2::opts::set_search_path(level, dir.path());
+            }
         }
-    }
+        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+        std::env::set_var("GIT_CONFIG_GLOBAL", dir.path().join(".gitconfig"));
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        dir
+    });
 }
 
 /// Apply [`isolate_git_config`] before libtest starts a single test thread.

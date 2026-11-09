@@ -204,7 +204,7 @@ export const defaultMockData = {
 /**
  * Tauri command handler that returns mock data
  */
-function createMockHandler(mocks: typeof defaultMockData) {
+export function createMockHandler(mocks: typeof defaultMockData) {
   return (command: string, args?: Record<string, unknown>): unknown => {
     switch (command) {
       // Repository commands

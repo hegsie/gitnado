@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 
-use rand::Rng;
+use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -77,11 +77,7 @@ pub const UNAUTHORIZED_MESSAGE: &str =
 
 /// Generate a new random bearer token for the MCP server
 pub fn generate_auth_token() -> String {
-    rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(AUTH_TOKEN_LEN)
-        .map(char::from)
-        .collect()
+    Alphanumeric.sample_string(&mut rand::rng(), AUTH_TOKEN_LEN)
 }
 
 /// MCP server configuration

@@ -3,7 +3,6 @@ import { setupOpenRepository } from '../fixtures/tauri-mock';
 import { LeftPanelPage } from '../pages/panels.page';
 import {
   startCommandCaptureWithMocks,
-  startCommandCapture,
   findCommand,
   injectCommandError,
   injectCommandMock,
@@ -31,7 +30,7 @@ test.describe('Stash List Context Menu', () => {
     });
   });
 
-  test('should display stash items', async ({ page }) => {
+  test('should display stash items', async () => {
     await leftPanel.expandStashes();
 
     const stashCount = await leftPanel.getStashCount();
@@ -488,7 +487,7 @@ test.describe('Stash Contents Preview', () => {
     expect(showCommands.length).toBeGreaterThan(0);
   });
 
-  test('clicking the stash again hides its file list', async ({ page }) => {
+  test('clicking the stash again hides its file list', async () => {
     await leftPanel.expandStashes();
 
     await leftPanel.getStash(0).click();

@@ -14,7 +14,6 @@
  * of the handler, so the item cannot be clicked a second time.
  */
 
-type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 const invoked: string[] = [];
 let confirmCount = 0;
 /** Resolves the pending confirm; while set, confirms hang. */

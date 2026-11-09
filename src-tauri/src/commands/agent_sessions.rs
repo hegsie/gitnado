@@ -274,7 +274,9 @@ fn count_changed(worktree: &WorktreeInfo) -> Option<usize> {
 
 fn snapshot_processes() -> Vec<ProcInfo> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else {
+        return Vec::new();
+    };
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,

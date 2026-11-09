@@ -155,7 +155,8 @@ pub async fn generate_commit_message(
     repo_path: String,
 ) -> Result<GeneratedCommitMessage> {
     // Get staged diff
-    let diff = get_staged_diff(&repo_path)?;
+    let repo_path_for_diff = repo_path.clone();
+    let diff = crate::utils::blocking_git(move || get_staged_diff(&repo_path_for_diff)).await?;
 
     if diff.is_empty() {
         return Err(GitnadoError::OperationFailed(
@@ -301,7 +302,10 @@ pub async fn generate_changelog(
     let max_commits = max_commits.unwrap_or(200);
 
     // Get commits between the two refs using git log
-    let commits_text = get_commits_between_refs(&repo_path, &base_ref, &compare_ref, max_commits)?;
+    let commits_text = crate::utils::blocking_git(move || {
+        get_commits_between_refs(&repo_path, &base_ref, &compare_ref, max_commits)
+    })
+    .await?;
 
     if commits_text.is_empty() {
         return Err(GitnadoError::OperationFailed(
@@ -400,22 +404,25 @@ pub async fn find_reflog_entry(
     query: String,
 ) -> Result<ReflogMatch> {
     // Get reflog entries
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&repo_path)
-        .arg("reflog")
-        .arg("--format=%H %gd %gs %ci")
-        .arg("-50")
-        .output()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get reflog: {}", e)))?;
+    let reflog_text = crate::utils::blocking_git(move || {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_path)
+            .arg("reflog")
+            .arg("--format=%H %gd %gs %ci")
+            .arg("-50")
+            .output()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get reflog: {}", e)))?;
 
-    if !output.status.success() {
-        return Err(GitnadoError::OperationFailed(
-            "Failed to get reflog".to_string(),
-        ));
-    }
+        if !output.status.success() {
+            return Err(GitnadoError::OperationFailed(
+                "Failed to get reflog".to_string(),
+            ));
+        }
 
-    let reflog_text = String::from_utf8_lossy(&output.stdout).to_string();
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    })
+    .await?;
 
     if reflog_text.trim().is_empty() {
         return Err(GitnadoError::OperationFailed("Reflog is empty".to_string()));
@@ -507,7 +514,7 @@ pub async fn analyze_staged_changes(
     state: State<'_, AiState>,
     repo_path: String,
 ) -> Result<StagedAnalysis> {
-    let diff = get_staged_diff(&repo_path)?;
+    let diff = crate::utils::blocking_git(move || get_staged_diff(&repo_path)).await?;
 
     if diff.is_empty() {
         return Ok(StagedAnalysis {
@@ -612,17 +619,21 @@ pub async fn generate_pr_description(
     head_ref: String,
     title: String,
 ) -> Result<GeneratedPrDescription> {
-    // Get commits between refs
-    let commits_text = get_commits_between_refs(&repo_path, &base_ref, &head_ref, 100)?;
+    // Get commits between refs and diff stats off the async runtime
+    let repo_path_for_git = repo_path.clone();
+    let (commits_text, stats) = crate::utils::blocking_git(move || {
+        let commits_text = get_commits_between_refs(&repo_path_for_git, &base_ref, &head_ref, 100)?;
 
-    if commits_text.is_empty() {
-        return Err(GitnadoError::OperationFailed(
-            "No commits found between the specified refs".to_string(),
-        ));
-    }
+        if commits_text.is_empty() {
+            return Err(GitnadoError::OperationFailed(
+                "No commits found between the specified refs".to_string(),
+            ));
+        }
 
-    // Get diff stats
-    let stats = get_diff_stats(&repo_path, &base_ref, &head_ref)?;
+        let stats = get_diff_stats(&repo_path_for_git, &base_ref, &head_ref)?;
+        Ok((commits_text, stats))
+    })
+    .await?;
 
     let context =
         mcp_client::render_context(&mcp_client::gather_context(&external, &repo_path).await);
@@ -663,7 +674,7 @@ pub async fn suggest_commit_splits(
     state: State<'_, AiState>,
     repo_path: String,
 ) -> Result<CommitSplitSuggestion> {
-    let diff = get_staged_diff(&repo_path)?;
+    let diff = crate::utils::blocking_git(move || get_staged_diff(&repo_path)).await?;
 
     if diff.is_empty() {
         return Ok(CommitSplitSuggestion {

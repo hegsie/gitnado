@@ -8,7 +8,6 @@ import {
   getCapturedCommands,
   injectCommandError,
   injectCommandMock,
-  waitForRepositoryChanged,
 } from '../fixtures/test-helpers';
 
 test.describe('File Status Context Menu', () => {
@@ -34,12 +33,12 @@ test.describe('File Status Context Menu', () => {
     await injectCommandMock(page, { 'plugin:dialog|confirm': true, 'plugin:dialog|ask': true });
   });
 
-  test('should display unstaged files', async ({ page }) => {
+  test('should display unstaged files', async () => {
     const unstagedCount = await rightPanel.getUnstagedCount();
     expect(unstagedCount).toBe(3);
   });
 
-  test('should display staged files', async ({ page }) => {
+  test('should display staged files', async () => {
     const stagedCount = await rightPanel.getStagedCount();
     expect(stagedCount).toBe(1);
   });

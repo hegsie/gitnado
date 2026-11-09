@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository, defaultMockData } from '../fixtures/tauri-mock';
-import { AppPage } from '../pages/app.page';
 import { LeftPanelPage } from '../pages/panels.page';
 import { DialogsPage } from '../pages/dialogs.page';
 import {
@@ -16,11 +15,9 @@ import {
 } from '../fixtures/test-helpers';
 
 test.describe('Branch List', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     await setupOpenRepository(page);
   });
@@ -41,11 +38,9 @@ test.describe('Branch List', () => {
 });
 
 test.describe('Branch with Multiple Branches', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     await setupOpenRepository(page, {
       branches: [
@@ -112,11 +107,9 @@ test.describe('Branch with Multiple Branches', () => {
 });
 
 test.describe('Stash List', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     await setupOpenRepository(page, {
       stashes: [
@@ -141,11 +134,9 @@ test.describe('Stash List', () => {
 });
 
 test.describe('Tag List', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     await setupOpenRepository(page, {
       tags: [
@@ -189,12 +180,10 @@ test.describe('Tag List', () => {
 });
 
 test.describe('Create Branch Dialog', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
@@ -252,11 +241,9 @@ test.describe('Create Branch Dialog', () => {
 });
 
 test.describe('Branch Checkout via Context Menu', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     await setupOpenRepository(page, {
       branches: [
@@ -565,11 +552,9 @@ test.describe('Branch Context Menu - Remote Branch Checkout', () => {
 });
 
 test.describe('Empty Repository Branches', () => {
-  let app: AppPage;
   let leftPanel: LeftPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     leftPanel = new LeftPanelPage(page);
     await setupOpenRepository(page, {
       branches: [],

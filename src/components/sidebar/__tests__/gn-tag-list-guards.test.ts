@@ -27,8 +27,6 @@ import type { GnTagList } from '../gn-tag-list.ts';
 
 // Import the actual component
 import '../gn-tag-list.ts';
-import { repositoryStore } from '../../../stores/repository.store.ts';
-import type { Repository } from '../../../types/git.types.ts';
 import {
   tryAcquireRefOp,
   resetRefOpLocks,
@@ -39,21 +37,6 @@ import {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const REPO_PATH = '/test/repo';
-
-function mockRepo(path: string, name: string): Repository {
-  return {
-    path,
-    name,
-    isValid: true,
-    isBare: false,
-    headRef: 'main',
-    detachedHeadOid: null,
-    state: 'clean',
-    isShallow: false,
-    isPartialClone: false,
-    cloneFilter: null,
-  };
-}
 
 function makeTag(overrides: Partial<{
   name: string;

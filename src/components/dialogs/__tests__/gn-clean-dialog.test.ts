@@ -5,7 +5,7 @@
  */
 
 import { expect, fixture, html } from '@open-wc/testing';
-import { pushOverlay, removeOverlay, resetOverlayStack } from '../../../utils/overlay-stack.ts';
+import { pushOverlay, removeOverlay } from '../../../utils/overlay-stack.ts';
 
 let failingCommands: Set<string> = new Set();
 let cleanableEntries: unknown[] = [];

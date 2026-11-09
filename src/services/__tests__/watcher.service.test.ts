@@ -42,7 +42,7 @@ const mockInvoke = (command: string, args?: Record<string, unknown>): Promise<un
   },
 };
 
-import { startWatching, stopWatching, onFileChange, cleanup } from '../watcher.service.ts';
+import { startWatching, stopWatching, onFileChange } from '../watcher.service.ts';
 import { uiStore } from '../../stores/index.ts';
 
 describe('watcher.service', () => {

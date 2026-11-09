@@ -125,11 +125,13 @@ pub fn detect_active_backend(gpu_info: &Option<GpuInfo>) -> (ComputeBackend, Vec
 
 /// Detect system capabilities for local AI inference.
 pub fn detect() -> SystemCapabilities {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-
-    let total_ram_bytes = sys.total_memory();
-    let available_ram_bytes = sys.available_memory();
+    let (total_ram_bytes, available_ram_bytes) = match sysinfo::System::new() {
+        Ok(mut sys) => {
+            sys.refresh_memory();
+            (sys.total_memory(), sys.available_memory())
+        }
+        Err(_) => (0, 0),
+    };
 
     let gpu_info = detect_gpu(total_ram_bytes);
     let npu_info = detect_npu();

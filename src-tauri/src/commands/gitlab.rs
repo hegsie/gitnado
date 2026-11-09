@@ -342,34 +342,38 @@ pub async fn detect_gitlab_repo(
     path: String,
     remote_name: Option<String>,
 ) -> Result<Option<DetectedGitLabRepo>> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(&path).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to open repository: {}", e))
+        })?;
 
-    let remotes = repo
-        .remotes()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
+        let remotes = repo
+            .remotes()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
 
-    for candidate in remotes.iter().flatten().flatten() {
-        if remote_name
-            .as_deref()
-            .is_some_and(|wanted| wanted != candidate)
-        {
-            continue;
-        }
-        if let Ok(remote) = repo.find_remote(candidate) {
-            if let Ok(url) = remote.url() {
-                if let Some(repo_info) = parse_gitlab_url(url) {
-                    return Ok(Some(DetectedGitLabRepo {
-                        instance_url: repo_info.0,
-                        project_path: repo_info.1,
-                        remote_name: candidate.to_string(),
-                    }));
+        for candidate in remotes.iter().flatten().flatten() {
+            if remote_name
+                .as_deref()
+                .is_some_and(|wanted| wanted != candidate)
+            {
+                continue;
+            }
+            if let Ok(remote) = repo.find_remote(candidate) {
+                if let Ok(url) = remote.url() {
+                    if let Some(repo_info) = parse_gitlab_url(url) {
+                        return Ok(Some(DetectedGitLabRepo {
+                            instance_url: repo_info.0,
+                            project_path: repo_info.1,
+                            remote_name: candidate.to_string(),
+                        }));
+                    }
                 }
             }
         }
-    }
 
-    Ok(None)
+        Ok(None)
+    })
+    .await
 }
 
 fn parse_gitlab_url(url: &str) -> Option<(String, String)> {

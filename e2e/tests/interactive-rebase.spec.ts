@@ -6,7 +6,6 @@ import {
   waitForCommand,
   injectCommandMock,
   injectCommandError,
-  waitForRepositoryChanged,
 } from '../fixtures/test-helpers';
 
 /**

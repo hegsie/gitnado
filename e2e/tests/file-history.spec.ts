@@ -238,9 +238,10 @@ test.describe('File History - View Diff', () => {
     const panelHandle = await page.locator('gn-file-history').elementHandle();
     await page.evaluate((el) => {
       if (!el) return;
-      (window as any).__viewDiffDetail__ = null;
+      const win = window as unknown as { __viewDiffDetail__?: { commitOid: string; filePath: string } | null };
+      win.__viewDiffDetail__ = null;
       el.addEventListener('view-diff', ((e: CustomEvent) => {
-        (window as any).__viewDiffDetail__ = e.detail;
+        win.__viewDiffDetail__ = e.detail;
       }) as EventListener, { once: true });
     }, panelHandle);
 
@@ -248,12 +249,12 @@ test.describe('File History - View Diff', () => {
     await page.locator('gn-file-history .view-diff-btn').first().click();
 
     // Wait for the event to be captured
-    await page.waitForFunction(() => (window as any).__viewDiffDetail__ != null);
-    const eventDetail = await page.evaluate(() => (window as any).__viewDiffDetail__);
+    await page.waitForFunction(() => (window as unknown as { __viewDiffDetail__?: { commitOid: string; filePath: string } | null }).__viewDiffDetail__ != null);
+    const eventDetail = await page.evaluate(() => (window as unknown as { __viewDiffDetail__?: { commitOid: string; filePath: string } | null }).__viewDiffDetail__);
 
     expect(eventDetail).not.toBeNull();
-    expect(eventDetail.commitOid).toBe('abc123def456789');
-    expect(eventDetail.filePath).toBe('src/main.ts');
+    expect(eventDetail?.commitOid).toBe('abc123def456789');
+    expect(eventDetail?.filePath).toBe('src/main.ts');
   });
 });
 

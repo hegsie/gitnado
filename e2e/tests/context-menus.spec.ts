@@ -1,10 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { setupOpenRepository, defaultMockData, type MockBranch, type MockTag, type MockCommit } from '../fixtures/tauri-mock';
-import { AppPage } from '../pages/app.page';
+import { setupOpenRepository, defaultMockData } from '../fixtures/tauri-mock';
 import {
   startCommandCapture,
   findCommand,
-  waitForRepositoryChanged,
   injectCommandError,
   injectCommandMock,
   autoConfirmDialogs,
@@ -68,10 +66,7 @@ async function oidAtRow(page: import('@playwright/test').Page, rowIndex: number)
 }
 
 test.describe('Commit Context Menu', () => {
-  let app: AppPage;
-
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
   });
 
@@ -291,11 +286,7 @@ test.describe('Context Menus - repository switch', () => {
 });
 
 test.describe('Operation Banner', () => {
-  let app: AppPage;
-
   test('should show operation banner when repo is in cherry-pick state', async ({ page }) => {
-    app = new AppPage(page);
-
     // Setup with cherry-pick state
     await setupOpenRepository(page, {
       repository: {
@@ -318,8 +309,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show operation banner when repo is in merge state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -333,8 +322,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show operation banner when repo is in rebase state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -348,8 +335,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show operation banner when repo is in revert state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -363,8 +348,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should not show operation banner when repo is clean', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -377,8 +360,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should have correct styling for cherry-pick banner', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -391,8 +372,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('clicking abort should show success toast', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -422,8 +401,6 @@ test.describe('Operation Banner', () => {
     // The banner used to render Abort for every non-clean state, so during a
     // bisect it was a permanent dead end — clicking it could only ever produce
     // "Cannot abort operation: bisect".
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -436,8 +413,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('declining the abort confirm does not abort', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -460,8 +435,6 @@ test.describe('Operation Banner', () => {
   // The backend's empty-pick error tells the user to "Skip or abort"; these pin
   // the Skip half of that promise on the banner.
   test('cherry-pick banner offers Skip and runs skip_cherry_pick without a confirm when nothing is conflicted', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -492,8 +465,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('revert banner offers Skip and runs skip_revert', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -514,8 +485,6 @@ test.describe('Operation Banner', () => {
   test('no Skip button for states that have no skip command', async ({ page }) => {
     // Only cherry-pick and revert have a skip wired to this control. Rendering
     // it for merge/rebase/bisect would be a dead button.
-    app = new AppPage(page);
-
     for (const state of ['merge', 'rebase', 'bisect']) {
       await setupOpenRepository(page, {
         repository: { ...defaultMockData.repository, state },
@@ -526,14 +495,11 @@ test.describe('Operation Banner', () => {
   });
 
   test('a failed skip shows an error toast and leaves the banner up', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
         state: 'cherrypick',
-      },
-      status: { staged: [], unstaged: [] },
+      },      status: { staged: [], unstaged: [] },
     });
     await startCommandCapture(page);
     await injectCommandError(page, 'skip_cherry_pick', 'Repository is busy');
@@ -549,8 +515,6 @@ test.describe('Operation Banner', () => {
   test('skipping with conflicted files asks for confirmation first', async ({ page }) => {
     // With conflicts on disk there IS resolution work the skip discards, so it
     // is gated exactly like Abort.
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -585,8 +549,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show Resolve Conflicts button for cherry-pick state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -604,8 +566,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show Resolve Conflicts button for merge state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -620,8 +580,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show Resolve Conflicts button for rebase state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -636,8 +594,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('should show Resolve Conflicts button for revert state', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -652,8 +608,6 @@ test.describe('Operation Banner', () => {
   });
 
   test('Resolve Conflicts button should open conflict resolution dialog', async ({ page }) => {
-    app = new AppPage(page);
-
     await setupOpenRepository(page, {
       repository: {
         ...defaultMockData.repository,
@@ -671,10 +625,7 @@ test.describe('Operation Banner', () => {
 });
 
 test.describe('Context Menu Actions', () => {
-  let app: AppPage;
-
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
   });
 
@@ -695,10 +646,7 @@ test.describe('Context Menu Actions', () => {
 });
 
 test.describe('Commit Context Menu - Specific Items', () => {
-  let app: AppPage;
-
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
   });
 
@@ -779,10 +727,7 @@ test.describe('Commit Context Menu - Specific Items', () => {
 });
 
 test.describe('Context Menus - Error Scenarios', () => {
-  let app: AppPage;
-
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
   });
 

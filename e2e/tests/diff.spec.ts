@@ -1,6 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
 import { setupOpenRepository, withModifiedFiles } from '../fixtures/tauri-mock';
-import { AppPage } from '../pages/app.page';
 import { RightPanelPage, GraphPanelPage } from '../pages/panels.page';
 import {
   startCommandCapture,
@@ -10,12 +9,10 @@ import {
 } from '../fixtures/test-helpers';
 
 test.describe('Diff View', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     graph = new GraphPanelPage(page);
     // Setup with modified files
@@ -55,12 +52,10 @@ test.describe('Diff View', () => {
 });
 
 test.describe('Diff View Content', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     graph = new GraphPanelPage(page);
     // Setup with a file that has diff content
@@ -90,14 +85,10 @@ test.describe('Diff View Content', () => {
 });
 
 test.describe('Binary Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
-  let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
-    graph = new GraphPanelPage(page);
     // Setup with a binary file
     await setupOpenRepository(
       page,
@@ -112,11 +103,9 @@ test.describe('Binary Files', () => {
 });
 
 test.describe('New Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -131,11 +120,9 @@ test.describe('New Files', () => {
 });
 
 test.describe('Deleted Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -150,11 +137,9 @@ test.describe('Deleted Files', () => {
 });
 
 test.describe('Renamed Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -169,12 +154,10 @@ test.describe('Renamed Files', () => {
 });
 
 test.describe('Image Diff View', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     graph = new GraphPanelPage(page);
     // Setup with image files
@@ -213,11 +196,9 @@ test.describe('Image Diff View', () => {
 });
 
 test.describe('Image Diff New Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -234,11 +215,9 @@ test.describe('Image Diff New Files', () => {
 });
 
 test.describe('Image Diff Deleted Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -255,12 +234,10 @@ test.describe('Image Diff Deleted Files', () => {
 });
 
 test.describe('Image Diff Difference Mode', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     graph = new GraphPanelPage(page);
     // Setup with a modified image file

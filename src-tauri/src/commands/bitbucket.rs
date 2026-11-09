@@ -351,28 +351,32 @@ pub async fn check_bitbucket_connection_with_token(
 /// Detect Bitbucket repository from git remotes
 #[command]
 pub async fn detect_bitbucket_repo(path: String) -> Result<Option<DetectedBitbucketRepo>> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(&path).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to open repository: {}", e))
+        })?;
 
-    let remotes = repo
-        .remotes()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
+        let remotes = repo
+            .remotes()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
 
-    for remote_name in remotes.iter().flatten().flatten() {
-        if let Ok(remote) = repo.find_remote(remote_name) {
-            if let Ok(url) = remote.url() {
-                if let Some(repo_info) = parse_bitbucket_url(url) {
-                    return Ok(Some(DetectedBitbucketRepo {
-                        workspace: repo_info.0,
-                        repo_slug: repo_info.1,
-                        remote_name: remote_name.to_string(),
-                    }));
+        for remote_name in remotes.iter().flatten().flatten() {
+            if let Ok(remote) = repo.find_remote(remote_name) {
+                if let Ok(url) = remote.url() {
+                    if let Some(repo_info) = parse_bitbucket_url(url) {
+                        return Ok(Some(DetectedBitbucketRepo {
+                            workspace: repo_info.0,
+                            repo_slug: repo_info.1,
+                            remote_name: remote_name.to_string(),
+                        }));
+                    }
                 }
             }
         }
-    }
 
-    Ok(None)
+        Ok(None)
+    })
+    .await
 }
 
 fn parse_bitbucket_url(url: &str) -> Option<(String, String)> {

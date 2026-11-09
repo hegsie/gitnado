@@ -7,7 +7,6 @@
  * settings back as an error" pattern fixed elsewhere, missed on this surface.
  */
 
-type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 const invoked: Array<{ command: string; args?: unknown }> = [];
 let failCommands = new Set<string>();
 let failureFor: Map<string, { code: string; message: string }> = new Map();

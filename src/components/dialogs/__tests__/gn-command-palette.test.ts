@@ -513,7 +513,6 @@ describe('gn-command-palette', () => {
         ></gn-command-palette>
       `);
 
-      const internal = el as unknown as { recentCommands: string[] };
       // loadRecentCommands reads from localStorage as-is; saveRecentCommand slices to 5
       // But the loaded list might still have 6 since it's raw read
       // After executing a command, it gets trimmed

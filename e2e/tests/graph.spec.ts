@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
 import { AppPage } from '../pages/app.page';
 import { GraphPanelPage, RightPanelPage } from '../pages/panels.page';
-import { startCommandCapture, startCommandCaptureWithMocks, findCommand, waitForRepositoryChanged, injectCommandError, injectCommandMock, waitForCommand } from '../fixtures/test-helpers';
+import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandMock, waitForCommand } from '../fixtures/test-helpers';
 
 /**
  * Helper to get a Playwright ElementHandle for the gn-graph-canvas element.
@@ -166,7 +166,6 @@ test.describe('Commit Graph', () => {
 });
 
 test.describe('Graph with Multiple Commits', () => {
-  let app: AppPage;
   let graph: GraphPanelPage;
   let rightPanel: RightPanelPage;
 
@@ -178,7 +177,6 @@ test.describe('Graph with Multiple Commits', () => {
   ];
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     graph = new GraphPanelPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(page, { commits });
@@ -338,9 +336,7 @@ test.describe('Graph with Multiple Commits', () => {
 });
 
 test.describe('Graph Commit Selection', () => {
-  let app: AppPage;
   let graph: GraphPanelPage;
-  let rightPanel: RightPanelPage;
 
   const commits = [
     makeCommit(0, []),
@@ -349,9 +345,7 @@ test.describe('Graph Commit Selection', () => {
   ];
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     graph = new GraphPanelPage(page);
-    rightPanel = new RightPanelPage(page);
     await setupOpenRepository(page, { commits });
     await expect(graph.canvas).toBeVisible();
     await waitForNodeCount(page, 3);
@@ -686,7 +680,6 @@ test.describe('Empty Repository Graph', () => {
 
 test.describe('Graph - UI Outcome Verification', () => {
   let graph: GraphPanelPage;
-  let rightPanel: RightPanelPage;
 
   // commit0 is the newest tip; commit2 is the root
   const commits = [
@@ -697,7 +690,6 @@ test.describe('Graph - UI Outcome Verification', () => {
 
   test.beforeEach(async ({ page }) => {
     graph = new GraphPanelPage(page);
-    rightPanel = new RightPanelPage(page);
     await setupOpenRepository(page, { commits });
     await expect(graph.canvas).toBeVisible();
     await waitForNodeCount(page, 3);

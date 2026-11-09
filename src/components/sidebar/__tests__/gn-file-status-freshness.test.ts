@@ -15,7 +15,6 @@
  * reload after something did.
  */
 
-type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 const invoked: string[] = [];
 let statusPayload: unknown = [];
 

@@ -606,7 +606,12 @@ mod tests {
         // Create a subdirectory
         std::fs::create_dir_all(repo.path.join("subdir")).unwrap();
 
-        let mut action = make_action("1", "Pwd", "pwd");
+        let cmd = if cfg!(target_os = "windows") {
+            "cd"
+        } else {
+            "pwd"
+        };
+        let mut action = make_action("1", "Pwd", cmd);
         action.working_directory = Some(format!("{}/subdir", repo.path_str()));
         save_custom_action(repo.path_str(), action).await.unwrap();
 

@@ -29,7 +29,7 @@ test.describe('Welcome Screen', () => {
     await expect(app.welcomeTagline).toContainText('Git client');
   });
 
-  test('should display all action buttons', async ({ page }) => {
+  test('should display all action buttons', async () => {
     await expect(app.openButton).toBeVisible();
     await expect(app.cloneButton).toBeVisible();
     await expect(app.initButton).toBeVisible();
@@ -234,7 +234,7 @@ test.describe('Clone Dialog - Command Verification', () => {
     expect(args.path).toBe('/tmp/clones/ssh-repo');
   });
 
-  test('should not call clone_repository when URL is empty', async ({ page }) => {
+  test('should not call clone_repository when URL is empty', async () => {
     // Only fill destination, leave URL empty
     await dialogs.clone.fillPath('/home/user/projects');
 
@@ -245,7 +245,7 @@ test.describe('Clone Dialog - Command Verification', () => {
     await expect(dialogs.clone.dialog).toBeVisible();
   });
 
-  test('should not call clone_repository when destination is empty', async ({ page }) => {
+  test('should not call clone_repository when destination is empty', async () => {
     // Only fill URL, leave destination empty
     await dialogs.clone.fillUrl('https://github.com/user/repo.git');
 
@@ -287,7 +287,7 @@ test.describe('Clone Dialog - Error Handling', () => {
     await expect(errorMessage).toContainText('Repository not found');
   });
 
-  test('should disable clone button when URL is empty', async ({ page }) => {
+  test('should disable clone button when URL is empty', async () => {
     // Leave URL empty but fill destination
     await dialogs.clone.fillPath('/home/user/projects');
 
@@ -298,7 +298,7 @@ test.describe('Clone Dialog - Error Handling', () => {
     await expect(dialogs.clone.dialog).toBeVisible();
   });
 
-  test('should disable clone button when destination is empty', async ({ page }) => {
+  test('should disable clone button when destination is empty', async () => {
     // Fill URL but leave destination empty
     await dialogs.clone.fillUrl('https://github.com/user/repo.git');
 
@@ -416,7 +416,7 @@ test.describe('Init Dialog - Command Verification', () => {
     expect(args.bare).toBe(true);
   });
 
-  test('should not call init_repository when path is empty', async ({ page }) => {
+  test('should not call init_repository when path is empty', async () => {
     // Leave path empty - the Initialize button should be disabled
     await expect(dialogs.init.initButton).toBeDisabled();
 
@@ -428,7 +428,15 @@ test.describe('Init Dialog - Command Verification', () => {
     // The dialog reads the setting when it opens, so change it and reopen
     await dialogs.init.closeWithEscape();
     await page.evaluate(() => {
-      (window as any).__GITNADO_STORES__.settingsStore.getState().setDefaultBranchName('trunk');
+      (
+        window as unknown as {
+          __GITNADO_STORES__: {
+            settingsStore: { getState: () => { setDefaultBranchName: (name: string) => void } };
+          };
+        }
+      ).__GITNADO_STORES__.settingsStore
+        .getState()
+        .setDefaultBranchName('trunk');
     });
     await app.initButton.click();
     await dialogs.init.waitForOpen();
@@ -491,7 +499,7 @@ test.describe('Init Dialog - Error Handling', () => {
     await expect(errorMessage).toContainText('Permission denied');
   });
 
-  test('should disable init button when path is empty', async ({ page }) => {
+  test('should disable init button when path is empty', async () => {
     // Leave path empty - the Initialize button should be disabled (validation at button level)
     await expect(dialogs.init.initButton).toBeDisabled();
 

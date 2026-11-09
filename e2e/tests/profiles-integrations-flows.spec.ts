@@ -415,10 +415,6 @@ const dashboardCompactIdentity = (page: Page) =>
   page.locator('gn-context-dashboard .compact-identity').first();
 const dashboardNoProfile = (page: Page) =>
   page.locator('gn-context-dashboard .no-profile');
-const dashboardAccountStatusDot = (page: Page) =>
-  page.locator('gn-context-dashboard .account-status-dot').first();
-const dashboardConnectBtn = (page: Page) =>
-  page.locator('gn-context-dashboard .configure-btn, gn-context-dashboard .no-profile-btn');
 
 test.describe('Cross-component propagation - toolbar reflects dialog state', () => {
   test('applying a profile updates the toolbar chip immediately', async ({ page }) => {
@@ -1104,8 +1100,6 @@ test.describe('Workflow - Profile Manager ↔ Integration dialogs', () => {
 
   // --- W5 -------------------------------------------------------------
   test('W5: applying a different profile while the integration dialog is closed updates that dialog\'s default account on reopen', async ({ page }) => {
-    const dialogs = new DialogsPage(page);
-
     const profileA = { ...workProfile, defaultAccounts: { github: 'account-github-work' } };
     const profileB = {
       ...personalProfile,
@@ -2128,8 +2122,6 @@ test.describe('Keyboard & a11y', () => {
   });
 
   test('a failed connection check flips the status to disconnected and updates the toolbar', async ({ page }) => {
-    const dialogs = new DialogsPage(page);
-
     await setupProfilesAndAccounts(page, {
       profiles: [workProfile],
       accounts: [githubWork],

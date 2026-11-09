@@ -1327,8 +1327,9 @@ export class GnSettingsDialog extends LitElement {
 
     this.downloadCompleteUnlisten = await this.listenOrNull<{ modelId: string; loaded?: boolean; loadError?: string }>('model-download-complete', (event) => {
       // Remove from progress tracking and refresh the model list
-      const { [event.payload.modelId]: _, ...rest } = this.downloadProgress;
-      this.downloadProgress = rest;
+      const nextProgress = { ...this.downloadProgress };
+      delete nextProgress[event.payload.modelId];
+      this.downloadProgress = nextProgress;
       this.loadLocalAiData();
 
       // If the model was auto-loaded, refresh provider list and notify other components
@@ -1346,8 +1347,9 @@ export class GnSettingsDialog extends LitElement {
     this.downloadErrorUnlisten = await this.listenOrNull<{ modelId: string; error: string }>('model-download-error', (event) => {
       this.aiError = msg(str`Download failed for ${event.payload.modelId}: ${event.payload.error}`);
       // Remove from progress tracking and refresh downloaded models list
-      const { [event.payload.modelId]: _, ...rest } = this.downloadProgress;
-      this.downloadProgress = rest;
+      const nextProgress = { ...this.downloadProgress };
+      delete nextProgress[event.payload.modelId];
+      this.downloadProgress = nextProgress;
       this.loadLocalAiData();
     });
   }
@@ -1369,8 +1371,9 @@ export class GnSettingsDialog extends LitElement {
       this.aiError = result.error?.message ?? msg('Failed to cancel download');
       return;
     }
-    const { [modelId]: _, ...rest } = this.downloadProgress;
-    this.downloadProgress = rest;
+    const nextProgress = { ...this.downloadProgress };
+    delete nextProgress[modelId];
+    this.downloadProgress = nextProgress;
     await this.loadLocalAiData();
   }
 

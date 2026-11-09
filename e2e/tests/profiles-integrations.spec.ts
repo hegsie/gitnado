@@ -89,11 +89,9 @@ const testAccounts = {
 // ============================================================================
 
 test.describe('Profile Manager Dialog - Basic Operations', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -155,11 +153,9 @@ test.describe('Profile Manager Dialog - Basic Operations', () => {
 
 // These tests require store initialization with custom profiles/accounts
 test.describe('Profile Manager Dialog - With Existing Profiles', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
 
     // Setup with existing profiles
@@ -579,11 +575,9 @@ test.describe('Profile Manager Dialog - Attach with no accounts', () => {
 // ============================================================================
 
 test.describe('Global Accounts Management', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
 
     await setupProfilesAndAccounts(page, {
@@ -632,16 +626,14 @@ test.describe('Global Accounts Management', () => {
 // ============================================================================
 
 test.describe('Multiple GitHub Accounts Management', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
 
-  test('should allow adding first GitHub account via PAT', async ({ page }) => {
+  test('should allow adding first GitHub account via PAT', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -657,7 +649,7 @@ test.describe('Multiple GitHub Accounts Management', () => {
     await expect(dialogs.github.connectButton).toBeVisible();
   });
 
-  test('should show account name input or PAT token input when adding account', async ({ page }) => {
+  test('should show account name input or PAT token input when adding account', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -681,7 +673,7 @@ test.describe('Multiple GitHub Accounts Management', () => {
     ).toBeVisible();
   });
 
-  test('should switch between OAuth and PAT methods', async ({ page }) => {
+  test('should switch between OAuth and PAT methods', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -697,16 +689,14 @@ test.describe('Multiple GitHub Accounts Management', () => {
 });
 
 test.describe('Account Deletion Tests', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
 
-  test('GitHub dialog should load and show connection options', async ({ page }) => {
+  test('GitHub dialog should load and show connection options', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -715,7 +705,7 @@ test.describe('Account Deletion Tests', () => {
     await expect(dialogs.github.connectionTab).toBeVisible();
   });
 
-  test('Profile manager should have New Profile button', async ({ page }) => {
+  test('Profile manager should have New Profile button', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('Profiles & Accounts');
     await dialogs.commandPalette.executeFirst();
@@ -730,11 +720,9 @@ test.describe('Account Deletion Tests', () => {
 // ============================================================================
 
 test.describe('GitHub Dialog - Account Selector', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
 
     await setupProfilesAndAccounts(page, {
@@ -813,11 +801,9 @@ test.describe('GitHub Dialog - Account Selector', () => {
 // ============================================================================
 
 test.describe('GitHub Dialog - Connection States', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test('should show disconnected state when no accounts connected', async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
 
     await setupProfilesAndAccounts(page, {
@@ -836,7 +822,6 @@ test.describe('GitHub Dialog - Connection States', () => {
   });
 
   test('should show connected state with user info', async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
 
     await setupProfilesAndAccounts(page, {
@@ -870,7 +855,6 @@ test.describe('GitHub Dialog - Connection States', () => {
   });
 
   test('should have disconnect option when connected', async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
 
     await setupProfilesAndAccounts(page, {
@@ -895,16 +879,14 @@ test.describe('GitHub Dialog - Connection States', () => {
 // ============================================================================
 
 test.describe('Integration Dialogs - Platform Tabs', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
 
-  test('GitHub should have Connection, PRs, Issues, Releases, Actions tabs', async ({ page }) => {
+  test('GitHub should have Connection, PRs, Issues, Releases, Actions tabs', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -916,7 +898,7 @@ test.describe('Integration Dialogs - Platform Tabs', () => {
     await expect(dialogs.github.actionsTab).toBeVisible();
   });
 
-  test('GitLab should have Connection, MRs, Issues, Pipelines tabs', async ({ page }) => {
+  test('GitLab should have Connection, MRs, Issues, Pipelines tabs', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitLab Integration');
     await dialogs.commandPalette.executeFirst();
@@ -927,7 +909,7 @@ test.describe('Integration Dialogs - Platform Tabs', () => {
     await expect(dialogs.gitlab.pipelinesTab).toBeVisible();
   });
 
-  test('Azure DevOps should have Connection, PRs, Work Items, Pipelines tabs', async ({ page }) => {
+  test('Azure DevOps should have Connection, PRs, Work Items, Pipelines tabs', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('Azure DevOps');
     await dialogs.commandPalette.executeFirst();
@@ -938,7 +920,7 @@ test.describe('Integration Dialogs - Platform Tabs', () => {
     await expect(dialogs.azureDevOps.pipelinesTab).toBeVisible();
   });
 
-  test('Bitbucket should have Connection, PRs, Issues, Pipelines tabs', async ({ page }) => {
+  test('Bitbucket should have Connection, PRs, Issues, Pipelines tabs', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('Bitbucket');
     await dialogs.commandPalette.executeFirst();
@@ -955,11 +937,9 @@ test.describe('Integration Dialogs - Platform Tabs', () => {
 // ============================================================================
 
 test.describe('Profile Creation Flow', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -1010,16 +990,14 @@ test.describe('Profile Creation Flow', () => {
 // ============================================================================
 
 test.describe('Account Addition Flow', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
 
-  test('GitHub should show PAT token input', async ({ page }) => {
+  test('GitHub should show PAT token input', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -1031,7 +1009,7 @@ test.describe('Account Addition Flow', () => {
     await expect(dialogs.github.tokenInput).toBeVisible();
   });
 
-  test('GitLab should have instance URL input', async ({ page }) => {
+  test('GitLab should have instance URL input', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitLab Integration');
     await dialogs.commandPalette.executeFirst();
@@ -1040,7 +1018,7 @@ test.describe('Account Addition Flow', () => {
     await expect(dialogs.gitlab.instanceUrlInput).toBeVisible();
   });
 
-  test('Azure DevOps should have organization input', async ({ page }) => {
+  test('Azure DevOps should have organization input', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('Azure DevOps');
     await dialogs.commandPalette.executeFirst();
@@ -1049,7 +1027,7 @@ test.describe('Account Addition Flow', () => {
     await expect(dialogs.azureDevOps.organizationInput).toBeVisible();
   });
 
-  test('Bitbucket should have app password inputs', async ({ page }) => {
+  test('Bitbucket should have app password inputs', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('Bitbucket');
     await dialogs.commandPalette.executeFirst();
@@ -1068,16 +1046,14 @@ test.describe('Account Addition Flow', () => {
 // ============================================================================
 
 test.describe('Error Handling', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
 
-  test('should allow entering token in GitHub dialog', async ({ page }) => {
+  test('should allow entering token in GitHub dialog', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -1089,7 +1065,7 @@ test.describe('Error Handling', () => {
     await expect(dialogs.github.tokenInput).toHaveValue('test-token-12345');
   });
 
-  test('connect button should be present for PAT auth', async ({ page }) => {
+  test('connect button should be present for PAT auth', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();

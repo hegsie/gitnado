@@ -8,7 +8,6 @@ import {
 import { AppPage } from '../pages/app.page';
 import { DialogsPage } from '../pages/dialogs.page';
 import {
-  startCommandCapture,
   findCommand,
   injectCommandError,
   injectCommandMock,
@@ -72,7 +71,7 @@ test.describe('GitLab Dialog - Connection Flow', () => {
     await setupOpenRepository(page);
   });
 
-  test('should show instance URL and token inputs when PAT method selected', async ({ page }) => {
+  test('should show instance URL and token inputs when PAT method selected', async () => {
     await app.executeCommand('GitLab');
     await expect(dialogs.gitlab.dialog).toBeVisible();
 
@@ -84,7 +83,7 @@ test.describe('GitLab Dialog - Connection Flow', () => {
     await expect(dialogs.gitlab.connectButton).toBeVisible();
   });
 
-  test('should be able to type in token input', async ({ page }) => {
+  test('should be able to type in token input', async () => {
     await app.executeCommand('GitLab');
     await expect(dialogs.gitlab.dialog).toBeVisible();
 

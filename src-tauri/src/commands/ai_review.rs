@@ -573,11 +573,12 @@ pub async fn review_branch_diff(
     let base = base_ref.clone();
     let head = head_ref.clone();
 
-    let (diff_text, files_reviewed) = tokio::task::spawn_blocking(move || {
+    let (diff_text, files_reviewed) = crate::utils::blocking_git(move || {
         compute_branch_diff(Path::new(&repo_path), &base, head.as_deref())
+            .map_err(crate::error::GitnadoError::OperationFailed)
     })
     .await
-    .map_err(|e| format!("Diff task failed: {}", e))??;
+    .map_err(|e| e.to_string())?;
 
     if diff_text.trim().is_empty() {
         return Ok(AiBranchReviewResult {
@@ -915,16 +916,17 @@ pub async fn suggest_comment_resolution_patch(
 
     let repo_path_buf = repo_root.to_path_buf();
     let file_path_owned = trimmed_file.to_string();
-    tokio::task::spawn_blocking(move || {
+    crate::utils::blocking_git(move || {
         build_comment_resolution_patch(
             &repo_path_buf,
             &file_path_owned,
             &original_content,
             &ai_response,
         )
+        .map_err(crate::error::GitnadoError::OperationFailed)
     })
     .await
-    .map_err(|e| format!("Patch verification task failed: {}", e))?
+    .map_err(|e| e.to_string())
 }
 
 /// Apply a generated unified diff patch to the working tree (#624).
@@ -933,11 +935,12 @@ pub async fn apply_comment_resolution_patch(
     path: String,
     unified_diff: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    crate::utils::blocking_git(move || {
         apply_unified_diff_to_workdir(Path::new(&path), &unified_diff)
+            .map_err(crate::error::GitnadoError::OperationFailed)
     })
     .await
-    .map_err(|e| format!("Apply patch task failed: {}", e))?
+    .map_err(|e| e.to_string())
 }
 
 // ============================================================================
@@ -1136,7 +1139,7 @@ pub async fn explain_ci_failure(
     let (recent_diff, recent_files) = if let Some(ref repo_path) = path {
         let p = repo_path.trim().to_string();
         if !p.is_empty() {
-            tokio::task::spawn_blocking(move || get_recent_head_context(Path::new(&p)))
+            crate::utils::blocking_git(move || Ok(get_recent_head_context(Path::new(&p))))
                 .await
                 .unwrap_or_default()
         } else {

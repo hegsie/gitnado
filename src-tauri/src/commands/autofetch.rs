@@ -61,7 +61,7 @@ pub async fn is_auto_fetch_running(state: State<'_, AutoFetchState>, path: Strin
 /// Get remote status (ahead/behind counts) for a repository
 #[command]
 pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
-    tokio::task::spawn_blocking(move || {
+    crate::utils::blocking_git(move || {
         let repo = git2::Repository::open(&path)
             .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repo: {}", e)))?;
 
@@ -140,7 +140,6 @@ pub async fn get_remote_status(path: String) -> Result<RemoteStatus> {
         })
     })
     .await
-    .map_err(|e| GitnadoError::OperationFailed(format!("Task failed: {}", e)))?
 }
 
 #[cfg(test)]

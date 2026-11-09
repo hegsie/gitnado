@@ -10,7 +10,6 @@
  */
 
 // ── Tauri mock (must be set before any imports) ────────────────────────────
-type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 
 let cbId = 0;
 /** Order of the things this test cares about, as they happened. */

@@ -1103,7 +1103,7 @@ describe('gn-github-dialog', () => {
       // A failing authorize-url makes startOAuth emit OAuth state 'error'. The
       // spinner only renders for pending/exchanging, so without surfacing the
       // error the form would silently reset to the sign-in button (dead-end).
-      mockInvoke = async (command: string, args?: unknown) => {
+      mockInvoke = async (command: string, _args?: unknown) => {
         if (command === 'get_unified_profiles_config') {
           return { version: 3, profiles: [], accounts: [], repositoryAssignments: {} };
         }

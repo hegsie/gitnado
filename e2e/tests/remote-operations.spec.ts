@@ -10,7 +10,6 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupOpenRepository, defaultMockData, withConflicts } from '../fixtures/tauri-mock';
-import { AppPage } from '../pages/app.page';
 import { startCommandCapture, startCommandCaptureWithMocks, findCommand, injectCommandError, injectCommandHang, injectCommandMock, emitBackendEvent, waitForCommand, openViaCommandPalette } from '../fixtures/test-helpers';
 
 // ============================================================================
@@ -89,10 +88,7 @@ function withAheadBehind(ahead: number, behind: number) {
 // ============================================================================
 
 test.describe('Remote Operation Buttons', () => {
-  let app: AppPage;
-
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
   });
 
@@ -370,10 +366,7 @@ test.describe('the same surfaces still work once a remote exists', () => {
 // ============================================================================
 
 test.describe('Ahead/Behind Badges', () => {
-  let app: AppPage;
-
   test('should show Push badge when commits are ahead', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(5, 0));
 
     // Push badge should show ahead count
@@ -383,7 +376,6 @@ test.describe('Ahead/Behind Badges', () => {
   });
 
   test('should show Pull badge when commits are behind', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 3));
 
     // Pull badge should show behind count
@@ -393,7 +385,6 @@ test.describe('Ahead/Behind Badges', () => {
   });
 
   test('should show both badges when ahead and behind', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(2, 4));
 
     // Both badges should be visible
@@ -408,7 +399,6 @@ test.describe('Ahead/Behind Badges', () => {
   });
 
   test('should not show badges when up to date (0/0)', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 0));
 
     // Neither badge should be visible
@@ -420,7 +410,6 @@ test.describe('Ahead/Behind Badges', () => {
   });
 
   test('Push badge should have success color styling', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(3, 0));
 
     const pushBadge = page.locator('.badge.push');
@@ -430,7 +419,6 @@ test.describe('Ahead/Behind Badges', () => {
   });
 
   test('Pull badge should have primary color styling', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 2));
 
     const pullBadge = page.locator('.badge.pull');
@@ -513,10 +501,7 @@ test.describe('Status-bar ahead/behind badge', () => {
 // ============================================================================
 
 test.describe('Branch List Ahead/Behind Indicators', () => {
-  let app: AppPage;
-
   test('should show ahead indicator on branch with upstream', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(3, 0));
 
     // The branch list should show ahead indicator
@@ -526,7 +511,6 @@ test.describe('Branch List Ahead/Behind Indicators', () => {
   });
 
   test('should show behind indicator on branch with upstream', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 2));
 
     // The branch list should show behind indicator
@@ -536,7 +520,6 @@ test.describe('Branch List Ahead/Behind Indicators', () => {
   });
 
   test('should show both ahead and behind indicators', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(5, 3));
 
     const aheadIndicator = page.locator('.ahead-behind .ahead');
@@ -547,7 +530,6 @@ test.describe('Branch List Ahead/Behind Indicators', () => {
   });
 
   test('should not show indicators when synced', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 0));
 
     // No ahead/behind indicators should be visible
@@ -561,10 +543,7 @@ test.describe('Branch List Ahead/Behind Indicators', () => {
 // ============================================================================
 
 test.describe('Remote Button Tooltips', () => {
-  let app: AppPage;
-
   test('Push button should have push tooltip', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(5, 0));
 
     const pushButton = dashboardButton(page, /Push/i);
@@ -573,7 +552,6 @@ test.describe('Remote Button Tooltips', () => {
   });
 
   test('Pull button should have pull tooltip', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 3));
 
     const pullButton = dashboardButton(page, /Pull/i);
@@ -582,7 +560,6 @@ test.describe('Remote Button Tooltips', () => {
   });
 
   test('Fetch button should have fetch tooltip', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
 
     const fetchButton = dashboardButton(page, /Fetch/i);
@@ -596,10 +573,7 @@ test.describe('Remote Button Tooltips', () => {
 // ============================================================================
 
 test.describe('Large Badge Values', () => {
-  let app: AppPage;
-
   test('should display large ahead count correctly', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(42, 0));
 
     const pushBadge = page.locator('.badge.push');
@@ -608,7 +582,6 @@ test.describe('Large Badge Values', () => {
   });
 
   test('should display large behind count correctly', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 100));
 
     const pullBadge = page.locator('.badge.pull');
@@ -622,10 +595,7 @@ test.describe('Large Badge Values', () => {
 // ============================================================================
 
 test.describe('Context Dashboard', () => {
-  let app: AppPage;
-
   test('should show context dashboard when repository is open', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
 
     const contextDashboard = page.locator('gn-context-dashboard');
@@ -633,7 +603,6 @@ test.describe('Context Dashboard', () => {
   });
 
   test('should show remote buttons section', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
 
     // Remote buttons should be in a group
@@ -652,10 +621,7 @@ test.describe('Context Dashboard', () => {
 // ============================================================================
 
 test.describe('Fetch Operation', () => {
-  let app: AppPage;
-
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page);
   });
 
@@ -778,10 +744,7 @@ test.describe('Remote selection for fetch/pull/push', () => {
 // ============================================================================
 
 test.describe('Push Operation', () => {
-  let app: AppPage;
-
   test('clicking Push button should push and clear ahead badge', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(3, 0));
 
     // Verify push badge initially shows 3 ahead
@@ -807,7 +770,6 @@ test.describe('Push Operation', () => {
   });
 
   test('push failure should show error toast with message and preserve badge', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(3, 0));
 
     // Verify initial badge
@@ -835,7 +797,6 @@ test.describe('Push Operation', () => {
   });
 
   test('push refused while the repository is busy says so and keeps the badge', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(3, 0));
 
     const pushBadge = page.locator('.badge.push');
@@ -947,10 +908,7 @@ test.describe('Push gate follows the push URL', () => {
 });
 
 test.describe('Pull Operation', () => {
-  let app: AppPage;
-
   test('clicking Pull button should pull and clear behind badge', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 5));
 
     // Verify pull badge initially shows 5 behind
@@ -976,7 +934,6 @@ test.describe('Pull Operation', () => {
   });
 
   test('pull failure should show error toast with message and preserve badge', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 5));
 
     // Verify initial badge
@@ -999,7 +956,6 @@ test.describe('Pull Operation', () => {
   });
 
   test('pull with conflicts should show merge state', async ({ page }) => {
-    app = new AppPage(page);
     // Start with behind commits
     await setupOpenRepository(page, {
       ...withAheadBehind(0, 3),
@@ -1017,10 +973,7 @@ test.describe('Pull Operation', () => {
 // ============================================================================
 
 test.describe('Remote Operation Sequences', () => {
-  let app: AppPage;
-
   test('fetch should preserve existing badges after refresh', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(2, 3));
 
     // Verify badges are initially visible with correct counts
@@ -1046,7 +999,6 @@ test.describe('Remote Operation Sequences', () => {
   });
 
   test('fetch should update branch list ahead/behind indicators', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(4, 1));
 
     // Verify branch list shows ahead/behind indicators
@@ -1076,10 +1028,7 @@ test.describe('Remote Operation Sequences', () => {
 // ============================================================================
 
 test.describe('Remote Operations - UI Outcome Verification', () => {
-  let app: AppPage;
-
   test('push success: verify ahead badge disappears after push', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(5, 0));
 
     // Verify the push badge initially shows 5
@@ -1100,7 +1049,6 @@ test.describe('Remote Operations - UI Outcome Verification', () => {
   });
 
   test('pull success: verify behind badge disappears after pull', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 4));
 
     // Verify the pull badge initially shows 4
@@ -1121,7 +1069,6 @@ test.describe('Remote Operations - UI Outcome Verification', () => {
   });
 
   test('push failure: verify ahead badge remains unchanged', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(3, 0));
 
     // Verify the push badge initially shows 3
@@ -1145,7 +1092,6 @@ test.describe('Remote Operations - UI Outcome Verification', () => {
   });
 
   test('pull failure: verify behind badge remains unchanged', async ({ page }) => {
-    app = new AppPage(page);
     await setupOpenRepository(page, withAheadBehind(0, 7));
 
     // Verify the pull badge initially shows 7

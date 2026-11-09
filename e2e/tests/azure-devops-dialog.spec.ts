@@ -1,9 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository, setupProfilesAndAccounts } from '../fixtures/tauri-mock';
 import { AppPage } from '../pages/app.page';
-import { DialogsPage, AzureDevOpsDialogPage } from '../pages/dialogs.page';
+import { DialogsPage } from '../pages/dialogs.page';
 import {
-  startCommandCapture,
   findCommand,
   injectCommandError,
   injectCommandMock,
@@ -184,7 +183,7 @@ test.describe('Azure DevOps Dialog - Connection Tab', () => {
     });
   });
 
-  test('shows PAT authentication form', async ({ page }) => {
+  test('shows PAT authentication form', async () => {
     await app.executeCommand('Azure DevOps');
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
 
@@ -194,7 +193,7 @@ test.describe('Azure DevOps Dialog - Connection Tab', () => {
     await expect(dialogs.azureDevOps.connectButton).toBeVisible();
   });
 
-  test('can type in PAT input', async ({ page }) => {
+  test('can type in PAT input', async () => {
     await app.executeCommand('Azure DevOps');
     await expect(dialogs.azureDevOps.dialog).toBeVisible();
 

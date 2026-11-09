@@ -35,8 +35,6 @@ import {
 } from '../window-drop.service.ts';
 import { repositoryStore, uiStore } from '../../stores/index.ts';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 function classification(
   path: string,
   overrides: Partial<{

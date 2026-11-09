@@ -61,7 +61,7 @@ test.describe('Tag List Context Menu', () => {
     });
   });
 
-  test('should display tags after expanding section', async ({ page }) => {
+  test('should display tags after expanding section', async () => {
     await leftPanel.expandTags();
 
     const tagCount = await leftPanel.getTagCount();

@@ -4,7 +4,6 @@ import { setupOpenRepository } from '../fixtures/tauri-mock';
 import { AppPage } from '../pages/app.page';
 import { DialogsPage } from '../pages/dialogs.page';
 import {
-  startCommandCapture,
   findCommand,
   injectCommandError,
   injectCommandMock,
@@ -70,7 +69,7 @@ test.describe('GitHub Dialog - Connection Flow', () => {
     await setupOpenRepository(page);
   });
 
-  test('should show token input when PAT method selected', async ({ page }) => {
+  test('should show token input when PAT method selected', async () => {
     await app.executeCommand('GitHub');
     await expect(dialogs.github.dialog).toBeVisible();
 
@@ -81,7 +80,7 @@ test.describe('GitHub Dialog - Connection Flow', () => {
     await expect(dialogs.github.connectButton).toBeVisible();
   });
 
-  test('should be able to type in token input', async ({ page }) => {
+  test('should be able to type in token input', async () => {
     await app.executeCommand('GitHub');
     await expect(dialogs.github.dialog).toBeVisible();
 

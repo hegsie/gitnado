@@ -9,12 +9,18 @@ import {
   startCommandCaptureWithMocks,
 } from '../fixtures/test-helpers';
 
+type WindowWithSettingsStore = Window & {
+  __GITNADO_STORES__?: {
+    settingsStore?: {
+      getState: () => { theme?: string; showAvatars?: boolean };
+    };
+  };
+};
+
 test.describe('Settings Dialog', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -44,11 +50,9 @@ test.describe('Settings Dialog', () => {
 });
 
 test.describe('Keyboard Shortcuts Dialog', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -77,11 +81,9 @@ test.describe('Keyboard Shortcuts Dialog', () => {
 });
 
 test.describe('Profile Manager Dialog', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -120,11 +122,9 @@ test.describe('Profile Manager Dialog', () => {
 });
 
 test.describe('GitHub Dialog', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -233,11 +233,9 @@ test.describe('Clone Dialog Validation', () => {
 });
 
 test.describe('Dialog Backdrop', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -283,11 +281,9 @@ test.describe('Dialog Focus Management', () => {
 });
 
 test.describe('Multiple Dialogs', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -316,11 +312,9 @@ test.describe('Multiple Dialogs', () => {
 });
 
 test.describe('Settings Dialog - Theme Change', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -345,23 +339,21 @@ test.describe('Settings Dialog - Theme Change', () => {
 
     // Verify the settings store was updated (persisted via zustand/persist to localStorage)
     await page.waitForFunction(() => {
-      const stores = (window as any).__GITNADO_STORES__;
+      const stores = (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.theme === 'light';
     });
 
     const theme = await page.evaluate(() => {
-      return (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.theme;
+      return (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__?.settingsStore?.getState()?.theme;
     });
     expect(theme).toBe('light');
   });
 });
 
 test.describe('Settings Dialog - Toggle Settings', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -372,7 +364,7 @@ test.describe('Settings Dialog - Toggle Settings', () => {
 
     // Get the initial value of the first toggle (showAvatars)
     const initialValue = await page.evaluate(() => {
-      return (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.showAvatars;
+      return (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__?.settingsStore?.getState()?.showAvatars;
     });
 
     // Toggle the first setting switch
@@ -380,12 +372,12 @@ test.describe('Settings Dialog - Toggle Settings', () => {
 
     // Verify the settings store was updated with the toggled value
     await page.waitForFunction((initial) => {
-      const stores = (window as any).__GITNADO_STORES__;
+      const stores = (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__;
       return stores?.settingsStore?.getState()?.showAvatars !== initial;
     }, initialValue);
 
     const newValue = await page.evaluate(() => {
-      return (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.showAvatars;
+      return (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__?.settingsStore?.getState()?.showAvatars;
     });
     expect(newValue).toBe(!initialValue);
   });
@@ -410,11 +402,9 @@ test.describe('Settings Dialog - Toggle Settings', () => {
 });
 
 test.describe('Settings Dialog - Error Handling', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -438,11 +428,9 @@ test.describe('Settings Dialog - Error Handling', () => {
 });
 
 test.describe('Keyboard Shortcuts Dialog - Details', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -485,11 +473,9 @@ test.describe('Keyboard Shortcuts Dialog - Details', () => {
 });
 
 test.describe('Dialogs - Error Scenarios', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -554,16 +540,16 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
     // Move a setting off its default so the reset is observable.
     await dialogs.settings.setTheme('light');
     await page.waitForFunction(() => {
-      const stores = (window as any).__GITNADO_STORES__;
-      return stores?.settingsStore?.getState()?.theme === 'light';
+      const stores = (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__;
+      return stores?.settingsStore?.getState?.()?.theme === 'light';
     });
 
     await dialogs.settings.resetButton.click();
 
     // The store goes back to the default theme...
     await page.waitForFunction(() => {
-      const stores = (window as any).__GITNADO_STORES__;
-      return stores?.settingsStore?.getState()?.theme === 'dark';
+      const stores = (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__;
+      return stores?.settingsStore?.getState?.()?.theme === 'dark';
     });
     // ...the dialog repaints from the store...
     await expect(dialogs.settings.themeSelect).toHaveValue('dark');
@@ -581,8 +567,8 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
 
     await dialogs.settings.setTheme('light');
     await page.waitForFunction(() => {
-      const stores = (window as any).__GITNADO_STORES__;
-      return stores?.settingsStore?.getState()?.theme === 'light';
+      const stores = (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__;
+      return stores?.settingsStore?.getState?.()?.theme === 'light';
     });
 
     await dialogs.settings.resetButton.click();
@@ -598,7 +584,7 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
 
     await expect(dialogs.settings.themeSelect).toHaveValue('light');
     const theme = await page.evaluate(
-      () => (window as any).__GITNADO_STORES__?.settingsStore?.getState()?.theme
+      () => (window as unknown as WindowWithSettingsStore).__GITNADO_STORES__?.settingsStore?.getState?.()?.theme
     );
     expect(theme).toBe('light');
     await expect(page.locator('gn-toast-container .toast')).toHaveCount(0);

@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository, withStagedFiles } from '../fixtures/tauri-mock';
-import { AppPage } from '../pages/app.page';
 import { RightPanelPage } from '../pages/panels.page';
 import {
   startCommandCapture,
@@ -12,11 +11,9 @@ import {
 } from '../fixtures/test-helpers';
 
 test.describe('Commit Workflow', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -52,11 +49,9 @@ test.describe('Commit Workflow', () => {
 });
 
 test.describe('Commit Message Validation', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -86,11 +81,9 @@ test.describe('Commit Message Validation', () => {
 });
 
 test.describe('Commit Without Staged Files', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(page, {
       status: { staged: [], unstaged: [{ path: 'file.ts', status: 'modified', isStaged: false, isConflicted: false }] },
@@ -112,11 +105,9 @@ test.describe('Commit Without Staged Files', () => {
 });
 
 test.describe('AI Commit Message Generation', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(
       page,
@@ -134,11 +125,9 @@ test.describe('AI Commit Message Generation', () => {
 });
 
 test.describe('Commit Details Tab', () => {
-  let app: AppPage;
   let rightPanel: RightPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     rightPanel = new RightPanelPage(page);
     await setupOpenRepository(page);
   });

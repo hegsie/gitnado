@@ -28,7 +28,7 @@ import '../sidebar/gn-stash-list.ts';
 // Side-effect import so showPrompt finds the singleton already in the DOM.
 import '../dialogs/gn-prompt-dialog.ts';
 import type { GnPromptDialog } from '../dialogs/gn-prompt-dialog.ts';
-import { tryAcquireRefOp, resetRefOpLocks } from '../../utils/ref-lock.ts';
+import { resetRefOpLocks } from '../../utils/ref-lock.ts';
 
 /**
  * handleCreateStash now asks for an optional stash message, so these tests

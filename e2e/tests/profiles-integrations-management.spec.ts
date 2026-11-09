@@ -18,7 +18,6 @@
 
 import { test, expect, Page } from '@playwright/test';
 import {
-  setupOpenRepository,
   setupProfilesAndAccounts,
   type MockUnifiedProfile,
   type MockIntegrationAccount,

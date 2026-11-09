@@ -1,15 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { setupOpenRepository } from '../fixtures/tauri-mock';
-import { AppPage } from '../pages/app.page';
 import { DialogsPage } from '../pages/dialogs.page';
 import { startCommandCapture, findCommand, waitForCommand, injectCommandError } from '../fixtures/test-helpers';
 
 test.describe('GitHub OAuth Integration', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -82,11 +79,9 @@ test.describe('GitHub OAuth Integration', () => {
 });
 
 test.describe('GitLab OAuth Integration', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -130,11 +125,9 @@ test.describe('GitLab OAuth Integration', () => {
 });
 
 test.describe('Azure DevOps OAuth Integration', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -185,11 +178,9 @@ test.describe('Azure DevOps OAuth Integration', () => {
 });
 
 test.describe('Bitbucket OAuth Integration', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -235,11 +226,9 @@ test.describe('Bitbucket OAuth Integration', () => {
 });
 
 test.describe('OAuth UI State Management', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -267,11 +256,9 @@ test.describe('OAuth UI State Management', () => {
 });
 
 test.describe('Dialog Tabs with OAuth', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -321,11 +308,9 @@ test.describe('Dialog Tabs with OAuth', () => {
 });
 
 test.describe('GitHub PAT Submit Flow', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -369,11 +354,9 @@ test.describe('GitHub PAT Submit Flow', () => {
 });
 
 test.describe('GitLab PAT Submit Flow', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -399,16 +382,14 @@ test.describe('GitLab PAT Submit Flow', () => {
 });
 
 test.describe('OAuth Dialog State After Close', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
 
-  test('GitHub dialog should reset state after close and reopen', async ({ page }) => {
+  test('GitHub dialog should reset state after close and reopen', async () => {
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');
     await dialogs.commandPalette.executeFirst();
@@ -520,7 +501,7 @@ test.describe('OAuth - Strengthened Assertions', () => {
     await setupOpenRepository(page);
   });
 
-  test('cross-dialog state: GitHub token should not leak into GitLab dialog', async ({ page }) => {
+  test('cross-dialog state: GitHub token should not leak into GitLab dialog', async () => {
     // Open GitHub dialog, switch to PAT, fill in a token
     await dialogs.commandPalette.open();
     await dialogs.commandPalette.search('GitHub Integration');

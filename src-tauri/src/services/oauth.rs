@@ -4,7 +4,7 @@
 //! for GitHub, GitLab, Azure DevOps, and Bitbucket.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::Rng;
+use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -21,11 +21,7 @@ impl PKCEChallenge {
     /// Generate a new PKCE challenge
     pub fn new() -> Self {
         // Generate a random 43-128 character verifier (RFC 7636)
-        let verifier: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(64)
-            .map(char::from)
-            .collect();
+        let verifier = Alphanumeric.sample_string(&mut rand::rng(), 64);
 
         // Generate challenge as base64url(SHA256(verifier))
         let mut hasher = Sha256::new();
@@ -444,11 +440,7 @@ pub struct AuthorizeUrlResponse {
 
 /// Generate a random state parameter for CSRF protection
 pub fn generate_state() -> String {
-    rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect()
+    Alphanumeric.sample_string(&mut rand::rng(), 32)
 }
 
 #[cfg(test)]

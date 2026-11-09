@@ -6,11 +6,9 @@ import { GraphPanelPage, RightPanelPage } from '../pages/panels.page';
 import { startCommandCapture, findCommand, waitForCommand, injectCommandError } from '../fixtures/test-helpers';
 
 test.describe('Keyboard Shortcuts', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -118,11 +116,9 @@ test.describe('Keyboard Shortcuts', () => {
 });
 
 test.describe('Command Palette', () => {
-  let app: AppPage;
   let dialogs: DialogsPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     dialogs = new DialogsPage(page);
     await setupOpenRepository(page);
   });
@@ -161,11 +157,9 @@ test.describe('Command Palette', () => {
 });
 
 test.describe('Graph Navigation', () => {
-  let app: AppPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     graph = new GraphPanelPage(page);
     await setupOpenRepository(page, {
       commits: [
@@ -239,11 +233,9 @@ test.describe('Graph Navigation', () => {
 });
 
 test.describe('Vim Mode Navigation', () => {
-  let app: AppPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     graph = new GraphPanelPage(page);
     // Setup with vim mode enabled
     await setupOpenRepository(page, withVimMode());
@@ -375,7 +367,7 @@ test.describe('Refresh Command', () => {
     await expect(page.locator('.command-label', { hasText: 'Refresh repository' })).toBeVisible();
   });
 
-  test('Executing refresh command should close command palette', async ({ page }) => {
+  test('Executing refresh command should close command palette', async () => {
     await app.openCommandPalette();
     await dialogs.commandPalette.search('Refresh');
     await dialogs.commandPalette.executeFirst();
@@ -399,11 +391,9 @@ test.describe('Refresh Command', () => {
 });
 
 test.describe('Graph Selection Keyboard', () => {
-  let app: AppPage;
   let graph: GraphPanelPage;
 
   test.beforeEach(async ({ page }) => {
-    app = new AppPage(page);
     graph = new GraphPanelPage(page);
     await setupOpenRepository(page, {
       commits: [

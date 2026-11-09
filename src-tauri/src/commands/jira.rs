@@ -166,10 +166,11 @@ fn generate_branch_name(issue_key: &str, summary: &str, branch_type: Option<&str
 pub async fn get_jira_config(path: String) -> Result<Option<JiraConfig>> {
     debug!("Getting JIRA config for: {}", path);
 
-    match load_jira_config(&path) {
+    crate::utils::blocking_git(move || match load_jira_config(&path) {
         Ok(config) => Ok(Some(config)),
         Err(_) => Ok(None),
-    }
+    })
+    .await
 }
 
 /// Save JIRA configuration for a repository
@@ -177,29 +178,32 @@ pub async fn get_jira_config(path: String) -> Result<Option<JiraConfig>> {
 pub async fn save_jira_config(path: String, config: JiraConfig) -> Result<()> {
     debug!("Saving JIRA config for: {}", path);
 
-    let gitnado_dir = gitnado_config_dir(&path)?;
+    crate::utils::blocking_git(move || {
+        let gitnado_dir = gitnado_config_dir(&path)?;
 
-    // Create the gitnado directory if it doesn't exist
-    if !gitnado_dir.exists() {
-        std::fs::create_dir_all(&gitnado_dir).map_err(|e| {
-            GitnadoError::OperationFailed(format!(
-                "Failed to create gitnado config directory: {}",
-                e
-            ))
+        // Create the gitnado directory if it doesn't exist
+        if !gitnado_dir.exists() {
+            std::fs::create_dir_all(&gitnado_dir).map_err(|e| {
+                GitnadoError::OperationFailed(format!(
+                    "Failed to create gitnado config directory: {}",
+                    e
+                ))
+            })?;
+        }
+
+        let config_path = gitnado_dir.join("jira.json");
+        let content = serde_json::to_string_pretty(&config).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to serialize JIRA config: {}", e))
         })?;
-    }
 
-    let config_path = gitnado_dir.join("jira.json");
-    let content = serde_json::to_string_pretty(&config).map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to serialize JIRA config: {}", e))
-    })?;
+        std::fs::write(&config_path, content).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to write JIRA config: {}", e))
+        })?;
 
-    std::fs::write(&config_path, content).map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to write JIRA config: {}", e))
-    })?;
-
-    info!("JIRA config saved to {:?}", config_path);
-    Ok(())
+        info!("JIRA config saved to {:?}", config_path);
+        Ok(())
+    })
+    .await
 }
 
 /// Delete JIRA configuration for a repository
@@ -207,15 +211,18 @@ pub async fn save_jira_config(path: String, config: JiraConfig) -> Result<()> {
 pub async fn delete_jira_config(path: String) -> Result<()> {
     debug!("Deleting JIRA config for: {}", path);
 
-    let config_path = gitnado_config_dir(&path)?.join("jira.json");
-    if config_path.exists() {
-        std::fs::remove_file(&config_path).map_err(|e| {
-            GitnadoError::OperationFailed(format!("Failed to delete JIRA config: {}", e))
-        })?;
-    }
+    crate::utils::blocking_git(move || {
+        let config_path = gitnado_config_dir(&path)?.join("jira.json");
+        if config_path.exists() {
+            std::fs::remove_file(&config_path).map_err(|e| {
+                GitnadoError::OperationFailed(format!("Failed to delete JIRA config: {}", e))
+            })?;
+        }
 
-    info!("JIRA config deleted for {}", path);
-    Ok(())
+        info!("JIRA config deleted for {}", path);
+        Ok(())
+    })
+    .await
 }
 
 /// Test JIRA connection credentials
@@ -232,7 +239,7 @@ pub async fn test_jira_connection(
                     "Either config or repository path is required".to_string(),
                 )
             })?;
-            load_jira_config(&repo_path)?
+            crate::utils::blocking_git(move || load_jira_config(&repo_path)).await?
         }
     };
 
@@ -282,7 +289,7 @@ pub async fn get_jira_issues(
 ) -> Result<Vec<JiraIssue>> {
     debug!("Fetching JIRA issues for: {}", path);
 
-    let config = load_jira_config(&path)?;
+    let config = crate::utils::blocking_git(move || load_jira_config(&path)).await?;
     let max_results = max_results.unwrap_or(50);
 
     // Build default JQL if none provided
@@ -412,7 +419,7 @@ pub async fn get_jira_issues(
 pub async fn get_jira_issue(path: String, issue_key: String) -> Result<JiraIssue> {
     debug!("Fetching JIRA issue: {}", issue_key);
 
-    let config = load_jira_config(&path)?;
+    let config = crate::utils::blocking_git(move || load_jira_config(&path)).await?;
     let url = build_jira_api_url(
         &config.base_url,
         &format!(
@@ -505,7 +512,7 @@ pub async fn get_jira_issue(path: String, issue_key: String) -> Result<JiraIssue
 pub async fn get_jira_transitions(path: String, issue_key: String) -> Result<Vec<JiraTransition>> {
     debug!("Fetching transitions for JIRA issue: {}", issue_key);
 
-    let config = load_jira_config(&path)?;
+    let config = crate::utils::blocking_git(move || load_jira_config(&path)).await?;
     let url = build_jira_api_url(
         &config.base_url,
         &format!("issue/{}/transitions", issue_key),
@@ -573,7 +580,7 @@ pub async fn transition_jira_issue(
         issue_key, transition_id
     );
 
-    let config = load_jira_config(&path)?;
+    let config = crate::utils::blocking_git(move || load_jira_config(&path)).await?;
     let url = build_jira_api_url(
         &config.base_url,
         &format!("issue/{}/transitions", issue_key),
@@ -639,7 +646,8 @@ pub async fn create_branch_from_jira(
     debug!("Creating branch from JIRA issue {} in {}", issue_key, path);
 
     // First, fetch the issue to get its summary
-    let config = load_jira_config(&path)?;
+    let path_for_config = path.clone();
+    let config = crate::utils::blocking_git(move || load_jira_config(&path_for_config)).await?;
     let url = build_jira_api_url(
         &config.base_url,
         &format!("issue/{}?fields=summary", issue_key),
@@ -686,21 +694,30 @@ pub async fn create_branch_from_jira(
     let branch_name =
         generate_branch_name(&issue.key, &issue.fields.summary, branch_type.as_deref());
 
-    // Create the branch using git2
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
+    // Create the branch using git2 on the blocking pool
+    let branch_name = crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(&path).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to open repository: {}", e))
+        })?;
 
-    let head = repo
-        .head()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get HEAD: {}", e)))?;
+        let head = repo
+            .head()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get HEAD: {}", e)))?;
 
-    let commit = head
-        .peel_to_commit()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get HEAD commit: {}", e)))?;
+        let commit = head.peel_to_commit().map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to get HEAD commit: {}", e))
+        })?;
 
-    repo.branch(&branch_name, &commit, false).map_err(|e| {
-        GitnadoError::OperationFailed(format!("Failed to create branch '{}': {}", branch_name, e))
-    })?;
+        repo.branch(&branch_name, &commit, false).map_err(|e| {
+            GitnadoError::OperationFailed(format!(
+                "Failed to create branch '{}': {}",
+                branch_name, e
+            ))
+        })?;
+
+        Ok(branch_name)
+    })
+    .await?;
 
     info!(
         "Created branch '{}' from JIRA issue {}",

@@ -69,11 +69,6 @@ function makeBranch(overrides: Partial<{
   };
 }
 
-/** Returns a promise that never resolves (blocks the handler). */
-function neverResolve(): Promise<never> {
-  return new Promise(() => {});
-}
-
 /** plugin-dialog's confirm() treats the OK button label as "confirmed". */
 let confirmResult = true;
 

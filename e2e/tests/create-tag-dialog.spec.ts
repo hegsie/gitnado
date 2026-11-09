@@ -206,11 +206,12 @@ test.describe('Create Tag Dialog', () => {
   test('tag-created event fires after successful creation', async ({ page }) => {
     // Set up event listener before opening dialog
     await page.evaluate(() => {
-      (window as any).__TAG_CREATED_RECEIVED__ = false;
+      const win = window as unknown as { __TAG_CREATED_RECEIVED__?: boolean };
+      win.__TAG_CREATED_RECEIVED__ = false;
       document.addEventListener(
         'tag-created',
         () => {
-          (window as any).__TAG_CREATED_RECEIVED__ = true;
+          win.__TAG_CREATED_RECEIVED__ = true;
         },
         { once: true }
       );
@@ -234,7 +235,7 @@ test.describe('Create Tag Dialog', () => {
     await createBtn.click();
 
     await page.waitForFunction(
-      () => (window as any).__TAG_CREATED_RECEIVED__ === true,
+      () => (window as unknown as { __TAG_CREATED_RECEIVED__?: boolean }).__TAG_CREATED_RECEIVED__ === true,
       { timeout: 5000 }
     );
   });

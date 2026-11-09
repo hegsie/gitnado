@@ -9,6 +9,21 @@ import {
   injectCommandMock,
 } from '../fixtures/test-helpers';
 
+type CommitPanelElement = HTMLElement & {
+  loadTemplates?: () => Promise<void>;
+  checkAiAvailability?: () => Promise<void>;
+  updateComplete?: Promise<boolean>;
+};
+
+type WindowWithCommitPanelGlobals = Window & {
+  __REFRESH_RECEIVED__?: boolean;
+  __GITNADO_STORES__?: {
+    settingsStore: {
+      getState: () => { setOfflineMode: (offline: boolean) => void };
+    };
+  };
+};
+
 test.describe('Commit Panel - Basic', () => {
   let rightPanel: RightPanelPage;
 
@@ -87,10 +102,7 @@ test.describe('Commit Panel - Amend Mode', () => {
 });
 
 test.describe('Commit Panel - Conventional Commits', () => {
-  let rightPanel: RightPanelPage;
-
   test.beforeEach(async ({ page }) => {
-    rightPanel = new RightPanelPage(page);
     await setupOpenRepository(page);
   });
 
@@ -155,7 +167,7 @@ test.describe('Commit Panel - Templates', () => {
     });
 
     // Force the commit panel to reload templates using Playwright locator (auto-pierces shadow DOM)
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.loadTemplates === 'function') {
         await el.loadTemplates();
         await el.updateComplete;
@@ -386,9 +398,10 @@ test.describe('Commit Panel - Commit E2E', () => {
 
     // Set up the event listener before performing the action
     await page.evaluate(() => {
-      (window as any).__REFRESH_RECEIVED__ = false;
+      const win = window as unknown as WindowWithCommitPanelGlobals;
+      win.__REFRESH_RECEIVED__ = false;
       window.addEventListener('repository-refresh', () => {
-        (window as any).__REFRESH_RECEIVED__ = true;
+        win.__REFRESH_RECEIVED__ = true;
       }, { once: true });
     });
 
@@ -396,8 +409,8 @@ test.describe('Commit Panel - Commit E2E', () => {
     await rightPanel.commitButton.click();
 
     // Wait for the event to be received
-    await page.waitForFunction(() => (window as any).__REFRESH_RECEIVED__ === true);
-    const result = await page.evaluate(() => (window as any).__REFRESH_RECEIVED__);
+    await page.waitForFunction(() => (window as unknown as WindowWithCommitPanelGlobals).__REFRESH_RECEIVED__ === true);
+    const result = await page.evaluate(() => (window as unknown as WindowWithCommitPanelGlobals).__REFRESH_RECEIVED__);
     expect(result).toBe(true);
   });
 
@@ -458,7 +471,7 @@ test.describe('Commit Panel - Commit E2E', () => {
     });
 
     // Force the commit panel to re-check AI availability using Playwright locator (auto-pierces shadow DOM)
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
@@ -548,7 +561,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Force the commit panel to reload templates
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.loadTemplates === 'function') {
         await el.loadTemplates();
         await el.updateComplete;
@@ -577,7 +590,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Force the commit panel to re-check AI availability
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
@@ -612,7 +625,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     // Force the commit panel to re-check AI availability
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
@@ -660,7 +673,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
 
     // The panel checks availability while still online — the state a user is
     // in when they turn offline mode on with the panel already open.
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;
@@ -669,7 +682,7 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     await expect(page.locator('gn-commit-panel .generate-btn')).toHaveAttribute('title', 'Generate commit message using AI');
 
     await page.evaluate(() => {
-      (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
+      (window as unknown as WindowWithCommitPanelGlobals).__GITNADO_STORES__?.settingsStore.getState().setOfflineMode(true);
     });
 
     await startCommandCaptureWithMocks(page, {
@@ -708,10 +721,10 @@ test.describe('Commit Panel - UI Outcome Verification', () => {
     });
 
     await page.evaluate(() => {
-      (window as any).__GITNADO_STORES__.settingsStore.getState().setOfflineMode(true);
+      (window as unknown as WindowWithCommitPanelGlobals).__GITNADO_STORES__?.settingsStore.getState().setOfflineMode(true);
     });
 
-    await page.locator('gn-commit-panel').evaluate(async (el: any) => {
+    await page.locator('gn-commit-panel').evaluate(async (el: CommitPanelElement) => {
       if (typeof el.checkAiAvailability === 'function') {
         await el.checkAiAvailability();
         await el.updateComplete;

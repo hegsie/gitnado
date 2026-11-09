@@ -75,13 +75,13 @@ test.describe('Commit Details Panel', () => {
     await selectCommit(page, defaultCommit);
   });
 
-  test('should show commit details panel when Details tab is clicked', async ({ page }) => {
+  test('should show commit details panel when Details tab is clicked', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitDetails).toBeVisible();
   });
 
-  test('should show commit SHA', async ({ page }) => {
+  test('should show commit SHA', async () => {
     await rightPanel.switchToDetails();
 
     // The component renders SHA in a <code class="commit-oid"> element
@@ -91,7 +91,7 @@ test.describe('Commit Details Panel', () => {
     await expect(shaElement).toContainText('abc123d');
   });
 
-  test('should show author name', async ({ page }) => {
+  test('should show author name', async () => {
     await rightPanel.switchToDetails();
 
     // Author section has section-title "Author" followed by meta-value with name
@@ -102,7 +102,7 @@ test.describe('Commit Details Panel', () => {
     await expect(authorName).toContainText('Test User');
   });
 
-  test('should show timestamp', async ({ page }) => {
+  test('should show timestamp', async () => {
     await rightPanel.switchToDetails();
 
     // Timestamp is in a .timestamp element within the Author section
@@ -113,7 +113,7 @@ test.describe('Commit Details Panel', () => {
     expect(text!.length).toBeGreaterThan(0);
   });
 
-  test('should show commit message summary', async ({ page }) => {
+  test('should show commit message summary', async () => {
     await rightPanel.switchToDetails();
 
     const summary = rightPanel.commitDetails.locator('.commit-message');
@@ -132,7 +132,7 @@ test.describe('Commit Details - Files Changed', () => {
     await selectCommit(page, defaultCommit);
   });
 
-  test('should show files changed section', async ({ page }) => {
+  test('should show files changed section', async () => {
     await rightPanel.switchToDetails();
 
     // The section title is "Files Changed (N)" where N is the count
@@ -140,7 +140,7 @@ test.describe('Commit Details - Files Changed', () => {
     await expect(filesSection).toBeVisible();
   });
 
-  test('should list exactly 3 files', async ({ page }) => {
+  test('should list exactly 3 files', async () => {
     await rightPanel.switchToDetails();
 
     // Wait for file items to appear
@@ -148,7 +148,7 @@ test.describe('Commit Details - Files Changed', () => {
     await expect(fileItems).toHaveCount(3);
   });
 
-  test('should display file names', async ({ page }) => {
+  test('should display file names', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -160,7 +160,7 @@ test.describe('Commit Details - Files Changed', () => {
     await expect(fileTexts.nth(2)).toContainText('README.md');
   });
 
-  test('file items should be clickable', async ({ page }) => {
+  test('file items should be clickable', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -173,7 +173,7 @@ test.describe('Commit Details - Files Changed', () => {
     await expect(firstFile).toHaveClass(/selected/);
   });
 
-  test('should show file status indicators', async ({ page }) => {
+  test('should show file status indicators', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -200,7 +200,7 @@ test.describe('Commit Details - Context Menu', () => {
     await selectCommit(page, defaultCommit);
   });
 
-  test('should open context menu on right-click on file', async ({ page }) => {
+  test('should open context menu on right-click on file', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -213,7 +213,7 @@ test.describe('Commit Details - Context Menu', () => {
     await expect(contextMenu).toBeVisible();
   });
 
-  test('context menu should have View diff option', async ({ page }) => {
+  test('context menu should have View diff option', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -226,7 +226,7 @@ test.describe('Commit Details - Context Menu', () => {
     await expect(viewDiffItem).toBeVisible();
   });
 
-  test('context menu should have Copy file path option', async ({ page }) => {
+  test('context menu should have Copy file path option', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -239,7 +239,7 @@ test.describe('Commit Details - Context Menu', () => {
     await expect(copyPathItem).toBeVisible();
   });
 
-  test('context menu should have View history option', async ({ page }) => {
+  test('context menu should have View history option', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -252,7 +252,7 @@ test.describe('Commit Details - Context Menu', () => {
     await expect(historyItem).toBeVisible();
   });
 
-  test('context menu should have View blame option for non-deleted files', async ({ page }) => {
+  test('context menu should have View blame option for non-deleted files', async () => {
     await rightPanel.switchToDetails();
 
     await expect(rightPanel.commitFilesChanged).toHaveCount(3);
@@ -290,7 +290,7 @@ test.describe('Commit Details - Parent Commits', () => {
     await selectCommit(page, commitWithParent);
   });
 
-  test('should show parent commit section', async ({ page }) => {
+  test('should show parent commit section', async () => {
     await rightPanel.switchToDetails();
 
     // The parent section has section-title "Parent"
@@ -298,7 +298,7 @@ test.describe('Commit Details - Parent Commits', () => {
     await expect(parentSection).toBeVisible();
   });
 
-  test('should show parent commit OID as clickable link', async ({ page }) => {
+  test('should show parent commit OID as clickable link', async () => {
     await rightPanel.switchToDetails();
 
     const parentOid = rightPanel.commitDetails.locator('.parent-oid');

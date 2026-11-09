@@ -4,13 +4,12 @@
  */
 
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state, query } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { showErrorWithSuggestion } from '../../services/error-suggestion.service.ts';
-import { repositoryStore } from '../../stores/repository.store.ts';
 import type { Tag, Remote } from '../../types/git.types.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
 import { confirmDeleteTag, offerRemoteTagDelete } from '../../utils/tag-delete.ts';

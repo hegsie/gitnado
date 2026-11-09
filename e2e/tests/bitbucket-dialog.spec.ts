@@ -8,7 +8,6 @@ import {
 import { AppPage } from '../pages/app.page';
 import { DialogsPage } from '../pages/dialogs.page';
 import {
-  startCommandCapture,
   findCommand,
   injectCommandError,
   injectCommandHang,
@@ -73,7 +72,7 @@ test.describe('Bitbucket Dialog - Connection Flow', () => {
     await setupOpenRepository(page);
   });
 
-  test('should show username and app password inputs when App Password method selected', async ({ page }) => {
+  test('should show username and app password inputs when App Password method selected', async () => {
     await app.executeCommand('Bitbucket');
     await expect(dialogs.bitbucket.dialog).toBeVisible();
 
@@ -85,7 +84,7 @@ test.describe('Bitbucket Dialog - Connection Flow', () => {
     await expect(dialogs.bitbucket.connectButton).toBeVisible();
   });
 
-  test('should be able to type in username and app password inputs', async ({ page }) => {
+  test('should be able to type in username and app password inputs', async () => {
     await app.executeCommand('Bitbucket');
     await expect(dialogs.bitbucket.dialog).toBeVisible();
 

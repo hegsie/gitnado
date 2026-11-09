@@ -39,7 +39,7 @@ const mockInvoke: MockInvoke = async (command: string) => {
 };
 
 // ── Imports (after Tauri mock) ─────────────────────────────────────────────
-import { expect, fixture, html } from '@open-wc/testing';
+import { expect, fixture } from '@open-wc/testing';
 import '../gn-interactive-rebase-dialog.ts';
 import '../gn-bisect-dialog.ts';
 import '../gn-create-branch-dialog.ts';

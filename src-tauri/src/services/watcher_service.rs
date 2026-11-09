@@ -774,6 +774,26 @@ impl RepoAccumulator {
     }
 }
 
+/// True for non-mutating file-access notifications (`IN_OPEN`, `IN_ACCESS`,
+/// `IN_CLOSE_NOWRITE`).
+///
+/// Linux's `inotify` backend emits `EventKind::Access` whenever a watched file
+/// is opened, read, or closed after reading. Refreshing repository state reads
+/// `.git/HEAD`, `.git/config`, `.git/refs/**`, and `packed-refs`, which would
+/// otherwise feed straight back into `coalesce` as `RefsChanged` or
+/// `ConfigChanged` and trigger an infinite refresh loop. `Close(Write)` is the
+/// only access event that reflects a completed write.
+fn is_read_only_event(kind: &notify::EventKind) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Access(access)
+            if !matches!(
+                access,
+                notify::event::AccessKind::Close(notify::event::AccessMode::Write)
+            )
+    )
+}
+
 /// Collapse a batch of debounced events into at most one event of each kind
 /// per repository. A `git gc` touching thousands of files becomes a couple of
 /// IPC messages instead of thousands.
@@ -793,6 +813,9 @@ fn coalesce(messages: Vec<WatchMessage>) -> Vec<(String, WatcherEvent)> {
         };
 
         for event in events {
+            if is_read_only_event(&event.kind) {
+                continue;
+            }
             for path in &event.paths {
                 let accumulator = match per_repo.get_mut(&scope.key) {
                     Some(existing) => existing,
@@ -845,7 +868,11 @@ mod tests {
     }
 
     fn debounced(paths: Vec<PathBuf>) -> DebouncedEvent {
-        let mut event = Event::new(EventKind::Any);
+        debounced_with_kind(EventKind::Any, paths)
+    }
+
+    fn debounced_with_kind(kind: EventKind, paths: Vec<PathBuf>) -> DebouncedEvent {
+        let mut event = Event::new(kind);
         event.paths = paths;
         DebouncedEvent::new(event, std::time::Instant::now())
     }
@@ -1577,6 +1604,60 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0].1 {
             WatcherEvent::WorkdirChanged(paths) => assert_eq!(paths, &vec![path]),
+            other => panic!("expected WorkdirChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_only_access_events_are_ignored_in_git_dir_and_workdir() {
+        use notify::event::{AccessKind, AccessMode};
+
+        let root = Path::new("/repo");
+        let watched_paths = vec![
+            root.join(".git/config"),
+            root.join(".git/HEAD"),
+            root.join(".git/refs/heads/main"),
+            root.join(".git/index"),
+            root.join("src/main.rs"),
+        ];
+        let read_only_kinds = [
+            EventKind::Access(AccessKind::Open(AccessMode::Any)),
+            EventKind::Access(AccessKind::Read),
+            EventKind::Access(AccessKind::Close(AccessMode::Read)),
+        ];
+
+        for kind in read_only_kinds {
+            let events = coalesce(vec![(
+                scope(root),
+                Ok(vec![debounced_with_kind(kind, watched_paths.clone())]),
+            )]);
+            assert!(
+                events.is_empty(),
+                "read-only event {kind:?} should not produce watcher events, got {events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn close_write_access_event_is_still_classified() {
+        use notify::event::{AccessKind, AccessMode};
+
+        let root = Path::new("/repo");
+        let close_write = EventKind::Access(AccessKind::Close(AccessMode::Write));
+        let events = coalesce(vec![(
+            scope(root),
+            Ok(vec![debounced_with_kind(
+                close_write,
+                vec![root.join(".git/HEAD"), root.join("src/main.rs")],
+            )]),
+        )]);
+
+        assert_eq!(events.len(), 2, "got {events:?}");
+        assert!(matches!(events[0].1, WatcherEvent::RefsChanged));
+        match &events[1].1 {
+            WatcherEvent::WorkdirChanged(paths) => {
+                assert_eq!(paths, &vec![root.join("src/main.rs")]);
+            }
             other => panic!("expected WorkdirChanged, got {other:?}"),
         }
     }

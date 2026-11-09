@@ -13,7 +13,6 @@
  * the same reporting as every other surface.
  */
 
-type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 const invoked: Array<{ command: string; args?: unknown }> = [];
 let failures = new Map<string, { code?: string; message: string }>();
 

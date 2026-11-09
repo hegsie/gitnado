@@ -339,35 +339,39 @@ pub async fn detect_ado_repo(
     path: String,
     remote_name: Option<String>,
 ) -> Result<Option<DetectedAdoRepo>> {
-    let repo = git2::Repository::open(&path)
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open repository: {}", e)))?;
+    crate::utils::blocking_git(move || {
+        let repo = git2::Repository::open(&path).map_err(|e| {
+            GitnadoError::OperationFailed(format!("Failed to open repository: {}", e))
+        })?;
 
-    let remotes = repo
-        .remotes()
-        .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
+        let remotes = repo
+            .remotes()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get remotes: {}", e)))?;
 
-    for candidate in remotes.iter().flatten().flatten() {
-        if remote_name
-            .as_deref()
-            .is_some_and(|wanted| wanted != candidate)
-        {
-            continue;
-        }
-        if let Ok(remote) = repo.find_remote(candidate) {
-            if let Ok(url) = remote.url() {
-                if let Some(repo_info) = parse_ado_url(url) {
-                    return Ok(Some(DetectedAdoRepo {
-                        organization: repo_info.0,
-                        project: repo_info.1,
-                        repository: repo_info.2,
-                        remote_name: candidate.to_string(),
-                    }));
+        for candidate in remotes.iter().flatten().flatten() {
+            if remote_name
+                .as_deref()
+                .is_some_and(|wanted| wanted != candidate)
+            {
+                continue;
+            }
+            if let Ok(remote) = repo.find_remote(candidate) {
+                if let Ok(url) = remote.url() {
+                    if let Some(repo_info) = parse_ado_url(url) {
+                        return Ok(Some(DetectedAdoRepo {
+                            organization: repo_info.0,
+                            project: repo_info.1,
+                            repository: repo_info.2,
+                            remote_name: candidate.to_string(),
+                        }));
+                    }
                 }
             }
         }
-    }
 
-    Ok(None)
+        Ok(None)
+    })
+    .await
 }
 
 /// Get a single pull request by ID

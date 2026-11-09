@@ -5984,7 +5984,7 @@ export class AppShell extends LitElement {
   }
 
   private async handleWorkspaceOpenRepoFile(e: CustomEvent<{ repoPath: string; filePath: string; lineNumber: number }>): Promise<void> {
-    const { repoPath, filePath, lineNumber } = e.detail;
+    const { repoPath, filePath } = e.detail;
 
     // Close the workspace manager
     dialogs.close('workspaceManager');
