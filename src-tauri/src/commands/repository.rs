@@ -41,6 +41,9 @@ pub async fn open_repository(path: String) -> Result<Repository> {
         }
 
         let repo = git2::Repository::open(path)?;
+        // Hooks run without Gitnado; opening the repo is when a fixed hook
+        // script can reach an existing install.
+        crate::commands::agent_hooks::upgrade_managed_script_quietly(&repo);
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())

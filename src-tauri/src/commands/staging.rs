@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use tauri::command;
 
-use super::path_utils::validate_path_within_repo;
+use super::path_utils::{literal_git_pathspec, validate_path_within_repo};
 use crate::error::Result;
 use crate::models::{
     FileHunks, FileStatus, HunkDiffLine, IndexedDiffHunk, SortedFileStatus, SortedStatusEntry,
@@ -382,15 +382,21 @@ pub async fn unstage_files(path: String, paths: Vec<String>) -> Result<()> {
                     let head_tree = commit.tree()?;
                     if head_tree.get_path(path_obj).is_ok() {
                         // Reset to HEAD version
-                        repo.reset_default(Some(commit.as_object()), [path_obj])?;
+                        let literal_path = literal_git_pathspec(&file_path);
+                        repo.reset_default(Some(commit.as_object()), [Path::new(&literal_path)])?;
+                        index = repo.index()?;
                     } else {
                         // Remove from index (was newly added)
                         index.remove_path(path_obj)?;
+                        index.write()?;
+                        index = repo.index()?;
                     }
                 }
                 None => {
                     // Unborn HEAD: reset against the empty tree == drop from index.
                     index.remove_path(path_obj)?;
+                    index.write()?;
+                    index = repo.index()?;
                 }
             }
         }
@@ -657,11 +663,13 @@ pub async fn get_file_hunks(path: String, file_path: String, staged: bool) -> Re
             // Staged: diff between HEAD and index
             let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
             let mut opts = git2::DiffOptions::new();
+            opts.disable_pathspec_match(true);
             opts.pathspec(&file_path);
             repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?
         } else {
             // Unstaged: diff between index and working directory
             let mut opts = git2::DiffOptions::new();
+            opts.disable_pathspec_match(true);
             opts.pathspec(&file_path);
             repo.diff_index_to_workdir(None, Some(&mut opts))?
         };
@@ -1285,6 +1293,54 @@ mod tests {
         std::fs::remove_file(&outside).ok();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_write_file_content_refuses_dangling_symlink_escape() {
+        let repo = TestRepo::with_initial_commit();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("created-by-write.txt");
+        std::os::unix::fs::symlink(&victim, repo.path.join("link.txt")).unwrap();
+
+        let result = write_file_content(
+            repo.path_str(),
+            "link.txt".to_string(),
+            "escaped".to_string(),
+            None,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "write through a dangling symlink must fail"
+        );
+        assert!(
+            !victim.exists(),
+            "no file may be created outside the repository"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_file_hunks_does_not_glob_match_sibling() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_file("a[1].txt", "original bracket");
+        repo.create_file("a1.txt", "original plain");
+        repo.stage_file("a[1].txt");
+        repo.stage_file("a1.txt");
+        repo.create_commit("add both", &[]);
+
+        repo.create_file("a[1].txt", "modified bracket");
+        repo.create_file("a1.txt", "UNSAVED WORK");
+
+        let hunks = get_file_hunks(repo.path_str(), "a[1].txt".to_string(), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            (hunks.total_additions, hunks.total_deletions),
+            (1, 1),
+            "the hunks for a[1].txt must not include the changes to a1.txt"
+        );
+    }
+
     #[tokio::test]
     async fn test_discard_changes_does_not_glob_match_sibling() {
         let repo = TestRepo::with_initial_commit();
@@ -1439,6 +1495,40 @@ mod tests {
         let status = get_status(repo.path_str()).await.unwrap();
         let staged = status.iter().find(|e| e.path == "new.txt" && e.is_staged);
         assert!(staged.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_unstage_files_does_not_glob_match_sibling() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit(
+            "add metacharacter paths",
+            &[
+                ("a[1].txt", "original bracket\n"),
+                ("a1.txt", "original sibling\n"),
+            ],
+        );
+        repo.create_file("a[1].txt", "modified bracket\n");
+        repo.create_file("a1.txt", "modified sibling\n");
+        repo.stage_file("a[1].txt");
+        repo.stage_file("a1.txt");
+
+        unstage_files(repo.path_str(), vec!["a[1].txt".to_string()])
+            .await
+            .unwrap();
+
+        let git_repo = repo.repo();
+        let head = git_repo.head().unwrap().peel_to_commit().unwrap();
+        let head_tree = head.tree().unwrap();
+        let index = git_repo.index().unwrap();
+        assert_eq!(
+            index.get_path(Path::new("a[1].txt"), 0).unwrap().id,
+            head_tree.get_path(Path::new("a[1].txt")).unwrap().id()
+        );
+        assert_ne!(
+            index.get_path(Path::new("a1.txt"), 0).unwrap().id,
+            head_tree.get_path(Path::new("a1.txt")).unwrap().id(),
+            "unstaging a[1].txt must leave a1.txt staged"
+        );
     }
 
     #[tokio::test]
@@ -1961,17 +2051,18 @@ mod tests {
     #[tokio::test]
     async fn test_stage_dangling_symlink() {
         let repo = TestRepo::with_initial_commit();
+        std::fs::create_dir_all(repo.path.join("sub")).unwrap();
 
-        std::os::unix::fs::symlink("does-not-exist", repo.path.join("broken"))
+        std::os::unix::fs::symlink("../build/out.txt", repo.path.join("sub/broken"))
             .expect("failed to create symlink");
 
-        let result = stage_files(repo.path_str(), vec!["broken".to_string()]).await;
+        let result = stage_files(repo.path_str(), vec!["sub/broken".to_string()]).await;
         assert!(result.is_ok(), "staging failed: {:?}", result.err());
 
         let git_repo = repo.repo();
         let index = git_repo.index().unwrap();
         let entry = index
-            .get_path(Path::new("broken"), 0)
+            .get_path(Path::new("sub/broken"), 0)
             .expect("dangling symlink should be staged, not treated as a deletion");
         assert_eq!(
             entry.mode, 0o120000,
@@ -1980,7 +2071,7 @@ mod tests {
         let blob = git_repo.find_blob(entry.id).unwrap();
         assert_eq!(
             blob.content(),
-            b"does-not-exist",
+            b"../build/out.txt",
             "symlink blob must contain the link target"
         );
     }

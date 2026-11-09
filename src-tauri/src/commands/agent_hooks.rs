@@ -15,12 +15,17 @@
 //! - Hooks go into `.claude/settings.local.json` (personal, not shared). Other
 //!   hooks in that file are preserved, and the file is git-ignored through
 //!   `.git/info/exclude` when nothing already ignores it.
+//! - The script is installed once, then runs without Gitnado. So that a fix to
+//!   it reaches existing installs, opening the repository (or the Checkpoints
+//!   dialog) replaces a script that is byte-for-byte a previous release —
+//!   never one the user has edited, and never one that is not installed.
 
 use std::path::{Path, PathBuf};
 
 use git2::Repository;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use tauri::command;
 
 use crate::error::{GitnadoError, Result};
@@ -66,6 +71,15 @@ state="$statedir/turn-$sid"
 tmp="$gitdir/gitnado-checkpoint-index.$$"
 trap 'rm -f "$tmp"' EXIT
 if [ -f "$gitdir/index" ]; then cp "$gitdir/index" "$tmp" 2>/dev/null || exit 0; fi
+# What is staged, read from the copy before `add -A` (write-tree on the real
+# index would rewrite its cache). Fails, and is skipped, mid-conflict.
+index_tree=$(GIT_INDEX_FILE="$tmp" git write-tree 2>/dev/null)
+head_tree=""
+[ -n "$head" ] && head_tree=$(git rev-parse -q --verify "$head^{tree}" 2>/dev/null)
+empty_tree=$(git hash-object -t tree /dev/null 2>/dev/null)
+if [ "$index_tree" = "$head_tree" ] || { [ -z "$head" ] && [ "$index_tree" = "$empty_tree" ]; }; then
+  index_tree=""
+fi
 if GIT_INDEX_FILE="$tmp" git add -A >/dev/null 2>&1; then
   tree=$(GIT_INDEX_FILE="$tmp" git write-tree 2>/dev/null)
 fi
@@ -73,20 +87,50 @@ fi
 if [ -n "$tree" ]; then
   last=$(git for-each-ref --sort=-refname --count=1 --format='%(objectname)' refs/gitnado/checkpoints/ 2>/dev/null)
   last_tree=""
-  [ -n "$last" ] && last_tree=$(git rev-parse -q --verify "$last^{tree}" 2>/dev/null)
-  # Skip a snapshot identical to the newest one (a turn that changed nothing).
-  if [ "$tree" != "$last_tree" ]; then
+  last_index_tree=""
+  if [ -n "$last" ]; then
+    last_tree=$(git rev-parse -q --verify "$last^{tree}" 2>/dev/null)
+    last_index=$(git cat-file commit "$last" 2>/dev/null | sed -n 's/^Index: \([0-9a-f]\{40,64\}\)$/\1/p')
+    [ -n "$last_index" ] && last_index_tree=$(git rev-parse -q --verify "$last_index^{tree}" 2>/dev/null)
+  fi
+  # Skip a snapshot identical to the newest one (a turn that changed nothing,
+  # staged or not).
+  if [ "$tree" != "$last_tree" ] || [ "$index_tree" != "$last_index_tree" ]; then
     if [ "$phase" = before ]; then label="Before agent turn"; else label="After agent turn"; fi
     msg=$(printf '%s\n\nAgent: Claude Code\nSession: %s\n' "$label" "$sid")
     [ -n "$head" ] && msg=$(printf '%s\nHead: %s' "$msg" "$head")
     [ -n "$branch" ] && msg=$(printf '%s\nBranch: %s' "$msg" "$branch")
-    if [ -n "$head" ]; then
-      commit=$(printf '%s\n' "$msg" | git commit-tree "$tree" -p "$head" 2>/dev/null)
-    else
-      commit=$(printf '%s\n' "$msg" | git commit-tree "$tree" 2>/dev/null)
+    # The staged state rides along as an extra parent (kept alive by the
+    # checkpoint ref) named by an Index trailer; see commands::checkpoint.
+    index_commit=""
+    if [ -n "$index_tree" ]; then
+      if [ -n "$head" ]; then
+        index_commit=$(printf 'gitnado checkpoint index\n' | git commit-tree "$index_tree" -p "$head" 2>/dev/null)
+      else
+        index_commit=$(printf 'gitnado checkpoint index\n' | git commit-tree "$index_tree" 2>/dev/null)
+      fi
     fi
+    [ -n "$index_commit" ] && msg=$(printf '%s\nIndex: %s' "$msg" "$index_commit")
+    set --
+    [ -n "$head" ] && set -- "$@" -p "$head"
+    [ -n "$index_commit" ] && set -- "$@" -p "$index_commit"
+    commit=$(printf '%s\n' "$msg" | git commit-tree "$tree" "$@" 2>/dev/null)
     if [ -n "$commit" ]; then
-      git update-ref "refs/gitnado/checkpoints/$(date +%s)000-$$" "$commit" >/dev/null 2>&1
+      stamp=$(date +%s 2>/dev/null)
+      case "$stamp" in
+        ''|*[!0-9]*) exit 0 ;;
+      esac
+      stamp="${stamp}000"
+      last_ref=$(git for-each-ref --sort=-refname --count=1 \
+        --format='%(refname:strip=3)' refs/gitnado/checkpoints/ 2>/dev/null)
+      last_stamp=${last_ref%%-*}
+      case "$last_stamp" in
+        ''|*[!0-9]*) last_stamp=0 ;;
+      esac
+      if [ "$last_stamp" -ge "$stamp" ]; then
+        stamp=$((last_stamp + 1))
+      fi
+      git update-ref "refs/gitnado/checkpoints/$stamp-$$" "$commit" >/dev/null 2>&1
     fi
   fi
 fi
@@ -138,6 +182,74 @@ fn workdir(repo: &Repository) -> Result<PathBuf> {
 
 fn script_path(repo: &Repository) -> PathBuf {
     repo.path().join(SCRIPT_DIR).join(SCRIPT_NAME)
+}
+
+/// SHA-256 of every script a previous Gitnado release installed. A script on
+/// disk matching one is ours and unedited, so it may be replaced; anything
+/// else is the user's and is left alone. Append the outgoing hash whenever
+/// SCRIPT changes:
+/// `git show <rev>:src-tauri/src/commands/agent_hooks.rs | sed -n '/^const SCRIPT: &str = r#"/,/^"#;$/p' | sed '1s/^const SCRIPT: &str = r#"//' | sed '$d' | shasum -a 256`
+const PREVIOUS_SCRIPT_SHA256: &[&str] = &[
+    // 6ae19c91 (#608): snapshotted the working tree but not the index.
+    "f309a06a26249caf9e44307ee8469445306077457dbf11e8e96f20c87037703c",
+];
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Write SCRIPT to `script` by rename, never in place: `sh` reads a script as
+/// it executes, so rewriting the file under a hook that is mid-run would feed
+/// it the tail of a different version. The running hook keeps the old inode.
+fn write_script(script: &Path) -> Result<()> {
+    if let Some(parent) = script.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = script.with_extension(format!("sh.tmp-{}", std::process::id()));
+    let written = (|| -> std::io::Result<()> {
+        std::fs::write(&tmp, SCRIPT)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::rename(&tmp, script)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(written?)
+}
+
+fn upgrade_script_if_known(repo: &Repository, known: &[&str]) -> Result<bool> {
+    let script = script_path(repo);
+    let on_disk = match std::fs::read(&script) {
+        Ok(bytes) => bytes,
+        // Not installed: an upgrade must never install it.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    if on_disk == SCRIPT.as_bytes() || !known.contains(&sha256_hex(&on_disk).as_str()) {
+        return Ok(false);
+    }
+    write_script(&script)?;
+    Ok(true)
+}
+
+/// Bring an installed, unedited managed script up to the current version.
+/// Returns whether it was rewritten.
+pub fn upgrade_managed_script(repo: &Repository) -> Result<bool> {
+    upgrade_script_if_known(repo, PREVIOUS_SCRIPT_SHA256)
+}
+
+/// Best-effort [`upgrade_managed_script`] for callers that must not fail.
+pub fn upgrade_managed_script_quietly(repo: &Repository) {
+    if let Err(e) = upgrade_managed_script(repo) {
+        tracing::warn!("Could not update the Gitnado agent hook script: {}", e);
+    }
 }
 
 fn settings_path(repo: &Repository) -> Result<PathBuf> {
@@ -250,15 +362,7 @@ pub fn install_in(repo: &Repository) -> Result<AgentHooksStatus> {
     let mut settings = read_settings(&settings_file)?;
 
     let script = script_path(repo);
-    if let Some(parent) = script.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&script, SCRIPT)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-    }
+    write_script(&script)?;
 
     let hooks = settings
         .entry("hooks")
@@ -368,7 +472,12 @@ pub fn attribution_in(repo: &Repository, oid: &str) -> Result<Option<AgentAttrib
 
 #[command]
 pub async fn get_agent_hooks_status(path: String) -> Result<AgentHooksStatus> {
-    crate::utils::blocking_git(move || status_in(&open(&path)?)).await
+    crate::utils::blocking_git(move || {
+        let repo = open(&path)?;
+        upgrade_managed_script_quietly(&repo);
+        status_in(&repo)
+    })
+    .await
 }
 
 #[command]
@@ -602,6 +711,50 @@ mod tests {
     }
 
     #[test]
+    fn hook_checkpoints_keep_what_was_staged() {
+        use crate::commands::checkpoint::restore_checkpoint_in;
+        let t = TestRepo::with_initial_commit();
+        install_in(&t.repo()).unwrap();
+        // Partially staged: the staged version exists nowhere but the index.
+        t.create_file("README.md", "staged");
+        t.stage_file("README.md");
+        t.create_file("README.md", "worktree");
+        let index_before = fs::read(t.path.join(".git/index")).unwrap();
+
+        let out = run_hook(&t, "before", "sess-idx");
+        assert!(out.status.success());
+        assert_eq!(
+            fs::read(t.path.join(".git/index")).unwrap(),
+            index_before,
+            "the real index must be untouched"
+        );
+        let repo = t.repo();
+        assert_eq!(list_checkpoints_in(&repo).unwrap().len(), 1);
+
+        // The agent unstages without touching the working tree: only the
+        // staged state changed, and that alone is worth a checkpoint.
+        let head_tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let mut index = repo.index().unwrap();
+        index.read_tree(&head_tree).unwrap();
+        index.write().unwrap();
+        run_hook(&t, "after", "sess-idx");
+        let checkpoints = list_checkpoints_in(&repo).unwrap();
+        assert_eq!(checkpoints.len(), 2, "{checkpoints:?}");
+        assert_eq!(checkpoints[0].files_changed, 1);
+
+        restore_checkpoint_in(&repo, &checkpoints[1].id).unwrap();
+        let mut index = repo.index().unwrap();
+        index.read(true).unwrap();
+        let entry = index.get_path(Path::new("README.md"), 0).unwrap();
+        let blob = repo.find_blob(entry.id).unwrap();
+        assert_eq!(blob.content(), b"staged");
+        assert_eq!(
+            fs::read_to_string(t.path.join("README.md")).unwrap(),
+            "worktree"
+        );
+    }
+
+    #[test]
     fn hook_never_fails_outside_a_repository() {
         let t = TestRepo::with_initial_commit();
         install_in(&t.repo()).unwrap();
@@ -641,5 +794,60 @@ mod tests {
         })
         .unwrap();
         assert!(json.contains("settingsPath") && json.contains("scriptPath"));
+    }
+
+    #[test]
+    fn upgrade_replaces_only_an_unedited_previous_script() {
+        let t = TestRepo::with_initial_commit();
+        let repo = t.repo();
+        let script = script_path(&repo);
+        let legacy = "#!/bin/sh\n# Managed by Gitnado: an older release\nexit 0\n";
+        let known = sha256_hex(legacy.as_bytes());
+
+        // Not installed: nothing is created.
+        assert!(!upgrade_script_if_known(&repo, &[&known]).unwrap());
+        assert!(!script.exists());
+
+        install_in(&repo).unwrap();
+        // A previous release's script is replaced, staying executable.
+        fs::write(&script, legacy).unwrap();
+        assert!(upgrade_script_if_known(&repo, &[&known]).unwrap());
+        assert_eq!(fs::read_to_string(&script).unwrap(), SCRIPT);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&script).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+        // Already current: untouched.
+        assert!(!upgrade_script_if_known(&repo, &[&known]).unwrap());
+
+        // Edited by the user, even slightly: never overwritten.
+        let edited = format!("{legacy}# mine\n");
+        fs::write(&script, &edited).unwrap();
+        assert!(!upgrade_script_if_known(&repo, &[&known]).unwrap());
+        assert_eq!(fs::read_to_string(&script).unwrap(), edited);
+        assert!(!upgrade_managed_script(&repo).unwrap());
+        assert_eq!(fs::read_to_string(&script).unwrap(), edited);
+        let leftovers: Vec<_> = fs::read_dir(script.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 1, "no temp files left: {leftovers:?}");
+    }
+
+    #[test]
+    fn previous_script_hashes_never_include_the_current_script() {
+        let current = sha256_hex(SCRIPT.as_bytes());
+        for hash in PREVIOUS_SCRIPT_SHA256 {
+            assert_eq!(hash.len(), 64);
+            assert!(hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+            assert_ne!(
+                *hash, current,
+                "SCRIPT changed: record its new hash only after release"
+            );
+        }
     }
 }

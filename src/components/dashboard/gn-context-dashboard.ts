@@ -848,8 +848,7 @@ export class GnContextDashboard extends LitElement {
       }));
     } catch (err) {
       // Surface the failure via a visible toast — the repository store's error
-      // field has no render sink, so setError alone would be silent (CLAUDE.md
-      // error-feedback rule).
+      // field has no render sink, so setError alone would not display anything.
       showToast(
         `Failed to switch profile: ${err instanceof Error ? err.message : 'Unknown error'}`,
         'error'

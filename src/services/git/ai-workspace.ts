@@ -37,6 +37,8 @@ export async function openInEditor(
 export interface OpenResult {
   success: boolean;
   message?: string;
+  /** Set when the open succeeded via a fallback the user should know about. */
+  notice?: string;
 }
 
 /** Editor configuration from git config */

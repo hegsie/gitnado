@@ -176,6 +176,7 @@ pub async fn get_diff_with_options(
         // Apply file path filter if specified
         if let Some(ref fp) = file_path {
             let normalized = fp.replace('\\', "/");
+            opts.disable_pathspec_match(true);
             opts.pathspec(&normalized);
         }
 
@@ -259,6 +260,7 @@ pub async fn get_file_diff(
         let normalized_file_path = file_path.replace('\\', "/");
 
         let mut opts = git2::DiffOptions::new();
+        opts.disable_pathspec_match(true);
         opts.pathspec(&normalized_file_path);
         apply_diff_options(&mut opts, &ignore_whitespace, context_lines, None, None);
         // Include untracked files so we can show diff for new files
@@ -348,6 +350,7 @@ pub async fn get_file_diff(
             // Check if file is untracked
             let statuses = repo.statuses(Some(
                 git2::StatusOptions::new()
+                    .disable_pathspec_match(true)
                     .pathspec(&normalized_file_path)
                     .include_untracked(true)
                     .recurse_untracked_dirs(true),
@@ -384,6 +387,7 @@ pub async fn get_file_diff(
         // prints for it.
         if whitespace_is_ignored(&ignore_whitespace) {
             let mut plain_opts = git2::DiffOptions::new();
+            plain_opts.disable_pathspec_match(true);
             plain_opts.pathspec(&normalized_file_path);
             apply_diff_options(&mut plain_opts, &None, context_lines, None, None);
             plain_opts.include_untracked(true);
@@ -839,6 +843,7 @@ pub async fn get_commit_file_diff(
         let normalized_file_path = file_path.replace('\\', "/");
 
         let mut opts = git2::DiffOptions::new();
+        opts.disable_pathspec_match(true);
         opts.pathspec(&normalized_file_path);
         apply_diff_options(&mut opts, &ignore_whitespace, context_lines, None, None);
 
@@ -917,6 +922,7 @@ pub async fn get_commit_file_diff(
             // match them, but the patch we render is bounded to the one file.
             if let Some((old_path, new_path)) = rename_paths {
                 let mut pair_opts = git2::DiffOptions::new();
+                pair_opts.disable_pathspec_match(true);
                 pair_opts.pathspec(&old_path);
                 pair_opts.pathspec(&new_path);
                 apply_diff_options(
@@ -950,6 +956,7 @@ pub async fn get_commit_file_diff(
         // reported as an empty diff rather than as missing.
         if filtered.is_none() && whitespace_is_ignored(&ignore_whitespace) {
             let mut plain_opts = git2::DiffOptions::new();
+            plain_opts.disable_pathspec_match(true);
             plain_opts.pathspec(&normalized_file_path);
             apply_diff_options(&mut plain_opts, &None, context_lines, None, None);
             let mut plain_diff = repo.diff_tree_to_tree(
@@ -3086,5 +3093,58 @@ mod tests {
             ignored.hunks.is_empty(),
             "ignoring whitespace must apply to commit diffs too"
         );
+    }
+
+    /// `a[1].txt` is a glob that also matches `a1.txt`. A file diff for one
+    /// must never return the other, which would show the wrong file's diff.
+    #[tokio::test]
+    async fn test_get_file_diff_bracketed_name_is_not_a_glob() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit("base", &[("a1.txt", "one\n"), ("a[1].txt", "bracket\n")]);
+        repo.create_file("a1.txt", "one\ntwo\nthree\n");
+        repo.create_file("a[1].txt", "bracket\nextra\n");
+
+        let diff = get_file_diff(
+            repo.path_str(),
+            "a[1].txt".to_string(),
+            Some(false),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(diff.path, "a[1].txt");
+        assert_eq!(diff.additions, 1);
+        assert_eq!(diff.deletions, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_commit_file_diff_bracketed_name_is_not_a_glob() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit("base", &[("a1.txt", "one\n"), ("a[1].txt", "bracket\n")]);
+        let oid = repo.create_commit(
+            "edit both",
+            &[
+                ("a1.txt", "one\ntwo\nthree\n"),
+                ("a[1].txt", "bracket\nextra\n"),
+            ],
+        );
+
+        let diff = get_commit_file_diff(
+            repo.path_str(),
+            oid.to_string(),
+            "a[1].txt".to_string(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(diff.path, "a[1].txt");
+        assert_eq!(diff.additions, 1);
+        assert_eq!(diff.deletions, 0);
     }
 }

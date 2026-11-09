@@ -331,6 +331,7 @@ fn build_commit_explain_prompt(
 
     let mut diff_opts = git2::DiffOptions::new();
     if let Some(fp) = file_path.filter(|s| !s.trim().is_empty()) {
+        diff_opts.disable_pathspec_match(true);
         diff_opts.pathspec(fp);
     }
 
@@ -381,6 +382,7 @@ fn build_branch_compare_explain_prompt(
 
     let mut diff_opts = git2::DiffOptions::new();
     if let Some(fp) = file_path.filter(|s| !s.trim().is_empty()) {
+        diff_opts.disable_pathspec_match(true);
         diff_opts.pathspec(fp);
     }
 
@@ -531,6 +533,8 @@ fn collect_working_tree_diff(
             .recurse_untracked_dirs(true);
     }
     if let Some(fp) = file_path.filter(|s| !s.trim().is_empty()) {
+        staged_opts.disable_pathspec_match(true);
+        unstaged_opts.disable_pathspec_match(true);
         staged_opts.pathspec(fp);
         unstaged_opts.pathspec(fp);
     }
@@ -1178,6 +1182,34 @@ It connects the frontend drawer to the Tauri backend.
         assert_eq!(
             clean_stash_message("   ", Some("main")),
             "WIP on main: working tree changes"
+        );
+    }
+
+    /// `a[1].txt` globs to `a1.txt` without exact-match pathspecs, which would
+    /// leak the sibling's diff into the explanation prompt.
+    #[test]
+    fn test_collect_working_tree_diff_bracketed_name_is_not_a_glob() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_commit("base", &[("a1.txt", "one\n"), ("a[1].txt", "bracket\n")]);
+        repo.create_file("a1.txt", "one\ntwo\n");
+        repo.create_file("a[1].txt", "bracket\nextra\n");
+
+        let (files_summary, patch) =
+            collect_working_tree_diff(&repo.repo(), Some("a[1].txt"), false, MAX_DIFF_BYTES)
+                .unwrap();
+
+        assert!(patch.contains("a/a[1].txt"), "patch: {patch}");
+        assert!(
+            !patch.contains("a/a1.txt"),
+            "sibling leaked into patch: {patch}"
+        );
+        assert!(
+            files_summary.contains("a[1].txt"),
+            "summary: {files_summary}"
+        );
+        assert!(
+            !files_summary.contains("a1.txt"),
+            "summary: {files_summary}"
         );
     }
 }

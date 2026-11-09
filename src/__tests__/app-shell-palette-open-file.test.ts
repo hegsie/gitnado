@@ -99,6 +99,18 @@ describe('app-shell command palette: open file in editor', () => {
     expect(errorToasts()).to.have.lengthOf(0);
   });
 
+  it('a fallback open for a terminal-only editor tells the user why', async () => {
+    const notice = "Git's core.editor (vim) runs in a terminal, so this was opened with the system default app instead.";
+    mockResponses['open_in_configured_editor'] = () => ({ success: true, message: null, notice });
+
+    const el = shellOnRepo();
+    await openFile(el, 'src/main.rs');
+
+    const toasts = uiStore.getState().toasts as Array<{ message: string; type: string }>;
+    expect(errorToasts()).to.have.lengthOf(0);
+    expect(toasts.some((t) => t.type === 'info' && t.message === notice)).to.be.true;
+  });
+
   it('a rejected open_in_configured_editor surfaces the backend reason', async () => {
     failures['open_in_configured_editor'] = {
       code: 'INVALID_PATH',

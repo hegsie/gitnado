@@ -75,5 +75,6 @@ export async function openRepositoryInEditor(repoPath: string): Promise<boolean>
       result.data?.message ?? result.error?.message,
     );
   }
+  if (result.data.notice) showToast(result.data.notice, 'info');
   return true;
 }

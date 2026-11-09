@@ -5980,6 +5980,8 @@ export class AppShell extends LitElement {
         result.data?.message || result.error?.message || 'Failed to open file in editor';
       log.error('Failed to open file in editor:', message);
       showToast(message, 'error');
+    } else if (result.data.notice) {
+      showToast(result.data.notice, 'info');
     }
   }
 

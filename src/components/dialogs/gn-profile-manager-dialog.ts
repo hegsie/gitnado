@@ -1101,7 +1101,7 @@ export class GnProfileManagerDialog extends LitElement {
   // for UI sync — these handlers call unifiedProfileService.* which updates the
   // store, and subscribed components re-render. Do NOT add a profile-change
   // CustomEvent here: there is no parent listener for it, so it would be an
-  // orphan event (CLAUDE.md "Event Dispatch Consistency"). The window-level
+  // orphan event. The window-level
   // `repository-refresh` below is a different thing: saving rewrites the open
   // repository's .git/config, and app-shell listens for that event (same as
   // handleApply).

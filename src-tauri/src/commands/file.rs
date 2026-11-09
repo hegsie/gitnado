@@ -4,7 +4,7 @@
 use std::path::Path;
 use tauri::command;
 
-use super::path_utils::validate_path_within_repo;
+use super::path_utils::resolve_path_within_repo;
 use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
@@ -28,6 +28,10 @@ fn escape_cmd_meta(s: &str) -> String {
 pub struct OpenResult {
     pub success: bool,
     pub message: Option<String>,
+    /// Something the user should know even though the open succeeded — e.g.
+    /// that a fallback app was used instead of the configured editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 /// Editor configuration from git config
@@ -185,6 +189,7 @@ pub async fn reveal_in_file_manager(path: String) -> Result<OpenResult> {
     Ok(OpenResult {
         success: true,
         message: None,
+        notice: None,
     })
 }
 
@@ -255,6 +260,7 @@ pub async fn open_in_default_app(path: String) -> Result<OpenResult> {
     Ok(OpenResult {
         success: true,
         message: None,
+        notice: None,
     })
 }
 
@@ -266,13 +272,20 @@ pub async fn open_in_configured_editor(
     line: Option<u32>,
 ) -> Result<OpenResult> {
     let repo_path = Path::new(&path);
-    let target_file = if Path::new(&filePath).is_absolute() {
-        filePath.clone()
+    let canonical_repo = repo_path.canonicalize().map_err(|e| {
+        GitnadoError::OperationFailed(format!("Failed to resolve repo path: {}", e))
+    })?;
+    let requested_path = Path::new(&filePath);
+    let target_path = if requested_path == repo_path || requested_path == canonical_repo.as_path() {
+        if repo_path.is_absolute() {
+            repo_path.to_path_buf()
+        } else {
+            canonical_repo
+        }
     } else {
-        validate_path_within_repo(repo_path, &filePath)?
-            .to_string_lossy()
-            .to_string()
+        resolve_path_within_repo(repo_path, &filePath)?
     };
+    let target_file = target_path.to_string_lossy().to_string();
 
     let target = Path::new(&target_file);
     if !target.exists() {
@@ -287,6 +300,18 @@ pub async fn open_in_configured_editor(
         .or_else(|| std::env::var("EDITOR").ok());
 
     match editor {
+        Some(editor_cmd) if is_terminal_editor(&editor_cmd) && target.is_dir() => {
+            let mut result = open_in_default_app(target_file).await?;
+            result.notice = Some(format!(
+                "Git's core.editor ({editor_cmd}) runs in a terminal, so the repository \
+                 directory was opened with the system default app instead."
+            ));
+            Ok(result)
+        }
+        Some(editor_cmd) if is_terminal_editor(&editor_cmd) => Ok(editor_unavailable(format!(
+            "The configured editor ({editor_cmd}) requires a terminal and cannot open files \
+             from Gitnado. Configure a GUI editor in Git settings."
+        ))),
         Some(editor_cmd) => {
             // Parse the editor command and add line number support
             let (cmd, args) = parse_editor_command(&editor_cmd, &target_file, line);
@@ -305,12 +330,53 @@ pub async fn open_in_configured_editor(
             Ok(OpenResult {
                 success: true,
                 message: Some(format!("Opened in {}", cmd)),
+                notice: None,
             })
         }
-        None => {
-            // No editor configured, fall back to system default
-            open_in_default_app(target_file).await
-        }
+        None if target.is_dir() => open_in_default_app(target_file).await,
+        // Do not hand repository files to the OS default handler, which may
+        // execute them; directories above can still open in the file manager.
+        None => Ok(no_editor_configured_for_file()),
+    }
+}
+
+fn no_editor_configured_for_file() -> OpenResult {
+    editor_unavailable(
+        "No editor is configured. Configure a GUI editor in Git settings to open files.",
+    )
+}
+
+fn editor_unavailable(message: impl Into<String>) -> OpenResult {
+    OpenResult {
+        success: false,
+        message: Some(message.into()),
+        notice: None,
+    }
+}
+
+/// Whether `editor_cmd` (a `core.editor`-style command line) needs a terminal
+/// to show anything. Includes no-op editors like `true`, which "succeed"
+/// without opening anything at all.
+fn is_terminal_editor(editor_cmd: &str) -> bool {
+    let parts = split_command(editor_cmd);
+    let Some(cmd) = parts.first() else {
+        return false;
+    };
+    // Both separators, so a Windows path is recognised wherever it is parsed.
+    let base = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd).to_lowercase();
+    let name = base
+        .strip_suffix(".exe")
+        .or_else(|| base.strip_suffix(".cmd"))
+        .or_else(|| base.strip_suffix(".bat"))
+        .unwrap_or(&base);
+    match name {
+        "vi" | "vim" | "nvim" | "neovim" | "view" | "nano" | "pico" | "micro" | "hx" | "helix"
+        | "kak" | "joe" | "ne" | "mg" | "jed" | "ed" | "vis" | "true" | ":" => true,
+        // GUI unless told to stay in the terminal.
+        "emacs" | "emacsclient" => parts[1..]
+            .iter()
+            .any(|a| matches!(a.as_str(), "-nw" | "-t" | "--tty" | "--no-window-system")),
+        _ => false,
     }
 }
 
@@ -503,6 +569,7 @@ pub async fn set_editor_config(path: String, editor: String, global: bool) -> Re
             editor,
             if global { "global" } else { "local" }
         )),
+        notice: None,
     })
 }
 
@@ -546,6 +613,54 @@ mod tests {
         assert_eq!(cmd, "code");
         assert!(args.contains(&"--goto".to_string()));
         assert!(args.contains(&"/path/to/file.rs:42".to_string()));
+    }
+
+    #[test]
+    fn terminal_editors_are_detected() {
+        for editor in [
+            "vim",
+            "/usr/bin/nvim -f",
+            "nano",
+            "'C:\\Program Files\\Vim\\vim.exe'",
+            "emacs -nw",
+            "emacsclient -t",
+            "true",
+        ] {
+            assert!(is_terminal_editor(editor), "{editor}");
+        }
+        for editor in [
+            "code --wait",
+            "gvim -f",
+            "mvim",
+            "emacs",
+            "emacsclient -c",
+            "subl -n -w",
+            "",
+        ] {
+            assert!(!is_terminal_editor(editor), "{editor}");
+        }
+    }
+
+    #[test]
+    fn terminal_editor_fallback_reports_that_no_file_was_opened() {
+        let result = editor_unavailable(
+            "The configured editor (vim) requires a terminal and cannot open files from Gitnado.",
+        );
+
+        assert!(!result.success);
+        assert!(result.message.unwrap().contains("requires a terminal"));
+    }
+
+    #[test]
+    fn missing_editor_for_file_reports_configuration_guidance() {
+        let result = no_editor_configured_for_file();
+
+        assert!(!result.success);
+        assert!(result
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("Configure a GUI editor"));
     }
 
     #[test]
@@ -634,6 +749,41 @@ mod tests {
             open_in_configured_editor(repo.path_str(), "nonexistent_file.txt".to_string(), None)
                 .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_open_in_configured_editor_accepts_repo_root() {
+        let repo = TestRepo::with_initial_commit();
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("core.editor", "missing-gitnado-test-editor")
+            .unwrap();
+
+        let result = open_in_configured_editor(repo.path_str(), repo.path_str(), None).await;
+
+        assert!(matches!(result, Err(GitnadoError::OperationFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_open_in_configured_editor_rejects_absolute_path_outside_repo() {
+        let repo = TestRepo::with_initial_commit_named("repo");
+        let outside_path = repo.dir.path().join("outside.txt");
+        std::fs::write(&outside_path, "outside").unwrap();
+        repo.repo()
+            .config()
+            .unwrap()
+            .set_str("core.editor", "missing-gitnado-test-editor")
+            .unwrap();
+
+        let result = open_in_configured_editor(
+            repo.path_str(),
+            outside_path.to_string_lossy().into_owned(),
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(GitnadoError::InvalidPath(_))));
     }
 
     #[tokio::test]
