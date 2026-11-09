@@ -2679,4 +2679,53 @@ mod tests {
             .unwrap();
         assert!(full.contains("trailer"), "commit-msg rewrite must persist");
     }
+
+    #[tokio::test]
+    async fn test_search_commits_file_filter_supports_globs() {
+        let repo = TestRepo::with_initial_commit();
+        let ts_oid = repo.create_commit("add TypeScript file", &[("main.ts", "const x = 1;\n")]);
+        let nested_oid =
+            repo.create_commit("add nested Rust file", &[("src/lib.rs", "pub fn f() {}\n")]);
+        repo.create_commit("add readme", &[("README.md", "docs\n")]);
+
+        let ts_commits = search_commits(
+            repo.path_str(),
+            None,
+            None,
+            None,
+            None,
+            Some("*.ts".to_string()),
+            None,
+            Some(100),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            ts_commits.len(),
+            1,
+            "the glob should match a TypeScript file"
+        );
+        assert_eq!(ts_commits[0].oid, ts_oid.to_string());
+
+        let nested_commits = search_commits(
+            repo.path_str(),
+            None,
+            None,
+            None,
+            None,
+            Some("src/**".to_string()),
+            None,
+            Some(100),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            nested_commits.len(),
+            1,
+            "the glob should match nested source files"
+        );
+        assert_eq!(nested_commits[0].oid, nested_oid.to_string());
+    }
 }

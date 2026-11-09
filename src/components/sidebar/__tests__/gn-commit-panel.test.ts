@@ -346,6 +346,246 @@ describe('gn-commit-panel', () => {
       expect(buildCommitMessage()).to.equal('fix(auth): resolve token refresh');
     });
 
+    type ConventionalInternals = {
+      conventionalMode: boolean;
+      selectedType: string;
+      scope: string;
+      summary: string;
+      description: string;
+      amend: boolean;
+      scopeChosen: boolean;
+      buildCommitMessage: () => string;
+      handleHistorySelect: (message: string) => void;
+      fetchLastCommitMessage: () => Promise<void>;
+      snapshotDraftForAmend: () => void;
+      restoreDraftAfterAmend: () => void;
+      handleCommit: () => Promise<void>;
+      handleAiStagingChanged: (e: CustomEvent<{ commitMessage?: string }>) => void;
+    };
+
+    function withLastCommitSummary(summary: string): void {
+      const base = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (command === 'get_commit_history') {
+          return [{
+            oid: 'abc123def456', shortId: 'abc123d', message: summary, summary, body: '',
+            author: { name: 'T', email: 't@t', timestamp: 0 },
+            committer: { name: 'T', email: 't@t', timestamp: 0 },
+            parentIds: [], timestamp: 0,
+          }];
+        }
+        return base(command, args);
+      };
+    }
+
+    it('amend in conventional mode does not double the last commit prefix', async () => {
+      withLastCommitSummary('fix(api): handle timeout');
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      p.selectedType = 'feat';
+      p.scope = 'stale';
+
+      await p.fetchLastCommitMessage();
+
+      expect(p.selectedType).to.equal('fix');
+      expect(p.scope).to.equal('api');
+      expect(p.summary).to.equal('handle timeout');
+      expect(p.buildCommitMessage.call(el)).to.equal('fix(api): handle timeout');
+    });
+
+    it('amend keeps a non-conventional subject verbatim by leaving conventional mode', async () => {
+      withLastCommitSummary('Update readme');
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+
+      await p.fetchLastCommitMessage();
+
+      expect(p.conventionalMode).to.be.false;
+      expect(p.buildCommitMessage.call(el)).to.equal('Update readme');
+    });
+
+    it('amend keeps a breaking-change subject verbatim', async () => {
+      withLastCommitSummary('feat(api)!: drop v1');
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+
+      await p.fetchLastCommitMessage();
+
+      expect(p.buildCommitMessage.call(el)).to.equal('feat(api)!: drop v1');
+    });
+
+    it('unticking amend restores the draft conventional fields', async () => {
+      withLastCommitSummary('docs(readme): typo');
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      p.selectedType = 'refactor';
+      p.scope = 'core';
+      p.summary = 'my draft';
+
+      p.snapshotDraftForAmend();
+      await p.fetchLastCommitMessage();
+      p.restoreDraftAfterAmend();
+
+      expect(p.buildCommitMessage.call(el)).to.equal('refactor(core): my draft');
+    });
+
+    it('restores conventional settings after successfully amending', async () => {
+      withLastCommitSummary('Update readme');
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      p.selectedType = 'feat';
+      p.scope = 'draft';
+      p.scopeChosen = true;
+      p.snapshotDraftForAmend();
+      p.amend = true;
+
+      await p.fetchLastCommitMessage();
+      await el.updateComplete;
+      await p.handleCommit();
+
+      expect(p.conventionalMode).to.be.true;
+      expect(p.selectedType).to.equal('feat');
+      expect(p.scope).to.equal('draft');
+      expect(p.scopeChosen).to.be.false;
+    });
+
+    it('selecting a history message in conventional mode does not double the prefix', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      p.selectedType = 'feat';
+      p.scope = 'stale';
+
+      p.handleHistorySelect('fix: correct rounding\n\nbody');
+
+      expect(p.scope).to.equal('');
+      expect(p.buildCommitMessage.call(el)).to.equal('fix: correct rounding\n\nbody');
+    });
+
+    it('keeps conventional-like history subjects verbatim unless they round-trip exactly', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+
+      for (const subject of ['Fix: typo', 'fix:x', 'fix:  typo', 'fix(): typo']) {
+        p.conventionalMode = true;
+        p.handleHistorySelect(subject);
+
+        expect(p.conventionalMode, subject).to.be.false;
+        expect(p.buildCommitMessage.call(el), subject).to.equal(subject);
+      }
+    });
+
+    it('an AI suggestion without a scope clears a stale scope', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      p.scope = 'old';
+
+      p.handleAiStagingChanged(new CustomEvent('x', { detail: { commitMessage: 'fix: null check' } }));
+
+      expect(p.buildCommitMessage.call(el)).to.equal('fix: null check');
+    });
+
+    function typeScope(el: GnCommitPanel, value: string): void {
+      const input = el.shadowRoot!.querySelector('.scope-input') as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+    }
+
+    it('an unprefixed AI suggestion keeps a scope the user typed for this draft', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      await el.updateComplete;
+      p.selectedType = 'docs';
+      typeScope(el, 'guide');
+
+      p.handleAiStagingChanged(new CustomEvent('x', { detail: { commitMessage: 'explain setup' } }));
+
+      expect(p.buildCommitMessage.call(el)).to.equal('docs(guide): explain setup');
+    });
+
+    it('a scopeless prefixed AI suggestion keeps a scope the user typed', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      await el.updateComplete;
+      typeScope(el, 'ui');
+
+      p.handleAiStagingChanged(new CustomEvent('x', { detail: { commitMessage: 'fix: align icons' } }));
+
+      expect(p.buildCommitMessage.call(el)).to.equal('fix(ui): align icons');
+    });
+
+    it('normalizes known AI conventional prefixes without disabling conventional mode', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+
+      for (const [subject, expected] of [
+        ['Fix: typo', 'fix: typo'],
+        ['FEAT(core): x', 'feat(core): x'],
+        ['fix:  typo', 'fix: typo'],
+      ]) {
+        p.conventionalMode = true;
+        p.handleAiStagingChanged(new CustomEvent('x', { detail: { commitMessage: subject } }));
+
+        expect(p.conventionalMode, subject).to.be.true;
+        expect(p.buildCommitMessage.call(el), subject).to.equal(expected);
+      }
+    });
+
+    it('an unprefixed AI suggestion drops a scope derived from an earlier message', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals;
+      p.conventionalMode = true;
+      p.handleHistorySelect('fix(api): old message');
+      expect(p.scope).to.equal('api');
+
+      p.handleAiStagingChanged(new CustomEvent('x', { detail: { commitMessage: 'tidy imports' } }));
+
+      expect(p.buildCommitMessage.call(el)).to.equal('fix: tidy imports');
+    });
+
+    it('a plain generated message does not inherit a stale scope', async () => {
+      const base = mockInvoke;
+      mockInvoke = async (command: string, args?: unknown) =>
+        command === 'generate_commit_message'
+          ? { summary: 'tidy imports', body: null }
+          : base(command, args);
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals & { handleGenerateMessage: () => Promise<void> };
+      p.conventionalMode = true;
+      p.handleHistorySelect('fix(api): old message');
+
+      await p.handleGenerateMessage.call(el);
+
+      expect(invokeHistory.some(c => c.command === 'generate_commit_message')).to.be.true;
+      expect(p.buildCommitMessage.call(el)).to.equal('fix: tidy imports');
+    });
+
+    it('a scope typed for the previous commit does not leak into the next AI message', async () => {
+      const el = await renderCommitPanel();
+      const p = el as unknown as ConventionalInternals & { handleCommit: () => Promise<void> };
+      p.conventionalMode = true;
+      await el.updateComplete;
+      typeScope(el, 'auth');
+      p.summary = 'first change';
+      await p.handleCommit.call(el);
+      expect(invokeHistory.some(c => c.command === 'create_commit')).to.be.true;
+      expect(p.scope, 'the field keeps it for a run of related commits').to.equal('auth');
+
+      p.handleAiStagingChanged(new CustomEvent('x', { detail: { commitMessage: 'second change' } }));
+
+      expect(p.buildCommitMessage.call(el)).to.equal('feat: second change');
+    });
+
     it('builds message with body when description is provided', async () => {
       const el = await renderCommitPanel();
       const internal = el as unknown as {

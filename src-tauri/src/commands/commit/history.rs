@@ -419,6 +419,7 @@ pub async fn get_file_history(
 
             // Create diff options
             let mut diff_opts = git2::DiffOptions::new();
+            diff_opts.disable_pathspec_match(true);
             diff_opts.pathspec(&current_path);
 
             let diff = match repo.diff_tree_to_tree(
