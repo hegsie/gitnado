@@ -60,7 +60,7 @@ async-trait = "0.1"
 futures-util = "0.3"
 
 # Local AI inference
-sysinfo = "0.39"
+sysinfo = "0.40"
 llama-cpp-2 = { version = "0.1", default-features = false }
 
 # Embedding & semantic search
