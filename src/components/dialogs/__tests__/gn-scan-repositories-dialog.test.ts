@@ -442,8 +442,7 @@ describe('gn-scan-repositories-dialog', () => {
       invokeCallArgs.filter((c) => c.command === 'scan_for_repositories').map((c) => c.args.path),
     ).to.deep.equal(['/code', '/other']);
     await waitUntil(() => text(el, '.folder-path').includes('/other'), 'the new folder on screen');
-    // The drop must not be silent (CLAUDE.md: every user-initiated operation
-    // gives feedback).
+    // The drop must not be silent; every user-initiated operation gives feedback.
     expect(uiStore.getState().toasts.map((t: any) => t.message).join(' ')).to.contain('other');
   });
 

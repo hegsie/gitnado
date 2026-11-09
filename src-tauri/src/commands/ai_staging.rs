@@ -16,6 +16,7 @@ use git2::{BranchType, DiffOptions, Patch, Repository};
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
 
+use super::path_utils::literal_git_pathspec;
 use crate::services::ai::{truncate_at_char_boundary, AiService, AiState, MAX_DIFF_BYTES};
 use crate::utils::create_command;
 
@@ -779,7 +780,8 @@ fn reset_file_in_index(repo: &Repository, file_path: &str) -> Result<(), String>
         Some(commit) => {
             let head_tree = commit.tree().map_err(|e| e.to_string())?;
             if head_tree.get_path(path_obj).is_ok() {
-                repo.reset_default(Some(commit.as_object()), [path_obj])
+                let literal_path = literal_git_pathspec(file_path);
+                repo.reset_default(Some(commit.as_object()), [Path::new(&literal_path)])
                     .map_err(|e| e.to_string())?;
             } else {
                 let _ = index.remove_path(path_obj);
@@ -1245,6 +1247,38 @@ mod tests {
     use super::*;
     use crate::services::ai::create_ai_state;
     use crate::test_utils::TestRepo;
+
+    #[test]
+    fn reset_file_in_index_does_not_glob_match_sibling() {
+        let test_repo = TestRepo::with_initial_commit();
+        test_repo.create_commit(
+            "add metacharacter paths",
+            &[
+                ("a[1].txt", "original bracket\n"),
+                ("a1.txt", "original sibling\n"),
+            ],
+        );
+        test_repo.create_file("a[1].txt", "modified bracket\n");
+        test_repo.create_file("a1.txt", "modified sibling\n");
+        test_repo.stage_file("a[1].txt");
+        test_repo.stage_file("a1.txt");
+
+        let repo = test_repo.repo();
+        reset_file_in_index(&repo, "a[1].txt").unwrap();
+
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let head_tree = head.tree().unwrap();
+        let index = repo.index().unwrap();
+        assert_eq!(
+            index.get_path(Path::new("a[1].txt"), 0).unwrap().id,
+            head_tree.get_path(Path::new("a[1].txt")).unwrap().id()
+        );
+        assert_ne!(
+            index.get_path(Path::new("a1.txt"), 0).unwrap().id,
+            head_tree.get_path(Path::new("a1.txt")).unwrap().id(),
+            "resetting a[1].txt must leave a1.txt staged"
+        );
+    }
 
     #[test]
     fn test_extract_all_repo_hunks_multiple_hunks_in_single_file() {

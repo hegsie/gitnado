@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 use tauri::command;
 
+use super::path_utils::resolve_path_within_repo;
 use crate::error::{GitnadoError, Result};
 
 /// Information about a file's encoding
@@ -193,12 +194,7 @@ pub async fn detect_file_encoding(
     path: String,
     #[allow(non_snake_case)] filePath: String,
 ) -> Result<FileEncodingInfo> {
-    let repo_path = Path::new(&path);
-    let full_path = if Path::new(&filePath).is_absolute() {
-        filePath.clone().into()
-    } else {
-        repo_path.join(&filePath)
-    };
+    let full_path = resolve_path_within_repo(Path::new(&path), &filePath)?;
 
     if !full_path.exists() {
         return Err(GitnadoError::InvalidPath(
@@ -249,12 +245,7 @@ pub async fn convert_file_encoding(
     #[allow(non_snake_case)] filePath: String,
     #[allow(non_snake_case)] targetEncoding: String,
 ) -> Result<ConvertEncodingResult> {
-    let repo_path = Path::new(&path);
-    let full_path = if Path::new(&filePath).is_absolute() {
-        filePath.clone().into()
-    } else {
-        repo_path.join(&filePath)
-    };
+    let full_path = resolve_path_within_repo(Path::new(&path), &filePath)?;
 
     if !full_path.exists() {
         return Err(GitnadoError::InvalidPath(

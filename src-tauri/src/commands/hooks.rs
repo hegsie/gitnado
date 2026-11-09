@@ -8,7 +8,7 @@
 //! silently bypass pre-commit/commit-msg/pre-push/etc. on its default paths.
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -595,9 +595,23 @@ pub async fn get_hooks(path: String) -> Result<Vec<GitHook>> {
     Ok(hooks)
 }
 
+/// Hook names are single file names inside the hooks directory. Anything that
+/// could resolve outside it (separators, `..`, absolute paths) is rejected.
+fn validate_hook_name(name: &str) -> Result<()> {
+    let mut components = Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(part)), None) if part == name => Ok(()),
+        _ => Err(GitnadoError::InvalidPath(format!(
+            "Invalid hook name: {}",
+            name
+        ))),
+    }
+}
+
 /// Get a specific hook
 #[command]
 pub async fn get_hook(path: String, name: String) -> Result<GitHook> {
+    validate_hook_name(&name)?;
     let repo = git2::Repository::open(Path::new(&path))?;
     let hooks_dir = resolve_hooks_dir(&repo);
     let hook_path = hooks_dir.join(&name);
@@ -634,6 +648,7 @@ pub async fn get_hook(path: String, name: String) -> Result<GitHook> {
 /// Save a hook script
 #[command]
 pub async fn save_hook(path: String, name: String, content: String) -> Result<()> {
+    validate_hook_name(&name)?;
     let repo = git2::Repository::open(Path::new(&path))?;
     let hooks_dir = resolve_hooks_dir(&repo);
 
@@ -679,6 +694,7 @@ pub async fn save_hook(path: String, name: String, content: String) -> Result<()
 /// Delete a hook
 #[command]
 pub async fn delete_hook(path: String, name: String) -> Result<()> {
+    validate_hook_name(&name)?;
     let repo = git2::Repository::open(Path::new(&path))?;
     let hooks_dir = resolve_hooks_dir(&repo);
     let hook_path = hooks_dir.join(&name);
@@ -699,6 +715,7 @@ pub async fn delete_hook(path: String, name: String) -> Result<()> {
 /// Enable or disable a hook (by toggling execute permission or renaming)
 #[command]
 pub async fn toggle_hook(path: String, name: String, enabled: bool) -> Result<()> {
+    validate_hook_name(&name)?;
     let repo = git2::Repository::open(Path::new(&path))?;
     let hooks_dir = resolve_hooks_dir(&repo);
     let hook_path = hooks_dir.join(&name);
@@ -1415,5 +1432,48 @@ mod tests {
             .unwrap();
         assert_eq!(other_logs.len(), 1);
         assert_eq!(other_logs[0].hook_name, "post-commit");
+    }
+
+    #[tokio::test]
+    async fn test_hook_commands_reject_names_that_escape_hooks_dir() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_file("victim.txt", "keep me");
+        let victim = repo.path.join("victim.txt");
+        let escaping = [
+            "../../victim.txt",
+            "../../created.txt",
+            "/etc/passwd",
+            "a/b",
+            "..",
+            ".",
+            "",
+        ];
+
+        for name in escaping {
+            let name = name.to_string();
+            assert!(
+                get_hook(repo.path_str(), name.clone()).await.is_err(),
+                "get_hook {name}"
+            );
+            assert!(
+                save_hook(repo.path_str(), name.clone(), "echo hi".into())
+                    .await
+                    .is_err(),
+                "save_hook {name}"
+            );
+            assert!(
+                delete_hook(repo.path_str(), name.clone()).await.is_err(),
+                "delete_hook {name}"
+            );
+            assert!(
+                toggle_hook(repo.path_str(), name.clone(), false)
+                    .await
+                    .is_err(),
+                "toggle_hook {name}"
+            );
+        }
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+        assert!(!repo.path.join("created.txt").exists());
     }
 }
