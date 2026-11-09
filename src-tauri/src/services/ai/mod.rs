@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use config::{api_key_account, ConfigLoadError, KeyringSecretStore, SecretStore};
 pub use config::{AiConfig, AiTaskRoute, AiTaskTier, ProviderSettings};
 pub use ledger::{AiLedger, AiLedgerEntry, AiPrivacySummary, NewAiLedgerEntry};
 pub use providers::{
@@ -136,6 +137,10 @@ pub struct AiProviderInfo {
     pub probed: bool,
     pub requires_api_key: bool,
     pub has_api_key: bool,
+    /// Set when API keys could not be read from or migrated to the OS keyring,
+    /// so Settings can explain why a key is missing instead of showing nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_error: Option<String>,
     pub endpoint: String,
     pub models: Vec<String>,
     pub selected_model: Option<String>,
@@ -501,6 +506,12 @@ Reflog:
 pub struct AiService {
     config_dir: PathBuf,
     config: AiConfig,
+    /// OS keyring (or a test double) holding provider API keys
+    secrets: std::sync::Arc<dyn SecretStore>,
+    /// Set when API keys could not be loaded or migrated; saving is refused so
+    /// a legacy plaintext key still on disk is not overwritten and lost. The
+    /// parsed non-secret settings remain in `config` for the UI.
+    secret_error: Option<String>,
     providers: HashMap<AiProviderType, Box<dyn AiProvider>>,
     /// Shared reference to the local inference provider (for loading models)
     local_provider: LocalInferenceProvider,
@@ -513,11 +524,25 @@ pub struct AiService {
 impl AiService {
     /// Create a new AI service
     pub fn new(config_dir: PathBuf) -> Self {
-        let config = AiConfig::load(&config_dir).unwrap_or_default();
+        Self::new_with_store(config_dir, std::sync::Arc::new(KeyringSecretStore))
+    }
+
+    /// Create a new AI service with an explicit secret store
+    pub fn new_with_store(config_dir: PathBuf, secrets: std::sync::Arc<dyn SecretStore>) -> Self {
+        let (config, secret_error) = match AiConfig::load_with(&config_dir, secrets.as_ref()) {
+            Ok(config) => (config, None),
+            Err(ConfigLoadError::Secret { message, config }) => {
+                tracing::error!("AI API keys unavailable: {}", message);
+                (*config, Some(message))
+            }
+            Err(ConfigLoadError::Parse(_)) => (AiConfig::default(), None),
+        };
 
         let mut service = Self {
             config_dir,
             config,
+            secrets,
+            secret_error,
             providers: HashMap::new(),
             local_provider: LocalInferenceProvider::new(),
             local_ai_state: None,
@@ -706,6 +731,7 @@ impl AiService {
         tier: AiTaskTier,
         route: Option<AiTaskRoute>,
     ) -> Result<(), String> {
+        self.ensure_config_save_allowed()?;
         match route {
             Some(r) => {
                 self.config.task_routes.insert(tier, r);
@@ -775,6 +801,13 @@ impl AiService {
                     probed,
                     requires_api_key: provider_type.requires_api_key(),
                     has_api_key: settings.and_then(|s| s.api_key.as_ref()).is_some(),
+                    key_error: if provider_type.requires_api_key() {
+                        self.secret_error
+                            .clone()
+                            .or_else(|| self.config.key_errors.get(&provider_type).cloned())
+                    } else {
+                        None
+                    },
                     endpoint: settings
                         .and_then(|s| s.endpoint.clone())
                         .unwrap_or_else(|| provider_type.default_endpoint().to_string()),
@@ -789,6 +822,7 @@ impl AiService {
 
     /// Set the active provider
     pub fn set_active_provider(&mut self, provider_type: AiProviderType) -> Result<(), String> {
+        self.ensure_config_save_allowed()?;
         self.config.active_provider = Some(provider_type);
         self.save_config()
     }
@@ -799,7 +833,21 @@ impl AiService {
         provider_type: AiProviderType,
         api_key: Option<String>,
     ) -> Result<(), String> {
+        self.ensure_config_save_allowed()?;
+
+        // An empty key means "clear"; an empty keychain item reads back as an error.
+        let api_key = api_key.filter(|k| !k.trim().is_empty());
         let has_key = api_key.is_some();
+
+        // Keyring first: if it fails, nothing changes and the error is surfaced.
+        let account = api_key_account(provider_type);
+        match &api_key {
+            Some(key) => self.secrets.set(&account, key),
+            None => self.secrets.delete(&account),
+        }
+        .map_err(|e| format!("Failed to update the API key in the OS keyring: {}", e))?;
+
+        self.config.key_errors.remove(&provider_type);
         let settings = self.config.providers.entry(provider_type).or_default();
         settings.api_key = api_key;
 
@@ -819,6 +867,7 @@ impl AiService {
         provider_type: AiProviderType,
         model: Option<String>,
     ) -> Result<(), String> {
+        self.ensure_config_save_allowed()?;
         let settings = self.config.providers.entry(provider_type).or_default();
         settings.model = model;
         self.save_config()
@@ -830,6 +879,7 @@ impl AiService {
         provider_type: AiProviderType,
         endpoint: Option<String>,
     ) -> Result<(), String> {
+        self.ensure_config_save_allowed()?;
         let settings = self.config.providers.entry(provider_type).or_default();
         settings.endpoint = endpoint;
 
@@ -1137,7 +1187,15 @@ impl AiService {
 
     /// Save configuration to disk
     fn save_config(&self) -> Result<(), String> {
+        self.ensure_config_save_allowed()?;
         self.config.save(&self.config_dir)
+    }
+
+    fn ensure_config_save_allowed(&self) -> Result<(), String> {
+        if let Some(msg) = &self.secret_error {
+            return Err(msg.clone());
+        }
+        Ok(())
     }
 
     /// Test if a provider is available
@@ -2081,5 +2139,219 @@ mod tests {
 
         service.clear_ledger();
         assert!(service.get_ledger().is_empty());
+    }
+
+    mod api_key_storage {
+        use super::*;
+        use crate::services::ai::config::tests::MemorySecretStore;
+        use std::sync::atomic::Ordering;
+        use std::sync::Arc;
+
+        fn store_service(dir: &tempfile::TempDir, store: &Arc<MemorySecretStore>) -> AiService {
+            AiService::new_with_store(dir.path().to_path_buf(), store.clone())
+        }
+
+        #[test]
+        fn set_api_key_goes_to_keyring_not_disk_and_survives_reload() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            let mut service = store_service(&dir, &store);
+
+            service
+                .set_api_key(AiProviderType::OpenAi, Some("sk-new".to_string()))
+                .unwrap();
+
+            let raw = std::fs::read_to_string(dir.path().join("ai_config.json")).unwrap();
+            assert!(!raw.contains("sk-new"));
+            assert_eq!(service.config.active_provider, Some(AiProviderType::OpenAi));
+            let reloaded = store_service(&dir, &store);
+            assert_eq!(
+                reloaded.config.providers[&AiProviderType::OpenAi]
+                    .api_key
+                    .as_deref(),
+                Some("sk-new")
+            );
+        }
+
+        #[test]
+        fn set_api_key_keyring_failure_is_surfaced_and_changes_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            let mut service = store_service(&dir, &store);
+            store.fail.store(true, Ordering::SeqCst);
+
+            let err = service
+                .set_api_key(AiProviderType::OpenAi, Some("sk-new".to_string()))
+                .unwrap_err();
+
+            assert!(err.contains("OS keyring"));
+            assert!(!service
+                .config
+                .providers
+                .contains_key(&AiProviderType::OpenAi));
+            assert!(!dir.path().join("ai_config.json").exists());
+        }
+
+        #[test]
+        fn local_provider_settings_can_be_saved_when_keyring_is_unavailable() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("ai_config.json"),
+                r#"{"activeProvider":"ollama","providers":{"ollama":{"enabled":true,"model":"llama3.2"},"open_ai":{"enabled":false}}}"#,
+            )
+            .unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            store.fail.store(true, Ordering::SeqCst);
+            let mut service = store_service(&dir, &store);
+
+            service.set_active_provider(AiProviderType::Ollama).unwrap();
+
+            assert_eq!(service.config.active_provider, Some(AiProviderType::Ollama));
+            assert!(service
+                .config
+                .key_errors
+                .contains_key(&AiProviderType::OpenAi));
+            let raw = std::fs::read_to_string(dir.path().join("ai_config.json")).unwrap();
+            assert!(raw.contains("llama3.2"));
+        }
+
+        #[test]
+        fn clearing_api_key_deletes_it_from_keyring() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            let mut service = store_service(&dir, &store);
+            service
+                .set_api_key(AiProviderType::Anthropic, Some("k".to_string()))
+                .unwrap();
+
+            service
+                .set_api_key(AiProviderType::Anthropic, None)
+                .unwrap();
+
+            assert!(store.secrets.lock().unwrap().is_empty());
+            assert!(service.config.providers[&AiProviderType::Anthropic]
+                .api_key
+                .is_none());
+        }
+
+        #[tokio::test]
+        async fn provider_info_reports_keyring_failure() {
+            let _policy = no_policy();
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("ai_config.json"),
+                r#"{"activeProvider":"ollama","providers":{"ollama":{"enabled":true,"model":"llama3.2"},"open_ai":{"enabled":true}}}"#,
+            )
+            .unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            store.fail.store(true, Ordering::SeqCst);
+            let service = store_service(&dir, &store);
+
+            let infos = service.get_providers_info().await;
+
+            let openai = infos
+                .iter()
+                .find(|i| i.provider_type == AiProviderType::OpenAi)
+                .unwrap();
+            assert!(openai.key_error.as_deref().unwrap().contains("keyring"));
+            assert!(infos
+                .iter()
+                .filter(|i| !i.requires_api_key)
+                .all(|i| i.key_error.is_none()));
+        }
+
+        #[test]
+        fn blank_api_key_clears_instead_of_storing_an_empty_secret() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            let mut service = store_service(&dir, &store);
+            service
+                .set_api_key(AiProviderType::OpenAi, Some("k".to_string()))
+                .unwrap();
+
+            service
+                .set_api_key(AiProviderType::OpenAi, Some("  ".to_string()))
+                .unwrap();
+
+            assert!(store.secrets.lock().unwrap().is_empty());
+            assert!(service.config.providers[&AiProviderType::OpenAi]
+                .api_key
+                .is_none());
+        }
+
+        #[test]
+        fn unreadable_keyring_blocks_saves_so_legacy_key_is_not_lost() {
+            let dir = tempfile::tempdir().unwrap();
+            let legacy = r#"{"activeProvider":"open_ai","providers":{"open_ai":{"enabled":true,"model":"gpt-4o","endpoint":"https://example.test","apiKey":"sk-legacy"},"ollama":{"enabled":true,"model":"llama3.2"}}}"#;
+            std::fs::write(dir.path().join("ai_config.json"), legacy).unwrap();
+            let store = Arc::new(MemorySecretStore::default());
+            store.fail.store(true, Ordering::SeqCst);
+            let mut service = store_service(&dir, &store);
+
+            assert_eq!(service.config.active_provider, Some(AiProviderType::OpenAi));
+            assert_eq!(
+                service.config.providers[&AiProviderType::OpenAi]
+                    .model
+                    .as_deref(),
+                Some("gpt-4o")
+            );
+            assert_eq!(
+                service.config.providers[&AiProviderType::OpenAi]
+                    .endpoint
+                    .as_deref(),
+                Some("https://example.test")
+            );
+            assert_eq!(
+                service.config.providers[&AiProviderType::OpenAi]
+                    .api_key
+                    .as_deref(),
+                Some("sk-legacy")
+            );
+            assert_eq!(
+                service.config.providers[&AiProviderType::Ollama]
+                    .model
+                    .as_deref(),
+                Some("llama3.2")
+            );
+            assert!(service.set_active_provider(AiProviderType::Ollama).is_err());
+            assert_eq!(service.config.active_provider, Some(AiProviderType::OpenAi));
+            assert!(service
+                .set_model(AiProviderType::OpenAi, Some("changed".to_string()))
+                .is_err());
+            assert_eq!(
+                service.config.providers[&AiProviderType::OpenAi]
+                    .model
+                    .as_deref(),
+                Some("gpt-4o")
+            );
+            assert!(service
+                .set_endpoint(
+                    AiProviderType::OpenAi,
+                    Some("https://changed.example.test".to_string())
+                )
+                .is_err());
+            assert_eq!(
+                service.config.providers[&AiProviderType::OpenAi]
+                    .endpoint
+                    .as_deref(),
+                Some("https://example.test")
+            );
+            assert!(service
+                .set_task_route(
+                    AiTaskTier::FastText,
+                    Some(AiTaskRoute {
+                        provider: AiProviderType::Ollama,
+                        model: None,
+                    })
+                )
+                .is_err());
+            assert!(service.config.task_routes.is_empty());
+            assert!(service
+                .set_api_key(AiProviderType::OpenAi, Some("x".to_string()))
+                .is_err());
+
+            let raw = std::fs::read_to_string(dir.path().join("ai_config.json")).unwrap();
+            assert_eq!(raw, legacy);
+        }
     }
 }

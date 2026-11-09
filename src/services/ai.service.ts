@@ -39,6 +39,8 @@ export interface AiProviderInfo {
   probed: boolean;
   requiresApiKey: boolean;
   hasApiKey: boolean;
+  /** Why stored API keys could not be loaded from the OS keyring, if they could not. */
+  keyError?: string | null;
   endpoint: string;
   models: string[];
   selectedModel: string | null;

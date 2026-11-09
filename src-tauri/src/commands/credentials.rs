@@ -1019,17 +1019,10 @@ fn build_security_add_stdin(value: &str) -> Result<String> {
 /// any application can access the item without triggering authorization
 /// prompts (development convenience — the binary changes on every rebuild).
 /// In release builds `-A` is omitted for proper per-app keychain isolation.
-fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
+pub(crate) fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        // Built before the delete below: a value we cannot write must not cost
-        // the caller the entry they already had.
         let stdin_payload = build_security_add_stdin(value)?;
-
-        // Delete existing entry first (add-generic-password fails if it exists)
-        let _ = std::process::Command::new("security")
-            .args(["delete-generic-password", "-s", service, "-a", key])
-            .output();
 
         // `-w` last with no value => password read from the prompts on stdin
         // (see `build_security_add_stdin` for why the value is sent twice).
@@ -1074,8 +1067,20 @@ fn write_keyring_token(service: &str, key: &str, value: &str) -> Result<()> {
     {
         // Chunk transparently: Windows Credential Manager caps a secret at 2560
         // bytes, which large Entra tokens exceed.
-        crate::services::keyring_util::set(service, key, value)
-            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to store token: {e}")))?;
+        crate::services::keyring_util::set(service, key, value).map_err(|e| {
+            #[cfg(target_os = "linux")]
+            {
+                GitnadoError::OperationFailed(format!(
+                    "Failed to store token: {e}. Linux credential storage requires an \
+                         available, unlocked Secret Service provider such as GNOME Keyring \
+                         or KWallet."
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                GitnadoError::OperationFailed(format!("Failed to store token: {e}"))
+            }
+        })?;
     }
 
     Ok(())
@@ -1134,6 +1139,35 @@ fn interpret_keychain_read(
     )))
 }
 
+/// Turn a `security delete-generic-password` result into a fallible delete.
+///
+/// A missing entry is already cleared; all other failures must reach callers
+/// so they do not discard the in-memory key while the keychain retains it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn interpret_keychain_delete(
+    key: &str,
+    success: bool,
+    status_code: Option<i32>,
+    stderr: &[u8],
+) -> Result<()> {
+    if success || status_code == Some(SEC_ITEM_NOT_FOUND) {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let status = status_code
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "a signal".to_string());
+    Err(GitnadoError::OperationFailed(format!(
+        "Keychain delete failed for {key} (security exited with {status}): {}",
+        if stderr.is_empty() {
+            "no error output".to_string()
+        } else {
+            stderr
+        }
+    )))
+}
+
 /// Confirm a value just written under `key` reads back as itself.
 ///
 /// Pure over the read-back result so it is unit-tested on every platform.
@@ -1161,7 +1195,7 @@ fn verify_keychain_write(
 
 /// Read `key` from `service`; `Ok(None)` when absent, `Err` when the keychain
 /// could not be read (see `interpret_keychain_read`).
-fn read_keyring_token(service: &str, key: &str) -> Result<Option<String>> {
+pub(crate) fn read_keyring_token(service: &str, key: &str) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     {
         let output = std::process::Command::new("security")
@@ -1180,19 +1214,37 @@ fn read_keyring_token(service: &str, key: &str) -> Result<Option<String>> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        crate::services::keyring_util::get(service, key)
-            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to get token: {e}")))
+        crate::services::keyring_util::get(service, key).map_err(|e| {
+            #[cfg(target_os = "linux")]
+            {
+                GitnadoError::OperationFailed(format!(
+                    "Failed to get token: {e}. Linux credential storage requires an \
+                         available, unlocked Secret Service provider such as GNOME Keyring \
+                         or KWallet."
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                GitnadoError::OperationFailed(format!("Failed to get token: {e}"))
+            }
+        })
     }
 }
 
 /// Remove `key` from `service`. A missing entry is not an error.
-fn remove_keyring_token(service: &str, key: &str) -> Result<()> {
+pub(crate) fn remove_keyring_token(service: &str, key: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("security")
+        let output = std::process::Command::new("security")
             .args(["delete-generic-password", "-s", service, "-a", key])
-            .output();
-        Ok(())
+            .output()
+            .map_err(|e| GitnadoError::OperationFailed(format!("Failed to run security: {e}")))?;
+        interpret_keychain_delete(
+            key,
+            output.status.success(),
+            output.status.code(),
+            &output.stderr,
+        )
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -2443,6 +2495,30 @@ mod tests {
             .to_string();
         assert!(err.contains("a signal"), "{err}");
         assert!(err.contains("no error output"), "{err}");
+    }
+
+    #[test]
+    fn keychain_delete_treats_missing_item_as_success() {
+        assert!(interpret_keychain_delete("k", true, Some(0), b"").is_ok());
+        assert!(interpret_keychain_delete("k", false, Some(SEC_ITEM_NOT_FOUND), b"").is_ok());
+    }
+
+    #[test]
+    fn keychain_delete_reports_other_failures() {
+        let err = interpret_keychain_delete(
+            "github_token_acc",
+            false,
+            Some(36),
+            b"User interaction is not allowed.",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("github_token_acc"), "names the key: {err}");
+        assert!(err.contains("36"), "carries the exit status: {err}");
+        assert!(
+            err.contains("User interaction is not allowed"),
+            "carries security's own message: {err}"
+        );
     }
 
     #[test]
