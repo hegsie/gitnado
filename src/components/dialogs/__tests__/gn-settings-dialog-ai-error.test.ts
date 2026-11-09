@@ -10,6 +10,7 @@ import { expect, fixture, html } from '@open-wc/testing';
 type MockInvoke = (command: string, args?: unknown) => Promise<unknown>;
 
 let failingCommands: Set<string> = new Set();
+let providersResponse: unknown[] = [];
 
 const mockInvoke: MockInvoke = async (command: string) => {
   if (command === 'plugin:notification|is_permission_granted') return false;
@@ -19,7 +20,7 @@ const mockInvoke: MockInvoke = async (command: string) => {
 
   switch (command) {
     case 'get_ai_providers':
-      return [];
+      return providersResponse;
     case 'get_app_version':
       return '0.1.0';
     case 'get_settings':
@@ -66,6 +67,29 @@ async function createComponent(): Promise<GnSettingsDialog> {
 describe('gn-settings-dialog AI error reset', () => {
   beforeEach(() => {
     failingCommands = new Set();
+    providersResponse = [];
+  });
+
+  it('shows the keyring failure reported by the backend when providers load', async () => {
+    providersResponse = [
+      {
+        providerType: 'open_ai',
+        name: 'OpenAI',
+        available: false,
+        probed: false,
+        requiresApiKey: true,
+        hasApiKey: false,
+        keyError: 'Failed to read the api-key:open_ai API key from the OS keyring: locked',
+        endpoint: '',
+        models: [],
+        selectedModel: null,
+      },
+    ];
+    const el = await createComponent();
+    await (el as unknown as { loadAiProviders: () => Promise<void> }).loadAiProviders();
+    await el.updateComplete;
+
+    expect((el as unknown as { aiError: string | null }).aiError).to.contain('OS keyring');
   });
 
   it('handleCancelDownload clears a stale aiError', async () => {

@@ -624,6 +624,8 @@ export class GnSettingsDialog extends LitElement {
 
     if (providersResult.success && providersResult.data) {
       this.aiProviders = providersResult.data;
+      const keyError = providersResult.data.find(p => p.keyError)?.keyError;
+      if (keyError) this.aiError = keyError;
     }
 
     if (activeResult.success && activeResult.data !== undefined) {

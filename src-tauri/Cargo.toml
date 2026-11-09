@@ -88,9 +88,10 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-window-state = "2"
 
 # Keyring crate only used on non-macOS; macOS uses `security` CLI directly
-# to avoid keychain ACL prompts that the keyring crate triggers on dev builds
+# to avoid keychain ACL prompts that the keyring crate triggers on dev builds.
+# Linux uses keyutils with Secret Service backing so credentials survive reboot.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-keyring = { version = "3", features = ["windows-native", "linux-native"] }
+keyring = { version = "3", features = ["windows-native", "linux-native-sync-persistent"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1", default-features = false, features = ["metal"] }
