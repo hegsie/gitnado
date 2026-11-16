@@ -43,7 +43,7 @@
     "@xterm/xterm": "^6.0.0",
     "lit": "^3.3.3",
     "shiki": "^4.6.0",
-    "zustand": "^5.0.16"
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
     "@lit/localize-tools": "^0.8.2",
