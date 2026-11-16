@@ -60,7 +60,7 @@
     "prettier": "^3.10.1",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.72.2",
-    "vite": "^8.3.6"
+    "vite": "^8.3.8"
   },
   "overrides": {
     "playwright": "1.64.1",
