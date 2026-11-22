@@ -1085,6 +1085,29 @@ export class GnBranchList extends LitElement {
   // NEWER load for the same path started meanwhile (path equality alone
   // can't catch A -> B -> A switches reordering two loads for A)
   private branchesLoadSeq = new Map<string, number>();
+  private inFlightCleanupScan = new Map<
+    string,
+    { days: number; promise: ReturnType<typeof gitService.getCleanupCandidates> }
+  >();
+
+  private getCoalescedCleanupCandidates(
+    repoPath: string,
+    staleBranchDays: number,
+  ): ReturnType<typeof gitService.getCleanupCandidates> {
+    const existing = this.inFlightCleanupScan.get(repoPath);
+    if (existing && existing.days === staleBranchDays) {
+      return existing.promise;
+    }
+    const promise = gitService
+      .getCleanupCandidates(repoPath, staleBranchDays)
+      .finally(() => {
+        if (this.inFlightCleanupScan.get(repoPath)?.promise === promise) {
+          this.inFlightCleanupScan.delete(repoPath);
+        }
+      });
+    this.inFlightCleanupScan.set(repoPath, { days: staleBranchDays, promise });
+    return promise;
+  }
 
   private async loadBranches(): Promise<void> {
     if (!this.repositoryPath) return;
@@ -1103,7 +1126,7 @@ export class GnBranchList extends LitElement {
       // detection across every branch only for the "Clean up" header badge,
       // while `getBranches`, `getRemotes`, and `getStacks` are fast metadata
       // reads that should populate the sidebar immediately.
-      const cleanupPromise = gitService.getCleanupCandidates(
+      const cleanupPromise = this.getCoalescedCleanupCandidates(
         loadedPath,
         settingsStore.getState().staleBranchDays,
       );

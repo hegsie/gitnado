@@ -1211,6 +1211,40 @@ describe('app-shell multi-repo behavior', () => {
       expect(refreshed).to.equal(1);
     });
 
+    it('defers refs-changed refreshes while a ref operation lock is held on the active repo', async () => {
+      const { tryAcquireRefOp, releaseRefOp } = await import('../utils/ref-lock.ts');
+      const el = createAppShell();
+      document.body.appendChild(el);
+      try {
+        (el as any).activeRepository = { repository: mockRepo('/repo/active', 'active') };
+
+        let refreshed = 0;
+        (el as any).handleRefresh = () => {
+          refreshed++;
+          return Promise.resolve();
+        };
+
+        expect(tryAcquireRefOp('/repo/active')).to.be.true;
+
+        // Watcher fires multiple times during a batch branch cleanup
+        (el as any).handleWatcherEvent({
+          repoPath: '/repo/active',
+          eventType: 'refs-changed',
+          paths: [],
+        });
+        await new Promise((r) => setTimeout(r, 250));
+        expect(refreshed, 'must not refresh mid-operation while ref lock is held').to.equal(0);
+
+        // Releasing the lock flushes a single debounced refresh
+        releaseRefOp('/repo/active');
+        await new Promise((r) => setTimeout(r, 250));
+        expect(refreshed, 'flushes deferred refresh once lock is released').to.equal(1);
+      } finally {
+        releaseRefOp('/repo/active');
+        el.remove();
+      }
+    });
+
     it('refreshes a stale repo when its tab becomes active', async () => {
       const el = createAppShell();
       document.body.appendChild(el);

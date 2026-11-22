@@ -1106,6 +1106,7 @@ export class AppShell extends LitElement {
   private lastAutoFetchInterval = 0;
   private lastRemoteAllowlistKey = '';
   private refsChangedDebounceTimer?: ReturnType<typeof setTimeout>;
+  private deferredRefsRefreshPending = false;
   private updateUnlisteners: UnlistenFn[] = [];
   /** Teardown for the native menu's key-press watcher. */
   private appMenuWatchDispose?: () => void;
@@ -1552,6 +1553,16 @@ export class AppShell extends LitElement {
       clearTimeout(this.refsChangedDebounceTimer);
     }
     this.refsChangedDebounceTimer = setTimeout(() => {
+      const activePath = this.activeRepository?.repository.path;
+      if (activePath && isRefOpRunning(activePath)) {
+        // A multi-step ref operation (such as batch branch cleanup) is currently
+        // in flight for the active repo. Defer the full refresh until the ref
+        // lock is released so we don't fire a storm of graph/index/merge-scan
+        // refreshes after every individual ref deletion.
+        this.deferredRefsRefreshPending = true;
+        return;
+      }
+      this.deferredRefsRefreshPending = false;
       this.handleRefresh();
     }, 200);
   };
@@ -1738,6 +1749,11 @@ export class AppShell extends LitElement {
     // taken there must re-render this component's ?disabled bindings too.
     this.unsubscribeRefOps = subscribeRefOps(() => {
       this.refOpsVersion++;
+      const activePath = this.activeRepository?.repository.path;
+      if (this.deferredRefsRefreshPending && (!activePath || !isRefOpRunning(activePath))) {
+        this.deferredRefsRefreshPending = false;
+        this.handleRefsChanged();
+      }
     });
 
     // A freshly mounted shell shows nothing, exactly as it did when every

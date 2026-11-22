@@ -1766,5 +1766,163 @@ describe('gn-branch-cleanup-dialog (fixture)', () => {
       expect(items[1].querySelector('.pr-badge.open-pr')?.textContent?.trim()).to.equal('PR #42');
       expect(items[1].querySelector('.user-status-badge')).to.be.null;
     });
+
+    it('shows provider enrichment status banner while PR and author checks are in flight', async () => {
+      pullRequestService.invalidateProviderDetection();
+      let resolvePrs!: (value: unknown[]) => void;
+      const prPromise = new Promise<unknown[]>((r) => {
+        resolvePrs = r;
+      });
+      let resolveUser!: (value: unknown) => void;
+      const userPromise = new Promise<unknown>((r) => {
+        resolveUser = r;
+      });
+
+      mockInvoke = async (command: string) => {
+        if (command === 'get_cleanup_candidates') {
+          return [
+            createCandidate('feature/stale-one', 'stale', {
+              lastCommitAuthor: 'Alice',
+              lastCommitAuthorEmail: 'alice@example.com',
+            }),
+          ];
+        }
+        if (command === 'detect_ado_repo') {
+          return {
+            organization: 'sefe',
+            project: 'proj',
+            repository: 'repo',
+            remoteName: 'origin',
+          };
+        }
+        if (command === 'get_keyring_token') {
+          return 'ado-pat-token';
+        }
+        if (command === 'list_ado_pull_requests') {
+          return prPromise;
+        }
+        if (command === 'check_ado_user_exists') {
+          return userPromise;
+        }
+        return null;
+      };
+
+      const el = await fixture<GnBranchCleanupDialog>(
+        html`<gn-branch-cleanup-dialog .repositoryPath=${REPO_PATH}></gn-branch-cleanup-dialog>`,
+      );
+      await el.open();
+      await waitUntil(
+        () => el.shadowRoot!.querySelector('.enrichment-banner') !== null,
+        'enrichment banner should appear during PR lookup',
+      );
+      expect(el.shadowRoot!.querySelector('.enrichment-banner')!.textContent).to.include(
+        'Checking open pull requests...',
+      );
+
+      resolvePrs([]);
+      await waitUntil(
+        () =>
+          el.shadowRoot!
+            .querySelector('.enrichment-banner')
+            ?.textContent?.includes('Checking stale branch author activity (1/1)...') ?? false,
+        'enrichment banner should update to author check',
+      );
+
+      resolveUser({ status: 'active', matchedName: 'Alice' });
+      await waitUntil(
+        () => el.shadowRoot!.querySelector('.enrichment-banner') === null,
+        'enrichment banner should disappear once finished',
+      );
+    });
+
+    it('renders live per-branch status badges, progress bar, and stays open on completion', async () => {
+      const branchA = createCandidate('feature/alpha', 'merged');
+      const branchB = createCandidate('feature/beta', 'merged');
+      const el = await renderAndOpen([branchA, branchB]);
+
+      let resolveDeleteA!: () => void;
+      const deleteAPromise = new Promise<void>((r) => {
+        resolveDeleteA = r;
+      });
+      let resolveDeleteB!: () => void;
+      const deleteBPromise = new Promise<void>((r) => {
+        resolveDeleteB = r;
+      });
+
+      mockInvoke = async (command: string, args?: unknown) => {
+        if (isConfirmCommand(command)) return confirmResult(true);
+        if (command === 'get_remotes') return REMOTES;
+        if (command === 'delete_branch') {
+          const name = (args as { name: string }).name;
+          if (name === 'feature/alpha') return deleteAPromise;
+          if (name === 'feature/beta') return deleteBPromise;
+        }
+        if (command === 'prune_remote_tracking_branches') {
+          return { success: true, branchesPruned: ['origin/gone'] };
+        }
+        return null;
+      };
+
+      const deleteBtn = el.shadowRoot!.querySelector('.btn-danger') as HTMLButtonElement;
+      deleteBtn.click();
+
+      await waitUntil(
+        () => el.shadowRoot!.querySelector('.branch-status-badge.deleting') !== null,
+        'first branch should show Deleting... status',
+      );
+
+      // While first branch is deleting, second branch is queued (pending)
+      const itemsMidA = Array.from(el.shadowRoot!.querySelectorAll('.branch-item'));
+      expect(
+        itemsMidA[0].querySelector('.branch-status-badge.deleting')?.textContent?.trim(),
+      ).to.equal('Deleting...');
+      expect(
+        itemsMidA[1].querySelector('.branch-status-badge.pending')?.textContent?.trim(),
+      ).to.equal('Queued');
+
+      const bannerMidA = el.shadowRoot!.querySelector('.progress-banner');
+      expect(bannerMidA).to.not.be.null;
+      expect(bannerMidA!.textContent).to.include('Deleting branch 1 of 2: feature/alpha');
+
+      // Complete first branch deletion -> moves to second branch
+      resolveDeleteA();
+      await waitUntil(
+        () =>
+          itemsMidA[0].querySelector('.branch-status-badge.deleted') !== null &&
+          itemsMidA[1].querySelector('.branch-status-badge.deleting') !== null,
+        'first branch should be Deleted and second branch Deleting...',
+      );
+      expect(bannerMidA!.textContent).to.include('1 deleted');
+      expect(bannerMidA!.textContent).to.include('Deleting branch 2 of 2: feature/beta');
+
+      // Complete second branch deletion -> finishes and stays open
+      resolveDeleteB();
+      await waitUntil(
+        () => el.shadowRoot!.querySelector('.progress-banner.completed') !== null,
+        'completion banner should render',
+      );
+
+      // Modal stays open so user can review results
+      expect(el.pinnedRepositoryPathIfOpen).to.equal(REPO_PATH);
+      const completedBanner = el.shadowRoot!.querySelector('.progress-banner.completed');
+      expect(completedBanner!.textContent).to.include('Cleanup complete: Deleted 2 branches');
+      expect(completedBanner!.textContent).to.include('2 deleted');
+
+      // Both branches show Deleted badge, strikethrough class, and disabled unchecked checkboxes
+      const finalItems = Array.from(el.shadowRoot!.querySelectorAll('.branch-item'));
+      for (const item of finalItems) {
+        expect(item.classList.contains('deleted')).to.be.true;
+        expect(item.querySelector('.branch-status-badge.deleted')?.textContent?.trim()).to.equal(
+          'Deleted',
+        );
+        const cb = item.querySelector('input[type="checkbox"]') as HTMLInputElement;
+        expect(cb.checked).to.be.false;
+        expect(cb.disabled).to.be.true;
+      }
+
+      // Dismiss button now reads Close
+      const secondaryBtn = el.shadowRoot!.querySelector('.btn-secondary') as HTMLButtonElement;
+      expect(secondaryBtn.textContent?.trim()).to.equal('Close');
+    });
   });
 });

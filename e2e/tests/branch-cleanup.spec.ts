@@ -100,8 +100,14 @@ test.describe('Branch Cleanup - squash/rebase-merged detection', () => {
       expect((d.args as { force?: boolean }).force).not.toBe(true);
     }
 
-    // Dialog closes once anything was deleted.
-    await expect(page.locator('gn-branch-cleanup-dialog .branch-item').first()).toBeHidden();
+    // Dialog stays open after deletion showing per-branch Deleted status and completion banner.
+    const dialog = page.locator('gn-branch-cleanup-dialog');
+    await expect(dialog.locator('.progress-banner.completed')).toContainText('Cleanup complete');
+    await expect(dialog.locator('.branch-status-badge.deleted')).toHaveCount(2);
+
+    // Clicking Close dismisses the dialog.
+    await dialog.locator('.btn-secondary').click();
+    await expect(dialog.locator('.branch-item').first()).toBeHidden();
   });
 
   test('surfaces a backend refusal instead of silently dropping it', async ({ page }) => {

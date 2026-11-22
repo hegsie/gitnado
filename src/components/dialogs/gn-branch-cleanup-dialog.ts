@@ -29,6 +29,12 @@ import {
 
 type CleanupTab = 'merged' | 'stale' | 'gone';
 type RiskLevel = 'safe' | 'warning' | 'danger';
+type BranchDeleteStatus = 'pending' | 'deleting' | 'deleted' | 'failed' | 'kept';
+
+interface BranchDeleteState {
+  status: BranchDeleteStatus;
+  error?: string;
+}
 
 interface CleanupBranch {
   branch: Branch;
@@ -123,11 +129,153 @@ export class GnBranchCleanupDialog extends LitElement {
 
       .loading {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
+        gap: var(--spacing-sm);
         padding: var(--spacing-xl);
         color: var(--color-text-muted);
         font-size: var(--font-size-sm);
+      }
+
+      .loading-spinner {
+        width: 24px;
+        height: 24px;
+        color: var(--color-primary);
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      .loading-bar {
+        width: 220px;
+        max-width: 80%;
+        height: 4px;
+        background: var(--color-bg-tertiary);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+
+      .loading-bar-fill {
+        height: 100%;
+        width: 30%;
+        background: var(--color-primary);
+        border-radius: 2px;
+        animation: indeterminate 1.4s ease-in-out infinite;
+      }
+
+      @keyframes indeterminate {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(400%); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .loading-bar-fill {
+          width: 100% !important;
+          transform: none !important;
+        }
+      }
+
+      .enrichment-banner {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        padding: 4px var(--spacing-md);
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-xs);
+      }
+
+      .enrichment-spinner {
+        width: 12px;
+        height: 12px;
+        color: var(--color-primary);
+        flex-shrink: 0;
+        animation: spin 1s linear infinite;
+      }
+
+      .progress-banner {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: var(--spacing-sm) var(--spacing-md);
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-tertiary);
+        font-size: var(--font-size-xs);
+      }
+
+      .progress-banner.completed {
+        background: var(--color-bg-secondary);
+      }
+
+      .progress-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--spacing-sm);
+      }
+
+      .progress-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--color-text-primary);
+        font-weight: var(--font-weight-medium);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .progress-counts {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        flex-shrink: 0;
+        color: var(--color-text-secondary);
+      }
+
+      .progress-count-pill {
+        padding: 1px 6px;
+        border-radius: var(--radius-full);
+        font-weight: var(--font-weight-medium);
+      }
+
+      .progress-count-pill.deleted {
+        background: var(--color-success-bg);
+        color: var(--color-success);
+      }
+
+      .progress-count-pill.failed {
+        background: var(--color-error-bg, var(--color-warning-bg));
+        color: var(--color-error);
+      }
+
+      .progress-count-pill.kept {
+        background: var(--color-warning-bg);
+        color: var(--color-warning);
+      }
+
+      .progress-track {
+        height: 6px;
+        background: var(--color-bg-primary, rgba(0, 0, 0, 0.15));
+        border-radius: 3px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: var(--color-primary);
+        border-radius: 3px;
+        transition: width 0.15s ease;
+      }
+
+      .progress-fill.completed {
+        background: var(--color-success);
       }
 
       .empty-state {
@@ -187,6 +335,69 @@ export class GnBranchCleanupDialog extends LitElement {
 
       .branch-item.protected {
         opacity: 0.5;
+      }
+
+      .branch-item.deleting {
+        background: var(--color-primary-bg, rgba(59, 130, 246, 0.08));
+      }
+
+      .branch-item.deleted {
+        opacity: 0.65;
+      }
+
+      .branch-item.deleted .branch-name-text {
+        text-decoration: line-through;
+        color: var(--color-text-muted);
+      }
+
+      .branch-status-badge {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-medium);
+        padding: 2px 8px;
+        border-radius: var(--radius-full);
+      }
+
+      .branch-status-badge svg {
+        width: 12px;
+        height: 12px;
+      }
+
+      .branch-status-badge.pending {
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+      }
+
+      .branch-status-badge.deleting {
+        background: var(--color-primary-bg, rgba(59, 130, 246, 0.15));
+        color: var(--color-primary);
+      }
+
+      .branch-status-badge.deleting svg {
+        animation: spin 1s linear infinite;
+      }
+
+      .branch-status-badge.deleted {
+        background: var(--color-success-bg);
+        color: var(--color-success);
+      }
+
+      .branch-status-badge.failed {
+        background: var(--color-error-bg, var(--color-warning-bg));
+        color: var(--color-error);
+      }
+
+      .branch-status-badge.kept {
+        background: var(--color-warning-bg);
+        color: var(--color-warning);
+      }
+
+      .branch-error-detail {
+        font-size: var(--font-size-xs);
+        color: var(--color-error);
       }
 
       .branch-item input[type="checkbox"] {
@@ -420,6 +631,19 @@ export class GnBranchCleanupDialog extends LitElement {
   @state() private prLookupDone = false;
   @state() private openPrByBranch = new Map<string, SidebarPullRequest>();
   @state() private authorStatusByKey = new Map<string, ProviderUserExistenceState>();
+  @state() private providerEnriching = false;
+  @state() private providerEnrichmentStatus = '';
+  @state() private branchStatusByName = new Map<string, BranchDeleteState>();
+  @state() private deleteProgressProcessed = 0;
+  @state() private deleteProgressTotal = 0;
+  @state() private deleteProgressCurrentLabel = '';
+  @state() private deleteCompletedSummary = '';
+  @state() private deleteCompletedCounts: {
+    deleted: number;
+    failed: number;
+    kept: number;
+    pruned: boolean;
+  } | null = null;
 
   private loadGeneration = 0;
 
@@ -461,6 +685,14 @@ export class GnBranchCleanupDialog extends LitElement {
     this.prLookupDone = false;
     this.openPrByBranch = new Map();
     this.authorStatusByKey = new Map();
+    this.providerEnriching = false;
+    this.providerEnrichmentStatus = '';
+    this.branchStatusByName = new Map();
+    this.deleteProgressProcessed = 0;
+    this.deleteProgressTotal = 0;
+    this.deleteProgressCurrentLabel = '';
+    this.deleteCompletedSummary = '';
+    this.deleteCompletedCounts = null;
   }
 
   private async loadCleanupData(preserveSelection = false): Promise<void> {
@@ -580,7 +812,17 @@ export class GnBranchCleanupDialog extends LitElement {
         this.selectedBranches = new Set(
           [...this.selectedBranches].filter((name) => stillListed.has(name)),
         );
+        const nextStatuses = new Map<string, BranchDeleteState>();
+        for (const [name, state] of this.branchStatusByName.entries()) {
+          if (stillListed.has(name)) {
+            nextStatuses.set(name, state);
+          }
+        }
+        this.branchStatusByName = nextStatuses;
       } else {
+        this.branchStatusByName = new Map();
+        this.deleteCompletedSummary = '';
+        this.deleteCompletedCounts = null;
         // Auto-select safe branches in merged and gone categories
         for (const cb of this.mergedBranches) {
           if (!cb.isProtected && cb.risk === 'safe') {
@@ -653,6 +895,11 @@ export class GnBranchCleanupDialog extends LitElement {
       this.prProviderTarget = target;
 
       // 1. Fetch open PRs for the repository
+      this.providerEnriching = true;
+      this.providerEnrichmentStatus =
+        target.provider === 'gitlab'
+          ? 'Checking open merge requests...'
+          : 'Checking open pull requests...';
       const prRes = await pullRequestService.listOpenPullRequests(target, token, 100);
       if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
         return;
@@ -681,10 +928,14 @@ export class GnBranchCleanupDialog extends LitElement {
         }
       }
 
+      let authorIdx = 0;
+      const totalAuthors = uniqueAuthors.size;
       for (const [key, author] of uniqueAuthors) {
         if (gen !== this.loadGeneration || !this.isOpen || this.pinnedRepoPath !== repoPath) {
           return;
         }
+        authorIdx++;
+        this.providerEnrichmentStatus = `Checking stale branch author activity (${authorIdx}/${totalAuthors})...`;
         const statusRes = await pullRequestService.checkProviderUserStatus(
           target,
           author.name,
@@ -702,6 +953,11 @@ export class GnBranchCleanupDialog extends LitElement {
       }
     } catch {
       // Provider enrichment is non-fatal
+    } finally {
+      if (gen === this.loadGeneration) {
+        this.providerEnriching = false;
+        this.providerEnrichmentStatus = '';
+      }
     }
   }
 
@@ -798,7 +1054,9 @@ export class GnBranchCleanupDialog extends LitElement {
   }
 
   private getSelectableBranches(): CleanupBranch[] {
-    return this.getActiveTabBranches().filter((cb) => !cb.isProtected);
+    return this.getActiveTabBranches().filter(
+      (cb) => !cb.isProtected && this.branchStatusByName.get(cb.branch.name)?.status !== 'deleted',
+    );
   }
 
   private isAllSelected(): boolean {
@@ -824,6 +1082,9 @@ export class GnBranchCleanupDialog extends LitElement {
   }
 
   private handleToggleBranch(branchName: string): void {
+    if (this.branchStatusByName.get(branchName)?.status === 'deleted') {
+      return;
+    }
     if (this.selectedBranches.has(branchName)) {
       this.selectedBranches.delete(branchName);
     } else {
@@ -860,11 +1121,21 @@ export class GnBranchCleanupDialog extends LitElement {
 
     const selectedMap = new Map<string, CleanupBranch>();
     for (const cb of allBranches) {
-      if (this.selectedBranches.has(cb.branch.name) && !selectedMap.has(cb.branch.name)) {
+      if (
+        this.selectedBranches.has(cb.branch.name) &&
+        this.branchStatusByName.get(cb.branch.name)?.status !== 'deleted' &&
+        !selectedMap.has(cb.branch.name)
+      ) {
         selectedMap.set(cb.branch.name, cb);
       }
     }
     return Array.from(selectedMap.values());
+  }
+
+  private setBranchStatus(branchName: string, state: BranchDeleteState): void {
+    const next = new Map(this.branchStatusByName);
+    next.set(branchName, state);
+    this.branchStatusByName = next;
   }
 
   private async handleDelete(): Promise<void> {
@@ -985,6 +1256,17 @@ export class GnBranchCleanupDialog extends LitElement {
     let kept = 0;
     const failures: string[] = [];
 
+    const initialStatuses = new Map(this.branchStatusByName);
+    for (const cb of toDelete) {
+      initialStatuses.set(cb.branch.name, { status: 'pending' });
+    }
+    this.branchStatusByName = initialStatuses;
+    this.deleteProgressProcessed = 0;
+    this.deleteProgressTotal = toDelete.length + (this.pruneRemotes ? 1 : 0);
+    this.deleteProgressCurrentLabel = '';
+    this.deleteCompletedSummary = '';
+    this.deleteCompletedCounts = null;
+
     // Pinned at open(): these irreversible force-deletes and the remote prune
     // must target the repo the cleanup was invoked on, even if the user
     // switches tabs during the confirm or across the delete loop's awaits
@@ -996,7 +1278,13 @@ export class GnBranchCleanupDialog extends LitElement {
     // and no way to do it. Collect them and offer one escalation below.
     const unmergedRefusals: CleanupBranch[] = [];
 
+    let branchIndex = 0;
     for (const cb of toDelete) {
+      branchIndex++;
+      const displayName = cb.branch.isRemote ? cb.branch.name : cb.branch.shorthand;
+      this.setBranchStatus(cb.branch.name, { status: 'deleting' });
+      this.deleteProgressCurrentLabel = `Deleting branch ${branchIndex} of ${toDelete.length}: ${displayName}`;
+
       if (cb.branch.isRemote) {
         const remote =
           cb.remoteName ??
@@ -1008,11 +1296,16 @@ export class GnBranchCleanupDialog extends LitElement {
           remote,
           name: cb.branch.shorthand,
         });
+        this.deleteProgressProcessed++;
         if (result.success) {
           deleted++;
+          this.selectedBranches.delete(cb.branch.name);
+          this.setBranchStatus(cb.branch.name, { status: 'deleted' });
         } else {
           failed++;
-          failures.push(`${cb.branch.name}: ${result.error?.message ?? 'unknown error'}`);
+          const errMsg = result.error?.message ?? 'unknown error';
+          this.setBranchStatus(cb.branch.name, { status: 'failed', error: errMsg });
+          failures.push(`${cb.branch.name}: ${errMsg}`);
           console.error(`Failed to delete remote branch ${cb.branch.name}:`, result.error);
         }
         continue;
@@ -1034,14 +1327,21 @@ export class GnBranchCleanupDialog extends LitElement {
         (cb.risk === 'danger' || (cb.branch.aheadBehind?.ahead ?? 0) > 0);
       const result = await gitService.deleteBranch(repoPath, cb.branch.name, force);
       if (result.success) {
+        this.deleteProgressProcessed++;
         deleted++;
+        this.selectedBranches.delete(cb.branch.name);
+        this.setBranchStatus(cb.branch.name, { status: 'deleted' });
       } else if (!force && /not fully merged/i.test(result.error?.message ?? '')) {
+        this.setBranchStatus(cb.branch.name, { status: 'pending' });
         unmergedRefusals.push(cb);
       } else {
+        this.deleteProgressProcessed++;
         failed++;
+        const errMsg = result.error?.message ?? 'unknown error';
+        this.setBranchStatus(cb.branch.name, { status: 'failed', error: errMsg });
         // Keep the reason: a bare "Failed to delete N branches" leaves the user
         // with no idea why and no way forward.
-        failures.push(`${cb.branch.name}: ${result.error?.message ?? 'unknown error'}`);
+        failures.push(`${cb.branch.name}: ${errMsg}`);
         console.error(`Failed to delete ${cb.branch.name}:`, result.error);
       }
     }
@@ -1112,15 +1412,26 @@ export class GnBranchCleanupDialog extends LitElement {
           // Declining is the safe choice the dialog just offered — counting it
           // as a failure would report the user's own decision back to them as
           // a red error.
+          this.deleteProgressProcessed++;
           kept++;
+          this.selectedBranches.delete(cb.branch.name);
+          this.setBranchStatus(cb.branch.name, { status: 'kept' });
           continue;
         }
+        const displayName = cb.branch.isRemote ? cb.branch.name : cb.branch.shorthand;
+        this.setBranchStatus(cb.branch.name, { status: 'deleting' });
+        this.deleteProgressCurrentLabel = `Force deleting ${displayName}...`;
         const retry = await gitService.deleteBranch(repoPath, cb.branch.name, true);
+        this.deleteProgressProcessed++;
         if (retry.success) {
           deleted++;
+          this.selectedBranches.delete(cb.branch.name);
+          this.setBranchStatus(cb.branch.name, { status: 'deleted' });
         } else {
           failed++;
-          failures.push(`${cb.branch.name}: ${retry.error?.message ?? 'unknown error'}`);
+          const errMsg = retry.error?.message ?? 'unknown error';
+          this.setBranchStatus(cb.branch.name, { status: 'failed', error: errMsg });
+          failures.push(`${cb.branch.name}: ${errMsg}`);
         }
       }
     }
@@ -1132,7 +1443,9 @@ export class GnBranchCleanupDialog extends LitElement {
     // result. Without that, an offline or auth-failed prune reported success.
     let pruned = false;
     if (this.pruneRemotes) {
+      this.deleteProgressCurrentLabel = 'Pruning remote-tracking branches...';
       const pruneResult = await gitService.pruneRemoteTrackingBranches(repoPath);
+      this.deleteProgressProcessed++;
       // Ok with an empty list means there was nothing to prune — reporting
       // "remotes pruned" for that overstates, and it forced a reload after
       // every zero-delete attempt.
@@ -1146,6 +1459,7 @@ export class GnBranchCleanupDialog extends LitElement {
     }
 
     this.deleting = false;
+    this.deleteProgressCurrentLabel = '';
     releaseRefOp(lockedRepo);
 
     // ONE composite message covering every combination. Reporting deleted /
@@ -1162,6 +1476,8 @@ export class GnBranchCleanupDialog extends LitElement {
 
     if (notes.length > 0) {
       showToast(notes.join(', '), failed > 0 ? 'error' : kept > 0 ? 'warning' : 'success');
+      this.deleteCompletedSummary = `Cleanup complete: ${notes.join(', ')}`;
+      this.deleteCompletedCounts = { deleted, failed, kept, pruned };
     }
 
     // The prune mutates the repo on its own, so the refresh must fire for it
@@ -1177,17 +1493,11 @@ export class GnBranchCleanupDialog extends LitElement {
       );
     }
 
-    if (deleted > 0) {
-      this.close();
-      return;
-    }
-
-    // The dialog stays open, so refresh what it shows. A successful prune
-    // removes remote-tracking refs that the risk badges and the Gone Upstream
-    // tab are derived from, and a failure may have been caused by state that
-    // has since changed — either way the list on screen is no longer what the
-    // next Delete click would act on.
-    if (pruned || failed > 0) {
+    // Stay open so the user can inspect per-branch Deleted / Failed / Kept
+    // indicators across tabs. Only auto-reload when nothing was deleted (so no
+    // "Deleted ✓" rows would be wiped from view) and a prune or failure changed
+    // the candidate state.
+    if (deleted === 0 && (pruned || failed > 0)) {
       await this.loadCleanupData(true);
     }
   }
@@ -1245,6 +1555,135 @@ export class GnBranchCleanupDialog extends LitElement {
     `;
   }
 
+  private renderBranchStatusBadge(deleteState: BranchDeleteState) {
+    switch (deleteState.status) {
+      case 'pending':
+        return html`
+          <span class="branch-status-badge pending" title="Queued for deletion">
+            Queued
+          </span>
+        `;
+      case 'deleting':
+        return html`
+          <span class="branch-status-badge deleting" title="Deleting branch...">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 11-6.219-8.56"></path>
+            </svg>
+            Deleting...
+          </span>
+        `;
+      case 'deleted':
+        return html`
+          <span class="branch-status-badge deleted" title="Branch deleted">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            Deleted
+          </span>
+        `;
+      case 'failed':
+        return html`
+          <span class="branch-status-badge failed" title=${deleteState.error ?? 'Deletion failed'}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            Failed
+          </span>
+        `;
+      case 'kept':
+        return html`
+          <span class="branch-status-badge kept" title="Kept (not fully merged)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            Kept
+          </span>
+        `;
+    }
+  }
+
+  private renderProgressBanner() {
+    if (!this.deleting && !this.deleteCompletedSummary) {
+      return nothing;
+    }
+
+    const total = Math.max(this.deleteProgressTotal, 1);
+    const percent = this.deleting
+      ? Math.min(100, Math.round((this.deleteProgressProcessed / total) * 100))
+      : 100;
+
+    let liveDeleted = 0;
+    let liveFailed = 0;
+    let liveKept = 0;
+    for (const s of this.branchStatusByName.values()) {
+      if (s.status === 'deleted') liveDeleted++;
+      else if (s.status === 'failed') liveFailed++;
+      else if (s.status === 'kept') liveKept++;
+    }
+
+    const counts = this.deleteCompletedCounts ?? {
+      deleted: liveDeleted,
+      failed: liveFailed,
+      kept: liveKept,
+      pruned: false,
+    };
+
+    return html`
+      <div class="progress-banner ${this.deleting ? '' : 'completed'}" role="status" aria-live="polite">
+        <div class="progress-header">
+          <span class="progress-label">
+            ${this.deleting
+              ? html`
+                  <svg class="enrichment-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12a9 9 0 11-6.219-8.56"></path>
+                  </svg>
+                  <span>${this.deleteProgressCurrentLabel || 'Preparing branch cleanup...'}</span>
+                `
+              : html`<span>${this.deleteCompletedSummary}</span>`}
+          </span>
+          <div class="progress-counts">
+            ${counts.deleted > 0
+              ? html`<span class="progress-count-pill deleted">${counts.deleted} deleted</span>`
+              : nothing}
+            ${counts.failed > 0
+              ? html`<span class="progress-count-pill failed">${counts.failed} failed</span>`
+              : nothing}
+            ${counts.kept > 0
+              ? html`<span class="progress-count-pill kept">${counts.kept} kept</span>`
+              : nothing}
+            ${this.deleting && this.deleteProgressTotal > 0
+              ? html`<span>${this.deleteProgressProcessed}/${this.deleteProgressTotal}</span>`
+              : nothing}
+          </div>
+        </div>
+        <div class="progress-track">
+          <div
+            class="progress-fill ${this.deleting ? '' : 'completed'}"
+            style="width: ${percent}%"
+          ></div>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderEnrichmentBanner() {
+    if (!this.providerEnriching || !this.providerEnrichmentStatus || this.loading) {
+      return nothing;
+    }
+    return html`
+      <div class="enrichment-banner" role="status" aria-live="polite">
+        <svg class="enrichment-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12a9 9 0 11-6.219-8.56"></path>
+        </svg>
+        <span>${this.providerEnrichmentStatus}</span>
+      </div>
+    `;
+  }
+
   private renderBranchItem(cb: CleanupBranch) {
     const {
       branch,
@@ -1256,7 +1695,10 @@ export class GnBranchCleanupDialog extends LitElement {
       isProtected,
       protectedReason,
     } = cb;
-    const isSelected = this.selectedBranches.has(branch.name);
+    const deleteState = this.branchStatusByName.get(branch.name);
+    const isDeleted = deleteState?.status === 'deleted';
+    const isDeleting = deleteState?.status === 'deleting';
+    const isSelected = !isDeleted && this.selectedBranches.has(branch.name);
 
     const timePart = branch.lastCommitTimestamp
       ? `Last commit: ${this.formatTimeAgo(branch.lastCommitTimestamp)}`
@@ -1277,17 +1719,17 @@ export class GnBranchCleanupDialog extends LitElement {
     const authorStatus = this.authorStatusByKey.get(this.authorKey(cb));
 
     return html`
-      <li class="branch-item ${isProtected ? 'protected' : ''}">
+      <li class="branch-item ${isProtected ? 'protected' : ''} ${isDeleting ? 'deleting' : ''} ${isDeleted ? 'deleted' : ''}">
         <input
           type="checkbox"
           .checked=${isSelected}
-          ?disabled=${isProtected || this.deleting}
+          ?disabled=${isProtected || isDeleted || this.deleting}
           @change=${() => this.handleToggleBranch(branch.name)}
           aria-label="Select ${displayName}"
         />
         <div class="branch-info">
           <span class="branch-name">
-            ${displayName}
+            <span class="branch-name-text">${displayName}</span>
             ${branch.isRemote
               ? html`<span class="remote-badge">${remoteName ?? 'remote'}</span>`
               : nothing}
@@ -1326,18 +1768,23 @@ export class GnBranchCleanupDialog extends LitElement {
           ${riskReason && !isProtected
             ? html`<span class="branch-detail">${riskReason}</span>`
             : nothing}
+          ${deleteState?.status === 'failed' && deleteState.error
+            ? html`<span class="branch-error-detail">${deleteState.error}</span>`
+            : nothing}
         </div>
-        ${isProtected
-          ? html`
-              <span class="protected-badge" title=${protectedReason ?? 'Protected'}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                  <path d="M7 11V7a5 5 0 0110 0v4"></path>
-                </svg>
-                Protected
-              </span>
-            `
-          : this.renderRiskBadge(risk, riskReason)}
+        ${deleteState
+          ? this.renderBranchStatusBadge(deleteState)
+          : isProtected
+            ? html`
+                <span class="protected-badge" title=${protectedReason ?? 'Protected'}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0110 0v4"></path>
+                  </svg>
+                  Protected
+                </span>
+              `
+            : this.renderRiskBadge(risk, riskReason)}
       </li>
     `;
   }
@@ -1376,7 +1823,9 @@ export class GnBranchCleanupDialog extends LitElement {
       `;
     }
 
-    const selectable = branches.filter((cb) => !cb.isProtected);
+    const selectable = branches.filter(
+      (cb) => !cb.isProtected && this.branchStatusByName.get(cb.branch.name)?.status !== 'deleted',
+    );
     const allSelected = this.isAllSelected();
 
     return html`
@@ -1403,6 +1852,8 @@ export class GnBranchCleanupDialog extends LitElement {
   }
 
   render() {
+    const hasCompletedCleanup = Boolean(this.deleteCompletedSummary) && !this.deleting;
+
     return html`
       <gn-modal modalTitle="Branch Cleanup" @close=${this.handleModalClose}>
         <div class="tabs">
@@ -1411,9 +1862,22 @@ export class GnBranchCleanupDialog extends LitElement {
           ${this.renderTab('gone', 'Gone Upstream', this.goneUpstreamBranches.length)}
         </div>
 
+        ${this.renderProgressBanner()}
+        ${this.renderEnrichmentBanner()}
+
         <div class="content-area">
           ${this.loading
-            ? html`<div class="loading">Loading branches...</div>`
+            ? html`
+                <div class="loading" role="status" aria-live="polite">
+                  <svg class="loading-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12a9 9 0 11-6.219-8.56"></path>
+                  </svg>
+                  <span>Loading branches...</span>
+                  <div class="loading-bar">
+                    <div class="loading-bar-fill"></div>
+                  </div>
+                </div>
+              `
             : this.renderBranchList(this.getActiveTabBranches())}
         </div>
 
@@ -1438,7 +1902,7 @@ export class GnBranchCleanupDialog extends LitElement {
             </span>
             <div class="footer-actions">
               <button class="btn btn-secondary" @click=${this.close} ?disabled=${this.deleting}>
-                Cancel
+                ${hasCompletedCleanup ? 'Close' : 'Cancel'}
               </button>
               <button
                 class="btn btn-danger"
@@ -1449,7 +1913,9 @@ export class GnBranchCleanupDialog extends LitElement {
                 this.lock.busy}
               >
                 ${this.deleting
-                  ? 'Working...'
+                  ? this.deleteProgressTotal > 0
+                    ? `Deleting (${this.deleteProgressProcessed}/${this.deleteProgressTotal})...`
+                    : 'Working...'
                   : this.totalSelected === 0
                     ? 'Prune Remotes'
                     : `Delete Selected (${this.totalSelected})`}
