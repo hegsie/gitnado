@@ -738,6 +738,7 @@ export class AppShell extends LitElement {
   @state() private diffFile: StatusEntry | null = null;
   @state() private diffCommitFile: { commitOid: string; filePath: string } | null = null;
   @state() private diffFilePartiallyStaged = false;
+  @state() private worktreeDialogInitialBranch = '';
 
   // Blame view state. Open-ness lives in the dialog store, as for the diff.
   @state() private blameFile: string | null = null;
@@ -6224,6 +6225,13 @@ export class AppShell extends LitElement {
                   const provider = e.detail?.provider;
                   if (provider) this.openIntegrationStandalone(provider);
                 }}
+                @manage-worktrees=${(e: CustomEvent<{ branch?: string }>) => {
+                  this.worktreeDialogInitialBranch = e.detail?.branch ?? '';
+                  dialogs.open('worktrees');
+                }}
+                @start-agent-worktree=${() => {
+                  dialogs.open('startAgent');
+                }}
               >
                 <gn-left-panel></gn-left-panel>
               </aside>
@@ -6917,7 +6925,11 @@ export class AppShell extends LitElement {
         <gn-worktree-dialog
           ?open=${dialogs.isOpen('worktrees')}
           .repositoryPath=${this.activeRepository.repository.path}
-          @close=${() => { dialogs.close('worktrees'); }}
+          .initialBranch=${this.worktreeDialogInitialBranch}
+          @close=${() => {
+            this.worktreeDialogInitialBranch = '';
+            dialogs.close('worktrees');
+          }}
           @worktrees-changed=${(e: CustomEvent<{ repositoryPath?: string }>) =>
             // Routed to the repo the operation RAN ON. handleRefresh resolves
             // activeRepository at call time, so a Ctrl+Tab during a slow

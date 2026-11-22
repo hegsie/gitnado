@@ -4,7 +4,7 @@
  */
 
 import { html, css } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { sharedStyles } from '../../styles/shared-styles.ts';
 import * as gitService from '../../services/git.service.ts';
 import { showConfirm } from '../../services/dialog.service.ts';
@@ -19,6 +19,8 @@ import {
   subscribeRefOps,
 } from '../../utils/ref-lock.ts';
 import { samePath } from '../../utils/path-compare.ts';
+import { closeRemovedWorktreeTab, openOrSwitchWorktreeTab } from '../sidebar/gn-worktree-list.ts';
+import { defaultWorktreePath } from '../../services/agent-task.service.ts';
 import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
 
 type DialogMode = 'list' | 'add';
@@ -178,6 +180,14 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
         padding: 1px 6px;
         background: var(--color-bg-tertiary);
         color: var(--color-text-muted);
+        border-radius: var(--radius-xs);
+        font-size: var(--font-size-xs);
+      }
+
+      .prunable-badge {
+        padding: 1px 6px;
+        background: var(--color-error-bg);
+        color: var(--color-error);
         border-radius: var(--radius-xs);
         font-size: var(--font-size-xs);
       }
@@ -348,6 +358,8 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
     `,
   ];
 
+  @property({ type: String }) initialBranch = '';
+
   @state() private mode: DialogMode = 'list';
   @state() private worktrees: Worktree[] = [];
   @state() private branches: Branch[] = [];
@@ -379,6 +391,7 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
   @state() private addBranch = '';
   @state() private createNewBranch = false;
   @state() private newBranchName = '';
+  @state() private openInTabAfterAdd = true;
 
   /**
    * This dialog paints its own overlay instead of using gn-modal, so it had no
@@ -460,9 +473,15 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
       // in the same sweep, after the handlers and the mode-switch buttons.
       this.success = '';
       this.error = '';
-      this.mode = 'list';
-      this.addPath = '';
-      this.addBranch = '';
+      if (this.initialBranch) {
+        this.mode = 'add';
+        this.addBranch = this.initialBranch;
+        this.addPath = defaultWorktreePath(this.pinnedRepoPath, this.initialBranch);
+      } else {
+        this.mode = 'list';
+        this.addPath = '';
+        this.addBranch = '';
+      }
       this.createNewBranch = false;
       this.newBranchName = '';
       await this.loadWorktrees();
@@ -568,6 +587,7 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
     });
 
     if (result.success) {
+      const createdPath = result.data?.path ?? this.addPath;
       this.success = 'Worktree added successfully';
       this.addPath = '';
       this.addBranch = '';
@@ -582,6 +602,9 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
       // until the dialog was closed and reopened.
       await this.loadBranches(repoPath);
       this.dispatchRepoEvent('worktrees-changed', repoPath || this.repositoryPath);
+      if (this.openInTabAfterAdd && createdPath) {
+        await openOrSwitchWorktreeTab(createdPath);
+      }
     } else {
       this.error = result.error?.message || 'Failed to add worktree';
     }
@@ -695,6 +718,7 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
     }
 
     if (result.success) {
+      closeRemovedWorktreeTab(worktree.path);
       this.success = 'Worktree removed';
       this.error = '';
       await this.loadWorktrees(repoPath);
@@ -774,6 +798,59 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
     }
   }
 
+  private async handlePrune(): Promise<void> {
+    const repoPath = this.pinnedRepoPath;
+    if (!tryAcquireRefOpOrWarn(repoPath)) return;
+
+    this.loading = true;
+    this.error = '';
+    this.success = '';
+
+    try {
+      const result = await gitService.pruneWorktrees(repoPath);
+      if (result.success) {
+        for (const wt of this.worktrees) {
+          if (wt.isPrunable) {
+            closeRemovedWorktreeTab(wt.path);
+          }
+        }
+        this.success = 'Pruned stale worktrees';
+        await this.loadWorktrees(repoPath);
+        await this.loadBranches(repoPath);
+        this.dispatchRepoEvent('worktrees-changed', repoPath || this.repositoryPath);
+      } else {
+        this.error = result.error?.message || 'Failed to prune worktrees';
+      }
+    } finally {
+      this.loading = false;
+      releaseRefOp(repoPath);
+    }
+  }
+
+  private async handleOpenTab(worktree: Worktree): Promise<void> {
+    if (worktree.isPrunable) return;
+    const opened = await openOrSwitchWorktreeTab(worktree.path);
+    if (opened) {
+      this.handleClose();
+    }
+  }
+
+  private async handleOpenTerminal(worktree: Worktree): Promise<void> {
+    if (worktree.isPrunable) return;
+    const result = await gitService.openTerminal(worktree.path);
+    if (!result.success) {
+      showToast(result.error?.message || 'Failed to open terminal', 'error');
+    }
+  }
+
+  private async handleRevealInFileManager(worktree: Worktree): Promise<void> {
+    if (worktree.isPrunable) return;
+    const result = await gitService.openFileManager(worktree.path);
+    if (!result.success) {
+      showToast(result.error?.message || 'Failed to open file manager', 'error');
+    }
+  }
+
   private handleClose(): void {
     // Escape, the overlay and the x must honour the same rule the Remove
     // button does: dismissing mid-removal left `worktree remove --force`
@@ -808,10 +885,49 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
                   ${wt.branch || 'detached HEAD'}
                   ${wt.isMain ? html`<span class="main-badge">main</span>` : ''}
                   ${wt.isLocked ? html`<span class="locked-badge">locked</span>` : ''}
+                  ${wt.isPrunable ? html`<span class="prunable-badge">stale</span>` : ''}
                 </div>
                 <div class="worktree-path" title="${wt.path}">${wt.path}</div>
               </div>
               <div class="worktree-actions">
+                ${!this.isCurrentWorktree(wt) && !wt.isPrunable
+                  ? html`
+                      <button
+                        class="action-btn"
+                        title="Open in Tab"
+                        @click=${() => this.handleOpenTab(wt)}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                          <polyline points="15 3 21 3 21 9"/>
+                          <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                      </button>
+                    `
+                  : ''}
+                ${!wt.isPrunable
+                  ? html`
+                      <button
+                        class="action-btn"
+                        title="Open in Terminal"
+                        @click=${() => this.handleOpenTerminal(wt)}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="4 17 10 11 4 5"/>
+                          <line x1="12" y1="19" x2="20" y2="19"/>
+                        </svg>
+                      </button>
+                      <button
+                        class="action-btn"
+                        title="Reveal in File Manager"
+                        @click=${() => this.handleRevealInFileManager(wt)}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                      </button>
+                    `
+                  : ''}
                 ${wt.isLocked
                   ? html`
                       <button
@@ -930,6 +1046,19 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
               </div>
             </div>
           `}
+
+      <div class="form-group">
+        <label class="form-checkbox">
+          <input
+            type="checkbox"
+            .checked=${this.openInTabAfterAdd}
+            @change=${(e: Event) => {
+              this.openInTabAfterAdd = (e.target as HTMLInputElement).checked;
+            }}
+          />
+          Open worktree in new tab after creation
+        </label>
+      </div>
     `;
   }
 
@@ -990,6 +1119,17 @@ export class GnWorktreeDialog extends GnRepoScopedDialogBase {
                     Add Worktree
                   </button>
                   <div class="dialog-footer-right">
+                    ${this.worktrees.some((wt) => wt.isPrunable)
+                      ? html`
+                          <button
+                            class="btn btn-secondary"
+                            @click=${this.handlePrune}
+                            ?disabled=${this.loading || this.repositoryBusy || this.operationInFlight}
+                          >
+                            Prune Stale
+                          </button>
+                        `
+                      : ''}
                     <button
                       class="btn btn-secondary"
                       @click=${this.handleClose}

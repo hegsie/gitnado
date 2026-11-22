@@ -20,6 +20,8 @@ import {
 import * as gitService from '../../services/git.service.ts';
 import { showToast } from '../../services/notification.service.ts';
 import { GnRepoScopedDialogBase } from './gn-repo-scoped-dialog-base.ts';
+import { openOrSwitchWorktreeTab } from '../sidebar/gn-worktree-list.ts';
+import { samePath } from '../../utils/path-compare.ts';
 import './gn-modal.ts';
 
 /** How often the list refreshes while the dialog is open. */
@@ -263,6 +265,18 @@ export class GnAgentSessionsDialog extends GnRepoScopedDialogBase {
     }
   }
 
+  private async openWorktreeTab(session: AgentSession): Promise<void> {
+    const opened = await openOrSwitchWorktreeTab(session.worktreePath);
+    if (opened) {
+      this.close();
+    }
+  }
+
+  private isCurrentWorktree(worktreePath: string): boolean {
+    const current = this.pinnedRepoPath || this.repositoryPath;
+    return Boolean(current && samePath(current, worktreePath));
+  }
+
   private renderWhere(s: AgentSession) {
     const place = s.isMainWorktree ? 'main checkout' : s.worktreePath;
     return html`
@@ -291,6 +305,15 @@ export class GnAgentSessionsDialog extends GnRepoScopedDialogBase {
             ${this.renderChanged(s)} · running ${formatElapsed(s.elapsedSecs)}
           </span>
         </div>
+        ${!this.isCurrentWorktree(s.worktreePath)
+          ? html`
+              <button
+                class="btn btn-secondary open-tab-btn"
+                title="Open this worktree in a Gitnado tab"
+                @click=${() => void this.openWorktreeTab(s)}
+              >Open Tab</button>
+            `
+          : nothing}
         <button
           class="btn btn-secondary terminal-btn"
           title="Open a terminal in this worktree"
@@ -312,6 +335,15 @@ export class GnAgentSessionsDialog extends GnRepoScopedDialogBase {
           ${this.renderWhere(s)}
           <span class="meta">ran for ${formatElapsed(s.elapsedSecs)}</span>
         </div>
+        ${!this.isCurrentWorktree(s.worktreePath)
+          ? html`
+              <button
+                class="btn btn-secondary open-tab-btn"
+                title="Open this worktree in a Gitnado tab to review the agent's changes"
+                @click=${() => void this.openWorktreeTab(s)}
+              >Open Tab</button>
+            `
+          : nothing}
       </li>
     `;
   }

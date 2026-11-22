@@ -5,7 +5,6 @@ import * as gitService from "../../services/git.service.ts";
 import * as watcherService from "../../services/watcher.service.ts";
 import { showConfirm } from "../../services/dialog.service.ts";
 import { showToast } from "../../services/notification.service.ts";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { join } from "@tauri-apps/api/path";
 import type { StatusEntry, FileStatus } from "../../types/git.types.ts";
 import { repositoryStore } from "../../stores/repository.store.ts";
@@ -1449,8 +1448,19 @@ export class GnFileStatus extends LitElement {
       // against a different working tree.
       this.filterQuery = "";
       this.focusedIndex = -1;
-      // Reset for new repository so we show loading on first load
+      // Reset for new repository so we show loading on first load and clear
+      // any stale files/badges from the previous repository immediately.
       this.hasInitiallyLoaded = false;
+      this.stagedFiles = [];
+      this.unstagedFiles = [];
+      this.error = null;
+      this.dispatchEvent(
+        new CustomEvent("status-changed", {
+          detail: { stagedCount: 0, totalCount: 0 },
+          bubbles: true,
+          composed: true,
+        }),
+      );
       this.statusDirtySeq++;
       // Start watching the new repository
       try {
@@ -1546,8 +1556,22 @@ export class GnFileStatus extends LitElement {
       const isCurrent = this.repositoryPath === loadedPath;
 
       if (!result.success) {
+        repositoryStore.getState().updateRepoData(loadedPath, {
+          status: [],
+          stagedFiles: [],
+          unstagedFiles: [],
+        });
         if (isCurrent) {
           this.error = result.error?.message ?? "Failed to load status";
+          this.stagedFiles = [];
+          this.unstagedFiles = [];
+          this.dispatchEvent(
+            new CustomEvent("status-changed", {
+              detail: { stagedCount: 0, totalCount: 0 },
+              bubbles: true,
+              composed: true,
+            }),
+          );
         }
         return;
       }
@@ -1589,19 +1613,18 @@ export class GnFileStatus extends LitElement {
         this.unstagedFiles = newUnstagedFiles;
       }
 
-      // Emit status changed event only if something changed
-      if (stagedChanged || unstagedChanged) {
-        this.dispatchEvent(
-          new CustomEvent("status-changed", {
-            detail: {
-              stagedCount: this.stagedFiles.length,
-              totalCount: this.stagedFiles.length + this.unstagedFiles.length,
-            },
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      }
+      // Always emit status-changed on completion so parents (such as gn-right-panel)
+      // stay synchronized even when the repo finishes loading with 0 changes.
+      this.dispatchEvent(
+        new CustomEvent("status-changed", {
+          detail: {
+            stagedCount: this.stagedFiles.length,
+            totalCount: this.stagedFiles.length + this.unstagedFiles.length,
+          },
+          bubbles: true,
+          composed: true,
+        }),
+      );
     } catch (err) {
       if (this.repositoryPath === loadedPath) {
         this.error = err instanceof Error ? err.message : "Unknown error";
@@ -2329,8 +2352,16 @@ export class GnFileStatus extends LitElement {
     if (!file) return;
     this.contextMenu = { ...this.contextMenu, visible: false };
     try {
-      const fullPath = await join(this.repositoryPath, file.path);
-      await shellOpen(fullPath);
+      const result = await gitService.openInConfiguredEditor(
+        this.repositoryPath,
+        file.path,
+      );
+      if (!result.success || (result.data && !result.data.success)) {
+        showToast(
+          result.error?.message ?? "Failed to open file in editor",
+          "error",
+        );
+      }
     } catch (err) {
       console.error("Failed to open file:", err);
       showToast("Failed to open file in editor", "error");

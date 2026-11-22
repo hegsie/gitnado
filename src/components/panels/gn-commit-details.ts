@@ -17,8 +17,6 @@ import { loggers, openExternalUrl } from '../../utils/index.ts';
 import { shouldFetchAvatars, shouldFetchAvatarsNow } from '../../utils/avatar-policy.ts';
 import { settingsStore } from '../../stores/settings.store.ts';
 import { restoreFileFromCommit } from '../../utils/restore-file.ts';
-import { open as shellOpen } from '@tauri-apps/plugin-shell';
-import { join } from '@tauri-apps/api/path';
 import './gn-ai-explain-drawer.ts';
 
 const log = loggers.ui;
@@ -1496,8 +1494,16 @@ export class GnCommitDetails extends LitElement {
     if (!file || file.status === 'deleted') return;
     this.contextMenu = { ...this.contextMenu, visible: false };
     try {
-      const fullPath = await join(this.repositoryPath, file.path);
-      await shellOpen(fullPath);
+      const result = await gitService.openInConfiguredEditor(
+        this.repositoryPath,
+        file.path,
+      );
+      if (!result.success || (result.data && !result.data.success)) {
+        showToast(
+          result.error?.message ?? 'Failed to open file in editor',
+          'error',
+        );
+      }
     } catch (err) {
       console.error('Failed to open file:', err);
       showToast('Failed to open file in editor', 'error');

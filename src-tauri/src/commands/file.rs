@@ -8,18 +8,102 @@ use super::path_utils::resolve_path_within_repo;
 use crate::error::{GitnadoError, Result};
 use crate::utils::create_command;
 
-/// Escape cmd.exe metacharacters to prevent command injection (Windows only).
 #[cfg(target_os = "windows")]
-fn escape_cmd_meta(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if "&|<>^()%!".contains(c) {
-                format!("^{}", c)
-            } else {
-                c.to_string()
+fn windows_open_default_command(target: &Path) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+
+    let mut command = std::process::Command::new("rundll32.exe");
+    // CREATE_NO_WINDOW = 0x08000000
+    command.creation_flags(0x08000000);
+    command.arg("url.dll,FileProtocolHandler");
+    command.arg(target.as_os_str());
+    command
+}
+
+/// Spawn an editor process, handling Windows console hiding and `.cmd` shims.
+fn spawn_editor_process(
+    cmd: &str,
+    args: &[String],
+    repo_path: Option<&Path>,
+) -> std::io::Result<std::process::Child> {
+    let build_cmd = |program: &str| {
+        let mut command = std::process::Command::new(program);
+        command.args(args);
+        if let Some(dir) = repo_path.filter(|p| p.is_dir()) {
+            command.current_dir(dir);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        command
+    };
+
+    match build_cmd(cmd).spawn() {
+        Ok(child) => Ok(child),
+        #[cfg(target_os = "windows")]
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let cmd_path = Path::new(cmd);
+            if cmd_path.extension().is_none() {
+                for ext in ["cmd", "exe", "bat"] {
+                    let candidate = format!("{}.{}", cmd, ext);
+                    if let Ok(child) = build_cmd(&candidate).spawn() {
+                        return Ok(child);
+                    }
+                }
             }
-        })
-        .collect()
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Try to detect a common installed code editor when none is configured in git/env.
+fn detect_fallback_editor() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let candidates = [
+                Path::new(&local_app_data)
+                    .join("Programs")
+                    .join("Microsoft VS Code")
+                    .join("Code.exe"),
+                Path::new(&local_app_data)
+                    .join("Programs")
+                    .join("cursor")
+                    .join("Cursor.exe"),
+                Path::new(&local_app_data)
+                    .join("Programs")
+                    .join("Windsurf")
+                    .join("Windsurf.exe"),
+                Path::new(&local_app_data)
+                    .join("Programs")
+                    .join("Zed")
+                    .join("bin")
+                    .join("zed.exe"),
+            ];
+            for candidate in candidates {
+                if candidate.is_file() {
+                    return Some(format!("\"{}\"", candidate.to_string_lossy()));
+                }
+            }
+        }
+    }
+
+    for bin in ["code", "cursor", "windsurf", "zed", "subl"] {
+        let mut check = create_command(if cfg!(target_os = "windows") {
+            "where"
+        } else {
+            "which"
+        });
+        check.arg(bin);
+        if check.output().map(|o| o.status.success()).unwrap_or(false) {
+            return Some(bin.to_string());
+        }
+    }
+
+    None
 }
 
 /// Result of an open/reveal operation
@@ -235,8 +319,7 @@ pub async fn open_in_default_app(path: String) -> Result<OpenResult> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &escape_cmd_meta(&path)])
+        windows_open_default_command(target)
             .spawn()
             .map_err(|e| GitnadoError::OperationFailed(format!("Failed to open file: {}", e)))?;
     }
@@ -292,12 +375,25 @@ pub async fn open_in_configured_editor(
         return Err(GitnadoError::InvalidPath(target_file));
     }
 
-    // Get editor from git config (local first, then global)
-    let editor = get_git_config_value(Some(repo_path), "core.editor", false)
+    // Get editor from git config (local first, then global), environment, or installed editors
+    let editor = get_git_config_value(Some(repo_path).filter(|p| p.is_dir()), "core.editor", false)
         .or_else(|| get_git_config_value(None, "core.editor", true))
-        .or_else(|| std::env::var("GIT_EDITOR").ok())
-        .or_else(|| std::env::var("VISUAL").ok())
-        .or_else(|| std::env::var("EDITOR").ok());
+        .or_else(|| {
+            std::env::var("GIT_EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or_else(|| {
+            std::env::var("VISUAL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or_else(detect_fallback_editor);
 
     match editor {
         Some(editor_cmd) if is_terminal_editor(&editor_cmd) && target.is_dir() => {
@@ -316,16 +412,12 @@ pub async fn open_in_configured_editor(
             // Parse the editor command and add line number support
             let (cmd, args) = parse_editor_command(&editor_cmd, &target_file, line);
 
-            std::process::Command::new(&cmd)
-                .args(&args)
-                .current_dir(repo_path)
-                .spawn()
-                .map_err(|e| {
-                    GitnadoError::OperationFailed(format!(
-                        "Failed to open editor '{}': {}",
-                        editor_cmd, e
-                    ))
-                })?;
+            spawn_editor_process(&cmd, &args, Some(repo_path)).map_err(|e| {
+                GitnadoError::OperationFailed(format!(
+                    "Failed to open editor '{}': {}",
+                    editor_cmd, e
+                ))
+            })?;
 
             Ok(OpenResult {
                 success: true,
@@ -715,6 +807,23 @@ mod tests {
         let argument = windows_reveal_argument(target);
 
         assert_eq!(argument, r#"/select,"C:\repo with spaces\src\main.rs""#);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_open_default_command_uses_rundll32_file_protocol_handler() {
+        let target = Path::new(r"C:\repo with spaces & ampersand\src\tags-input.ts");
+        let cmd = windows_open_default_command(target);
+
+        assert_eq!(cmd.get_program(), "rundll32.exe");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            vec![
+                std::ffi::OsStr::new("url.dll,FileProtocolHandler"),
+                target.as_os_str(),
+            ]
+        );
     }
 
     #[cfg(target_os = "linux")]

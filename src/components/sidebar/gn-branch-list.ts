@@ -26,6 +26,9 @@ import { fuzzyScore } from '../../utils/fuzzy-search.ts';
 import '../dialogs/gn-branch-cleanup-dialog.ts';
 import type { GnBranchCleanupDialog } from '../dialogs/gn-branch-cleanup-dialog.ts';
 import type { Branch, Stack } from '../../types/git.types.ts';
+import type { Worktree } from '../../services/git.service.ts';
+import { samePath } from '../../utils/path-compare.ts';
+import { openOrSwitchWorktreeTab } from './gn-worktree-list.ts';
 import { findStackBranch } from '../../utils/stack-navigation.ts';
 import { restackConflictMessage, restackSummaryLines, restackedCount } from '../../utils/restack-plan.ts';
 import { isTopOverlay } from '../../utils/overlay-stack.ts';
@@ -635,6 +638,36 @@ export class GnBranchList extends LitElement {
       .branch-item.hidden-branch {
         opacity: 0.4;
       }
+
+      .worktree-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 1px 5px;
+        border-radius: var(--radius-xs);
+        font-size: 10px;
+        font-family: var(--font-family-mono);
+        background: var(--color-bg-tertiary);
+        color: var(--color-primary);
+        border: 1px solid var(--color-border);
+        cursor: pointer;
+        flex-shrink: 0;
+        max-width: 110px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .worktree-badge:hover {
+        background: var(--color-primary-bg);
+        border-color: var(--color-primary);
+      }
+
+      .worktree-badge svg {
+        width: 10px;
+        height: 10px;
+        flex-shrink: 0;
+      }
     `,
   ];
 
@@ -649,6 +682,8 @@ export class GnBranchList extends LitElement {
   @state() private stackPrSyncing = false;
   /** Local branches by name, for resolving stack rows to Branch objects. */
   private localBranchesByName = new Map<string, Branch>();
+  /** Worktrees keyed by branch name (for branches checked out in another worktree). */
+  @state() private worktreesByBranch = new Map<string, Worktree>();
   @state() private loading = true;
   @state() private error: string | null = null;
   @state() private expandedGroups = new Set<string>(['local', 'local-ungrouped', 'stacks']);
@@ -876,19 +911,32 @@ export class GnBranchList extends LitElement {
   }
 
   async updated(changedProperties: Map<string, unknown>): Promise<void> {
-    if (changedProperties.has('repositoryPath') && this.repositoryPath) {
+    if (changedProperties.has('repositoryPath')) {
       // A menu entry acts on the branch it was opened over, but resolves the
       // repo from `this.repositoryPath` at click time — and a keyboard tab
       // switch produces neither a document click nor Escape, so the menu would
       // survive the rebind and delete repo A's branch inside repo B.
       this.contextMenu = { ...this.contextMenu, visible: false };
+      // Clear previous repo's branches immediately so a failed or slow load on
+      // the newly selected tab never displays the old repository's branches.
+      this.localBranchGroups = [];
+      this.remoteGroups = [];
+      this.stacks = [];
+      this.stacksError = null;
+      this.localBranchesByName = new Map();
+      this.worktreesByBranch = new Map();
+      this.cleanupCandidateNames = new Set();
+      this.cleanupCheckFailed = false;
+      this.error = null;
       this.loadHiddenBranches();
       // Clear before the await: the previous repository's provider must never
       // label -- or enable -- a menu opened over this one's branches.
       this.prProvider = null;
       this.prProviderResolved = false;
-      await this.loadBranches();
-      await this.detectProvider();
+      if (this.repositoryPath) {
+        await this.loadBranches();
+        await this.detectProvider();
+      }
     }
   }
 
@@ -1059,10 +1107,11 @@ export class GnBranchList extends LitElement {
         loadedPath,
         settingsStore.getState().staleBranchDays,
       );
-      const [branchesResult, remotesResult, stacksResult] = await Promise.all([
+      const [branchesResult, remotesResult, stacksResult, worktreesResult] = await Promise.all([
         gitService.getBranches(loadedPath),
         gitService.getRemotes(loadedPath),
         gitService.getStacks(loadedPath),
+        gitService.getWorktrees(loadedPath),
       ]);
 
       // A newer load for the SAME path supersedes this one entirely (its
@@ -1078,6 +1127,12 @@ export class GnBranchList extends LitElement {
 
       if (!branchesResult.success) {
         if (isCurrent) {
+          this.localBranchGroups = [];
+          this.remoteGroups = [];
+          this.stacks = [];
+          this.localBranchesByName = new Map();
+          this.worktreesByBranch = new Map();
+          this.cleanupCandidateNames = new Set();
           this.error = branchesResult.error?.message ?? 'Failed to load branches';
         }
         return;
@@ -1102,6 +1157,16 @@ export class GnBranchList extends LitElement {
       // Separate local and remote branches
       const localBranches = branches.filter((b) => !b.isRemote);
       this.localBranchesByName = new Map(localBranches.map((b) => [b.name, b]));
+
+      const wtMap = new Map<string, Worktree>();
+      if (worktreesResult?.success && Array.isArray(worktreesResult.data)) {
+        for (const wt of worktreesResult.data) {
+          if (wt.branch && !wt.isCurrent && !samePath(wt.path, loadedPath)) {
+            wtMap.set(wt.branch, wt);
+          }
+        }
+      }
+      this.worktreesByBranch = wtMap;
       // Stacks are an overlay on the branch list: a failure to read them is
       // reported in their own section and never hides the branches.
       if (stacksResult?.success) {
@@ -1426,6 +1491,23 @@ export class GnBranchList extends LitElement {
 
   private async handleCheckout(branch: Branch): Promise<void> {
     if (branch.isHead) return;
+
+    // If this local branch is already checked out in another worktree, Git
+    // refuses `git checkout <branch>` with "already used by worktree at ...".
+    // Switch to (or open) that worktree tab directly instead!
+    if (!branch.isRemote) {
+      const wt = this.worktreesByBranch.get(branch.name) ?? this.worktreesByBranch.get(branch.shorthand);
+      if (wt && !wt.isPrunable) {
+        this.contextMenu = { ...this.contextMenu, visible: false };
+        const opened = await openOrSwitchWorktreeTab(wt.path);
+        if (opened) {
+          const folderName = wt.path.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() || wt.path;
+          showToast(`Switched to worktree "${folderName}" (${branch.shorthand})`, 'info');
+        }
+        return;
+      }
+    }
+
     const lockedRepo = this.repositoryPath;
     if (!this.claimOperation(lockedRepo)) return;
 
@@ -2176,6 +2258,31 @@ export class GnBranchList extends LitElement {
     `;
   }
 
+  private renderWorktreeBadge(branch: Branch) {
+    if (branch.isRemote || branch.isHead) return nothing;
+    const wt = this.worktreesByBranch.get(branch.name) ?? this.worktreesByBranch.get(branch.shorthand);
+    if (!wt) return nothing;
+
+    const folderName = wt.path.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() || wt.path;
+    return html`
+      <span
+        class="worktree-badge"
+        title="Checked out in worktree: ${wt.path} (click to open tab)"
+        @click=${async (e: Event) => {
+          e.stopPropagation();
+          if (!wt.isPrunable) {
+            await openOrSwitchWorktreeTab(wt.path);
+          }
+        }}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        ${folderName}
+      </span>
+    `;
+  }
+
   private renderBranchItem(branch: Branch, nested = false, stripPrefix: string | null = null) {
     // Determine display name: strip prefix if provided
     let displayName = branch.shorthand;
@@ -2212,6 +2319,7 @@ export class GnBranchList extends LitElement {
             <span class="branch-upstream" title="Tracking ${branch.upstream}">→ ${branch.upstream}</span>
           </div>
         ` : html`<span class="branch-name">${displayName}</span>`}
+        ${this.renderWorktreeBadge(branch)}
         ${this.renderAheadBehind(branch)}
         ${this.renderStaleIndicator(branch)}
         ${isDropTarget ? html`
@@ -2645,6 +2753,9 @@ export class GnBranchList extends LitElement {
     const branch = this.contextMenu.branch;
     const isLocal = !branch.isRemote;
     const isHead = branch.isHead;
+    const linkedWorktree = isLocal
+      ? (this.worktreesByBranch.get(branch.name) ?? this.worktreesByBranch.get(branch.shorthand) ?? null)
+      : null;
     const createRequestBlocked = isLocal ? this.createRequestBlockedReason(branch) : null;
 
     return html`
@@ -2661,7 +2772,27 @@ export class GnBranchList extends LitElement {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
-            Checkout
+            ${linkedWorktree ? 'Switch to Worktree Tab' : 'Checkout'}
+          </button>
+        ` : ''}
+
+        ${isLocal && !isHead && !linkedWorktree ? html`
+          <button
+            class="context-menu-item"
+            role="menuitem"
+            @click=${() => {
+              this.contextMenu = { ...this.contextMenu, visible: false };
+              this.dispatchEvent(new CustomEvent('manage-worktrees', {
+                detail: { branch: branch.shorthand },
+                bubbles: true,
+                composed: true,
+              }));
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            Open in New Worktree...
           </button>
         ` : ''}
 

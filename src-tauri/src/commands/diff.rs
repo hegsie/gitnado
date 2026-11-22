@@ -407,9 +407,7 @@ pub async fn get_file_diff(
             }
         }
 
-        // If we get here, the file might have changes that git considers empty
-        // (e.g., only whitespace/line-ending changes being ignored)
-        // Include debug info in error message for troubleshooting
+        // Include debug info in error message for genuinely missing files
         let sample_paths: String = available_paths
             .iter()
             .take(10)
@@ -435,9 +433,33 @@ pub async fn get_file_diff(
 
 /// Generate a diff for a new/untracked file (entire content as additions)
 fn generate_new_file_diff(full_path: &Path, file_path: &str) -> Result<DiffFile> {
-    let content = std::fs::read_to_string(full_path).map_err(|e| {
+    let bytes = std::fs::read(full_path).map_err(|e| {
         crate::error::GitnadoError::OperationFailed(format!("Failed to read file: {}", e))
     })?;
+
+    let is_image = is_image_file(file_path);
+    let image_type = get_image_type(file_path);
+
+    // Check for NUL bytes (git's heuristic for binary files) or non-UTF8 content
+    let is_binary_bytes = bytes.iter().take(8000).any(|&b| b == 0);
+    let content = match std::str::from_utf8(&bytes) {
+        Ok(text) if !is_binary_bytes && !is_image => text,
+        _ => {
+            return Ok(DiffFile {
+                path: file_path.to_string(),
+                old_path: None,
+                status: FileStatus::New,
+                hunks: Vec::new(),
+                is_binary: true,
+                is_image,
+                image_type,
+                additions: 0,
+                deletions: 0,
+                truncated: None,
+                total_lines: None,
+            });
+        }
+    };
 
     let lines: Vec<DiffLine> = content
         .lines()
@@ -452,23 +474,24 @@ fn generate_new_file_diff(full_path: &Path, file_path: &str) -> Result<DiffFile>
 
     let additions = lines.len();
 
-    let hunk = DiffHunk {
-        header: format!("@@ -0,0 +1,{} @@", additions),
-        old_start: 0,
-        old_lines: 0,
-        new_start: 1,
-        new_lines: additions as u32,
-        lines,
+    let hunks = if additions > 0 {
+        vec![DiffHunk {
+            header: format!("@@ -0,0 +1,{} @@", additions),
+            old_start: 0,
+            old_lines: 0,
+            new_start: 1,
+            new_lines: additions as u32,
+            lines,
+        }]
+    } else {
+        Vec::new()
     };
-
-    let is_image = is_image_file(file_path);
-    let image_type = get_image_type(file_path);
 
     Ok(DiffFile {
         path: file_path.to_string(),
         old_path: None,
         status: FileStatus::New,
-        hunks: vec![hunk],
+        hunks,
         is_binary: false,
         is_image,
         image_type,
@@ -512,6 +535,53 @@ fn maybe_truncate_diff(mut file: DiffFile, max_lines: Option<u32>) -> DiffFile {
 
 fn parse_diff(diff: &git2::Diff) -> Result<Vec<DiffFile>> {
     let mut files: Vec<DiffFile> = Vec::new();
+
+    // Pre-populate files from diff.deltas() so deltas without patch lines
+    // (e.g. empty files, mode-only changes, submodule gitlinks, or binary deltas
+    // that do not emit line callbacks) are always represented in the result.
+    for delta in diff.deltas() {
+        let file_path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if file_path.is_empty() || files.iter().any(|f| f.path == file_path) {
+            continue;
+        }
+
+        let status = match delta.status() {
+            git2::Delta::Added => FileStatus::New,
+            git2::Delta::Deleted => FileStatus::Deleted,
+            git2::Delta::Modified => FileStatus::Modified,
+            git2::Delta::Renamed => FileStatus::Renamed,
+            git2::Delta::Copied => FileStatus::Copied,
+            git2::Delta::Typechange => FileStatus::Typechange,
+            _ => FileStatus::Modified,
+        };
+
+        let is_image = is_image_file(&file_path);
+        let image_type = get_image_type(&file_path);
+        let is_binary = delta.flags().is_binary();
+
+        files.push(DiffFile {
+            path: file_path,
+            old_path: delta
+                .old_file()
+                .path()
+                .map(|p| p.to_string_lossy().to_string()),
+            status,
+            hunks: Vec::new(),
+            is_binary,
+            is_image,
+            image_type,
+            additions: 0,
+            deletions: 0,
+            truncated: None,
+            total_lines: None,
+        });
+    }
 
     diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
         let file_path = delta
@@ -3146,5 +3216,41 @@ mod tests {
         assert_eq!(diff.path, "a[1].txt");
         assert_eq!(diff.additions, 1);
         assert_eq!(diff.deletions, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_diff_empty_staged_file_returns_delta_without_hunks() {
+        let repo = TestRepo::with_initial_commit();
+        repo.create_file("empty.txt", "");
+        repo.stage_file("empty.txt");
+
+        let diff = get_file_diff(
+            repo.path_str(),
+            "empty.txt".to_string(),
+            Some(true),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(diff.path, "empty.txt");
+        assert_eq!(diff.status, FileStatus::New);
+        assert!(diff.hunks.is_empty());
+        assert_eq!(diff.additions, 0);
+        assert_eq!(diff.deletions, 0);
+    }
+
+    #[tokio::test]
+    async fn test_generate_new_file_diff_reports_binary_for_non_utf8_bytes() {
+        let repo = TestRepo::with_initial_commit();
+        let bin_path = repo.path.join("untracked.bin");
+        std::fs::write(&bin_path, [0xff, 0xfe, 0x00, 0x01, 0x80]).unwrap();
+
+        let diff = generate_new_file_diff(&bin_path, "untracked.bin").unwrap();
+        assert_eq!(diff.path, "untracked.bin");
+        assert_eq!(diff.status, FileStatus::New);
+        assert!(diff.is_binary);
+        assert!(diff.hunks.is_empty());
     }
 }
