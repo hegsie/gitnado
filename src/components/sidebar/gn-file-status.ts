@@ -1429,6 +1429,9 @@ export class GnFileStatus extends LitElement {
 
   async updated(changedProperties: Map<string, unknown>): Promise<void> {
     if (changedProperties.has("repositoryPath") && this.repositoryPath) {
+      const previousPath = changedProperties.get("repositoryPath") as
+        | string
+        | undefined;
       // A menu entry acts on the file it was opened over, but resolves the repo
       // from `this.repositoryPath` at click time — and a keyboard tab switch
       // produces neither a document click nor Escape, so the menu would survive
@@ -1454,13 +1457,15 @@ export class GnFileStatus extends LitElement {
       this.stagedFiles = [];
       this.unstagedFiles = [];
       this.error = null;
-      this.dispatchEvent(
-        new CustomEvent("status-changed", {
-          detail: { stagedCount: 0, totalCount: 0 },
-          bubbles: true,
-          composed: true,
-        }),
-      );
+      if (previousPath) {
+        this.dispatchEvent(
+          new CustomEvent("status-changed", {
+            detail: { stagedCount: 0, totalCount: 0 },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
       this.statusDirtySeq++;
       // Start watching the new repository
       try {

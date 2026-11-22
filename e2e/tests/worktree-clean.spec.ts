@@ -192,7 +192,7 @@ test.describe('Worktree Dialog - List View', () => {
 
     // Find the non-main, non-locked worktree's lock button
     const featureItem = page.locator('gn-worktree-dialog .worktree-item').nth(1);
-    const lockBtn = featureItem.locator('.action-btn').first(); // Lock button
+    const lockBtn = featureItem.locator('.action-btn[title="Lock"]');
     await lockBtn.click();
 
     await waitForCommand(page, 'lock_worktree');
@@ -207,7 +207,7 @@ test.describe('Worktree Dialog - List View', () => {
 
     // Locked worktree has an unlock button
     const lockedItem = page.locator('gn-worktree-dialog .worktree-item.locked');
-    const unlockBtn = lockedItem.locator('.action-btn').first(); // Unlock button
+    const unlockBtn = lockedItem.locator('.action-btn[title="Unlock"]');
     await unlockBtn.click();
 
     await waitForCommand(page, 'unlock_worktree');
@@ -298,7 +298,7 @@ test.describe('Worktree Dialog - Add Form', () => {
     await addBtn.click();
 
     // Check "Create new branch"
-    const checkbox = page.locator('gn-worktree-dialog .form-checkbox input[type="checkbox"]');
+    const checkbox = page.locator('gn-worktree-dialog .form-checkbox input[type="checkbox"]').first();
     await checkbox.check();
 
     // New branch name input should appear instead of select

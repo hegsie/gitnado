@@ -198,8 +198,8 @@ export class GnRightPanel extends LitElement {
       const newPath = activeRepo?.repository.path ?? null;
       if (newPath !== this.repositoryPath) {
         this.repositoryPath = newPath;
-        this.stagedCount = activeRepo?.stagedFiles.length ?? 0;
-        this.changesCount = activeRepo?.status.length ?? 0;
+        this.stagedCount = activeRepo?.stagedFiles?.length ?? 0;
+        this.changesCount = activeRepo?.status?.length ?? 0;
         this.hasUnseenChanges = false;
         if (newPath) {
           this.detectGitHubRepo();
