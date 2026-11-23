@@ -306,9 +306,16 @@ describe('app-shell render-path memoisation', () => {
       document.dispatchEvent(new MouseEvent('mousemove', { clientX }));
     }
 
+    beforeEach(() => {
+      localStorage.removeItem('gn-left-panel-width');
+      localStorage.removeItem('gn-right-panel-width');
+    });
+
     afterEach(() => {
       // Any test that leaves a drag open would keep document listeners alive.
       document.dispatchEvent(new MouseEvent('mouseup'));
+      localStorage.removeItem('gn-left-panel-width');
+      localStorage.removeItem('gn-right-panel-width');
     });
 
     it('coalesces a burst of mousemove events into a single width update', async () => {
@@ -322,7 +329,7 @@ describe('app-shell render-path memoisation', () => {
 
       await nextFrame();
       expect(writes()).to.equal(1);
-      expect((el as any).leftPanelWidth).to.equal(245);
+      expect((el as any).leftPanelWidth).to.equal(305);
 
       document.dispatchEvent(new MouseEvent('mouseup'));
       expect(writes()).to.equal(1);
@@ -353,8 +360,8 @@ describe('app-shell render-path memoisation', () => {
       move(190); // last move of the drag — never got its own frame
       document.dispatchEvent(new MouseEvent('mouseup'));
 
-      // 220 (start) + 90 (delta), applied synchronously by the mouseup flush.
-      expect((el as any).leftPanelWidth).to.equal(310);
+      // 280 (start) + 90 (delta), applied synchronously by the mouseup flush.
+      expect((el as any).leftPanelWidth).to.equal(370);
     });
 
     it('keeps the right panel clamped and inverted, flushing on mouseup', () => {
@@ -376,12 +383,12 @@ describe('app-shell render-path memoisation', () => {
       startDrag(el, 'left', 100);
       move(1000);
       document.dispatchEvent(new MouseEvent('mouseup'));
-      expect((el as any).leftPanelWidth).to.equal(400);
+      expect((el as any).leftPanelWidth).to.equal(520);
 
       startDrag(el, 'left', 100);
       move(-1000);
       document.dispatchEvent(new MouseEvent('mouseup'));
-      expect((el as any).leftPanelWidth).to.equal(150);
+      expect((el as any).leftPanelWidth).to.equal(200);
     });
 
     it('ignores mousemove once the drag has ended', async () => {

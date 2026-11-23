@@ -1470,7 +1470,7 @@ test.describe('Graph with more lanes than fit', () => {
     graph = new GraphPanelPage(page);
     // Wide enough that the automatic column is not already at the cap that
     // protects the message column, so the resize test has room to widen it
-    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.setViewportSize({ width: 1700, height: 900 });
     await setupOpenRepository(page, { commits });
     await expect(graph.canvas).toBeVisible();
     await waitForNodeCount(page, BRANCHES + 1);
