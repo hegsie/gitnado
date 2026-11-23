@@ -160,6 +160,12 @@ describe('gn-left-panel', () => {
       expect(internal.expandedSections.has('branches')).to.be.true;
     });
 
+    it('worktrees section is collapsed by default so it does not compete with branches', async () => {
+      const el = await renderPanel();
+      const internal = el as unknown as { expandedSections: Set<string> };
+      expect(internal.expandedSections.has('worktrees')).to.be.false;
+    });
+
     it('stashes section is collapsed by default', async () => {
       const el = await renderPanel();
       const internal = el as unknown as { expandedSections: Set<string> };
@@ -170,6 +176,23 @@ describe('gn-left-panel', () => {
       const el = await renderPanel();
       const internal = el as unknown as { expandedSections: Set<string> };
       expect(internal.expandedSections.has('tags')).to.be.false;
+    });
+
+    it('expanding a secondary section auto-collapses other secondary sections while keeping branches open', async () => {
+      const el = await renderPanel();
+      const toggleSection = (el as unknown as {
+        toggleSection: (section: string) => void;
+      }).toggleSection.bind(el);
+      const internal = el as unknown as { expandedSections: Set<string> };
+
+      toggleSection('worktrees');
+      expect(internal.expandedSections.has('branches')).to.be.true;
+      expect(internal.expandedSections.has('worktrees')).to.be.true;
+
+      toggleSection('stashes');
+      expect(internal.expandedSections.has('branches')).to.be.true;
+      expect(internal.expandedSections.has('worktrees')).to.be.false;
+      expect(internal.expandedSections.has('stashes')).to.be.true;
     });
 
     it('toggles section on header click', async () => {

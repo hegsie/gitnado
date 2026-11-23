@@ -92,10 +92,11 @@ export class GnWorktreeList extends LitElement {
 
       .worktree-item {
         --gn-focus-ring-offset: -2px;
+        position: relative;
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 4px 12px;
+        padding: 5px 10px;
         cursor: pointer;
         font-size: var(--font-size-sm);
         border-left: 2px solid transparent;
@@ -138,6 +139,8 @@ export class GnWorktreeList extends LitElement {
       }
 
       .worktree-branch {
+        flex: 1;
+        min-width: 0;
         font-weight: var(--font-weight-medium);
         color: var(--color-text-primary);
         overflow: hidden;
@@ -146,7 +149,7 @@ export class GnWorktreeList extends LitElement {
       }
 
       .worktree-path {
-        font-size: var(--font-size-xs);
+        font-size: 11px;
         color: var(--color-text-muted);
         font-family: var(--font-family-mono);
         overflow: hidden;
@@ -155,10 +158,10 @@ export class GnWorktreeList extends LitElement {
       }
 
       .badge {
-        padding: 0 5px;
+        padding: 0 4px;
         border-radius: var(--radius-xs);
-        font-size: 10px;
-        line-height: 16px;
+        font-size: 9px;
+        line-height: 14px;
         font-weight: var(--font-weight-medium);
         flex-shrink: 0;
       }
@@ -190,10 +193,19 @@ export class GnWorktreeList extends LitElement {
       }
 
       .row-actions {
+        position: absolute;
+        right: 6px;
+        top: 50%;
+        transform: translateY(-50%);
         display: flex;
         align-items: center;
         gap: 2px;
+        padding: 2px 4px;
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-hover);
+        box-shadow: -8px 0 8px var(--color-bg-hover);
         opacity: 0;
+        pointer-events: none;
         transition: opacity var(--transition-fast);
         flex-shrink: 0;
       }
@@ -201,6 +213,7 @@ export class GnWorktreeList extends LitElement {
       .worktree-item:hover .row-actions,
       .worktree-item:focus-within .row-actions {
         opacity: 1;
+        pointer-events: auto;
       }
 
       .row-action-btn {
@@ -239,23 +252,28 @@ export class GnWorktreeList extends LitElement {
 
       .worktree-footer-actions {
         display: flex;
-        gap: 6px;
-        padding: 4px 12px 6px;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-secondary);
       }
 
       .worktree-btn {
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 6px;
+        gap: 4px;
         flex: 1;
-        padding: 4px 8px;
+        min-width: 0;
+        padding: 3px 6px;
         border: 1px solid var(--color-border);
         border-radius: var(--radius-sm);
         background: transparent;
         color: var(--color-text-secondary);
         font-family: inherit;
-        font-size: var(--font-size-xs);
+        font-size: 11px;
+        white-space: nowrap;
         cursor: pointer;
       }
 
@@ -500,9 +518,11 @@ export class GnWorktreeList extends LitElement {
 
   private shortenPath(fullPath: string): string {
     const normalized = fullPath.replace(/\\/g, '/').replace(/\/+$/, '');
-    const parts = normalized.split('/');
-    if (parts.length <= 2) return fullPath;
-    return `…/${parts.slice(-2).join('/')}`;
+    const parts = normalized.split('/').filter(Boolean);
+    if (parts.length <= 1) return fullPath;
+    const folder = parts[parts.length - 1];
+    const parent = parts.slice(0, -1).join('/');
+    return `${folder} — ${parent}`;
   }
 
   private async handleOpenWorktreeTab(wt: Worktree, e?: Event): Promise<void> {
@@ -798,6 +818,43 @@ export class GnWorktreeList extends LitElement {
     const hasPrunable = this.worktrees.some((wt) => wt.isPrunable);
 
     return html`
+      <div class="worktree-footer-actions">
+        <button
+          class="worktree-btn"
+          title="Add or manage worktrees"
+          @click=${this.handleManageWorktrees}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          Add Worktree
+        </button>
+        <button
+          class="worktree-btn"
+          title="Start AI agent in an isolated worktree"
+          @click=${this.handleStartAgent}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+            <circle cx="12" cy="5" r="2"></circle>
+            <path d="M12 7v4"></path>
+          </svg>
+          Agent Worktree
+        </button>
+        ${hasPrunable
+          ? html`
+              <button
+                class="worktree-btn"
+                title="Prune stale worktrees whose directories were deleted"
+                ?disabled=${this.operationInProgress}
+                @click=${this.handlePruneWorktrees}
+              >
+                Prune Stale
+              </button>
+            `
+          : nothing}
+      </div>
       ${this.worktrees.length === 0
         ? html`<div class="empty">No worktrees</div>`
         : html`
@@ -877,43 +934,6 @@ export class GnWorktreeList extends LitElement {
               })}
             </ul>
           `}
-      <div class="worktree-footer-actions">
-        <button
-          class="worktree-btn"
-          title="Add or manage worktrees"
-          @click=${this.handleManageWorktrees}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          Add Worktree
-        </button>
-        <button
-          class="worktree-btn"
-          title="Start AI agent in an isolated worktree"
-          @click=${this.handleStartAgent}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="11" width="18" height="10" rx="2"></rect>
-            <circle cx="12" cy="5" r="2"></circle>
-            <path d="M12 7v4"></path>
-          </svg>
-          Agent Worktree
-        </button>
-        ${hasPrunable
-          ? html`
-              <button
-                class="worktree-btn"
-                title="Prune stale worktrees whose directories were deleted"
-                ?disabled=${this.operationInProgress}
-                @click=${this.handlePruneWorktrees}
-              >
-                Prune Stale
-              </button>
-            `
-          : nothing}
-      </div>
       ${this.renderContextMenu()}
     `;
   }

@@ -309,6 +309,45 @@ describe('gn-worktree-list & first-class worktree support', () => {
 
       expect(el.shadowRoot!.querySelectorAll('.branch-item').length).to.equal(0);
     });
+
+    it('hides redundant matching upstream subtitle and shows upstream line only when divergent', async () => {
+      mockInvoke = async (command: string) => {
+        if (command === 'get_branches') {
+          return [
+            {
+              name: 'feat/ai-agent',
+              shorthand: 'feat/ai-agent',
+              isHead: true,
+              isRemote: false,
+              upstream: 'origin/feat/ai-agent',
+              targetOid: '1111111abcdef',
+              isStale: false,
+            },
+            {
+              name: 'feat/custom-track',
+              shorthand: 'feat/custom-track',
+              isHead: false,
+              isRemote: false,
+              upstream: 'origin/main',
+              targetOid: '2222222abcdef',
+              isStale: false,
+            },
+          ];
+        }
+        if (command === 'get_worktrees') return [];
+        return [];
+      };
+
+      const el = await fixture<GnBranchList>(html`
+        <gn-branch-list .repositoryPath=${REPO_MAIN}></gn-branch-list>
+      `);
+      await settle(el);
+
+      const upstreamLines = Array.from(el.shadowRoot!.querySelectorAll('.branch-upstream')).map(
+        (u) => u.textContent?.trim(),
+      );
+      expect(upstreamLines).to.deep.equal(['→ origin/main']);
+    });
   });
 
   describe('gn-file-status Open in Editor & stale status clearing', () => {

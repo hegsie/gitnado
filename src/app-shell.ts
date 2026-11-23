@@ -614,12 +614,28 @@ export class AppShell extends LitElement {
       .status-bar {
         display: flex;
         align-items: center;
-        height: 24px;
+        justify-content: space-between;
+        gap: var(--spacing-md);
+        height: 28px;
         padding: 0 var(--spacing-sm);
         background: var(--color-bg-tertiary);
         border-top: 1px solid var(--color-border);
         font-size: var(--font-size-xs);
         color: var(--color-text-secondary);
+        flex-shrink: 0;
+      }
+
+      .status-bar-left {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .status-repo-path {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       gn-welcome {
@@ -886,9 +902,25 @@ export class AppShell extends LitElement {
   // Right panel tab tracking
   @state() private activeRightPanelTab: string | undefined;
 
-  // Panel dimensions
-  @state() private leftPanelWidth = 220;
-  @state() private rightPanelWidth = 350;
+  // Panel dimensions (persisted in localStorage)
+  @state() private leftPanelWidth = (() => {
+    try {
+      const saved = Number(localStorage.getItem('gn-left-panel-width'));
+      if (Number.isFinite(saved) && saved >= 200 && saved <= 520) return saved;
+    } catch {
+      // Ignore storage access errors
+    }
+    return 280;
+  })();
+  @state() private rightPanelWidth = (() => {
+    try {
+      const saved = Number(localStorage.getItem('gn-right-panel-width'));
+      if (Number.isFinite(saved) && saved >= 280 && saved <= 600) return saved;
+    } catch {
+      // Ignore storage access errors
+    }
+    return 350;
+  })();
 
   // Panel visibility
   @state() private leftPanelVisible = true;
@@ -4579,7 +4611,7 @@ export class AppShell extends LitElement {
 
     const delta = clientX - this.resizeStartPos;
     if (this.resizing === 'left') {
-      const newWidth = Math.max(150, Math.min(400, this.resizeStartValue + delta));
+      const newWidth = Math.max(200, Math.min(520, this.resizeStartValue + delta));
       this.leftPanelWidth = newWidth;
     } else {
       const newWidth = Math.max(280, Math.min(600, this.resizeStartValue - delta));
@@ -4594,10 +4626,20 @@ export class AppShell extends LitElement {
     // a few pixels away from where the user released it.
     this.cancelPendingResizeFrame();
     this.applyPendingResize();
+    const finishedSide = this.resizing;
     this.resizing = null;
     this.classList.remove('resizing', 'resizing-h');
     document.removeEventListener('mousemove', this.boundHandleMouseMove);
     document.removeEventListener('mouseup', this.boundHandleMouseUp);
+    try {
+      if (finishedSide === 'left') {
+        localStorage.setItem('gn-left-panel-width', String(this.leftPanelWidth));
+      } else if (finishedSide === 'right') {
+        localStorage.setItem('gn-right-panel-width', String(this.rightPanelWidth));
+      }
+    } catch {
+      // Ignore storage access errors
+    }
   }
 
   private cancelPendingResizeFrame(): void {
@@ -6207,17 +6249,6 @@ export class AppShell extends LitElement {
 
       ${this.activeRepository
         ? html`
-            <gn-context-dashboard
-              @open-profile-manager=${() => { dialogs.open('profileManager'); }}
-              @open-github=${() => this.openIntegrationStandalone('github')}
-              @open-gitlab=${() => this.openIntegrationStandalone('gitlab')}
-              @open-bitbucket=${() => this.openIntegrationStandalone('bitbucket')}
-              @open-azure-devops=${() => this.openIntegrationStandalone('azure-devops')}
-              @open-oidc=${() => this.openIntegrationStandalone('oidc')}
-              @refresh-account=${this.handleRefreshAccount}
-              @repository-refresh=${() => this.handleRefresh()}
-            ></gn-context-dashboard>
-
             <div class="main-content">
               <aside
                 class="left-panel ${this.leftPanelVisible ? '' : 'hidden'}"
@@ -6454,8 +6485,20 @@ export class AppShell extends LitElement {
             </div>
 
             <footer class="status-bar">
-              <span>${this.activeRepository.repository.path}</span>
-              ${this.renderRemoteBadges()}
+              <div class="status-bar-left">
+                <span class="status-repo-path" title="${this.activeRepository.repository.path}">${this.activeRepository.repository.path}</span>
+                ${this.renderRemoteBadges()}
+              </div>
+              <gn-context-dashboard
+                @open-profile-manager=${() => { dialogs.open('profileManager'); }}
+                @open-github=${() => this.openIntegrationStandalone('github')}
+                @open-gitlab=${() => this.openIntegrationStandalone('gitlab')}
+                @open-bitbucket=${() => this.openIntegrationStandalone('bitbucket')}
+                @open-azure-devops=${() => this.openIntegrationStandalone('azure-devops')}
+                @open-oidc=${() => this.openIntegrationStandalone('oidc')}
+                @refresh-account=${this.handleRefreshAccount}
+                @repository-refresh=${() => this.handleRefresh()}
+              ></gn-context-dashboard>
             </footer>
           `
         : html`<gn-welcome

@@ -36,23 +36,27 @@ export class GnLeftPanel extends LitElement {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 4px 12px;
-        font-size: var(--font-size-sm);
-        font-weight: var(--font-weight-medium);
+        height: 28px;
+        padding: 0 10px;
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-semibold);
+        letter-spacing: 0.02em;
         color: var(--color-text-secondary);
         background: var(--color-bg-tertiary);
         border-bottom: 1px solid var(--color-border);
         user-select: none;
         cursor: pointer;
+        flex-shrink: 0;
       }
 
       .section-header:hover {
         background: var(--color-bg-hover);
+        color: var(--color-text-primary);
       }
 
       .section-header .chevron {
-        width: 14px;
-        height: 14px;
+        width: 12px;
+        height: 12px;
         transition: transform var(--transition-fast);
         flex-shrink: 0;
       }
@@ -63,10 +67,14 @@ export class GnLeftPanel extends LitElement {
 
       .section-header .title {
         flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .section-header .count {
-        font-size: var(--font-size-xs);
+        font-size: 10px;
         color: var(--color-text-muted);
         background: var(--color-bg-secondary);
         padding: 1px 6px;
@@ -75,8 +83,8 @@ export class GnLeftPanel extends LitElement {
       }
 
       .section-action {
-        width: 18px;
-        height: 18px;
+        width: 20px;
+        height: 20px;
         padding: 0;
         border: none;
         background: transparent;
@@ -87,7 +95,7 @@ export class GnLeftPanel extends LitElement {
         color: var(--color-text-muted);
         cursor: pointer;
         flex-shrink: 0;
-        opacity: 0;
+        opacity: 0.65;
         transition: all var(--transition-fast);
       }
 
@@ -108,12 +116,12 @@ export class GnLeftPanel extends LitElement {
 
       .branches-section {
         flex: 1;
-        min-height: 100px;
+        min-height: 120px;
       }
 
       .refs-section {
         flex: 0 0 auto;
-        max-height: 30%;
+        max-height: 42%;
         border-top: 1px solid var(--color-border);
       }
 
@@ -150,7 +158,7 @@ export class GnLeftPanel extends LitElement {
   @state() private stashCount: number = 0;
   @state() private tagCount: number = 0;
   @state() private pullRequestCount: number = 0;
-  @state() private expandedSections = new Set<string>(['branches', 'worktrees']);
+  @state() private expandedSections = new Set<string>(['branches']);
 
   private unsubscribe?: () => void;
 
@@ -408,11 +416,24 @@ export class GnLeftPanel extends LitElement {
     this.forwardRefresh(e);
   }
 
+  private static readonly SECONDARY_SECTIONS = [
+    'worktrees',
+    'stashes',
+    'tags',
+    'pull-requests',
+    'gitflow',
+  ] as const;
+
   private toggleSection(section: string): void {
     const newExpanded = new Set(this.expandedSections);
     if (newExpanded.has(section)) {
       newExpanded.delete(section);
     } else {
+      if (section !== 'branches') {
+        for (const secondary of GnLeftPanel.SECONDARY_SECTIONS) {
+          newExpanded.delete(secondary);
+        }
+      }
       newExpanded.add(section);
     }
     this.expandedSections = newExpanded;

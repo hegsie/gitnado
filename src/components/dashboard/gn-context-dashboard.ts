@@ -50,48 +50,50 @@ export class GnContextDashboard extends LitElement {
     animationStyles,
     css`
       :host {
-        display: block;
+        display: flex;
+        align-items: center;
+        min-width: 0;
       }
 
-      /* Compact View */
+      /* Compact View (Status Bar Integrated) */
       .dashboard-compact {
         display: flex;
         align-items: center;
-        height: 36px;
-        padding: 0 var(--spacing-md);
-        background: var(--color-bg-secondary);
-        border-bottom: 1px solid var(--color-border);
-        gap: var(--spacing-md);
+        height: 26px;
+        padding: 0 var(--spacing-xs);
+        background: transparent;
+        gap: var(--spacing-sm);
+        min-width: 0;
       }
 
       .compact-profile {
         display: flex;
         align-items: center;
-        gap: var(--spacing-sm);
+        gap: 6px;
         min-width: 0;
       }
 
       .profile-dot {
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         flex-shrink: 0;
       }
 
       .profile-name {
-        font-size: var(--font-size-sm);
+        font-size: var(--font-size-xs);
         font-weight: var(--font-weight-medium);
         color: var(--color-text-primary);
         white-space: nowrap;
       }
 
       .compact-identity {
-        font-size: var(--font-size-xs);
+        font-size: 11px;
         color: var(--color-text-secondary);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 200px;
+        max-width: 180px;
       }
 
       /* The compact bar names no ref at all, so a detached HEAD had nowhere to
@@ -278,12 +280,19 @@ export class GnContextDashboard extends LitElement {
         transform: rotate(180deg);
       }
 
-      /* Expanded View */
+      /* Expanded View (Floating Popover above Status Bar) */
       .dashboard-expanded {
+        position: fixed;
+        left: var(--spacing-md);
+        right: var(--spacing-md);
+        bottom: 34px;
+        z-index: var(--z-dropdown, 100);
         background: var(--color-bg-secondary);
-        border-bottom: 1px solid var(--color-border);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg);
         padding: var(--spacing-md);
-        animation: slideDown 0.2s ease-out;
+        animation: slideDown 0.15s ease-out;
       }
 
       /* slideDown animation imported from animationStyles */
@@ -356,8 +365,8 @@ export class GnContextDashboard extends LitElement {
       .profile-selector-btn {
         display: flex;
         align-items: center;
-        gap: var(--spacing-sm);
-        padding: var(--spacing-xs) var(--spacing-sm);
+        gap: 6px;
+        padding: 2px 6px;
         border: none;
         border-radius: var(--radius-sm);
         background: transparent;
@@ -387,9 +396,8 @@ export class GnContextDashboard extends LitElement {
 
       .profile-dropdown {
         position: absolute;
-        top: 100%;
+        bottom: calc(100% + 4px);
         left: 0;
-        margin-top: var(--spacing-xs);
         min-width: 220px;
         background: var(--color-bg-primary);
         border: 1px solid var(--color-border);
@@ -397,6 +405,11 @@ export class GnContextDashboard extends LitElement {
         box-shadow: var(--shadow-lg);
         z-index: var(--z-dropdown, 100);
         overflow: hidden;
+      }
+
+      .dashboard-expanded .profile-dropdown {
+        bottom: auto;
+        top: calc(100% + 4px);
       }
 
       .dropdown-header {
@@ -521,23 +534,23 @@ export class GnContextDashboard extends LitElement {
       .remote-buttons {
         display: flex;
         align-items: center;
-        gap: var(--spacing-xs);
-        margin-left: auto;
-        padding-right: var(--spacing-sm);
+        gap: 2px;
+        margin-left: var(--spacing-xs);
+        padding-right: 2px;
       }
 
       .remote-btn {
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: var(--spacing-xs);
-        height: 24px;
-        padding: 0 var(--spacing-sm);
+        gap: 4px;
+        height: 20px;
+        padding: 0 6px;
         border: none;
         border-radius: var(--radius-sm);
         background: transparent;
         color: var(--color-text-secondary);
-        font-size: var(--font-size-xs);
+        font-size: 11px;
         cursor: pointer;
         transition: all var(--transition-fast);
       }
